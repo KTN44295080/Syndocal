@@ -2,7 +2,7 @@ use std::{
     collections::{hash_map::RandomState, BTreeMap, HashMap, HashSet, VecDeque},
     hash::{BuildHasher, Hash},
     io::{Read, Write},
-    net::{Shutdown, TcpListener, TcpStream},
+    net::{IpAddr, Shutdown, TcpListener, TcpStream},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
@@ -46,6 +46,9 @@ const HTTP_HEAD_PARTIAL_BACKOFF_MAX: Duration = Duration::from_millis(16);
 /// above any legitimate burst of Remote/DJ Link clients; connections beyond
 /// it are refused at once without waiting for a head.
 const REMOTE_MAX_PENDING_HEADS: u64 = 32;
+/// One peer address may hold at most this many of those slots, so a single
+/// host cannot take them all and lock every other Remote/DJ Link client out.
+const REMOTE_MAX_PENDING_HEADS_PER_IP: u64 = 8;
 const REMOTE_SOCKET_READ_TIMEOUT: Duration = Duration::from_millis(100);
 const REMOTE_SOCKET_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
 /// HELLO bearer credentials must not enter canonical identity, replay, or
@@ -4823,7 +4826,7 @@ impl RemoteWsServer {
         let thread_rejected_connections = Arc::clone(&rejected_connections);
         let dj_link_connections = Arc::new(AtomicU64::new(0));
         let thread_dj_link_connections = Arc::clone(&dj_link_connections);
-        let thread_pending_heads = Arc::new(AtomicU64::new(0));
+        let thread_pending_heads = Arc::new(PendingHeadCounters::default());
         let process_fence = process_fence.unwrap_or_else(new_dj_link_process_fence);
         let dj_link_registry = Arc::new(Mutex::new(DjLinkRegistry::with_process_fence(
             process_fence,
@@ -5608,7 +5611,7 @@ struct RemoteConnectionContext<'a> {
     dj_link_handler: Option<DjLinkDispatchHandler>,
     dj_link_registry: Arc<Mutex<DjLinkRegistry>>,
     dj_link_connections: Arc<AtomicU64>,
-    pending_heads: Arc<AtomicU64>,
+    pending_heads: Arc<PendingHeadCounters>,
 }
 
 struct RemoteWebsocketContext<'a> {
@@ -5651,7 +5654,13 @@ fn handle_connection<F, S>(
     }
     let _ = stream.set_read_timeout(Some(REMOTE_SOCKET_READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(REMOTE_SOCKET_WRITE_TIMEOUT));
-    let Some(head_slot) = PendingHeadSlot::acquire(&pending_heads) else {
+    // A connection whose peer address cannot be read cannot be attributed
+    // to a host for the per-address cap, so it is refused like a full one.
+    let head_slot = stream
+        .peer_addr()
+        .ok()
+        .and_then(|peer| PendingHeadSlot::acquire(&pending_heads, peer.ip().to_canonical()));
+    let Some(head_slot) = head_slot else {
         rejected_connections.fetch_add(1, Ordering::Relaxed);
         refuse_http_client(
             stream,
@@ -5821,28 +5830,55 @@ enum HttpHeadScan {
     Malformed,
 }
 
-/// Held while a connection waits for its HTTP head; see
-/// `REMOTE_MAX_PENDING_HEADS`.
+/// Pending-head slots in use, in total and per peer address; see
+/// `REMOTE_MAX_PENDING_HEADS` and `REMOTE_MAX_PENDING_HEADS_PER_IP`.
+#[derive(Debug, Default)]
+struct PendingHeadCounters {
+    state: Mutex<PendingHeadState>,
+}
+
+#[derive(Debug, Default)]
+struct PendingHeadState {
+    total: u64,
+    per_ip: HashMap<IpAddr, u64>,
+}
+
+/// Held while a connection waits for its HTTP head.
 struct PendingHeadSlot {
-    slots: Arc<AtomicU64>,
+    counters: Arc<PendingHeadCounters>,
+    ip: IpAddr,
 }
 
 impl PendingHeadSlot {
-    fn acquire(slots: &Arc<AtomicU64>) -> Option<Self> {
-        slots
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
-                (pending < REMOTE_MAX_PENDING_HEADS).then_some(pending + 1)
-            })
-            .ok()
-            .map(|_| Self {
-                slots: Arc::clone(slots),
-            })
+    fn acquire(counters: &Arc<PendingHeadCounters>, ip: IpAddr) -> Option<Self> {
+        // A poisoned counter refuses: the slot accounting can no longer be trusted.
+        let mut state = counters.state.lock().ok()?;
+        let held_by_ip = state.per_ip.get(&ip).copied().unwrap_or(0);
+        if state.total >= REMOTE_MAX_PENDING_HEADS || held_by_ip >= REMOTE_MAX_PENDING_HEADS_PER_IP {
+            return None;
+        }
+        state.total += 1;
+        *state.per_ip.entry(ip).or_insert(0) += 1;
+        Some(Self {
+            counters: Arc::clone(counters),
+            ip,
+        })
     }
 }
 
 impl Drop for PendingHeadSlot {
     fn drop(&mut self) {
-        self.slots.fetch_sub(1, Ordering::AcqRel);
+        let mut state = match self.counters.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state.total = state.total.saturating_sub(1);
+        if let Some(held) = state.per_ip.get_mut(&self.ip) {
+            *held = held.saturating_sub(1);
+            if *held == 0 {
+                state.per_ip.remove(&self.ip);
+            }
+        }
     }
 }
 
@@ -8700,6 +8736,33 @@ mod tests {
     }
 
     #[test]
+    fn pending_head_slots_cap_each_address_and_the_total() {
+        let counters = Arc::new(PendingHeadCounters::default());
+        let first: IpAddr = "192.0.2.1".parse().unwrap();
+        let per_ip = (0..REMOTE_MAX_PENDING_HEADS_PER_IP)
+            .map(|_| PendingHeadSlot::acquire(&counters, first).expect("slot within the per-address cap"))
+            .collect::<Vec<_>>();
+        assert!(PendingHeadSlot::acquire(&counters, first).is_none(), "one address cannot exceed its cap");
+        // Other hosts are not locked out by the first one.
+        let mut others = Vec::new();
+        for host in 2..=4 {
+            let ip: IpAddr = format!("192.0.2.{host}").parse().unwrap();
+            for _ in 0..REMOTE_MAX_PENDING_HEADS_PER_IP {
+                others.push(PendingHeadSlot::acquire(&counters, ip).expect("another host still gets slots"));
+            }
+        }
+        // 4 hosts x 8 = 32 = the total cap.
+        let fifth: IpAddr = "192.0.2.5".parse().unwrap();
+        assert!(PendingHeadSlot::acquire(&counters, fifth).is_none(), "the total cap still applies");
+        drop(per_ip);
+        assert!(PendingHeadSlot::acquire(&counters, fifth).is_some(), "released slots are reusable");
+        drop(others);
+        let state = counters.state.lock().unwrap();
+        assert_eq!(state.total, 0);
+        assert!(state.per_ip.is_empty(), "released addresses leave no entries behind");
+    }
+
+    #[test]
     fn pending_head_connections_are_capped() {
         let probe = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = probe.local_addr().unwrap().port();
@@ -8715,8 +8778,9 @@ mod tests {
         )
         .unwrap();
         // Each holder starts a head and never finishes it, keeping its slot
-        // until the head deadline.
-        let holders = (0..REMOTE_MAX_PENDING_HEADS)
+        // until the head deadline. All come from 127.0.0.1, so the per-address
+        // cap is the one that refuses the next connection.
+        let holders = (0..REMOTE_MAX_PENDING_HEADS_PER_IP)
             .map(|_| {
                 let mut holder = TcpStream::connect(("127.0.0.1", port)).unwrap();
                 holder.write_all(b"GET /").unwrap();
