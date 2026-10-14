@@ -28,7 +28,6 @@ const BLEND_MODES: [VideoBlendMode; 4] = [
     VideoBlendMode::Screen,
 ];
 
-#[allow(clippy::too_many_arguments)]
 fn run(
     destination: &mut [u8],
     source: &VideoFrame,
