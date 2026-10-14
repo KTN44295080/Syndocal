@@ -20210,11 +20210,11 @@ struct DjLinkTimelineStartRollbackImage {
 #[derive(Clone)]
 enum PendingCommandRollback {
     KeepApplied,
-    /// A Cue FX edit that was also applied to the running activations: undo
-    /// the authored change and put the running activations back.
-    RestoreCueEffectTargetsLive {
+    /// A Cue FX edit made while Blind that started holding the Cue's previous
+    /// FX: undo the authored change and drop that hold again.
+    RestoreCueEffectTargetsBlindHold {
         cue_rollback: Box<PendingCommandRollback>,
-        effect_activations: Vec<RuntimeEffectActivation>,
+        cue_id: CueId,
     },
     RestoreOutputBlackout {
         lighting: bool,
@@ -20598,7 +20598,7 @@ impl PendingCommandRollback {
                 | Self::RestoreCueLists { .. }
                 | Self::RestoreCueListDeletion { .. }
                 | Self::RestoreCueRemoval { .. }
-                | Self::RestoreCueEffectTargetsLive { .. }
+                | Self::RestoreCueEffectTargetsBlindHold { .. }
                 | Self::RestoreTimelineEvents { .. }
                 | Self::RestoreTimelineItems { .. }
                 | Self::RestoreTimelineLayers { .. }
@@ -20954,6 +20954,10 @@ struct EngineRuntime {
     cue_value_origins: HashMap<(FixtureId, String), CueListId>,
     programmer_enabled: bool,
     programmer_blind: bool,
+    /// While Blind, a Cue whose FX were edited keeps outputting the FX it had
+    /// before the first such edit; the edits are stored and reach the output
+    /// when Blind ends, like programmer values. Keyed by Cue id.
+    blind_held_cue_effect_targets: HashMap<CueId, Vec<CueEffectTarget>>,
     programmer_values: HashMap<(FixtureId, String), u16>,
     stage_map: StageMapConfig,
     stage_map_presets: Vec<StageMapPresetSummary>,
@@ -21394,6 +21398,7 @@ impl EngineRuntime {
             cue_value_origins: HashMap::new(),
             programmer_enabled: false,
             programmer_blind: false,
+            blind_held_cue_effect_targets: HashMap::new(),
             programmer_values: HashMap::new(),
             stage_map: StageMapConfig::default(),
             stage_map_presets: Vec::new(),
@@ -22203,6 +22208,7 @@ impl EngineRuntime {
             })
             .collect();
         self.programmer_enabled = snapshot.programmer.enabled;
+        self.blind_held_cue_effect_targets.clear();
         self.programmer_blind = if self.programmer_values.is_empty() {
             snapshot.programmer.blind
         } else {
@@ -23688,6 +23694,9 @@ impl EngineRuntime {
                 }
                 self.programmer_enabled = enabled;
                 self.programmer_blind = enabled && blind;
+                if !self.programmer_blind {
+                    self.release_blind_held_cue_effect_targets();
+                }
                 self.last_error = None;
             }
             EngineCommand::SetProgrammerAttribute {
@@ -23732,6 +23741,7 @@ impl EngineRuntime {
                 self.programmer_values.clear();
                 self.programmer_enabled = false;
                 self.programmer_blind = false;
+                self.release_blind_held_cue_effect_targets();
                 self.last_error = None;
             }
             EngineCommand::CommitProgrammer {
@@ -23740,6 +23750,7 @@ impl EngineRuntime {
                 self.commit_programmer_values(edited_scene_cue_id);
                 self.programmer_enabled = false;
                 self.programmer_blind = false;
+                self.release_blind_held_cue_effect_targets();
                 self.last_error = None;
             }
             EngineCommand::SetGroupHighlight { group_id, enabled } => {
@@ -26554,23 +26565,32 @@ impl EngineRuntime {
                     timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
                     last_error: previous_last_error.clone(),
                 };
-                let effect_activations_before = self.effect_activations.clone();
+                // The publication rebuild carries a stored FX edit into a
+                // running scene at once (timing kept). Blind holds the scene's
+                // previous FX until Blind ends instead.
+                let held_effect_targets = (self.programmer_blind
+                    && !self.blind_held_cue_effect_targets.contains_key(&cue_id))
+                .then(|| {
+                    self.cues
+                        .iter()
+                        .find(|cue| cue.id == cue_id)
+                        .map(|cue| cue.effect_targets.clone())
+                })
+                .flatten();
                 let result = if Instant::now() > expires_at {
                     Err("Cue effect-target update expired before engine execution".to_string())
                 } else {
                     self.set_cue_effect_targets_state(cue_id, effect_targets)
                 };
-                // An FX edit on a running scene reaches the output at once
-                // (unless Blind); a rolled-back publication restores both.
-                let rollback = if result.is_ok()
-                    && self.reapply_active_cue_effect_params(cue_id, Instant::now())
-                {
-                    PendingCommandRollback::RestoreCueEffectTargetsLive {
-                        cue_rollback: Box::new(rollback),
-                        effect_activations: effect_activations_before,
+                let rollback = match held_effect_targets {
+                    Some(held) if result.is_ok() => {
+                        self.blind_held_cue_effect_targets.insert(cue_id, held);
+                        PendingCommandRollback::RestoreCueEffectTargetsBlindHold {
+                            cue_rollback: Box::new(rollback),
+                            cue_id,
+                        }
                     }
-                } else {
-                    rollback
+                    _ => rollback,
                 };
                 self.last_error = if result.is_ok() {
                     None
@@ -31451,12 +31471,12 @@ impl EngineRuntime {
 
     fn rollback_pending_command(&mut self, rollback: PendingCommandRollback) {
         match rollback {
-            PendingCommandRollback::RestoreCueEffectTargetsLive {
+            PendingCommandRollback::RestoreCueEffectTargetsBlindHold {
                 cue_rollback,
-                effect_activations,
+                cue_id,
             } => {
                 self.rollback_pending_command(*cue_rollback);
-                self.effect_activations = effect_activations;
+                self.blind_held_cue_effect_targets.remove(&cue_id);
             }
             PendingCommandRollback::KeepApplied
             | PendingCommandRollback::SafetyBlackoutKeepApplied
@@ -35398,9 +35418,9 @@ impl EngineRuntime {
             if let Some(cue_index) =
                 cue_id.and_then(|cue_id| self.cues.iter().position(|cue| cue.id == cue_id))
             {
-                for target_index in 0..self.cues[cue_index].effect_targets.len() {
+                for target_index in 0..self.runtime_cue_effect_targets(cue_index).len() {
                     let (effect_id, params, transition_ms) = {
-                        let target = &self.cues[cue_index].effect_targets[target_index];
+                        let target = &self.runtime_cue_effect_targets(cue_index)[target_index];
                         if !target.enabled {
                             continue;
                         }
@@ -35495,11 +35515,13 @@ impl EngineRuntime {
                 previously_active_sparkle_states.push((key, activation.effect.id, preserved));
             }
         }
-        let cue_owned_counts = self
-            .cues
-            .iter()
-            .map(|cue| {
-                cue.effect_targets
+        // A held Cue whose FX no longer exists drops its hold.
+        let cues = &self.cues;
+        self.blind_held_cue_effect_targets
+            .retain(|cue_id, _| cues.iter().any(|cue| cue.id == *cue_id));
+        let cue_owned_counts = (0..self.cues.len())
+            .map(|cue_index| {
+                self.runtime_cue_effect_targets(cue_index)
                     .iter()
                     .filter(|target| target.enabled && target.params.is_some())
                     .count()
@@ -35551,9 +35573,9 @@ impl EngineRuntime {
         let mut first_error = None;
         for cue_index in 0..self.cues.len() {
             let start = self.effect_activations.len();
-            for target_index in 0..self.cues[cue_index].effect_targets.len() {
+            for target_index in 0..self.runtime_cue_effect_targets(cue_index).len() {
                 let (effect_id, params, transition_ms) = {
-                    let target = &self.cues[cue_index].effect_targets[target_index];
+                    let target = &self.runtime_cue_effect_targets(cue_index)[target_index];
                     if !target.enabled {
                         continue;
                     }
@@ -35589,9 +35611,9 @@ impl EngineRuntime {
                 .iter()
                 .position(|cue| cue.id == self.timeline_events[event_index].cue_id);
             if let Some(cue_index) = cue_index {
-                for target_index in 0..self.cues[cue_index].effect_targets.len() {
+                for target_index in 0..self.runtime_cue_effect_targets(cue_index).len() {
                     let (effect_id, params, transition_ms) = {
-                        let target = &self.cues[cue_index].effect_targets[target_index];
+                        let target = &self.runtime_cue_effect_targets(cue_index)[target_index];
                         if !target.enabled {
                             continue;
                         }
@@ -40230,13 +40252,16 @@ impl EngineRuntime {
         };
 
         let transition_sources = if timeline_effect_activation.is_none()
-            && cue.effect_targets.iter().any(|target| {
-                target.enabled
-                    && target.params.is_some()
-                    && target
-                        .transition_ms
-                        .is_some_and(|duration_ms| duration_ms > 0)
-            }) {
+            && self
+                .runtime_cue_effect_targets(cue_index)
+                .iter()
+                .any(|target| {
+                    target.enabled
+                        && target.params.is_some()
+                        && target
+                            .transition_ms
+                            .is_some_and(|duration_ms| duration_ms > 0)
+                }) {
             self.cue_list_effect_transition_sources(cue.cue_list_id)
         } else {
             Vec::new()
@@ -40276,7 +40301,10 @@ impl EngineRuntime {
         if let Some(follow) = follow {
             self.enqueue_pending_cue(follow);
         }
-        self.apply_cue_effect_targets(&cue.effect_targets);
+        match self.blind_held_cue_effect_targets.get(&cue_id).cloned() {
+            Some(held) => self.apply_cue_effect_targets(&held),
+            None => self.apply_cue_effect_targets(&cue.effect_targets),
+        }
         if let Some(activation) = timeline_effect_activation {
             let key = if let Some((parent_cue_id, generation)) = activation.direct_child_parent {
                 RuntimeEffectActivationKey::DirectChildTimeline {
@@ -40784,6 +40812,25 @@ impl EngineRuntime {
         }
     }
 
+    /// The FX targets a Cue's activations are built from: its pre-Blind
+    /// targets while Blind holds it, otherwise the authored ones.
+    fn runtime_cue_effect_targets(&self, cue_index: usize) -> &[CueEffectTarget] {
+        let cue = &self.cues[cue_index];
+        self.blind_held_cue_effect_targets
+            .get(&cue.id)
+            .map_or(cue.effect_targets.as_slice(), Vec::as_slice)
+    }
+
+    /// Blind ended: held scenes switch to their stored FX now, keeping each
+    /// running activation's timing.
+    fn release_blind_held_cue_effect_targets(&mut self) {
+        if self.blind_held_cue_effect_targets.is_empty() {
+            return;
+        }
+        self.blind_held_cue_effect_targets.clear();
+        self.rebuild_effect_activations(Instant::now());
+    }
+
     fn apply_cue_effect_targets(&mut self, targets: &[CueEffectTarget]) {
         for target in targets.iter().filter(|target| target.params.is_none()) {
             if let Some(effect) = self
@@ -40820,9 +40867,9 @@ impl EngineRuntime {
         let modifier = self.effective_cue_live_modifier(cue_id);
         if !range.is_empty() {
             let mut slot = range.start;
-            for target_index in 0..self.cues[cue_index].effect_targets.len() {
+            for target_index in 0..self.runtime_cue_effect_targets(cue_index).len() {
                 let (effect_id, params) = {
-                    let target = &self.cues[cue_index].effect_targets[target_index];
+                    let target = &self.runtime_cue_effect_targets(cue_index)[target_index];
                     if !target.enabled {
                         continue;
                     }
@@ -40861,46 +40908,6 @@ impl EngineRuntime {
             }
         }
         self.reapply_cue_live_step_modifier(cue_index, now, jump_segment);
-    }
-
-    /// Rewrite a Cue's prepared FX activations from its just-updated authored
-    /// params, keeping each activation's timing, so an edit to a playing
-    /// scene reaches the output without restarting it (an idle scene's
-    /// prepared activations simply stay current). Returns false (nothing
-    /// changed) when the programmer is Blind, the Cue has no activations, or
-    /// its enabled FX line-up no longer matches the slots; the output is then
-    /// left alone and a re-trigger rebuilds a changed line-up.
-    fn reapply_active_cue_effect_params(&mut self, cue_id: CueId, now: Instant) -> bool {
-        if self.programmer_blind {
-            return false;
-        }
-        let Some(cue_index) = self.cues.iter().position(|cue| cue.id == cue_id) else {
-            return false;
-        };
-        let range = self.cues[cue_index].effect_activation_range;
-        if range.is_empty() || range.end() > self.effect_activations.len() {
-            return false;
-        }
-        let running = self.effect_activations[range.start..range.end()]
-            .iter()
-            .map(|activation| activation.effect.id)
-            .collect::<Vec<_>>();
-        let authored = self.cues[cue_index]
-            .effect_targets
-            .iter()
-            .filter(|target| target.enabled)
-            .filter_map(|target| {
-                let params = target.params.as_ref()?;
-                self.runtime_effect_from_params_snapshot(target.effect_id, params, now)
-                    .ok()
-                    .map(|_| target.effect_id)
-            })
-            .collect::<Vec<_>>();
-        if running != authored {
-            return false;
-        }
-        self.reapply_cue_live_modifier(cue_index, now, false);
-        true
     }
 
     fn reapply_cue_live_modifier_by_id(&mut self, cue_id: CueId, now: Instant, jump_segment: bool) {
@@ -70433,7 +70440,7 @@ mod tests {
     }
 
     #[test]
-    fn cue_effect_target_edits_reach_running_activations_in_place_unless_blind() {
+    fn cue_effect_target_edits_reach_a_running_scene_and_blind_holds_them_until_it_ends() {
         let request = |period_ms: u64, high: u16| {
             test_lfo_request(
                 "Owned",
@@ -70445,74 +70452,82 @@ mod tests {
                 high,
             )
         };
+        let snapshot = RwLock::new(EngineSnapshot::default());
         let publish = |runtime: &mut EngineRuntime, targets: Vec<CueEffectTarget>| {
-            let (ack, _receiver) = mpsc::sync_channel(1);
+            let (ack, receiver) = mpsc::sync_channel(1);
             runtime.apply_command(EngineCommand::SetCueEffectTargetsPublished {
                 cue_id: 1,
                 effect_targets: targets,
                 expires_at: Instant::now() + Duration::from_secs(2),
                 ack,
             });
-            assert_eq!(runtime.last_error, None);
+            runtime.publish_pending_command_acks(0, &snapshot);
+            receiver.recv_timeout(Duration::from_millis(50)).unwrap()
+        };
+        let running = |runtime: &EngineRuntime| {
+            let range = runtime.cues[0].effect_activation_range;
+            (range.start..range.end())
+                .map(|slot| {
+                    let activation = &runtime.effect_activations[slot];
+                    assert!(
+                        runtime.active_effect_activation_indices.contains(&slot),
+                        "slot {slot} of the playing scene must stay active"
+                    );
+                    let RuntimeEffectKind::Lfo(lfo) = &activation.effect.kind else {
+                        panic!("expected an Lfo activation");
+                    };
+                    (activation.effect.id, lfo.request.period_ms, activation.effect.created_at)
+                })
+                .collect::<Vec<_>>()
+        };
+        let set_blind = |runtime: &mut EngineRuntime, blind: bool| {
+            runtime.apply_command(EngineCommand::SetProgrammerMode {
+                enabled: blind,
+                blind,
+                edited_scene_cue_id: None,
+            });
+            assert_eq!(runtime.programmer_blind, blind);
         };
         let mut runtime = runtime_with_lfo_effects(&[(7, false), (8, false)]);
-        create_effect_only_cue(
-            &mut runtime,
-            1,
-            vec![owned_lfo_target(7, request(1_000, 41_000))],
-        );
+        create_effect_only_cue(&mut runtime, 1, vec![owned_lfo_target(7, request(1_000, 41_000))]);
         let now = Instant::now();
         runtime.rebuild_effect_activations(now);
         runtime.start_cue(1, now, PendingCueTriggerSource::Manual);
-        let slot = runtime.cues[0].effect_activation_range.start;
-        let created_at = runtime.effect_activations[slot].effect.created_at;
+        let created_at = running(&runtime)[0].2;
 
-        // An edit reaches the running activation at once and keeps its timing.
-        publish(&mut runtime, vec![owned_lfo_target(7, request(500, 21_000))]);
-        let live = activation_lfo_request(&runtime, 1);
-        assert_eq!((live.period_ms, live.high), (500, 21_000));
-        assert_eq!(runtime.effect_activations[slot].effect.created_at, created_at);
+        // A stored edit reaches the playing scene at once and keeps its timing.
+        publish(&mut runtime, vec![owned_lfo_target(7, request(500, 21_000))]).unwrap();
+        assert_eq!(running(&runtime), vec![(7, 500, created_at)]);
 
-        // A rolled-back publication restores the authored FX and the activation.
-        let pending = runtime
-            .pending_command_acks
-            .pop()
-            .expect("published edit awaits its ack");
-        assert!(matches!(
-            pending.rollback,
-            PendingCommandRollback::RestoreCueEffectTargetsLive { .. }
-        ));
-        publish(&mut runtime, vec![owned_lfo_target(7, request(250, 11_000))]);
-        let rolled_back = runtime.pending_command_acks.pop().unwrap();
-        runtime.rollback_pending_command(rolled_back.rollback);
-        assert_eq!(activation_lfo_request(&runtime, 1).period_ms, 500);
-        let authored = runtime.cues[0].effect_targets[0].params.clone();
-        assert!(
-            matches!(authored, Some(EffectParamsSnapshot::Lfo(ref lfo)) if lfo.period_ms == 500),
-            "{authored:?}"
-        );
-        runtime.pending_command_acks.clear();
-
-        // Blind: the authored FX changes, the output does not.
-        runtime.programmer_blind = true;
-        publish(&mut runtime, vec![owned_lfo_target(7, request(2_000, 61_000))]);
-        assert_eq!(activation_lfo_request(&runtime, 1).period_ms, 500);
-        assert!(matches!(
-            runtime.pending_command_acks.pop().unwrap().rollback,
-            PendingCommandRollback::RestoreCueRemoval { .. }
-        ));
-        runtime.programmer_blind = false;
-
-        // A changed FX line-up is not patched in place (a re-trigger rebuilds it).
-        publish(
-            &mut runtime,
+        // Blind: edits are stored, the output keeps the previous FX, also for
+        // a changed line-up.
+        set_blind(&mut runtime, true);
+        let both = |period_ms| {
             vec![
-                owned_lfo_target(7, request(3_000, 51_000)),
-                owned_lfo_target(8, request(3_000, 51_000)),
-            ],
+                owned_lfo_target(7, request(period_ms, 61_000)),
+                owned_lfo_target(8, request(period_ms, 61_000)),
+            ]
+        };
+        runtime.fail_next_pending_publication = true;
+        assert!(publish(&mut runtime, both(250)).is_err());
+        assert!(
+            runtime.blind_held_cue_effect_targets.is_empty(),
+            "a rolled-back Blind edit drops the hold it created"
         );
-        assert_eq!(runtime.cues[0].effect_activation_range.len, 1);
-        assert_eq!(activation_lfo_request(&runtime, 1).period_ms, 500);
+        publish(&mut runtime, both(2_000)).unwrap();
+        publish(&mut runtime, both(3_000)).unwrap();
+        assert_eq!(runtime.cues[0].effect_targets.len(), 2, "the edit is stored");
+        assert_eq!(running(&runtime), vec![(7, 500, created_at)]);
+
+        // Ending Blind releases the stored FX into the playing scene.
+        set_blind(&mut runtime, false);
+        assert!(runtime.blind_held_cue_effect_targets.is_empty());
+        let released = running(&runtime);
+        assert_eq!(
+            released.iter().map(|(id, period, _)| (*id, *period)).collect::<Vec<_>>(),
+            vec![(7, 3_000), (8, 3_000)]
+        );
+        assert_eq!(released[0].2, created_at, "the running FX keeps its timing");
     }
 
     #[test]

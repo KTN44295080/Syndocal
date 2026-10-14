@@ -1892,8 +1892,8 @@ const japaneseText: Record<string, string> = {
   "Encoder CC": "エンコーダーCC",
   "Edits are saved automatically and a playing scene shows them at once. Turn on Blind to edit without changing the output.":
     "編集は自動で保存され、再生中のシーンにはすぐ反映されます。出力を変えずに編集するときはBlindをオンにしてください。",
-  "Blind: edits are saved but the output does not change until the scene is triggered again.":
-    "Blind中：編集は保存されますが、シーンを再度再生するまで出力は変わりません。",
+  "Blind: edits are saved, but the output keeps the previous FX until Blind is turned off.":
+    "Blind中：編集は保存されますが、Blindをオフにするまで出力は前のFXのままです。",
   Rejected: "拒否",
   "Packets with an invalid signature or a replayed/late sequence are ignored and counted here.":
     "署名が不正なパケットや、再送・遅れて届いたパケットは使わずに捨て、ここで数えます。",

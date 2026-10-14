@@ -3281,9 +3281,15 @@ export default function App() {
   let latestEngineSnapshot = initialEngineSnapshot;
   const [snapshotRevision, setSnapshotRevision] = createSignal<number | null>(null);
   let loadSceneEffectDraft = (_cueId: number, _effectId: number) => {};
+  // Stores a settled-but-unsaved FX edit before the editor moves away from it.
+  let flushSceneEffectDraft = () => {};
+  // Bumped whenever the FX form is reloaded or closed, so a save that was in
+  // flight meanwhile does not touch the form that replaced it.
+  let sceneEffectFormGeneration = 0;
   const selectSceneCue = (cueId: number) => {
     const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
     if (!cue) return;
+    flushSceneEffectDraft();
     const currentEffectId = selectedSceneEffectId();
     const effectId = cue.effect_targets.some((target) => target.effect_id === currentEffectId)
       ? currentEffectId
@@ -3298,6 +3304,8 @@ export default function App() {
     if (controlMode() === "edit") void changeControlFaderWriteMode("edit");
   };
   const closeSceneSettings = () => {
+    flushSceneEffectDraft();
+    sceneEffectFormGeneration += 1;
     setSelectedSceneCueId(null);
     setSelectedSceneEffectId(null);
     setSceneSettingsSurface("contents");
@@ -24171,16 +24179,22 @@ export default function App() {
     || window.confirm(translateUiText("Discard unsaved changes to this FX?", uiLocale()));
 
   loadSceneEffectDraft = (cueId: number, effectId: number) => {
+    sceneEffectFormGeneration += 1;
     const effect = sceneEffectForCue(cueId, effectId);
     if (effect) useEffectAsDraft(effect);
     rebaselineSceneEffectDraft();
   };
 
   const selectSceneEffect = (effectId: number) => {
+    if (effectId !== selectedSceneEffectId() && untrack(sceneEffectDraftDirty)) {
+      // Edits are live: the pending edit of the current FX is stored before
+      // switching. Only a draft that cannot be saved asks before discarding.
+      if (untrack(sceneEffectDraftSignature) !== null) flushSceneEffectDraft();
+      else if (!confirmDiscardSceneEffectDraft()) return;
+    }
     const cue = selectedSceneCue();
     const target = cue?.effect_targets.find((candidate) => candidate.effect_id === effectId);
     if (!cue || !target) return;
-    if (effectId !== selectedSceneEffectId() && !confirmDiscardSceneEffectDraft()) return;
     setSelectedSceneEffectId(effectId);
     setSceneFxStagePreview(target.enabled && target.params
       ? { cueId: cue.id, effectId, params: target.params, startedAt: performance.now() }
@@ -24255,14 +24269,12 @@ export default function App() {
     cueId: number,
     effectId: number,
     params: EffectParamsSnapshot,
-    options: { lineupChanged?: boolean } = {},
   ) => {
     setSceneFxStagePreview({ cueId, effectId, params, startedAt: performance.now() });
     if (snapshot().programmer.blind) return;
-    // A playing scene already picked the saved FX up in place in the engine
-    // (timing kept); only an idle scene or a changed FX line-up is
-    // (re)triggered.
-    if (!sceneIsPlaying(cueId) || options.lineupChanged) await triggerCue(cueId);
+    // The engine carries a stored FX into a playing scene in place (timing
+    // kept, also for a changed line-up); only an idle scene is started.
+    if (!sceneIsPlaying(cueId)) await triggerCue(cueId);
   };
 
   const createSceneEffect = async (family: EffectChooserFamily) => {
@@ -24444,9 +24456,35 @@ export default function App() {
     setMessage(`Duplicated cue-owned FX ${effectId} as rack position ${sourceIndex + 2}.`);
   };
 
-  // `auto`: an edit settled. The FX is stored and a playing scene picks it
-  // up in place (unless Blind); an idle scene is not started and the form is
-  // left untouched so typing can continue while the save is in flight.
+  // FX saves run one at a time. Each patches only its own FX into the scene's
+  // latest stored list, so a save cannot undo another FX's change that landed
+  // while it waited.
+  let sceneEffectSaveQueue: Promise<unknown> = Promise.resolve();
+  const persistSceneEffectParams = (request: {
+    cueId: number;
+    effectId: number;
+    params: EffectParamsSnapshot;
+    enable: boolean;
+  }) => {
+    const run = async () => {
+      const cue = snapshot().cues.find((candidate) => candidate.id === request.cueId);
+      if (!cue?.effect_targets.some((target) => target.effect_id === request.effectId)) return false;
+      return persistSceneEffectTargets(cue.id, cue.effect_targets.map((target) =>
+        target.effect_id === request.effectId
+          ? { ...target, enabled: request.enable || target.enabled, params: request.params }
+          : target
+      ));
+    };
+    const result = sceneEffectSaveQueue.then(run, run);
+    sceneEffectSaveQueue = result.catch(() => false);
+    return result;
+  };
+
+  // `auto`: an edit settled. The FX is stored as it is (a bypassed FX stays
+  // bypassed) and a playing scene picks it up in place unless Blind; an idle
+  // scene is not started and the form is left untouched so typing can
+  // continue while the save is in flight. The FX, its scene and the edit are
+  // captured before the first await, so a save outlives a selection change.
   const saveSceneEffectDraft = async (options: { auto?: boolean } = {}) => {
     const cue = selectedSceneCue();
     const effectId = selectedSceneEffectId();
@@ -24455,51 +24493,51 @@ export default function App() {
     if (!draft) return false;
     const savedSignature = JSON.stringify(draft);
     const params = effectParamsSnapshotFromDraft(draft);
-    const lineupChanged = !(cue.effect_targets.find((target) => target.effect_id === effectId)?.enabled ?? false);
-    const effectTargets = cue.effect_targets.map((target) =>
-      target.effect_id === effectId ? { ...target, enabled: true, params } : target
-    );
-    const saved = await persistSceneEffectTargets(cue.id, effectTargets);
+    const generation = sceneEffectFormGeneration;
+    const saved = await persistSceneEffectParams({ cueId: cue.id, effectId, params, enable: !options.auto });
     if (!saved) return false;
+    if (selectedSceneCueId() !== cue.id || selectedSceneEffectId() !== effectId) return true;
+    if (generation !== sceneEffectFormGeneration) {
+      // The form was reloaded from the scene before this save landed; show
+      // the stored values unless the operator is already editing again.
+      if (!untrack(sceneEffectDraftDirty)) loadSceneEffectDraft(cue.id, effectId);
+      return true;
+    }
+    const stored = selectedSceneCue()?.effect_targets.find((target) => target.effect_id === effectId);
     if (options.auto) {
       setSceneEffectDraftBaseline(savedSignature);
-      setSceneFxStagePreview({ cueId: cue.id, effectId, params, startedAt: performance.now() });
-      if (lineupChanged && !snapshot().programmer.blind && sceneIsPlaying(cue.id)) await triggerCue(cue.id);
+      if (stored?.enabled) {
+        setSceneFxStagePreview({ cueId: cue.id, effectId, params, startedAt: performance.now() });
+      }
       return true;
     }
     const effect = cueOwnedEffectSummary(
-      { ...effectTargets.find((target) => target.effect_id === effectId)!, params },
+      { ...(stored ?? { effect_id: effectId, enabled: true, transition_ms: null }), params },
       snapshot().effects.find((candidate) => candidate.id === effectId) ?? null,
     );
     if (effect) useEffectAsDraft(effect);
     rebaselineSceneEffectDraft();
-    await previewAndRunSceneEffect(cue.id, effectId, params, { lineupChanged });
+    await previewAndRunSceneEffect(cue.id, effectId, params);
     setMessage(`Saved cue-owned ${draft.effectType} FX for scene ${cue.id}.`);
     return true;
   };
 
   // FX edits are live: once an edit settles it is stored, and a playing scene
-  // shows it at once (Blind keeps the output unchanged). An invalid draft
-  // waits silently until it becomes valid.
+  // shows it at once (Blind holds the output until Blind ends). An invalid
+  // draft waits silently until it becomes valid.
   let sceneEffectAutoSaveTimer: ReturnType<typeof setTimeout> | undefined;
-  let sceneEffectAutoSaving = false;
-  const autoSaveSceneEffectDraft = async () => {
-    if (sceneEffectAutoSaving) {
-      sceneEffectAutoSaveTimer = setTimeout(() => void autoSaveSceneEffectDraft(), 150);
-      return;
-    }
-    if (!untrack(sceneEffectDraftDirty)) return;
-    sceneEffectAutoSaving = true;
-    try {
-      await saveSceneEffectDraft({ auto: true });
-    } finally {
-      sceneEffectAutoSaving = false;
+  flushSceneEffectDraft = () => {
+    clearTimeout(sceneEffectAutoSaveTimer);
+    if (untrack(sceneEffectDraftDirty) && untrack(sceneEffectDraftSignature) !== null) {
+      void saveSceneEffectDraft({ auto: true });
     }
   };
   createEffect(() => {
     if (!sceneEffectDraftDirty() || sceneEffectDraftSignature() === null) return;
     clearTimeout(sceneEffectAutoSaveTimer);
-    sceneEffectAutoSaveTimer = setTimeout(() => void autoSaveSceneEffectDraft(), 350);
+    sceneEffectAutoSaveTimer = setTimeout(() => {
+      if (untrack(sceneEffectDraftDirty)) void saveSceneEffectDraft({ auto: true });
+    }, 350);
   });
   onCleanup(() => clearTimeout(sceneEffectAutoSaveTimer));
 

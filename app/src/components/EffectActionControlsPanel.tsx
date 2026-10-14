@@ -91,7 +91,7 @@ export function EffectActionControlsPanel(props: EffectActionControlsPanelProps)
               data-effect-output-mode={mode()}
               title={mode() === "live"
                 ? "Edits are saved automatically and a playing scene shows them at once. Turn on Blind to edit without changing the output."
-                : "Blind: edits are saved but the output does not change until the scene is triggered again."}
+                : "Blind: edits are saved, but the output keeps the previous FX until Blind is turned off."}
             >
               {mode() === "live" ? "LIVE" : "BLIND"}
             </span>
