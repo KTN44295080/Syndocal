@@ -666,6 +666,7 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
             onClick={() => props.onSurface("contents")}
           >
             <SurfaceIcon surface="contents" />
+            <span class="sceneSettingsSurfaceRailLabel">Scene</span>
           </button>
           <button
             type="button"
@@ -677,6 +678,7 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
             onClick={() => props.onSurface("fx")}
           >
             <SurfaceIcon surface="fx" />
+            <span class="sceneSettingsSurfaceRailLabel">FX</span>
           </button>
           <button
             type="button"
@@ -688,6 +690,7 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
             onClick={() => props.onSurface("settings")}
           >
             <SurfaceIcon surface="settings" />
+            <span class="sceneSettingsSurfaceRailLabel">Props</span>
           </button>
           <button
             type="button"
@@ -699,6 +702,7 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
             onClick={() => props.onSurface("details")}
           >
             <SurfaceIcon surface="details" />
+            <span class="sceneSettingsSurfaceRailLabel">Cue</span>
           </button>
         </nav>
       </div>

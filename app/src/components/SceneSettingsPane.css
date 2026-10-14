@@ -105,3 +105,31 @@
   font-size: 11px;
   font-weight: 800;
 }
+
+/* The surface rail names its four views under the icons (same 40px targets). */
+.sceneSettingsPane .sceneSettingsSurfaceRail button {
+  grid-template-rows: 18px auto;
+  gap: 2px;
+  padding: 3px 1px;
+}
+
+.sceneSettingsPane .sceneSettingsSurfaceRail button > svg {
+  width: 18px;
+  height: 18px;
+}
+
+.sceneSettingsSurfaceRailLabel {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+/* The scroller's rows hug their content. Auto rows were sized by the
+   leftover height, so the tall FX editor overflowed its own row and anything
+   after it (e.g. an end-of-content marker) landed mid-editor. */
+.sceneSettingsPane:not([data-scene-settings-wide="true"]) .sceneSettingsScroller {
+  grid-auto-rows: max-content;
+}

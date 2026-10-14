@@ -1890,6 +1890,8 @@ const japaneseText: Record<string, string> = {
   "Audio Input": "音声入力",
   "Audio Output": "音声出力",
   "Encoder CC": "エンコーダーCC",
+  Scene: "シーン",
+  Props: "設定",
   "Discard unsaved changes to this FX?": "このFXの保存していない変更を破棄しますか？",
   Unsaved: "未保存",
   "Unsaved changes": "保存していない変更があります",
