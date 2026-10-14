@@ -143,10 +143,69 @@ frame into two phases:
    `present_prepared_output`), but the live path uses the CPU artistic seam.
    That is a design decision for the owner, not a tuning step.
 
+## Follow-up 2026-10-15: frame copies and parallel decode
+
+Two of the next steps above are done.
+
+1. **No more per-tick frame copies (`e53642ed`).**
+   - **Before:** each tick copied every layer's 8 MB frame three times. The
+     libav decoder cloned its cache entry to inspect it and again to return
+     it, and composition copied the frame out of the frame queue.
+   - **Now:** the frame queue shares frames (`Arc`). The decoder reads its
+     cache in place, so a reused frame is copied once.
+2. **A tick's libav frames decode in parallel.**
+   - **What runs in parallel:** on the live seam, the renderer first hands
+     the provider every input the tick needs. The libav decoder decodes the
+     distinct file inputs on separate sessions on the rayon pool.
+   - **What stays in input order:** the cache, session and fallback
+     decisions, so the results and counters equal decoding one by one
+     (`libav_parallel_decode_tests.rs`).
+   - **Where it is off:** the cancellable recording path and HAP inputs
+     still decode one by one.
+
+Results on the same machine and media, through the production decoder
+(`NdiAwareVideoFrameDecoder`, CLI fallback off;
+`target/qa/vj-bench/1791990134390.json`, re-run `1791991646115.json`):
+
+| Scenario | 2026-10-14 after (p50 / p95) | Now (p50 / p95) | Now over 16.7 ms |
+| --- | ---: | ---: | ---: |
+| H.264 1080p30, 1 layer | 8.0 / 17.2 | 5.7 / 15.0 | 0 |
+| H.264 1080p60, 1 layer | 15.8 / 17.0 | 13.9 / 15.0 | 0 |
+| HEVC 1080p30, 1 layer | 8.0 / 17.6 | 5.6 / 15.7 | 2 |
+| ProRes 422 1080p30, 1 layer | 8.3 / 17.0 | 5.5 / 15.4 | 0 |
+| HAP 1080p30, 1 layer | 8.1 / 13.0 | 6.1 / 11.1 | 0 |
+| HAP Q 1080p30, 1 layer | 8.3 / 20.8 | 5.8 / 18.8 | 109 |
+| H.264 1080p30 × 2 | 13.0 / 32.0 | 7.4 / 18.5 | 116 |
+| H.264 1080p30 × 4 | 23.5 / 62.2 | 14.4 / 28.3 | 120 |
+| H.264 1080p30 × 8 | 46.9 / 124.2 | 26.3 / 46.5 | 240 |
+| HAP 1080p30 × 2 | 12.3 / 22.9 | 7.6 / 14.3 | 0 |
+| HAP 1080p30 × 4 | 24.2 / 44.8 | 16.2 / 23.1 | 120 |
+| HAP 1080p30 × 8 | 45.8 / 88.6 | 25.9 / 39.8 | 240 |
+| H.264 2160p30, 1 layer, 4K out | 29.7 / 59.8 | 24.0 / 54.3 | 232 |
+| 4 × H.264 1080p30 into 4K out | 86.6 / 185.2 | 45.4 / 83.5 | 240 |
+
+**What holds 60 fps now:**
+- **1080p, one layer:** every codec except HAP Q.
+- **HAP, two layers:** holds 60 fps.
+- **H.264, two layers:** misses only on some decode frames (p95 18.5 ms).
+- **Four layers:** p50 fits 60 fps, but half the frames miss.
+
+**Remaining costs:**
+- the per-tick DXT-to-RGBA expansion for HAP;
+- HAP decode, which is not yet parallel;
+- the decode itself on decode frames;
+- 4K compositing on the CPU.
+
 ## SynapseRack comparison: what is and is not known
 
-- No SynapseRack frame times were measured. It is not installed here, and
-  installing third-party software needs the owner's approval.
+- No SynapseRack frame times were measured yet.
+  - **Approval:** the owner approved installing it (2026-10-15). The official
+    free Demo (limited to 4 layers and 2 group layers) is enough for the
+    1/2/4-layer comparison.
+  - **Downloaded:** `SynapseRack-Windows-Online-v3.3.0-build122-Installer.exe`
+    from `dl.synapserack.com`, 1 544 597 166 bytes, SHA-256
+    `a21a9767dc9ae7fa8fd4882f17047892932336f54634b4ae00d82e924778558a`.
+  - **Pending:** the installer is not code-signed, so the owner runs it.
 - To compare (Tier C), on one machine:
   - pin and record the SynapseRack build and licence (the Demo is limited to
     four layers);

@@ -213,6 +213,18 @@ impl PreferredVideoFrameDecoder {
                 .decode_input_frame_with_cancellation(input, cancellation),
             None => self.libav.decode_input_frame(input),
         };
+        self.finish_general_input(input, decoded, primary_error, cancellation)
+    }
+
+    /// Counts a libav result and falls back to the FFmpeg CLI where the
+    /// one-by-one path would.
+    fn finish_general_input(
+        &mut self,
+        input: &VideoRenderInput,
+        decoded: Result<Option<VideoFrame>, VideoDecodeError>,
+        primary_error: Option<VideoDecodeError>,
+        cancellation: Option<&dyn VideoRenderCancellation>,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
         match decoded {
             Ok(Some(frame)) => {
                 self.diagnostics.libav_successes =
@@ -325,6 +337,42 @@ impl VideoFrameDecoder for PreferredVideoFrameDecoder {
         cancellation: &dyn VideoRenderCancellation,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
         self.decode_input_frame_with_cancellation_impl(input, Some(cancellation))
+    }
+
+    /// Plain file inputs that go straight to libav are decoded together;
+    /// any HAP, still or path-less input keeps the one-by-one order and its
+    /// fallbacks. The counters end as they would one by one.
+    fn decode_input_frames(
+        &mut self,
+        inputs: &[VideoRenderInput],
+    ) -> Vec<Result<Option<VideoFrame>, VideoDecodeError>> {
+        let together = inputs.len() > 1
+            && inputs.iter().all(|input| {
+                let request = &input.request;
+                request.source.kind == VideoSourceKind::File
+                    && request
+                        .source
+                        .path
+                        .as_deref()
+                        .is_some_and(|path| !path.trim().is_empty())
+                    && !HapMovFrameDecoder::supports_request(request)
+            });
+        if !together {
+            return inputs
+                .iter()
+                .map(|input| self.decode_input_frame(input))
+                .collect();
+        }
+        for _ in inputs {
+            self.diagnostics.total_requests = self.diagnostics.total_requests.saturating_add(1);
+            self.diagnostics.libav_requests = self.diagnostics.libav_requests.saturating_add(1);
+        }
+        let decoded = self.libav.decode_input_frames(inputs);
+        inputs
+            .iter()
+            .zip(decoded)
+            .map(|(input, decoded)| self.finish_general_input(input, decoded, None, None))
+            .collect()
     }
 }
 

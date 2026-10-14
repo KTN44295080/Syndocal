@@ -1,0 +1,205 @@
+//! A tick's frames are decoded ahead together on the live path; a later
+//! request for exactly one of them returns that result, anything else
+//! decodes as before, and the cancellable (recording) path never decodes
+//! ahead.
+use super::*;
+use protocol::AutoVjSnapshot;
+
+/// Records which layers each single and batch decode was asked for.
+#[derive(Default)]
+struct RecordingDecoder {
+    single: Vec<VideoLayerId>,
+    batches: Vec<Vec<VideoLayerId>>,
+}
+
+fn solid(request: &VideoFrameRequest) -> VideoFrame {
+    debug_solid_frame_for_layer(
+        request.layer_id,
+        request.position_ms,
+        request.width,
+        request.height,
+    )
+}
+
+impl VideoFrameDecoder for RecordingDecoder {
+    fn retain_layers(&mut self, _layer_ids: &[VideoLayerId]) {}
+
+    fn decode_frame(
+        &mut self,
+        request: &VideoFrameRequest,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        self.single.push(request.layer_id);
+        Ok(Some(solid(request)))
+    }
+
+    fn decode_input_frames(
+        &mut self,
+        inputs: &[VideoRenderInput],
+    ) -> Vec<Result<Option<VideoFrame>, VideoDecodeError>> {
+        self.batches
+            .push(inputs.iter().map(|input| input.request.layer_id).collect());
+        inputs
+            .iter()
+            .map(|input| Ok(Some(solid(&input.request))))
+            .collect()
+    }
+}
+
+fn layer(id: VideoLayerId, kind: VideoSourceKind, position_ms: u64) -> VideoLayerSummary {
+    VideoLayerSummary {
+        id,
+        label: format!("Layer {id}"),
+        source: VideoSourceSummary {
+            kind,
+            path: Some(format!("layer-{id}.mp4")),
+            name: None,
+            codec: None,
+            metadata: None,
+        },
+        media_asset_id: None,
+        blend_mode: VideoBlendMode::Normal,
+        state: VideoLayerState {
+            position_ms,
+            ..VideoLayerState::default()
+        },
+        isf_effect: None,
+        clip_slots: Vec::new(),
+        default_clip_slot_id: None,
+    }
+}
+
+#[test]
+fn decoded_ahead_frames_are_used_once_and_cleared_with_the_tick() {
+    let mut provider = DecoderBackedFrameProvider::new(RecordingDecoder::default());
+    let first = layer(1, VideoSourceKind::File, 100);
+    let second = layer(2, VideoSourceKind::File, 200);
+    let still = layer(3, VideoSourceKind::StillImage, 0);
+    let mut inputs = Vec::new();
+    for layer in [&first, &second, &still] {
+        inputs.extend(provider.layer_frame_inputs(layer, 16, 9));
+    }
+    provider.decode_inputs_ahead(&inputs);
+    // Still images never reach the decoder.
+    assert_eq!(provider.decoder().batches, vec![vec![1, 2]]);
+
+    let frame = provider.frame_for_layer(&first, 16, 9).unwrap();
+    assert_eq!(frame, solid(&inputs[0].request));
+    assert!(
+        provider.decoder().single.is_empty(),
+        "a decoded-ahead frame is reused"
+    );
+    provider.frame_for_layer(&first, 16, 9).unwrap();
+    assert_eq!(provider.decoder().single, vec![1], "and used only once");
+    // A different position is a different input.
+    provider
+        .frame_for_layer(&layer(2, VideoSourceKind::File, 233), 16, 9)
+        .unwrap();
+    assert_eq!(provider.decoder().single, vec![1, 2]);
+
+    // The next tick's retention drops anything left over.
+    provider.retain_layers(&[1, 2]);
+    provider.frame_for_layer(&second, 16, 9).unwrap();
+    assert_eq!(provider.decoder().single, vec![1, 2, 2]);
+
+    // One input alone is not worth a batch.
+    provider.decode_inputs_ahead(&inputs[..1]);
+    assert_eq!(provider.decoder().batches.len(), 1);
+}
+
+fn two_layer_snapshot() -> VideoSnapshot {
+    VideoSnapshot {
+        layers: vec![
+            layer(11, VideoSourceKind::File, 100),
+            layer(12, VideoSourceKind::File, 200),
+        ],
+        media_assets: Vec::new(),
+        effect_chains: Vec::new(),
+        effect_presets: Vec::new(),
+        layer_groups: Vec::new(),
+        transition_buses: Vec::new(),
+        compositions: vec![CompositionSummary {
+            id: 5,
+            label: "Program".to_string(),
+            layer_ids: vec![11, 12],
+            timeline_layer_ids: Vec::new(),
+            output_ids: vec![6],
+        }],
+        outputs: vec![VideoOutputSummary {
+            id: 6,
+            label: "Projector".to_string(),
+            kind: VideoOutputKind::Display,
+            enabled: true,
+            composition_id: 5,
+            fullscreen: false,
+            monitor_id: None,
+            monitor_identity: None,
+            width: 32,
+            height: 18,
+            endpoint_name: None,
+            opacity: 1.0,
+            blackout: false,
+            mapping: VideoOutputMapping::default(),
+        }],
+        mapping_presets: Vec::new(),
+        auto_vj: AutoVjSnapshot::default(),
+        master_opacity: 1.0,
+        blackout: false,
+    }
+}
+
+#[test]
+fn the_live_seam_decodes_a_tick_together_and_recording_does_not() {
+    let snapshot = two_layer_snapshot();
+    let clip_runtime = VideoClipRuntimeSnapshot::default();
+    let transitions = VideoLayerTransitionRuntimeSnapshot::default();
+    let context = VideoEffectRenderContext {
+        clip_runtime: &clip_runtime,
+        project_render_epoch: 1,
+    };
+
+    let mut live = VideoPreviewRenderer::with_frame_provider(
+        VideoRuntimeConfig::default(),
+        DecoderBackedFrameProvider::new(RecordingDecoder::default()),
+    );
+    let rendered = live
+        .prepare_output_artistic_render_result_preview_with_effects_and_transitions(
+            &snapshot,
+            context,
+            &transitions,
+            6,
+            32,
+            18,
+        )
+        .unwrap();
+    assert!(rendered.frame().is_some());
+    assert_eq!(live.frame_provider().decoder().batches, vec![vec![11, 12]]);
+    assert!(live.frame_provider().decoder().single.is_empty());
+
+    let mut recording = VideoPreviewRenderer::with_frame_provider(
+        VideoRuntimeConfig::default(),
+        DecoderBackedFrameProvider::new(RecordingDecoder::default()),
+    );
+    let recorded = recording
+        .render_output_preview_with_effects_and_transitions_cancellable(
+            &snapshot,
+            context,
+            &transitions,
+            6,
+            32,
+            18,
+            &NeverCancelled,
+        )
+        .unwrap();
+    assert!(recording.frame_provider().decoder().batches.is_empty());
+    assert_eq!(recording.frame_provider().decoder().single, vec![11, 12]);
+    // Decoding ahead does not change the pixels.
+    assert_eq!(rendered.frame().unwrap(), &recorded);
+}
+
+struct NeverCancelled;
+
+impl VideoRenderCancellation for NeverCancelled {
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+}

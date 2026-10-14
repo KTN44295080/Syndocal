@@ -24,6 +24,10 @@ mod seek_projection_tests;
 mod catch_up_tests;
 
 #[cfg(all(feature = "libav", test))]
+#[path = "libav_parallel_decode_tests.rs"]
+mod parallel_decode_tests;
+
+#[cfg(all(feature = "libav", test))]
 use std::cell::Cell;
 #[cfg(feature = "libav")]
 use std::cell::RefCell;
@@ -120,6 +124,64 @@ struct LibavFrameCacheEntry {
     position_ms: u64,
     signature: StillImageSignature,
     frame: VideoFrame,
+}
+
+/// What `prepare_decode` leaves for the frame decode.
+#[cfg(feature = "libav")]
+enum LibavPrepared {
+    /// Answered without decoding: from the cache, by reuse, or an error.
+    Done(Result<Option<VideoFrame>, VideoDecodeError>),
+    /// The input's session must decode the requested frame.
+    Decode(LibavDecodeJob),
+}
+
+#[cfg(feature = "libav")]
+struct LibavDecodeJob {
+    path: PathBuf,
+    signature: StillImageSignature,
+    seek_before_decode: bool,
+    /// A continuation falls back on the input's previously cached frame.
+    continuation: bool,
+}
+
+/// The pool a tick's libav frame decodes run on. It is separate from the
+/// global pool the compositor's row bands use, so a decode, which may block
+/// on file I/O, never holds up another output's blending. `None` (one by one)
+/// if its threads cannot be started.
+#[cfg(feature = "libav")]
+fn libav_decode_pool() -> Option<&'static rayon::ThreadPool> {
+    static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(
+                std::thread::available_parallelism()
+                    .map_or(1, std::num::NonZeroUsize::get)
+                    .clamp(1, LIBAV_WORKING_SET_CAPACITY),
+            )
+            .thread_name(|index| format!("syndocal-video-decode-{index}"))
+            .build()
+            .ok()
+    })
+    .as_ref()
+}
+
+/// The input's cached frame, which a continuation falls back on.
+#[cfg(feature = "libav")]
+fn continuation_frame<'a>(
+    entries: &'a [LibavFrameCacheEntry],
+    input: &VideoRenderInput,
+) -> Option<&'a VideoFrame> {
+    entries
+        .iter()
+        .find(|entry| {
+            render_input_cache_owner_matches(
+                input.key,
+                input.request.layer_id,
+                entry.key,
+                entry.layer_id,
+            )
+        })
+        .map(|entry| &entry.frame)
 }
 
 #[cfg(feature = "libav")]
@@ -347,6 +409,125 @@ impl LibavFrameDecoder {
         &mut self,
         input: &VideoRenderInput,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        let job = match self.prepare_decode(input) {
+            LibavPrepared::Done(result) => return result,
+            LibavPrepared::Decode(job) => job,
+        };
+        let session_index = self
+            .session_index(input.key, input.request.layer_id)
+            .expect("a prepared decode has a session");
+        let mut hardware_frames = 0;
+        let primary_decode = decode_libav_session_frame(
+            &input.request,
+            &mut self.sessions[session_index],
+            job.seek_before_decode,
+            job.continuation
+                .then(|| continuation_frame(&self.entries, input))
+                .flatten(),
+            &mut hardware_frames,
+        );
+        self.session_counters.hardware_frames = self
+            .session_counters
+            .hardware_frames
+            .saturating_add(hardware_frames);
+        self.finish_decode(input, job, primary_decode)
+    }
+
+    /// Decodes distinct inputs of one tick on `pool`: the cache, session and
+    /// fallback decisions run one by one in input order, and only the frame
+    /// decodes run in parallel, each on its own session. The caller ensures
+    /// the batch cannot evict anything from the working set; then the
+    /// results, counters, cache and working-set order all equal decoding the
+    /// inputs one by one.
+    #[cfg(feature = "libav")]
+    fn decode_enabled_together(
+        &mut self,
+        inputs: &[VideoRenderInput],
+        pool: &rayon::ThreadPool,
+    ) -> Vec<Result<Option<VideoFrame>, VideoDecodeError>> {
+        use rayon::prelude::*;
+
+        let prepared = inputs
+            .iter()
+            .map(|input| self.prepare_decode(input))
+            .collect::<Vec<_>>();
+        let mut session_jobs = vec![None; self.sessions.len()];
+        for (index, prepared) in prepared.iter().enumerate() {
+            if let LibavPrepared::Decode(job) = prepared {
+                if let Some(session_index) =
+                    self.session_index(inputs[index].key, inputs[index].request.layer_id)
+                {
+                    session_jobs[session_index] = Some((index, job));
+                }
+            }
+        }
+        let entries = &self.entries;
+        let work = self
+            .sessions
+            .iter_mut()
+            .zip(session_jobs)
+            .filter_map(|(session, job)| job.map(|(index, job)| (index, job, session)))
+            .collect::<Vec<_>>();
+        let decode = |(index, job, session): (usize, &LibavDecodeJob, &mut LibavDecodeSession)| {
+            let input = &inputs[index];
+            let mut hardware_frames = 0;
+            let result = decode_libav_session_frame(
+                &input.request,
+                session,
+                job.seek_before_decode,
+                job.continuation
+                    .then(|| continuation_frame(entries, input))
+                    .flatten(),
+                &mut hardware_frames,
+            );
+            (index, result, hardware_frames)
+        };
+        // A tick where at most one layer advances decodes on this thread.
+        let decoded = if work.len() < 2 {
+            work.into_iter().map(decode).collect::<Vec<_>>()
+        } else {
+            pool.install(|| work.into_par_iter().map(decode).collect::<Vec<_>>())
+        };
+        let mut decoded_by_input = (0..inputs.len()).map(|_| None).collect::<Vec<_>>();
+        for (index, result, hardware_frames) in decoded {
+            decoded_by_input[index] = Some((result, hardware_frames));
+        }
+        let mut results = Vec::with_capacity(inputs.len());
+        for ((input, prepared), decoded) in inputs.iter().zip(prepared).zip(decoded_by_input) {
+            results.push(match prepared {
+                LibavPrepared::Done(result) => {
+                    // One by one, an answered input is touched in its turn;
+                    // touching it again here keeps the working-set order.
+                    if matches!(result, Ok(Some(_))) {
+                        self.touch_input(input.key, input.request.layer_id);
+                    }
+                    result
+                }
+                LibavPrepared::Decode(job) => match decoded {
+                    Some((primary_decode, hardware_frames)) => {
+                        self.session_counters.hardware_frames = self
+                            .session_counters
+                            .hardware_frames
+                            .saturating_add(hardware_frames);
+                        self.finish_decode(input, job, primary_decode)
+                    }
+                    // Its session is gone, which a batch that cannot evict
+                    // never sees; decode it on its own rather than fail.
+                    None => {
+                        debug_assert!(false, "a prepared decode lost its session");
+                        self.decode_enabled(input)
+                    }
+                },
+            });
+        }
+        results
+    }
+
+    /// Everything `decode_enabled` does before the frame decode: answering
+    /// from the cache, reusing the last frame, or choosing (and if needed
+    /// opening) the session that must decode.
+    #[cfg(feature = "libav")]
+    fn prepare_decode(&mut self, input: &VideoRenderInput) -> LibavPrepared {
         let key = input.key;
         let request = &input.request;
         let Some(path) = request
@@ -357,10 +538,10 @@ impl LibavFrameDecoder {
         else {
             self.release_input_key(key, request.layer_id);
             self.session_counters.errors = self.session_counters.errors.saturating_add(1);
-            return Err(VideoDecodeError::MissingSourcePath {
+            return LibavPrepared::Done(Err(VideoDecodeError::MissingSourcePath {
                 layer_id: request.layer_id,
                 label: request.label.clone(),
-            });
+            }));
         };
         let path = PathBuf::from(path);
         let signature = StillImageSignature::from_path(&path);
@@ -368,7 +549,7 @@ impl LibavFrameDecoder {
             self.touch_input(key, request.layer_id);
             self.session_counters.frame_reuses =
                 self.session_counters.frame_reuses.saturating_add(1);
-            return Ok(Some(frame));
+            return LibavPrepared::Done(Ok(Some(frame)));
         }
 
         // The cached entry is read in place: cloning it would copy the whole
@@ -402,13 +583,12 @@ impl LibavFrameDecoder {
             self.sessions[index].last_request_ms = Some(request.position_ms);
             self.session_counters.frame_reuses =
                 self.session_counters.frame_reuses.saturating_add(1);
-            return Ok(Some(frame));
+            return LibavPrepared::Done(Ok(Some(frame)));
         }
 
-        let session_index = if decision == LibavSessionDecision::Continue {
+        if decision == LibavSessionDecision::Continue {
             self.session_counters.sequential_continues =
                 self.session_counters.sequential_continues.saturating_add(1);
-            session_index.expect("continuation requires a matching session")
         } else {
             if session_index.is_some() {
                 self.session_counters.resets = self.session_counters.resets.saturating_add(1);
@@ -427,27 +607,37 @@ impl LibavFrameDecoder {
                     self.session_counters.errors = self.session_counters.errors.saturating_add(1);
                     self.release_input_key(key, request.layer_id);
                     self.record_hardware_error(&error);
-                    return Err(error);
+                    return LibavPrepared::Done(Err(error));
                 }
             };
             self.sessions.push(session);
             self.session_counters.opens = self.session_counters.opens.saturating_add(1);
-            self.sessions.len() - 1
-        };
+        }
+        LibavPrepared::Decode(LibavDecodeJob {
+            path,
+            signature,
+            seek_before_decode: decision == LibavSessionDecision::Reopen,
+            continuation: decision == LibavSessionDecision::Continue,
+        })
+    }
 
-        let seek_before_decode = decision == LibavSessionDecision::Reopen;
-        // Only a continuation falls back on its previous frame; nothing has
-        // changed `entries` since the index was taken on that path.
-        let terminal_frame = (decision == LibavSessionDecision::Continue)
-            .then(|| cached_entry_index.map(|index| &self.entries[index].frame))
-            .flatten();
-        let primary_decode = decode_libav_session_frame(
-            request,
-            &mut self.sessions[session_index],
+    /// Everything `decode_enabled` does after the frame decode: the reopen
+    /// fallback for a failed seek, error accounting and the cache update.
+    #[cfg(feature = "libav")]
+    fn finish_decode(
+        &mut self,
+        input: &VideoRenderInput,
+        job: LibavDecodeJob,
+        primary_decode: Result<VideoFrame, VideoDecodeError>,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        let key = input.key;
+        let request = &input.request;
+        let LibavDecodeJob {
+            path,
+            signature,
             seek_before_decode,
-            terminal_frame,
-            &mut self.session_counters.hardware_frames,
-        );
+            ..
+        } = job;
         let frame = match primary_decode {
             Ok(frame) => frame,
             Err(ref error)
@@ -480,7 +670,10 @@ impl LibavFrameDecoder {
                     &mut self.session_counters.hardware_frames,
                 ) {
                     Ok(frame) => {
-                        self.sessions[session_index] = fallback_session;
+                        match self.session_index(key, request.layer_id) {
+                            Some(session_index) => self.sessions[session_index] = fallback_session,
+                            None => self.sessions.push(fallback_session),
+                        }
                         frame
                     }
                     Err(error) => {
@@ -589,6 +782,54 @@ impl VideoFrameDecoder for LibavFrameDecoder {
         {
             Ok(None)
         }
+    }
+
+    /// Distinct file inputs decode their frames in parallel when the batch
+    /// cannot evict anything from the working set; anything else decodes one
+    /// by one.
+    fn decode_input_frames(
+        &mut self,
+        inputs: &[VideoRenderInput],
+    ) -> Vec<Result<Option<VideoFrame>, VideoDecodeError>> {
+        #[cfg(feature = "libav")]
+        {
+            let distinct = inputs.iter().enumerate().all(|(index, input)| {
+                inputs[..index].iter().all(|earlier| {
+                    !render_input_cache_owner_matches(
+                        input.key,
+                        input.layer_id(),
+                        earlier.key,
+                        earlier.layer_id(),
+                    )
+                })
+            });
+            let new_owners = inputs
+                .iter()
+                .filter(|input| {
+                    !self
+                        .working_set_lru
+                        .iter()
+                        .any(|owner| owner.matches(input.key, input.layer_id()))
+                })
+                .count();
+            let cannot_evict =
+                self.working_set_lru.len() + new_owners <= LIBAV_WORKING_SET_CAPACITY;
+            if inputs.len() >= 2
+                && distinct
+                && cannot_evict
+                && inputs
+                    .iter()
+                    .all(|input| input.request.source.kind == VideoSourceKind::File)
+            {
+                if let Some(pool) = libav_decode_pool() {
+                    return self.decode_enabled_together(inputs, pool);
+                }
+            }
+        }
+        inputs
+            .iter()
+            .map(|input| self.decode_input_frame(input))
+            .collect()
     }
 }
 

@@ -121,6 +121,16 @@ impl NdiAwareVideoFrameDecoder {
         self
     }
 
+    /// The production decoder around a chosen file decoder, so tests and the
+    /// VJ benchmark can pin its FFmpeg CLI fallback.
+    #[cfg(test)]
+    pub(crate) fn with_file_decoder(files: video::PreferredVideoFrameDecoder) -> Self {
+        Self {
+            files,
+            ..Self::from_env()
+        }
+    }
+
     pub fn replace_injected_frames(&mut self, frames: HashMap<u64, video::VideoFrame>) {
         self.injected_frames = frames;
     }
@@ -244,6 +254,30 @@ impl video::VideoFrameDecoder for NdiAwareVideoFrameDecoder {
             return Ok(frame);
         }
         video::VideoFrameDecoder::decode_frame(&mut self.files, request)
+    }
+
+    /// A tick of plain file inputs (none injected) decodes together in the
+    /// file decoder, handed over as the legacy inputs `decode_frame` passes
+    /// one by one; any other tick keeps `decode_frame` for every input.
+    fn decode_input_frames(
+        &mut self,
+        inputs: &[video::VideoRenderInput],
+    ) -> Vec<Result<Option<video::VideoFrame>, video::VideoDecodeError>> {
+        let files_only = inputs.iter().all(|input| {
+            input.request.source.kind == VideoSourceKind::File
+                && !self.injected_frames.contains_key(&input.request.layer_id)
+        });
+        if !files_only {
+            return inputs
+                .iter()
+                .map(|input| self.decode_frame(&input.request))
+                .collect();
+        }
+        let legacy = inputs
+            .iter()
+            .map(|input| video::VideoRenderInput::legacy(input.request.clone()))
+            .collect::<Vec<_>>();
+        video::VideoFrameDecoder::decode_input_frames(&mut self.files, &legacy)
     }
 
     fn decode_input_frame_with_cancellation(
@@ -1533,6 +1567,76 @@ impl Drop for NdiOutputWorker {
 mod capture_decoder_tests {
     use super::*;
     use video::VideoFrameDecoder;
+
+    fn file_input(input_id: u64, layer_id: u64, path: &str) -> video::VideoRenderInput {
+        video::VideoRenderInput::new(
+            protocol::VideoRenderInputKey {
+                project_render_epoch: 3,
+                input_id: protocol::VideoRenderInputId(input_id),
+            },
+            video::VideoFrameRequest {
+                layer_id,
+                label: format!("Layer {layer_id}"),
+                source: protocol::VideoSourceSummary {
+                    kind: VideoSourceKind::File,
+                    path: Some(path.to_string()),
+                    name: None,
+                    codec: None,
+                    metadata: None,
+                },
+                position_ms: 0,
+                width: 16,
+                height: 9,
+            },
+        )
+    }
+
+    fn missing_cli_decoder() -> NdiAwareVideoFrameDecoder {
+        NdiAwareVideoFrameDecoder::with_file_decoder(video::PreferredVideoFrameDecoder::new(
+            video::FfmpegCliFrameDecoder::new("missing-ndi-batch-test-ffmpeg.exe"),
+        ))
+    }
+
+    #[test]
+    fn a_file_tick_decodes_together_exactly_as_one_by_one() {
+        let inputs = (1..4)
+            .map(|layer| file_input(10 + layer, layer, &format!("missing-batch-{layer}.mp4")))
+            .collect::<Vec<_>>();
+        let mut one_by_one = missing_cli_decoder();
+        let mut together = missing_cli_decoder();
+        let expected = inputs
+            .iter()
+            .map(|input| one_by_one.decode_input_frame(input))
+            .collect::<Vec<_>>();
+        assert!(expected.iter().all(Result::is_err));
+        assert_eq!(together.decode_input_frames(&inputs), expected);
+        assert_eq!(together.diagnostics(), one_by_one.diagnostics());
+        assert_eq!(together.diagnostics().libav_requests, 3);
+    }
+
+    #[test]
+    fn an_injected_frame_keeps_the_tick_one_by_one() {
+        let inputs = vec![
+            file_input(21, 1, "missing-injected-1.mp4"),
+            file_input(22, 2, "missing-injected-2.mp4"),
+        ];
+        let injected = video::VideoFrame {
+            layer_id: 1,
+            width: 16,
+            height: 9,
+            pts_ms: 0,
+            duration_ms: 0,
+            format: video::VideoPixelFormat::Rgba8,
+            data: vec![7; 16 * 9 * 4],
+        };
+        let mut decoder = missing_cli_decoder();
+        decoder.replace_injected_frames(HashMap::from([(1, injected.clone())]));
+        let results = decoder.decode_input_frames(&inputs);
+        assert_eq!(results[0], Ok(Some(injected)));
+        assert!(results[1].is_err());
+        // Only the file input reached the file decoder.
+        assert_eq!(decoder.diagnostics().total_requests, 1);
+    }
 
     fn follow_video_snapshot(
         output_id: VideoOutputId,

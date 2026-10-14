@@ -121,9 +121,13 @@ fn percentile_ms(sorted: &[Duration], percentile: f64) -> f64 {
 
 /// Renders the scene at a 60 fps media clock and times every frame.
 fn run(scenario: &str, snapshot: &mut VideoSnapshot, width: u32, height: u32) -> Result {
-    let decoder = video::PreferredVideoFrameDecoder::new(video::FfmpegCliFrameDecoder::new(
-        "missing-benchmark-ffmpeg.exe",
-    ));
+    // The production decoder (as the native output builds it), with the
+    // FFmpeg CLI fallback pinned off so every frame is an in-process decode.
+    let decoder = crate::ndi_transport::NdiAwareVideoFrameDecoder::with_file_decoder(
+        video::PreferredVideoFrameDecoder::new(video::FfmpegCliFrameDecoder::new(
+            "missing-benchmark-ffmpeg.exe",
+        )),
+    );
     let mut renderer = video::VideoPreviewRenderer::with_frame_provider(
         video::VideoRuntimeConfig::default(),
         video::DecoderBackedFrameProvider::new(decoder).with_prefetch(0, 33),

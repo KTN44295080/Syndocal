@@ -23,6 +23,9 @@ use protocol::{
 use serde::{Deserialize, Serialize};
 
 mod builtin_isf;
+#[cfg(test)]
+#[path = "decode_ahead_tests.rs"]
+mod decode_ahead_tests;
 mod ffmpeg_cancellable_process;
 mod gpu_compositor;
 mod gpu_surface;
@@ -1736,6 +1739,20 @@ pub trait VideoFrameProvider {
         }
         Ok(frames)
     }
+    /// The inputs `frames_for_layer` will request for `layer`; empty when
+    /// this provider does not decode ahead.
+    fn layer_frame_inputs(
+        &self,
+        _layer: &VideoLayerSummary,
+        _width: u32,
+        _height: u32,
+    ) -> Vec<VideoRenderInput> {
+        Vec::new()
+    }
+    /// Decodes the frames one tick is about to request, so they can be
+    /// decoded together. A later request for exactly one of these inputs
+    /// returns its result; any other request decodes as before.
+    fn decode_inputs_ahead(&mut self, _inputs: &[VideoRenderInput]) {}
 }
 
 pub trait VideoFrameDecoder {
@@ -1775,6 +1792,18 @@ pub trait VideoFrameDecoder {
         }
         Ok(frame)
     }
+    /// Decodes the inputs of one tick, results in input order. They equal
+    /// decoding the inputs one by one; a decoder may decode distinct inputs
+    /// in parallel.
+    fn decode_input_frames(
+        &mut self,
+        inputs: &[VideoRenderInput],
+    ) -> Vec<Result<Option<VideoFrame>, VideoDecodeError>> {
+        inputs
+            .iter()
+            .map(|input| self.decode_input_frame(input))
+            .collect()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -1797,6 +1826,12 @@ pub struct DecoderBackedFrameProvider<D = NullVideoDecoder> {
     prefetch_count: usize,
     prefetch_interval_ms: u64,
     bpm: Option<f32>,
+    /// Results of `decode_inputs_ahead` not yet requested. Cleared whenever
+    /// the retained inputs change, so a result never outlives its tick.
+    decoded_ahead: Vec<(
+        VideoRenderInput,
+        Result<Option<VideoFrame>, VideoDecodeError>,
+    )>,
 }
 
 pub struct VideoPreviewRenderer<P = PreviewFrameProvider> {
@@ -3179,6 +3214,7 @@ impl<D> DecoderBackedFrameProvider<D> {
             prefetch_count: 0,
             prefetch_interval_ms: 33,
             bpm: None,
+            decoded_ahead: Vec::new(),
         }
     }
 
@@ -3229,13 +3265,50 @@ impl<D> DecoderBackedFrameProvider<D> {
 
 impl<D: VideoFrameDecoder> VideoFrameProvider for DecoderBackedFrameProvider<D> {
     fn retain_layers(&mut self, layer_ids: &[VideoLayerId]) {
+        self.decoded_ahead.clear();
         self.still_images.retain_layers(layer_ids);
         self.decoder.retain_layers(layer_ids);
     }
 
     fn retain_inputs(&mut self, inputs: &[VideoRenderInput]) {
+        self.decoded_ahead.clear();
         self.still_images.retain_inputs(inputs);
         self.decoder.retain_inputs(inputs);
+    }
+
+    fn layer_frame_inputs(
+        &self,
+        layer: &VideoLayerSummary,
+        width: u32,
+        height: u32,
+    ) -> Vec<VideoRenderInput> {
+        preview_prefetch_positions_ms(
+            layer,
+            self.prefetch_count,
+            self.prefetch_interval_ms,
+            self.bpm,
+        )
+        .into_iter()
+        .map(|position_ms| legacy_layer_input(layer, width, height, Some(position_ms)))
+        .collect()
+    }
+
+    fn decode_inputs_ahead(&mut self, inputs: &[VideoRenderInput]) {
+        self.decoded_ahead.clear();
+        // Still images take their own cache, never the decoder.
+        let mut ahead: Vec<VideoRenderInput> = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            if !matches!(input.request.source.kind, VideoSourceKind::StillImage)
+                && !ahead.contains(input)
+            {
+                ahead.push(input.clone());
+            }
+        }
+        if ahead.len() < 2 {
+            return;
+        }
+        let results = self.decoder.decode_input_frames(&ahead);
+        self.decoded_ahead = ahead.into_iter().zip(results).collect();
     }
 
     fn frame_for_layer(
@@ -3316,7 +3389,39 @@ impl<D: VideoFrameDecoder> VideoFrameProvider for DecoderBackedFrameProvider<D> 
     }
 }
 
+/// The legacy input a layer's frame request decodes, at its sanitized
+/// position unless `position_override_ms` is given.
+fn legacy_layer_input(
+    layer: &VideoLayerSummary,
+    width: u32,
+    height: u32,
+    position_override_ms: Option<u64>,
+) -> VideoRenderInput {
+    let state = sanitize_layer_state(layer.state.clone());
+    let position_ms = position_override_ms.unwrap_or(state.position_ms);
+    VideoRenderInput::legacy(VideoFrameRequest {
+        layer_id: layer.id,
+        label: layer.label.clone(),
+        source: layer.source.clone(),
+        position_ms,
+        width,
+        height,
+    })
+}
+
 impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
+    /// The result `decode_inputs_ahead` already produced for exactly `input`.
+    fn take_decoded_ahead(
+        &mut self,
+        input: &VideoRenderInput,
+    ) -> Option<Result<Option<VideoFrame>, VideoDecodeError>> {
+        let index = self
+            .decoded_ahead
+            .iter()
+            .position(|(ahead, _)| ahead == input)?;
+        Some(self.decoded_ahead.swap_remove(index).1)
+    }
+
     fn decode_or_placeholder_for_layer(
         &mut self,
         layer: &VideoLayerSummary,
@@ -3324,16 +3429,7 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
         height: u32,
         position_override_ms: Option<u64>,
     ) -> Result<VideoFrame, VideoFrameProviderError> {
-        let state = sanitize_layer_state(layer.state.clone());
-        let position_ms = position_override_ms.unwrap_or(state.position_ms);
-        let input = VideoRenderInput::legacy(VideoFrameRequest {
-            layer_id: layer.id,
-            label: layer.label.clone(),
-            source: layer.source.clone(),
-            position_ms,
-            width,
-            height,
-        });
+        let input = legacy_layer_input(layer, width, height, position_override_ms);
         self.decode_or_placeholder_for_input(&input)
     }
 
@@ -3391,7 +3487,11 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
                 });
         }
 
-        match self.decoder.decode_input_frame(input) {
+        let decoded = match self.take_decoded_ahead(input) {
+            Some(decoded) => decoded,
+            None => self.decoder.decode_input_frame(input),
+        };
+        match decoded {
             Ok(Some(frame)) => Ok(frame),
             Ok(None) if self.placeholder_when_missing => Ok(debug_solid_frame_for_layer(
                 request.layer_id,
@@ -3458,9 +3558,16 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
             };
         }
 
-        let decoded = self
-            .decoder
-            .decode_input_frame_with_cancellation(input, cancellation);
+        let decoded = match self.take_decoded_ahead(input) {
+            Some(decoded) if cancellation.is_cancelled() => {
+                drop(decoded);
+                Err(VideoDecodeError::Cancelled)
+            }
+            Some(decoded) => decoded,
+            None => self
+                .decoder
+                .decode_input_frame_with_cancellation(input, cancellation),
+        };
         match decoded {
             Ok(Some(frame)) => Ok(frame),
             Ok(None) if self.placeholder_when_missing => {
@@ -5080,6 +5187,58 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         )
     }
 
+    /// Hands the provider every input the per-layer loop below will request,
+    /// so their frames can be decoded together. An input that cannot be
+    /// built here is left to that loop, which reports it.
+    fn decode_requested_inputs_ahead(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        clip_runtime: &VideoClipRuntimeSnapshot,
+        project_render_epoch: u64,
+        requested_layer_ids: &[VideoLayerId],
+        width: u32,
+        height: u32,
+    ) {
+        let mut inputs = Vec::new();
+        for layer in snapshot
+            .layers
+            .iter()
+            .filter(|layer| requested_layer_ids.contains(&layer.id))
+        {
+            let runtime_layer = clip_runtime
+                .layers
+                .iter()
+                .find(|runtime| runtime.layer_id == layer.id);
+            if let Some(transition) = runtime_layer.and_then(|runtime| runtime.transition.as_ref())
+            {
+                for (slot_id, position_ms) in [
+                    (
+                        transition.outgoing_slot_id,
+                        runtime_layer
+                            .map(|runtime| runtime.playhead_ms)
+                            .unwrap_or(0),
+                    ),
+                    (transition.incoming_slot_id, transition.incoming_playhead_ms),
+                ] {
+                    if let Ok(input) = video_render_input_for_clip_slot(
+                        snapshot,
+                        layer,
+                        slot_id,
+                        position_ms,
+                        project_render_epoch,
+                        width,
+                        height,
+                    ) {
+                        inputs.push(input);
+                    }
+                }
+            } else {
+                inputs.extend(self.frame_provider.layer_frame_inputs(layer, width, height));
+            }
+        }
+        self.frame_provider.decode_inputs_ahead(&inputs);
+    }
+
     fn prepare_frames_with_effects_with_cancellation(
         &mut self,
         snapshot: &VideoSnapshot,
@@ -5148,6 +5307,16 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         self.frame_provider.retain_inputs(&retained_inputs);
         self.runtime.sync_layers(&layer_ids);
         self.reset_isf_stack_metrics();
+        if cancellation.is_none() {
+            self.decode_requested_inputs_ahead(
+                snapshot,
+                clip_runtime,
+                project_render_epoch,
+                requested_layer_ids,
+                width,
+                height,
+            );
+        }
         let mut effect_faults = Vec::new();
 
         for layer in &snapshot.layers {
