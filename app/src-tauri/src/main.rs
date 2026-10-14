@@ -169,6 +169,8 @@ use protocol::{
         OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID,
         OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID,
         OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID,
+        OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID,
+        OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID,
         OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID,
         OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
         OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
@@ -321,6 +323,7 @@ mod serial_dmx_machine;
 #[cfg(test)]
 mod serial_show_dmx_route_tests;
 mod show_serial_dmx_route;
+mod usb_dmx_universes;
 mod network_dmx_routes;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 mod show_spout_transport;
@@ -25259,6 +25262,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "bootstrap_vj_show",
     "cancel_pane_window_close",
     "cancel_queued_video_clip_slot_authoritative",
+    "clear_usb_dmx_universe_binding_v1",
     "close_open_video_output_windows",
     "close_pane_window",
     "close_video_output_window",
@@ -25321,6 +25325,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "seek_video_clip_slot_authoritative",
     "select_normal_audio_output",
     "select_serial_dmx_machine_binding_v1",
+    "select_usb_dmx_universe_binding_v1",
     "send_art_rdm_request",
     "send_dmx_routes_test_frame",
     "send_dmx_test_frame",
@@ -30018,6 +30023,36 @@ fn get_show_serial_dmx_safety_blackout_route_status_v1(
     state: State<'_, AppState>,
 ) -> Result<show_serial_dmx_route::ShowSerialDmxSafetyBlackoutRouteStatusV1, String> {
     show_serial_dmx_route::route_status(&state)
+}
+
+/// Read-only: machine-local USB-DMX cable bindings (Universes 1+) and every
+/// cable slot's runtime status.
+#[tauri::command]
+fn get_usb_dmx_universes_v1(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<usb_dmx_universes::UsbDmxUniversesStatusV1, String> {
+    usb_dmx_universes::status(&state, &app)
+}
+
+/// Bind one exact enumerated cable to a universe (machine-local only).
+#[tauri::command]
+fn select_usb_dmx_universe_binding_v1(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    request: usb_dmx_universes::SelectUsbDmxUniverseBindingRequestV1,
+) -> Result<usb_dmx_universes::UsbDmxUniversesStatusV1, String> {
+    usb_dmx_universes::select_binding(&state, &app, request)
+}
+
+/// Remove a universe's cable binding; its cable must be stopped.
+#[tauri::command]
+fn clear_usb_dmx_universe_binding_v1(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    request: usb_dmx_universes::ClearUsbDmxUniverseBindingRequestV1,
+) -> Result<usb_dmx_universes::UsbDmxUniversesStatusV1, String> {
+    usb_dmx_universes::clear_binding(&state, &app, request)
 }
 
 #[tauri::command]
@@ -50386,6 +50421,39 @@ async fn stop_show_serial_dmx_safety_blackout_route_v1(
     show_serial_dmx_route::stop_command(app, window, request).await
 }
 
+/// Lease-bound start of one universe's machine-local USB-DMX cable. Only the
+/// universe travels; native code resolves and revalidates the bound cable.
+#[tauri::command]
+async fn enable_usb_dmx_universe_route_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(
+        app,
+        window,
+        OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID,
+        request,
+    )
+    .await
+}
+
+/// Lease-bound stop of one universe's USB-DMX cable under the engaged S0.
+#[tauri::command]
+async fn stop_usb_dmx_universe_route_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(
+        app,
+        window,
+        OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID,
+        request,
+    )
+    .await
+}
+
 /// R4-only local-confirmed DSF2026 proof. The command accepts no test-frame
 /// data: native code can emit only one fixed ArtDmx U0 datagram to loopback.
 #[tauri::command]
@@ -57755,6 +57823,12 @@ fn output_lease_resources_for_control_action(
         | protocol::control_plane_command::OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute {
             ..
         }
+        | protocol::control_plane_command::OutputControlActionV2::EnableUsbDmxUniverseRoute {
+            ..
+        }
+        | protocol::control_plane_command::OutputControlActionV2::StopUsbDmxUniverseRoute {
+            ..
+        }
         | protocol::control_plane_command::OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe {
             ..
         }
@@ -57858,6 +57932,8 @@ pub(crate) fn build_output_lease_authorization_request(
         | OutputControlActionV2::EnableShowArtNetLoopbackRoute { lease }
         | OutputControlActionV2::EnableShowSerialDmxSafetyBlackoutRoute { lease }
         | OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute { lease }
+        | OutputControlActionV2::EnableUsbDmxUniverseRoute { lease, .. }
+        | OutputControlActionV2::StopUsbDmxUniverseRoute { lease, .. }
         | OutputControlActionV2::EnableShowSpoutOutputs { lease } => {
             let lease_id = output_lease::OutputLeaseId::decode(&lease.lease_id)
                 .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?;
@@ -133043,6 +133119,9 @@ fn main() {
             get_serial_dmx_machine_binding_status_v1,
             select_serial_dmx_machine_binding_v1,
             get_show_serial_dmx_safety_blackout_route_status_v1,
+            get_usb_dmx_universes_v1,
+            select_usb_dmx_universe_binding_v1,
+            clear_usb_dmx_universe_binding_v1,
             connect_midi_clock,
             disconnect_midi_clock,
             connect_midi_control,
@@ -133337,6 +133416,8 @@ fn main() {
             set_network_dmx_routes_v1,
             enable_show_serial_dmx_safety_blackout_route_v1,
             stop_show_serial_dmx_safety_blackout_route_v1,
+            enable_usb_dmx_universe_route_v1,
+            stop_usb_dmx_universe_route_v1,
             send_dsf2026_artnet_acceptance_probe_v1,
             acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1,
             enable_show_spout_outputs_v2,

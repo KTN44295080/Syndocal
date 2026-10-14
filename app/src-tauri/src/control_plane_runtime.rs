@@ -89,6 +89,8 @@ pub(crate) fn output_action_requires_native_danger_confirmation(
         OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. }
             | OutputControlActionV2::EnableShowSerialDmxSafetyBlackoutRoute { .. }
             | OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute { .. }
+            | OutputControlActionV2::EnableUsbDmxUniverseRoute { .. }
+            | OutputControlActionV2::StopUsbDmxUniverseRoute { .. }
             | OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. }
             | OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { .. }
             | OutputControlActionV2::EnableShowSpoutOutputs { .. }
@@ -1285,6 +1287,23 @@ where
                 lease_now_ms,
             )
         }
+        OutputControlActionV2::EnableUsbDmxUniverseRoute { universe, .. } => {
+            super::usb_dmx_universes::enable_with_output_control_fence(
+                &app,
+                state,
+                *universe,
+                &request.expected_fence,
+                &lease_request,
+            )
+        }
+        OutputControlActionV2::StopUsbDmxUniverseRoute { universe, .. } => {
+            super::usb_dmx_universes::stop_with_output_control_fence(
+                state,
+                *universe,
+                &request.expected_fence,
+                &lease_request,
+            )
+        }
         OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. } => {
             super::show_artnet_acceptance_probe::send_dsf2026_artnet_acceptance_probe_with_output_control_fence(
                 state,
@@ -1773,7 +1792,9 @@ fn validate_output_action_current(
             super::validate_current_staged_show_artnet_loopback_route(state).map(|_| ())
         }
         OutputControlActionV2::EnableShowSerialDmxSafetyBlackoutRoute { .. }
-        | OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute { .. } => Ok(()),
+        | OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute { .. }
+        | OutputControlActionV2::EnableUsbDmxUniverseRoute { .. }
+        | OutputControlActionV2::StopUsbDmxUniverseRoute { .. } => Ok(()),
         OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. } => {
             super::show_artnet_acceptance_probe::validate_current_dsf2026_artnet_acceptance_probe(
                 state,
@@ -2936,6 +2957,8 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
         | OutputControlActionV2::SetNetworkDmxRoutes { .. }
         | OutputControlActionV2::EnableShowSerialDmxSafetyBlackoutRoute { .. }
         | OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute { .. }
+        | OutputControlActionV2::EnableUsbDmxUniverseRoute { .. }
+        | OutputControlActionV2::StopUsbDmxUniverseRoute { .. }
         | OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. }
         | OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { .. }
         | OutputControlActionV2::EnableShowSpoutOutputs { .. }

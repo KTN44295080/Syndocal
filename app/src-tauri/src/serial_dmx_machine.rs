@@ -379,7 +379,7 @@ fn persist_selected_to_path(
     persist_binding_bytes_to_path(path, &bytes)
 }
 
-fn persist_binding_bytes_to_path(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn persist_binding_bytes_to_path(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if bytes.len() as u64 > MAX_SERIAL_DMX_MACHINE_BINDING_BYTES {
         return Err("Machine-local USB-DMX selection exceeds its safety limit".to_string());
     }

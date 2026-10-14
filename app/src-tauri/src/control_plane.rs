@@ -36,6 +36,8 @@ use protocol::control_plane_command::{
     OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID,
     OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID,
     OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID,
+    OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID,
+    OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID,
     OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID, OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID,
     OUTPUT_STANDBY_TAKEOVER_OPERATION_ID, OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
     SAFETY_BLACKOUT_ENGAGE_OPERATION_ID, SCENE_CREATE_AUTHORITATIVE_V1_OPERATION_ID,
@@ -68,9 +70,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 567;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 572;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "edfdf34a22b62146d527c66291b8b1d916a1f66ba2a4d98daa492b4d90034702";
+    "9793526443c0ce6f79e5e6cf326a394f6e971b1b5af402e2b50766546a726130";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -217,6 +219,8 @@ fn classify_registered_tauri_route(command: &str) -> Option<TauriRouteAdmissionC
         command,
         "enable_show_serial_dmx_safety_blackout_route_v1"
             | "stop_show_serial_dmx_safety_blackout_route_v1"
+            | "enable_usb_dmx_universe_route_v1"
+            | "stop_usb_dmx_universe_route_v1"
             | "enable_show_spout_outputs_v2"
             | "reset_show_spout_outputs_v1"
             | "send_dsf2026_artnet_acceptance_probe_v1"
@@ -344,6 +348,7 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "get_serial_dmx_machine_binding_status_v1"
             | "get_show_clock_status"
             | "get_show_serial_dmx_safety_blackout_route_status_v1"
+            | "get_usb_dmx_universes_v1"
             | "get_snapshot"
             | "get_snapshot_delta"
             | "get_timeline_cue_audio_status"
@@ -518,6 +523,8 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "seek_video_clip_slot_authoritative"
             | "seek_vj_preview"
             | "select_serial_dmx_machine_binding_v1"
+            | "select_usb_dmx_universe_binding_v1"
+            | "clear_usb_dmx_universe_binding_v1"
             | "select_normal_audio_output"
             | "send_art_rdm_request"
             | "send_dmx_routes_test_frame"
@@ -1281,6 +1288,8 @@ enum ReviewedCanonicalOperation {
     SetNetworkDmxRoutes,
     EnableShowSerialDmxSafetyBlackoutRoute,
     StopShowSerialDmxSafetyBlackoutRoute,
+    EnableUsbDmxUniverseRoute,
+    StopUsbDmxUniverseRoute,
     EnableShowSpoutOutputs,
     ResetShowSpoutOutputs,
     SendDsf2026ArtNetAcceptanceProbe,
@@ -1338,6 +1347,8 @@ impl ReviewedCanonicalOperation {
             Self::StopShowSerialDmxSafetyBlackoutRoute => {
                 OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
             }
+            Self::EnableUsbDmxUniverseRoute => OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID,
+            Self::StopUsbDmxUniverseRoute => OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID,
             Self::EnableShowSpoutOutputs => OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID,
             Self::ResetShowSpoutOutputs => OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID,
             Self::SendDsf2026ArtNetAcceptanceProbe => {
@@ -1419,6 +1430,12 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
         }
         "stop_show_serial_dmx_safety_blackout_route_v1" => {
             Some(ReviewedCanonicalOperation::StopShowSerialDmxSafetyBlackoutRoute)
+        }
+        "enable_usb_dmx_universe_route_v1" => {
+            Some(ReviewedCanonicalOperation::EnableUsbDmxUniverseRoute)
+        }
+        "stop_usb_dmx_universe_route_v1" => {
+            Some(ReviewedCanonicalOperation::StopUsbDmxUniverseRoute)
         }
         "enable_show_spout_outputs_v2" => Some(ReviewedCanonicalOperation::EnableShowSpoutOutputs),
         "reset_show_spout_outputs_v1" => Some(ReviewedCanonicalOperation::ResetShowSpoutOutputs),
@@ -1568,6 +1585,8 @@ fn canonical_descriptor_for_source(
         | ReviewedCanonicalOperation::SetNetworkDmxRoutes
         | ReviewedCanonicalOperation::EnableShowSerialDmxSafetyBlackoutRoute
         | ReviewedCanonicalOperation::StopShowSerialDmxSafetyBlackoutRoute
+        | ReviewedCanonicalOperation::EnableUsbDmxUniverseRoute
+        | ReviewedCanonicalOperation::StopUsbDmxUniverseRoute
         | ReviewedCanonicalOperation::SendDsf2026ArtNetAcceptanceProbe
         | ReviewedCanonicalOperation::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt
         | ReviewedCanonicalOperation::EnableShowSpoutOutputs
@@ -1640,6 +1659,8 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::SetNetworkDmxRoutes
                 | ReviewedCanonicalOperation::EnableShowSerialDmxSafetyBlackoutRoute
                 | ReviewedCanonicalOperation::StopShowSerialDmxSafetyBlackoutRoute
+                | ReviewedCanonicalOperation::EnableUsbDmxUniverseRoute
+                | ReviewedCanonicalOperation::StopUsbDmxUniverseRoute
                 | ReviewedCanonicalOperation::SendDsf2026ArtNetAcceptanceProbe
                 | ReviewedCanonicalOperation::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt
                 | ReviewedCanonicalOperation::EnableShowSpoutOutputs
@@ -1688,6 +1709,8 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::SetNetworkDmxRoutes
                 | ReviewedCanonicalOperation::EnableShowSerialDmxSafetyBlackoutRoute
                 | ReviewedCanonicalOperation::StopShowSerialDmxSafetyBlackoutRoute
+                | ReviewedCanonicalOperation::EnableUsbDmxUniverseRoute
+                | ReviewedCanonicalOperation::StopUsbDmxUniverseRoute
                 | ReviewedCanonicalOperation::SendDsf2026ArtNetAcceptanceProbe
                 | ReviewedCanonicalOperation::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt
                 | ReviewedCanonicalOperation::EnableShowSpoutOutputs
@@ -1734,6 +1757,8 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::SetNetworkDmxRoutes
                 | ReviewedCanonicalOperation::EnableShowSerialDmxSafetyBlackoutRoute
                 | ReviewedCanonicalOperation::StopShowSerialDmxSafetyBlackoutRoute
+                | ReviewedCanonicalOperation::EnableUsbDmxUniverseRoute
+                | ReviewedCanonicalOperation::StopUsbDmxUniverseRoute
                 | ReviewedCanonicalOperation::SendDsf2026ArtNetAcceptanceProbe
                 | ReviewedCanonicalOperation::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt
                 | ReviewedCanonicalOperation::EnableShowSpoutOutputs
@@ -1786,6 +1811,8 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::SetNetworkDmxRoutes
                 | ReviewedCanonicalOperation::EnableShowSerialDmxSafetyBlackoutRoute
                 | ReviewedCanonicalOperation::StopShowSerialDmxSafetyBlackoutRoute
+                | ReviewedCanonicalOperation::EnableUsbDmxUniverseRoute
+                | ReviewedCanonicalOperation::StopUsbDmxUniverseRoute
                 | ReviewedCanonicalOperation::SendDsf2026ArtNetAcceptanceProbe
                 | ReviewedCanonicalOperation::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt
                 | ReviewedCanonicalOperation::EnableShowSpoutOutputs
@@ -1978,6 +2005,8 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
             | "enable_show_art_net_loopback_route_v1"
             | "enable_show_serial_dmx_safety_blackout_route_v1"
             | "stop_show_serial_dmx_safety_blackout_route_v1"
+            | "enable_usb_dmx_universe_route_v1"
+            | "stop_usb_dmx_universe_route_v1"
             | "enable_show_spout_outputs_v2"
             | "reset_show_spout_outputs_v1"
             | "send_dsf2026_artnet_acceptance_probe_v1"
@@ -2187,6 +2216,8 @@ fn command_schema(operation_id: &str, direction: &str) -> SchemaIdentity {
                 | OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID
                 | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
                 | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
+                | OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID
+                | OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID
                 | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
                 | OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID
                 | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
@@ -2446,6 +2477,14 @@ mod tests {
                 TauriRouteAdmissionClass::LocalPhysicalMutation,
             ),
             (
+                "enable_usb_dmx_universe_route_v1",
+                TauriRouteAdmissionClass::LocalPhysicalMutation,
+            ),
+            (
+                "stop_usb_dmx_universe_route_v1",
+                TauriRouteAdmissionClass::LocalPhysicalMutation,
+            ),
+            (
                 "enable_show_spout_outputs_v2",
                 TauriRouteAdmissionClass::LocalPhysicalMutation,
             ),
@@ -2535,11 +2574,11 @@ mod tests {
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
             31
         );
-        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 109);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 110);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 11);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
-        assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 6);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 170);
+        assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 8);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 172);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 29);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 28);
@@ -2617,7 +2656,7 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 487;
+        const FRONTEND_INVOKE_COUNT: usize = 492;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 210);
         assert_eq!(
             registry.operations.len(),
@@ -2627,7 +2666,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1664);
+        assert_eq!(registry.operations.len(), 1674);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2747,6 +2786,14 @@ mod tests {
             (
                 "stop_show_serial_dmx_safety_blackout_route_v1",
                 OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID,
+            ),
+            (
+                "enable_usb_dmx_universe_route_v1",
+                OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID,
+            ),
+            (
+                "stop_usb_dmx_universe_route_v1",
+                OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID,
             ),
             (
                 "enable_show_spout_outputs_v2",
@@ -3009,17 +3056,17 @@ mod tests {
         const ENGINE_COUNT: usize = 284;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 210;
-        const FRONTEND_COUNT: usize = 487;
+        const FRONTEND_COUNT: usize = 492;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1664);
-        assert_eq!(SOURCE_TOTAL, 1697);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1674);
+        assert_eq!(SOURCE_TOTAL, 1707);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 74);
+        assert_eq!(canonical.canonical_operations.len(), 76);
 
         let output_control_operations = canonical
             .canonical_operations
@@ -3043,6 +3090,8 @@ mod tests {
                         | OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID
                         | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
                         | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
+                        | OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID
+                        | OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID
                         | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
                         | OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID
                         | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
@@ -3056,7 +3105,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(output_control_operations.len(), 26);
+        assert_eq!(output_control_operations.len(), 28);
         for (source_id, operation_id) in [
             (
                 "release_blackout_output_control_v2",
@@ -3099,6 +3148,14 @@ mod tests {
             (
                 "stop_show_serial_dmx_safety_blackout_route_v1",
                 OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID,
+            ),
+            (
+                "enable_usb_dmx_universe_route_v1",
+                OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID,
+            ),
+            (
+                "stop_usb_dmx_universe_route_v1",
+                OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID,
             ),
             (
                 "enable_show_spout_outputs_v2",
@@ -3408,7 +3465,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 74);
+        assert_eq!(direct.len(), 76);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
@@ -3426,7 +3483,7 @@ mod tests {
         // two frontend sources remain aliases rather than new external operations.
         // MIDI PitchBend and RelativeControlChange are input message shapes,
         // not external operations; they stay unclassified like the other four.
-        assert_eq!(unclassified.len(), 1131);
+        assert_eq!(unclassified.len(), 1134);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -3767,6 +3824,8 @@ mod tests {
                     | OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID
                     | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
                     | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
+                    | OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID
+                    | OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID
                     | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
                     | OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID
                     | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
@@ -3940,6 +3999,8 @@ mod tests {
                     | OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID
                     | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
                     | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
+                    | OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID
+                    | OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID
                     | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
                     | OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID
                     | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
@@ -4186,11 +4247,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both the native and frontend missing-publication resolver.
-        assert_eq!(legacy.operations.len(), 1664);
+        assert_eq!(legacy.operations.len(), 1674);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1664);
+        assert_eq!(operations.len(), 1674);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

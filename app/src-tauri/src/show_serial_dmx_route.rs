@@ -93,6 +93,19 @@ pub(super) fn select_machine_binding(
     let _transition_guard = super::lock_output_ownership_transition(state)?;
     let ports = io::serial_dmx::list_serial_ports()
         .map_err(|error| format!("USB-DMX device enumeration failed: {error}"))?;
+    // One cable outputs one universe: the Universe 0 cable may not be a
+    // cable already bound to another universe.
+    if let Some(identity) = ports
+        .iter()
+        .find(|port| {
+            port.name == request.port_name.trim()
+                && port.windows_device_instance_id == request.windows_device_instance_id
+                && port.macos_device_instance_id == request.macos_device_instance_id
+        })
+        .and_then(|port| serial_dmx_machine::SerialDmxMachineBindingIdentityV2::from_summary(port).ok())
+    {
+        super::usb_dmx_universes::ensure_cable_not_bound_to_a_universe(app, &identity)?;
+    }
     let (binding, route) = select_machine_binding_from_ports_with_route_status(
         &serial_dmx_machine_binding_path(app)?,
         &request,

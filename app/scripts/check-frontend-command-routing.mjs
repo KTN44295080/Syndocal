@@ -557,10 +557,25 @@ assert.deepEqual(
   "the exact Spout V2 enable and local reset routes must remain present exactly once",
 );
 assert(!manifest.includes("enable_show_spout_outputs_v1"), "the retired Spout V1 route must remain unreachable");
-// One new lease-bound network route operation brings the manifest to 487 routes, with the exact 135/31 mutation
-// classifications checked against both App and control_plane.rs below.
+// Independent USB-DMX cables (Universes 1+): two lease-bound output-control
+// routes plus a read-only status and the machine-local bind/clear.
+const usbDmxCableManifestCommands = [
+  "clear_usb_dmx_universe_binding_v1",
+  "enable_usb_dmx_universe_route_v1",
+  "get_usb_dmx_universes_v1",
+  "select_usb_dmx_universe_binding_v1",
+  "stop_usb_dmx_universe_route_v1",
+];
+assert.deepEqual(
+  manifest.filter((command) => usbDmxCableManifestCommands.includes(command)).sort(),
+  usbDmxCableManifestCommands,
+  "the USB-DMX cable routes must be present exactly once",
+);
+// The network route and the five USB-DMX cable routes bring the manifest to
+// 492 routes, with the exact 135/31 mutation classifications checked against
+// both App and control_plane.rs below.
 assert(manifest.includes("set_network_dmx_routes_v1"), "network universes must use the canonical output-control route");
-assert.equal(manifest.length, 487, "frontend Tauri manifest count drifted");
+assert.equal(manifest.length, 492, "frontend Tauri manifest count drifted");
 assert.equal(backendRendererMutations.length, 135, "backend renderer-ticketed classification count drifted");
 assert.equal(backendServerMutations.length, 31, "backend authoritative classification count drifted");
 assert.deepEqual(

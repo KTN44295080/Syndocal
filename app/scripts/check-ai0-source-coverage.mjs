@@ -114,8 +114,9 @@ async function run() {
   assert.equal(frozenCount, tauriCommands.length, "Tauri admission count is not tied to the production source");
   assert.equal(frozenFingerprint, tauriFingerprint, "Tauri admission fingerprint is not tied to the production source");
 
-  assert.equal(invokeManifest.length, 487, "frontend invoke inventory count drifted; classify the delta");
+  assert.equal(invokeManifest.length, 492, "frontend invoke inventory count drifted; classify the delta");
   assert(invokeManifest.includes("set_network_dmx_routes_v1"), "canonical network DMX route must remain inventoried");
+  assert(invokeManifest.includes("enable_usb_dmx_universe_route_v1"), "USB-DMX cable routes must remain inventoried");
   assert(invokeManifest.every((command) => tauriCommands.includes(command)), "frontend invoke inventory contains an unregistered Tauri command");
   assert.equal(new Set(invokeManifest).size, invokeManifest.length, "frontend invoke inventory contains a duplicate");
 

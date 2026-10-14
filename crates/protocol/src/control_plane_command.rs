@@ -1973,6 +1973,17 @@ pub const OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID: &str
 /// Retires only the host-local fixed Open DMX worker.
 pub const OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID: &str =
     "syndocal.output.show_serial_dmx_s0_route.stop.v1";
+/// Starts the machine-local USB-DMX cable of one universe other than 0. The
+/// action carries only the universe and the lease: the cable identity is the
+/// native machine-local binding, revalidated before a zero-first start.
+pub const OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID: &str =
+    "syndocal.output.usb_dmx_universe_route.enable.v1";
+/// Stops one universe's USB-DMX cable under the exact engaged S0 (or takes a
+/// joined faulted cable out of service).
+pub const OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID: &str =
+    "syndocal.output.usb_dmx_universe_route.stop.v1";
+/// Universes a USB-DMX cable other than the Universe 0 cable may output.
+pub const USB_DMX_CABLE_UNIVERSES: std::ops::RangeInclusive<u16> = 1..=32_767;
 /// The only show-specific same-machine video mutation.  Its action carries
 /// only an active lease; sender names, dimensions and routing are fixed by
 /// native code and are never caller-controlled.
@@ -2375,6 +2386,7 @@ pub enum OutputControlValidationErrorV1 {
     InvalidVideoControl,
     InvalidVideoTake,
     InvalidNetworkDmxRoutes,
+    InvalidUsbDmxUniverse,
 }
 
 impl fmt::Display for OutputControlValidationErrorV1 {
@@ -2393,6 +2405,7 @@ impl fmt::Display for OutputControlValidationErrorV1 {
             Self::InvalidLightingControl => "lighting control value, role, or group ID is invalid",
             Self::InvalidVideoControl => "video control value or role is invalid",
             Self::InvalidNetworkDmxRoutes => "network DMX routes are invalid",
+            Self::InvalidUsbDmxUniverse => "USB-DMX cable universe must be 1–32767",
             Self::InvalidVideoTake => "video Take layer or fade duration is invalid",
         })
     }
@@ -2666,6 +2679,14 @@ pub enum OutputControlActionV2 {
     StopShowSerialDmxSafetyBlackoutRoute {
         lease: OutputLeaseAuthorityV1,
     },
+    EnableUsbDmxUniverseRoute {
+        universe: u16,
+        lease: OutputLeaseAuthorityV1,
+    },
+    StopUsbDmxUniverseRoute {
+        universe: u16,
+        lease: OutputLeaseAuthorityV1,
+    },
     EnableShowSpoutOutputs {
         lease: OutputLeaseAuthorityV1,
     },
@@ -2768,6 +2789,14 @@ enum OutputControlActionV2Wire {
         lease: OutputLeaseAuthorityV1,
     },
     StopShowSerialDmxSafetyBlackoutRoute {
+        lease: OutputLeaseAuthorityV1,
+    },
+    EnableUsbDmxUniverseRoute {
+        universe: u16,
+        lease: OutputLeaseAuthorityV1,
+    },
+    StopUsbDmxUniverseRoute {
+        universe: u16,
         lease: OutputLeaseAuthorityV1,
     },
     EnableShowSpoutOutputs {
@@ -2873,6 +2902,10 @@ impl OutputControlActionV2 {
             Self::StopShowSerialDmxSafetyBlackoutRoute { .. } => {
                 OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
             }
+            Self::EnableUsbDmxUniverseRoute { .. } => {
+                OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID
+            }
+            Self::StopUsbDmxUniverseRoute { .. } => OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID,
             Self::EnableShowSpoutOutputs { .. } => OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID,
             Self::ResetShowSpoutOutputs {} => OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID,
             Self::SendDsf2026ArtNetAcceptanceProbe { .. } => {
@@ -2930,6 +2963,13 @@ impl OutputControlActionV2 {
                 validate_network_dmx_routes(routes).map_err(|_| OutputControlValidationErrorV1::InvalidNetworkDmxRoutes)?;
             }
             Self::EnableOutput | Self::ResetShowSpoutOutputs {} => {}
+            Self::EnableUsbDmxUniverseRoute { universe, lease }
+            | Self::StopUsbDmxUniverseRoute { universe, lease } => {
+                lease.validate()?;
+                if !USB_DMX_CABLE_UNIVERSES.contains(universe) {
+                    return Err(OutputControlValidationErrorV1::InvalidUsbDmxUniverse);
+                }
+            }
             Self::EnableShowArtNetLoopbackRoute { lease }
             | Self::EnableShowSerialDmxSafetyBlackoutRoute { lease }
             | Self::StopShowSerialDmxSafetyBlackoutRoute { lease }
@@ -3055,6 +3095,18 @@ impl OutputControlActionV2 {
             }
             Self::StopShowSerialDmxSafetyBlackoutRoute { lease } => {
                 OutputControlActionV2Wire::StopShowSerialDmxSafetyBlackoutRoute {
+                    lease: lease.clone(),
+                }
+            }
+            Self::EnableUsbDmxUniverseRoute { universe, lease } => {
+                OutputControlActionV2Wire::EnableUsbDmxUniverseRoute {
+                    universe: *universe,
+                    lease: lease.clone(),
+                }
+            }
+            Self::StopUsbDmxUniverseRoute { universe, lease } => {
+                OutputControlActionV2Wire::StopUsbDmxUniverseRoute {
+                    universe: *universe,
                     lease: lease.clone(),
                 }
             }
@@ -3231,6 +3283,21 @@ impl OutputControlActionV2 {
             Self::StopShowSerialDmxSafetyBlackoutRoute { lease } => {
                 // 0..=16 are frozen; stop cannot carry an arbitrary route.
                 output.push(17);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
+            Self::EnableUsbDmxUniverseRoute { universe, lease } => {
+                // 0..=26 are frozen. Only the universe and the lease travel;
+                // the cable identity stays native and machine-local.
+                output.push(27);
+                append_u64(output, u64::from(*universe));
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
+            Self::StopUsbDmxUniverseRoute { universe, lease } => {
+                // 0..=27 are frozen.
+                output.push(28);
+                append_u64(output, u64::from(*universe));
                 output.extend_from_slice(lease.lease_id.as_bytes());
                 append_u64(output, lease.generation);
             }
@@ -3484,6 +3551,12 @@ impl<'de> Deserialize<'de> for OutputControlActionV2 {
             }
             OutputControlActionV2Wire::StopShowSerialDmxSafetyBlackoutRoute { lease } => {
                 Self::StopShowSerialDmxSafetyBlackoutRoute { lease }
+            }
+            OutputControlActionV2Wire::EnableUsbDmxUniverseRoute { universe, lease } => {
+                Self::EnableUsbDmxUniverseRoute { universe, lease }
+            }
+            OutputControlActionV2Wire::StopUsbDmxUniverseRoute { universe, lease } => {
+                Self::StopUsbDmxUniverseRoute { universe, lease }
             }
             OutputControlActionV2Wire::EnableShowSpoutOutputs { lease } => {
                 Self::EnableShowSpoutOutputs { lease }
@@ -4015,7 +4088,9 @@ impl OutputControlLeaseResultV2 {
                 OutputLeaseReceiptOutcomeV2::Authorized
             }
             OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
-            | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID => {
+            | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
+            | OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID
+            | OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID => {
                 OutputLeaseReceiptOutcomeV2::Authorized
             }
             OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID => {
@@ -4229,6 +4304,8 @@ impl OutputControlReceiptV2 {
                 | OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID
                 | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
                 | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
+                | OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID
+                | OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID
                 | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
                 | OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID
                 | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
@@ -4306,6 +4383,8 @@ impl OutputControlReceiptV2 {
                         OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                             | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
                             | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
+                            | OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID
+                            | OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID
                             | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
                             | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
                             | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
@@ -4331,6 +4410,8 @@ impl OutputControlReceiptV2 {
                         OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                             | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
                             | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
+                            | OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID
+                            | OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID
                             | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
                             | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
                             | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
@@ -4448,6 +4529,8 @@ impl OutputControlRejectionV2 {
                 | OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID
                 | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
                 | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
+                | OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID
+                | OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID
                 | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
                 | OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID
                 | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
@@ -6241,6 +6324,44 @@ mod tests {
             .unwrap(),
             serial_stop
         );
+        // Independent USB-DMX cables carry only the universe and the lease;
+        // the cable identity stays native and machine-local.
+        let cable_enable = OutputControlActionV2::EnableUsbDmxUniverseRoute {
+            universe: 2,
+            lease: authority.clone(),
+        };
+        let cable_stop = OutputControlActionV2::StopUsbDmxUniverseRoute {
+            universe: 2,
+            lease: authority.clone(),
+        };
+        for (action, operation_id, tag) in [
+            (&cable_enable, OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID, 27),
+            (&cable_stop, OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID, 28),
+        ] {
+            assert_eq!(action.operation_id(), operation_id);
+            let mut shape = Vec::new();
+            action.append_canonical_bytes(&mut shape).unwrap();
+            assert_eq!(shape.first(), Some(&tag));
+            assert_eq!(&shape[1..9], &2u64.to_be_bytes()[..], "{shape:?}");
+            let json = serde_json::to_value(action).unwrap();
+            assert_eq!(json["universe"], serde_json::json!(2));
+            for forged_key in ["port_name", "windows_device_instance_id", "frame"] {
+                let mut forged = json.clone();
+                forged[forged_key] = serde_json::json!("caller_controlled");
+                assert!(serde_json::from_value::<OutputControlActionV2>(forged).is_err());
+            }
+            assert_eq!(
+                &serde_json::from_value::<OutputControlActionV2>(json.clone()).unwrap(),
+                action
+            );
+            for universe in [0, 32_768] {
+                let mut out_of_range = json.clone();
+                out_of_range["universe"] = serde_json::json!(universe);
+                // Rejected either at parse time or by validation.
+                let parsed = serde_json::from_value::<OutputControlActionV2>(out_of_range);
+                assert!(parsed.is_err() || parsed.unwrap().validate().is_err());
+            }
+        }
         // Schema v8 appends the clean-break V2 show-only activation. It
         // remains payloadless: callers cannot substitute generic sender
         // names, dimensions, or an arbitrary Spout target for the fixed
