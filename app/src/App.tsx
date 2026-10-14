@@ -3281,15 +3281,16 @@ export default function App() {
   let latestEngineSnapshot = initialEngineSnapshot;
   const [snapshotRevision, setSnapshotRevision] = createSignal<number | null>(null);
   let loadSceneEffectDraft = (_cueId: number, _effectId: number) => {};
-  // Stores a settled-but-unsaved FX edit before the editor moves away from it.
-  let flushSceneEffectDraft = () => {};
+  // Stores a settled-but-unsaved FX edit before the editor moves away from it;
+  // false when an unsavable draft should be kept (the operator declined).
+  let flushSceneEffectDraft = () => true;
   // Bumped whenever the FX form is reloaded or closed, so a save that was in
   // flight meanwhile does not touch the form that replaced it.
   let sceneEffectFormGeneration = 0;
   const selectSceneCue = (cueId: number) => {
     const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
     if (!cue) return;
-    flushSceneEffectDraft();
+    if (!flushSceneEffectDraft()) return;
     const currentEffectId = selectedSceneEffectId();
     const effectId = cue.effect_targets.some((target) => target.effect_id === currentEffectId)
       ? currentEffectId
@@ -3304,8 +3305,9 @@ export default function App() {
     if (controlMode() === "edit") void changeControlFaderWriteMode("edit");
   };
   const closeSceneSettings = () => {
-    flushSceneEffectDraft();
+    if (!flushSceneEffectDraft()) return;
     sceneEffectFormGeneration += 1;
+    sceneEffectStoredParamsJson = null;
     setSelectedSceneCueId(null);
     setSelectedSceneEffectId(null);
     setSceneSettingsSurface("contents");
@@ -24180,6 +24182,7 @@ export default function App() {
 
   loadSceneEffectDraft = (cueId: number, effectId: number) => {
     sceneEffectFormGeneration += 1;
+    sceneEffectStoredParamsJson = storedSceneEffectParamsJson(cueId, effectId);
     const effect = sceneEffectForCue(cueId, effectId);
     if (effect) useEffectAsDraft(effect);
     rebaselineSceneEffectDraft();
@@ -24189,8 +24192,7 @@ export default function App() {
     if (effectId !== selectedSceneEffectId() && untrack(sceneEffectDraftDirty)) {
       // Edits are live: the pending edit of the current FX is stored before
       // switching. Only a draft that cannot be saved asks before discarding.
-      if (untrack(sceneEffectDraftSignature) !== null) flushSceneEffectDraft();
-      else if (!confirmDiscardSceneEffectDraft()) return;
+      if (!flushSceneEffectDraft()) return;
     }
     const cue = selectedSceneCue();
     const target = cue?.effect_targets.find((candidate) => candidate.effect_id === effectId);
@@ -24261,6 +24263,26 @@ export default function App() {
     const cue = selectedSceneCue();
     return cue ? sceneMoveFxAvailable(cue, snapshot().fixtures) : false;
   });
+
+  // Every change to a scene's FX list (edit saves and rack actions) runs one
+  // at a time and is applied to the scene's latest stored list, so a save
+  // and a bypass/remove/move/duplicate can never revert each other.
+  let sceneEffectSaveQueue: Promise<unknown> = Promise.resolve();
+  let sceneEffectOperationsPending = 0;
+  const enqueueSceneEffectOperation = <T,>(operation: () => Promise<T>): Promise<T> => {
+    sceneEffectOperationsPending += 1;
+    const result = sceneEffectSaveQueue.then(operation, operation)
+      .finally(() => { sceneEffectOperationsPending -= 1; });
+    sceneEffectSaveQueue = result.catch(() => undefined);
+    return result;
+  };
+  const latestSceneCue = (cueId: number) =>
+    snapshot().cues.find((candidate) => candidate.id === cueId) ?? null;
+  // JSON of an FX's stored params: what a clean form reflects.
+  let sceneEffectStoredParamsJson: string | null = null;
+  const storedSceneEffectParamsJson = (cueId: number, effectId: number) =>
+    JSON.stringify(latestSceneCue(cueId)?.effect_targets
+      .find((target) => target.effect_id === effectId)?.params ?? null);
 
   const sceneIsPlaying = (cueId: number) =>
     snapshot().active_cue_id === cueId
@@ -24341,8 +24363,11 @@ export default function App() {
       return;
     }
     try {
-      const effectId = await invoke<number>("add_cue_owned_effect", { cueId: cue.id, params });
-      await refreshSnapshot();
+      const effectId = await enqueueSceneEffectOperation(async () => {
+        const added = await invoke<number>("add_cue_owned_effect", { cueId: cue.id, params });
+        await refreshSnapshot();
+        return added;
+      });
       setSelectedSceneEffectId(effectId);
       const effect = cueOwnedEffectSummary(
         { effect_id: effectId, enabled: true, params },
@@ -24359,29 +24384,42 @@ export default function App() {
   };
 
   const setSceneEffectEnabled = async (effectId: number, enabled: boolean) => {
-    const cue = selectedSceneCue();
-    const target = cue?.effect_targets.find((candidate) => candidate.effect_id === effectId);
-    if (!cue || !target) return;
-    const saved = await persistSceneEffectTargets(
-      cue.id,
-      cue.effect_targets.map((candidate) =>
-        candidate.effect_id === effectId ? { ...candidate, enabled } : candidate),
-    );
-    if (!saved) return;
+    const cueId = selectedSceneCue()?.id;
+    if (cueId === undefined) return;
+    const target = await enqueueSceneEffectOperation(async () => {
+      const cue = latestSceneCue(cueId);
+      const current = cue?.effect_targets.find((candidate) => candidate.effect_id === effectId);
+      if (!cue || !current) return null;
+      const saved = await persistSceneEffectTargets(
+        cue.id,
+        cue.effect_targets.map((candidate) =>
+          candidate.effect_id === effectId ? { ...candidate, enabled } : candidate),
+      );
+      return saved ? current : null;
+    });
+    if (!target) return;
     setSceneFxStagePreview(enabled && target.params
-      ? { cueId: cue.id, effectId, params: target.params, startedAt: performance.now() }
+      ? { cueId, effectId, params: target.params, startedAt: performance.now() }
       : null);
-    if (!snapshot().programmer.blind) await triggerCue(cue.id);
+    // A playing scene picks the change up in place; only an idle one starts.
+    if (!snapshot().programmer.blind && !sceneIsPlaying(cueId)) await triggerCue(cueId);
     setMessage(`${enabled ? "Enabled" : "Bypassed"} cue-owned FX ${effectId}.`);
   };
 
   const removeSceneEffect = async (effectId: number) => {
-    const cue = selectedSceneCue();
-    if (!cue || !cue.effect_targets.some((target) => target.effect_id === effectId)) return;
+    const cueId = selectedSceneCue()?.id;
+    if (cueId === undefined) return;
+    // A pending edit of the selected FX is stored first (queued ahead).
+    if (!flushSceneEffectDraft()) return;
     const wasRunning = selectedSceneIsRunning();
-    const nextTargets = cue.effect_targets.filter((target) => target.effect_id !== effectId);
-    const saved = await persistSceneEffectTargets(cue.id, nextTargets);
-    if (!saved) return;
+    const removed = await enqueueSceneEffectOperation(async () => {
+      const cue = latestSceneCue(cueId);
+      if (!cue || !cue.effect_targets.some((target) => target.effect_id === effectId)) return null;
+      const nextTargets = cue.effect_targets.filter((target) => target.effect_id !== effectId);
+      return await persistSceneEffectTargets(cue.id, nextTargets) ? { cue, nextTargets } : null;
+    });
+    if (!removed) return;
+    const { cue, nextTargets } = removed;
     const nextTarget = nextTargets[0] ?? null;
     setSelectedSceneEffectId(nextTarget?.effect_id ?? null);
     setSceneFxStagePreview(nextTarget?.enabled && nextTarget.params
@@ -24401,84 +24439,98 @@ export default function App() {
       || cue.node_graph_targets.length > 0
       || (cue.steps?.length ?? 0) > 0;
     if (!snapshot().programmer.blind) {
-      if (keepsExecutableContent) await triggerCue(cue.id);
-      else if (wasRunning) await releaseCueById(cue.id);
+      if (!keepsExecutableContent) {
+        if (wasRunning) await releaseCueById(cue.id);
+      } else if (!sceneIsPlaying(cue.id)) {
+        await triggerCue(cue.id);
+      }
     }
     setMessage(`Removed cue-owned FX ${effectId} from scene ${cue.id}.`);
   };
 
   const moveSceneEffect = async (effectId: number, delta: -1 | 1) => {
-    const cue = selectedSceneCue();
-    if (!cue) return;
-    const sourceIndex = cue.effect_targets.findIndex((target) => target.effect_id === effectId);
-    const destination = sourceIndex + delta;
-    if (sourceIndex < 0 || destination < 0 || destination >= cue.effect_targets.length) return;
-    const nextTargets = cue.effect_targets.map((target) => ({ ...target }));
-    [nextTargets[sourceIndex], nextTargets[destination]] = [nextTargets[destination]!, nextTargets[sourceIndex]!];
-    if (!await persistSceneEffectTargets(cue.id, nextTargets)) return;
-    if (!snapshot().programmer.blind) await triggerCue(cue.id);
+    const cueId = selectedSceneCue()?.id;
+    if (cueId === undefined) return;
+    const destination = await enqueueSceneEffectOperation(async () => {
+      const cue = latestSceneCue(cueId);
+      if (!cue) return null;
+      const sourceIndex = cue.effect_targets.findIndex((target) => target.effect_id === effectId);
+      const destination = sourceIndex + delta;
+      if (sourceIndex < 0 || destination < 0 || destination >= cue.effect_targets.length) return null;
+      const nextTargets = cue.effect_targets.map((target) => ({ ...target }));
+      [nextTargets[sourceIndex], nextTargets[destination]] = [nextTargets[destination]!, nextTargets[sourceIndex]!];
+      return await persistSceneEffectTargets(cue.id, nextTargets) ? destination : null;
+    });
+    if (destination === null) return;
+    if (!snapshot().programmer.blind && !sceneIsPlaying(cueId)) await triggerCue(cueId);
     setMessage(`Moved cue-owned FX ${effectId} to rack position ${destination + 1}.`);
   };
 
   const duplicateSceneEffect = async (effectId: number) => {
-    const cue = selectedSceneCue();
-    const sourceIndex = cue?.effect_targets.findIndex((target) => target.effect_id === effectId) ?? -1;
-    const source = sourceIndex >= 0 ? cue!.effect_targets[sourceIndex] : null;
-    if (!cue || !source?.params) {
-      setMessage("Only cue-owned FX with embedded parameters can be duplicated in this rack.");
-      return;
-    }
-    const params = structuredClone(source.params);
-    let duplicateId: number;
-    if (viewportFixture) {
-      const cueEffectIds = snapshot().cues.flatMap((candidate) =>
-        candidate.effect_targets.map((target) => target.effect_id));
-      duplicateId = Math.max(900, ...snapshot().effects.map((effect) => effect.id), ...cueEffectIds) + 1;
-    } else {
-      try {
-        duplicateId = await invoke<number>("add_cue_owned_effect", { cueId: cue.id, params });
-      } catch (error) {
-        setMessage(String(error));
-        return;
+    const cueId = selectedSceneCue()?.id;
+    if (cueId === undefined) return;
+    // A pending edit of the selected FX is stored first, so the copy has it.
+    if (!flushSceneEffectDraft()) return;
+    const duplicated = await enqueueSceneEffectOperation(async () => {
+      const cue = latestSceneCue(cueId);
+      const sourceIndex = cue?.effect_targets.findIndex((target) => target.effect_id === effectId) ?? -1;
+      const source = sourceIndex >= 0 ? cue!.effect_targets[sourceIndex] : null;
+      if (!cue || !source?.params) {
+        setMessage("Only cue-owned FX with embedded parameters can be duplicated in this rack.");
+        return null;
       }
-    }
-    const nextTargets = cue.effect_targets.map((target) => ({ ...target }));
-    nextTargets.splice(sourceIndex + 1, 0, {
-      effect_id: duplicateId,
-      enabled: source.enabled,
-      params,
-      transition_ms: source.transition_ms ?? null,
+      const params = structuredClone(source.params);
+      let duplicateId: number;
+      if (viewportFixture) {
+        const cueEffectIds = snapshot().cues.flatMap((candidate) =>
+          candidate.effect_targets.map((target) => target.effect_id));
+        duplicateId = Math.max(900, ...snapshot().effects.map((effect) => effect.id), ...cueEffectIds) + 1;
+      } else {
+        try {
+          duplicateId = await invoke<number>("add_cue_owned_effect", { cueId: cue.id, params });
+          await refreshSnapshot();
+        } catch (error) {
+          setMessage(String(error));
+          return null;
+        }
+      }
+      // The add above may have stored the copy already; build on the latest list.
+      const latest = latestSceneCue(cueId) ?? cue;
+      const nextTargets = latest.effect_targets
+        .filter((target) => target.effect_id !== duplicateId)
+        .map((target) => ({ ...target }));
+      const insertAt = nextTargets.findIndex((target) => target.effect_id === effectId) + 1;
+      nextTargets.splice(insertAt > 0 ? insertAt : nextTargets.length, 0, {
+        effect_id: duplicateId,
+        enabled: source.enabled,
+        params,
+        transition_ms: source.transition_ms ?? null,
+      });
+      if (!await persistSceneEffectTargets(cue.id, nextTargets)) return null;
+      return { duplicateId, position: (insertAt > 0 ? insertAt : nextTargets.length - 1) + 1 };
     });
-    if (!await persistSceneEffectTargets(cue.id, nextTargets)) return;
-    setSelectedSceneEffectId(duplicateId);
-    loadSceneEffectDraft(cue.id, duplicateId);
-    if (!snapshot().programmer.blind) await triggerCue(cue.id);
-    setMessage(`Duplicated cue-owned FX ${effectId} as rack position ${sourceIndex + 2}.`);
+    if (!duplicated) return;
+    setSelectedSceneEffectId(duplicated.duplicateId);
+    loadSceneEffectDraft(cueId, duplicated.duplicateId);
+    if (!snapshot().programmer.blind && !sceneIsPlaying(cueId)) await triggerCue(cueId);
+    setMessage(`Duplicated cue-owned FX ${effectId} as rack position ${duplicated.position}.`);
   };
 
-  // FX saves run one at a time. Each patches only its own FX into the scene's
-  // latest stored list, so a save cannot undo another FX's change that landed
-  // while it waited.
-  let sceneEffectSaveQueue: Promise<unknown> = Promise.resolve();
+  // An edit save patches only its own FX into the scene's latest list.
   const persistSceneEffectParams = (request: {
     cueId: number;
     effectId: number;
     params: EffectParamsSnapshot;
     enable: boolean;
-  }) => {
-    const run = async () => {
-      const cue = snapshot().cues.find((candidate) => candidate.id === request.cueId);
-      if (!cue?.effect_targets.some((target) => target.effect_id === request.effectId)) return false;
-      return persistSceneEffectTargets(cue.id, cue.effect_targets.map((target) =>
-        target.effect_id === request.effectId
-          ? { ...target, enabled: request.enable || target.enabled, params: request.params }
-          : target
-      ));
-    };
-    const result = sceneEffectSaveQueue.then(run, run);
-    sceneEffectSaveQueue = result.catch(() => false);
-    return result;
-  };
+  }) => enqueueSceneEffectOperation(async () => {
+    const cue = latestSceneCue(request.cueId);
+    if (!cue?.effect_targets.some((target) => target.effect_id === request.effectId)) return false;
+    return persistSceneEffectTargets(cue.id, cue.effect_targets.map((target) =>
+      target.effect_id === request.effectId
+        ? { ...target, enabled: request.enable || target.enabled, params: request.params }
+        : target
+    ));
+  });
 
   // `auto`: an edit settled. The FX is stored as it is (a bypassed FX stays
   // bypassed) and a playing scene picks it up in place unless Blind; an idle
@@ -24494,6 +24546,8 @@ export default function App() {
     const savedSignature = JSON.stringify(draft);
     const params = effectParamsSnapshotFromDraft(draft);
     const generation = sceneEffectFormGeneration;
+    // This save covers the form as it is now; a pending auto-save is moot.
+    if (!options.auto) clearTimeout(sceneEffectAutoSaveTimer);
     const saved = await persistSceneEffectParams({ cueId: cue.id, effectId, params, enable: !options.auto });
     if (!saved) return false;
     if (selectedSceneCueId() !== cue.id || selectedSceneEffectId() !== effectId) return true;
@@ -24504,6 +24558,7 @@ export default function App() {
       return true;
     }
     const stored = selectedSceneCue()?.effect_targets.find((target) => target.effect_id === effectId);
+    sceneEffectStoredParamsJson = JSON.stringify(stored?.params ?? null);
     if (options.auto) {
       setSceneEffectDraftBaseline(savedSignature);
       if (stored?.enabled) {
@@ -24528,10 +24583,26 @@ export default function App() {
   let sceneEffectAutoSaveTimer: ReturnType<typeof setTimeout> | undefined;
   flushSceneEffectDraft = () => {
     clearTimeout(sceneEffectAutoSaveTimer);
-    if (untrack(sceneEffectDraftDirty) && untrack(sceneEffectDraftSignature) !== null) {
-      void saveSceneEffectDraft({ auto: true });
-    }
+    if (!untrack(sceneEffectDraftDirty)) return true;
+    if (untrack(sceneEffectDraftSignature) === null) return confirmDiscardSceneEffectDraft();
+    void saveSceneEffectDraft({ auto: true });
+    return true;
   };
+  // The stored FX changed underneath a clean form (Undo/Redo, MIDI/OSC,
+  // another editor): show the stored values, so the next edit does not
+  // quietly write the old ones back. A form being edited is left alone.
+  createEffect(() => {
+    const cue = selectedSceneCue();
+    const effectId = selectedSceneEffectId();
+    if (!cue || effectId === null) return;
+    const stored = JSON.stringify(cue.effect_targets
+      .find((target) => target.effect_id === effectId)?.params ?? null);
+    untrack(() => {
+      if (sceneEffectStoredParamsJson === null || stored === sceneEffectStoredParamsJson) return;
+      if (sceneEffectDraftDirty() || sceneEffectOperationsPending > 0) return;
+      loadSceneEffectDraft(cue.id, effectId);
+    });
+  });
   createEffect(() => {
     if (!sceneEffectDraftDirty() || sceneEffectDraftSignature() === null) return;
     clearTimeout(sceneEffectAutoSaveTimer);
