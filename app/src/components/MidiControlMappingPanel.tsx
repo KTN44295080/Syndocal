@@ -621,12 +621,17 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
                                     Message
                                     <select
                                       value={current().message}
-                                      onInput={(event) => updateMessage({ message: event.currentTarget.value as MidiControlMessage })}
+                                      onInput={(event) => {
+                                        const message = event.currentTarget.value as MidiControlMessage;
+                                        // Pitch bend has no number; the backend requires 0.
+                                        updateMessage(message === "PitchBend" ? { message, number: 0 } : { message });
+                                      }}
                                     >
                                       <option value="ControlChange">CC</option>
                                       <option value="NoteOn">Note On</option>
                                       <option value="NoteOff">Note Off</option>
                                       <option value="ProgramChange">Program</option>
+                                      <option value="PitchBend">Pitch bend</option>
                                     </select>
                                   </label>
                                   <label>
@@ -646,6 +651,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
                                       min="0"
                                       max="127"
                                       value={current().number}
+                                      disabled={current().message === "PitchBend"}
                                       onInput={(event) => updateMessage({ number: Math.max(0, Math.min(127, Number(event.currentTarget.value))) })}
                                     />
                                   </label>

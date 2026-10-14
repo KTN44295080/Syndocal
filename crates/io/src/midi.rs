@@ -1488,13 +1488,13 @@ fn seven_bit_normalized(value: u8) -> f32 {
     f32::from(value.min(127)) / 127.0
 }
 
-/// Signed step of a relative encoder CC (Mackie Control V-Pot encoding:
-/// bit 6 set = down, bits 0-5 = step count). Mackie encoders send at most 15
-/// steps per message; larger counts come from other encodings (two's
-/// complement, binary offset) whose small moves would decode as huge jumps
-/// here, so they are ignored rather than applied.
+/// Mackie encoders send at most 15 steps per message.
 const RELATIVE_ENCODER_MAX_STEPS: i32 = 15;
 
+/// Signed step of a relative encoder CC (Mackie Control V-Pot encoding:
+/// bit 6 set = down, bits 0-5 = step count). Larger counts come from other
+/// encodings (two's complement, binary offset) whose small moves would decode
+/// as huge jumps here, so they are ignored rather than applied.
 fn relative_encoder_steps(value: u8) -> i32 {
     let steps = i32::from(value & 0x3f);
     if steps > RELATIVE_ENCODER_MAX_STEPS {
