@@ -58,6 +58,10 @@
 .topbarToolsPopover > section { display: grid; gap: 6px; }
 .topbarToolsPopover > section > strong { color: #9e958d; font-size: 11px; font-weight: 700; }
 .topbarWorkspaceMenu .workspaceOperationsButton { width: 100%; text-align: left; }
+/* While locked, the lock state and Unlock sit in the header beside the disabled menu. */
+.topbarLockedOperations { display: flex; align-items: center; min-width: 0; }
+.topbarLockedOperations .workspaceOperationsMenu { margin-left: 0; }
+.topbarLockedOperations .workspaceOperationsButton { width: auto; white-space: nowrap; }
 .topbarOrganized .topbarProject > span { overflow: hidden; text-overflow: ellipsis; }
 
 @media (max-width: 1100px) {

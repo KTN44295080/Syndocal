@@ -2749,6 +2749,21 @@ async function evaluatePageFunction(client, callback, ...args) {
   }
 }
 
+// Workspace operations live in the app menu since the one-row header
+// (98ac087b); open that menu first when the button is not on screen.
+async function clickWorkspaceOperationsButton(client) {
+  const visible = await client.evaluate(`(() => {
+    const button = document.querySelector('.workspaceOperationsButton');
+    const rect = button?.getBoundingClientRect();
+    return Boolean(rect && rect.width > 0 && rect.height > 0);
+  })()`);
+  if (!visible) {
+    await clickVisibleSelector(client, ".appMenuButton");
+    await sleep(80);
+  }
+  await clickVisibleSelector(client, ".workspaceOperationsButton");
+}
+
 async function clickVisibleSelector(client, selector) {
   const clicked = await client.evaluate(`(() => {
     const node = document.querySelector(${JSON.stringify(selector)});
@@ -24617,7 +24632,7 @@ async function runPaneReflowViewport(client, viewport) {
     };
     return { popoverVisible: Boolean(popover), stage: probe('stage'), timeline: probe('timeline') };
   })()`);
-  await clickVisibleSelector(client, ".workspaceOperationsButton");
+  await clickWorkspaceOperationsButton(client);
   await sleep(120);
   const dialogControls = await probeWorkspaceDialogPanes();
   const clickDialogPaneControl = async (pane) => await client.evaluate(`(() => {
@@ -24639,7 +24654,7 @@ async function runPaneReflowViewport(client, viewport) {
   const timelineOnlyAfterDialogStageRejoin = await readState();
   const timelineRejoinedViaDialog = await clickDialogPaneControl("timeline");
   await sleep(240);
-  await clickVisibleSelector(client, ".workspaceOperationsButton");
+  await clickWorkspaceOperationsButton(client);
   await sleep(160);
   const restoredNone = await readState();
 
@@ -24665,20 +24680,20 @@ async function runPaneReflowViewport(client, viewport) {
     return true;
   })()`);
   await sleep(200);
-  await clickVisibleSelector(client, ".workspaceOperationsButton");
+  await clickWorkspaceOperationsButton(client);
   await sleep(120);
   const stageDetachedWhileExpanded = await clickDialogPaneControl("stage");
   const timelineDetachedWhileExpanded = await clickDialogPaneControl("timeline");
   await sleep(260);
-  await clickVisibleSelector(client, ".workspaceOperationsButton");
+  await clickWorkspaceOperationsButton(client);
   await sleep(160);
   const expandedThenBothPopped = await readState();
-  await clickVisibleSelector(client, ".workspaceOperationsButton");
+  await clickWorkspaceOperationsButton(client);
   await sleep(120);
   const expandedStageRejoined = await clickDialogPaneControl("stage");
   const expandedTimelineRejoined = await clickDialogPaneControl("timeline");
   await sleep(260);
-  await clickVisibleSelector(client, ".workspaceOperationsButton");
+  await clickWorkspaceOperationsButton(client);
   await sleep(160);
   const expandedRestoredAfterRejoin = await readState();
 
@@ -24695,7 +24710,7 @@ async function runPaneReflowViewport(client, viewport) {
   const setupPatchIntegrated = await measureState("", enterSetupPatch);
   const setupPatchStageOnly = await measureState("syndocalPoppedPanes=stage", enterSetupPatch);
   const setupPatchBoth = await measureState("syndocalPoppedPanes=stage,timeline", enterSetupPatch);
-  await clickVisibleSelector(client, ".workspaceOperationsButton");
+  await clickWorkspaceOperationsButton(client);
   await sleep(120);
   const setupPatchDialogControls = await probeWorkspaceDialogPanes();
 
@@ -35830,7 +35845,7 @@ async function runWorkspaceOperatorViewport(client, viewport, { recycleForPaneWi
     mobile: false,
   });
   await navigateOperatorVjPage(client, fixtureUrl("workspace-operator"));
-  await clickVisibleSelector(client, ".workspaceOperationsButton");
+  await clickWorkspaceOperationsButton(client);
   await sleep(80);
   const menu = await client.evaluate(`(() => {
     const popover = document.querySelector('.workspaceOperationsPopover');

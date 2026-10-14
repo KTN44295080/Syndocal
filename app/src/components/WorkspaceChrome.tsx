@@ -274,6 +274,11 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
           >
             ...
           </button>
+          {/* The project menu is disabled while an operator lock is active, so
+              the lock state and its Unlock control move into the header. */}
+          <Show when={props.operatorLockMode !== null}>
+            <div class="topbarWorkspaceMenu topbarLockedOperations" data-operator-lock-header>{props.operations}</div>
+          </Show>
           <Show when={projectMenuOpen()}>
             <div class="appProjectMenu" role="menu">
               <button role="menuitem" aria-keyshortcuts="Control+N Meta+N" onClick={() => runProjectMenuAction(props.onNewProject)}>
@@ -448,7 +453,9 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               <div class="appProjectMenuLabel" role="separator">
                 <span>Workspace Layout</span>
               </div>
-              <div class="topbarWorkspaceMenu">{props.operations}</div>
+              <Show when={props.operatorLockMode === null}>
+                <div class="topbarWorkspaceMenu">{props.operations}</div>
+              </Show>
               <button
                 role="menuitem"
                 data-reset-workspace-layout
