@@ -30213,7 +30213,8 @@ fn connect_midi_control(
             Some(&selection),
         )
     };
-    let connection = io::midi::connect_midi_control_with_current(input_index, mappings, current_value, move |event| {
+    let connect = io::midi::connect_midi_control_with_current;
+    let connection = connect(input_index, mappings, current_value, move |event| {
         if midi_control_event_requires_fail_closed(&event) {
             return;
         }

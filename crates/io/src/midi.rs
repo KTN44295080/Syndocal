@@ -556,7 +556,9 @@ pub fn connect_midi_feedback_output_named(
         .ok_or(MidiError::MissingPort(port_index))?;
     let port_name = output.port_name(port).ok();
     if expected_name.is_some_and(|name| port_name.as_deref() != Some(name)) {
-        return Err(MidiError::Connect("MIDI feedback device changed; scan and select it again".into()));
+        return Err(MidiError::Connect(
+            "MIDI feedback device changed; scan and select it again".into(),
+        ));
     }
     let connection = output
         .connect(port, "syndocal-midi-feedback-output")
@@ -1358,7 +1360,11 @@ fn midi_feedback_message(mapping: &MidiControlMapping, normalized: f32) -> Optio
         MidiControlMessage::ControlChange => Some(vec![0xb0 | channel, number, value]),
         MidiControlMessage::PitchBend => {
             let value14 = (normalized.clamp(0.0, 1.0) * 16_383.0).round() as u16;
-            Some(vec![0xe0 | channel, (value14 & 0x7f) as u8, (value14 >> 7) as u8])
+            Some(vec![
+                0xe0 | channel,
+                (value14 & 0x7f) as u8,
+                (value14 >> 7) as u8,
+            ])
         }
         // Relative encoders and program changes have no absolute echo.
         MidiControlMessage::ProgramChange | MidiControlMessage::RelativeControlChange => None,
@@ -1703,7 +1709,8 @@ fn event_from_mapping(
             enabled: midi_message_enabled(message),
         }),
         MidiControlAction::ToggleCue => is_mapping_trigger(mapping, message)
-            .then_some(mapping.cue_id?).map(MidiControlEvent::ToggleCue),
+            .then_some(mapping.cue_id?)
+            .map(MidiControlEvent::ToggleCue),
         MidiControlAction::TriggerCue => {
             if is_mapping_trigger(mapping, message) {
                 Some(MidiControlEvent::TriggerCue(mapping.cue_id?))
@@ -2002,7 +2009,10 @@ mod tests {
         telemetry.messages_sent = u64::MAX;
         telemetry.record_sent(&[0x90, 60, 127], UNIX_EPOCH - Duration::from_secs(1));
         assert_eq!(telemetry.messages_sent, u64::MAX);
-        assert_eq!(telemetry.last_sent_unix_ms, None, "pre-epoch clocks report no time");
+        assert_eq!(
+            telemetry.last_sent_unix_ms, None,
+            "pre-epoch clocks report no time"
+        );
     }
 
     #[test]
@@ -2089,20 +2099,36 @@ mod tests {
         mapping.message = MidiControlMessage::PitchBend;
         mapping.number = 0;
         let mapping = std::slice::from_ref(&mapping);
-        assert_eq!(dimmer_value(&events_from_midi_message(&[0xe0, 0x7f, 0x7f], mapping)), 65_535);
-        assert_eq!(dimmer_value(&events_from_midi_message(&[0xe0, 0x00, 0x00], mapping)), 0);
+        assert_eq!(
+            dimmer_value(&events_from_midi_message(&[0xe0, 0x7f, 0x7f], mapping)),
+            65_535
+        );
+        assert_eq!(
+            dimmer_value(&events_from_midi_message(&[0xe0, 0x00, 0x00], mapping)),
+            0
+        );
         // 8192 / 16383 of the range, finer than any 7-bit step.
-        assert_eq!(dimmer_value(&events_from_midi_message(&[0xe0, 0x00, 0x40], mapping)), 32_770);
-        assert_eq!(dimmer_value(&events_from_midi_message(&[0xe0, 0x01, 0x40], mapping)), 32_774);
+        assert_eq!(
+            dimmer_value(&events_from_midi_message(&[0xe0, 0x00, 0x40], mapping)),
+            32_770
+        );
+        assert_eq!(
+            dimmer_value(&events_from_midi_message(&[0xe0, 0x01, 0x40], mapping)),
+            32_774
+        );
         // Another channel, a CC and malformed data bytes do not match.
         assert!(events_from_midi_message(&[0xe1, 0x00, 0x40], mapping).is_empty());
         assert!(events_from_midi_message(&[0xb0, 0x00, 0x40], mapping).is_empty());
         assert!(events_from_midi_message(&[0xe0, 0x80, 0x40], mapping).is_empty());
         assert!(events_from_midi_message(&[0xe0, 0x00], mapping).is_empty());
 
-        let learned = learned_control_from_midi_message(&[0xe2, 0x10, 0x20]).expect("pitch bend learns");
+        let learned =
+            learned_control_from_midi_message(&[0xe2, 0x10, 0x20]).expect("pitch bend learns");
         assert_eq!(learned.message, MidiControlMessage::PitchBend);
-        assert_eq!((learned.channel, learned.number, learned.value), (2, 0, 0x20));
+        assert_eq!(
+            (learned.channel, learned.number, learned.value),
+            (2, 0, 0x20)
+        );
     }
 
     #[test]
@@ -2114,31 +2140,99 @@ mod tests {
         let mut state = RelativeControlState::default();
         let at_half = |_: &MidiControlMapping| Some(0.5);
         // Mackie V-Pot: 0x01 = one step up, 0x41 = one step down, 0x43 = three down.
-        let up = dimmer_value(&events_from_midi_message_with_relative_state(&[0xb0, 16, 0x01], mappings, &mut state, &at_half));
+        let up = dimmer_value(&events_from_midi_message_with_relative_state(
+            &[0xb0, 16, 0x01],
+            mappings,
+            &mut state,
+            &at_half,
+        ));
         assert_eq!(up, ((0.5_f32 + 1.0 / 127.0) * 65_535.0).round() as u16);
         // While turning, steps accumulate from the produced value rather than
         // re-reading the (not yet updated) target.
-        let up_again = dimmer_value(&events_from_midi_message_with_relative_state(&[0xb0, 16, 0x01], mappings, &mut state, &at_half));
-        assert_eq!(up_again, ((0.5_f32 + 2.0 / 127.0) * 65_535.0).round() as u16);
-        let down = dimmer_value(&events_from_midi_message_with_relative_state(&[0xb0, 16, 0x43], mappings, &mut state, &at_half));
+        let up_again = dimmer_value(&events_from_midi_message_with_relative_state(
+            &[0xb0, 16, 0x01],
+            mappings,
+            &mut state,
+            &at_half,
+        ));
+        assert_eq!(
+            up_again,
+            ((0.5_f32 + 2.0 / 127.0) * 65_535.0).round() as u16
+        );
+        let down = dimmer_value(&events_from_midi_message_with_relative_state(
+            &[0xb0, 16, 0x43],
+            mappings,
+            &mut state,
+            &at_half,
+        ));
         assert_eq!(down, ((0.5_f32 - 1.0 / 127.0) * 65_535.0).round() as u16);
 
         // An unreadable target never moves (no guessed base), and the
         // stepped value never leaves the range.
         let mut fresh = RelativeControlState::default();
         let unknown = |_: &MidiControlMapping| None;
-        assert!(events_from_midi_message_with_relative_state(&[0xb0, 16, 0x41], mappings, &mut fresh, &unknown).is_empty());
-        assert!(events_from_midi_message_with_relative_state(&[0xb0, 16, 0x01], mappings, &mut fresh, &unknown).is_empty());
+        assert!(events_from_midi_message_with_relative_state(
+            &[0xb0, 16, 0x41],
+            mappings,
+            &mut fresh,
+            &unknown
+        )
+        .is_empty());
+        assert!(events_from_midi_message_with_relative_state(
+            &[0xb0, 16, 0x01],
+            mappings,
+            &mut fresh,
+            &unknown
+        )
+        .is_empty());
         let at_top = |_: &MidiControlMapping| Some(1.0);
-        assert_eq!(dimmer_value(&events_from_midi_message_with_relative_state(&[0xb0, 16, 0x0f], mappings, &mut fresh, &at_top)), 65_535);
+        assert_eq!(
+            dimmer_value(&events_from_midi_message_with_relative_state(
+                &[0xb0, 16, 0x0f],
+                mappings,
+                &mut fresh,
+                &at_top
+            )),
+            65_535
+        );
         // Only Mackie step counts (1-15) are applied: a two's-complement
         // "-1" (0x7f) or binary-offset "-1" (0x3f) would otherwise jump.
-        assert!(events_from_midi_message_with_relative_state(&[0xb0, 16, 0x7f], mappings, &mut fresh, &at_half).is_empty());
-        assert!(events_from_midi_message_with_relative_state(&[0xb0, 16, 0x3f], mappings, &mut fresh, &at_half).is_empty());
+        assert!(events_from_midi_message_with_relative_state(
+            &[0xb0, 16, 0x7f],
+            mappings,
+            &mut fresh,
+            &at_half
+        )
+        .is_empty());
+        assert!(events_from_midi_message_with_relative_state(
+            &[0xb0, 16, 0x3f],
+            mappings,
+            &mut fresh,
+            &at_half
+        )
+        .is_empty());
         // A zero step and other numbers do nothing; absolute CC mappings are unchanged.
-        assert!(events_from_midi_message_with_relative_state(&[0xb0, 16, 0x00], mappings, &mut fresh, &at_half).is_empty());
-        assert!(events_from_midi_message_with_relative_state(&[0xb0, 17, 0x01], mappings, &mut fresh, &at_half).is_empty());
-        assert_eq!(dimmer_value(&events_from_midi_message(&[0xb0, 7, 127], &[fixture_cc_mapping()])), 65_535);
+        assert!(events_from_midi_message_with_relative_state(
+            &[0xb0, 16, 0x00],
+            mappings,
+            &mut fresh,
+            &at_half
+        )
+        .is_empty());
+        assert!(events_from_midi_message_with_relative_state(
+            &[0xb0, 17, 0x01],
+            mappings,
+            &mut fresh,
+            &at_half
+        )
+        .is_empty());
+        assert_eq!(
+            dimmer_value(&events_from_midi_message(
+                &[0xb0, 7, 127],
+                &[fixture_cc_mapping()]
+            )),
+            65_535
+        );
 
         // Triggers and toggles never take relative steps.
         let mut toggle = fixture_cc_mapping();
@@ -2146,9 +2240,17 @@ mod tests {
         toggle.action = MidiControlAction::ToggleCue;
         toggle.cue_id = Some(9);
         let mut toggle_state = RelativeControlState::default();
-        assert!(events_from_midi_message_with_relative_state(&[0xb0, 7, 0x01], std::slice::from_ref(&toggle), &mut toggle_state, &at_half).is_empty());
+        assert!(events_from_midi_message_with_relative_state(
+            &[0xb0, 7, 0x01],
+            std::slice::from_ref(&toggle),
+            &mut toggle_state,
+            &at_half
+        )
+        .is_empty());
         assert!(!midi_action_is_continuous(&MidiControlAction::ToggleCue));
-        assert!(midi_action_is_continuous(&MidiControlAction::LightingMaster));
+        assert!(midi_action_is_continuous(
+            &MidiControlAction::LightingMaster
+        ));
     }
 
     #[test]
@@ -2156,18 +2258,32 @@ mod tests {
         let mut mapping = fixture_cc_mapping();
         mapping.message = MidiControlMessage::PitchBend;
         mapping.number = 0;
-        assert_eq!(midi_feedback_message(&mapping, 1.0), Some(vec![0xe0, 0x7f, 0x7f]));
-        assert_eq!(midi_feedback_message(&mapping, 0.5), Some(vec![0xe0, 0x00, 0x40]));
+        assert_eq!(
+            midi_feedback_message(&mapping, 1.0),
+            Some(vec![0xe0, 0x7f, 0x7f])
+        );
+        assert_eq!(
+            midi_feedback_message(&mapping, 0.5),
+            Some(vec![0xe0, 0x00, 0x40])
+        );
         let mut relative = fixture_cc_mapping();
         relative.message = MidiControlMessage::RelativeControlChange;
         assert_eq!(midi_feedback_message(&relative, 0.5), None);
 
         let mut cache = MidiFeedbackCache::default();
         cache.record_sent(0, &[0xe0, 0x00, 0x40]);
-        assert!(cache.pending_messages(&[vec![0xe0, 0x00, 0x40]], false).is_empty());
-        assert_eq!(cache.pending_messages(&[vec![0xe0, 0x01, 0x40]], false), vec![vec![0xe0, 0x01, 0x40]]);
+        assert!(cache
+            .pending_messages(&[vec![0xe0, 0x00, 0x40]], false)
+            .is_empty());
+        assert_eq!(
+            cache.pending_messages(&[vec![0xe0, 0x01, 0x40]], false),
+            vec![vec![0xe0, 0x01, 0x40]]
+        );
         cache.record_sent(1, &[0xe0, 0x7f, 0x7f]);
-        assert!(!cache.sent_by_slot.contains_key(&0), "a new pitch bend value replaces the old one on that channel");
+        assert!(
+            !cache.sent_by_slot.contains_key(&0),
+            "a new pitch bend value replaces the old one on that channel"
+        );
     }
 
     #[test]
@@ -2615,20 +2731,42 @@ mod tests {
             low: 0.0,
             high: 1.0,
         };
-        assert_eq!(events_from_midi_message(&[0x90,60,127], &[mapping.clone()]), vec![MidiControlEvent::ToggleCue(9)]);
-        assert!(events_from_midi_message(&[0x90,60,0], &[mapping.clone()]).is_empty());
-        assert!(events_from_midi_message(&[0x80,60,0], &[mapping.clone()]).is_empty());
+        assert_eq!(
+            events_from_midi_message(&[0x90, 60, 127], &[mapping.clone()]),
+            vec![MidiControlEvent::ToggleCue(9)]
+        );
+        assert!(events_from_midi_message(&[0x90, 60, 0], &[mapping.clone()]).is_empty());
+        assert!(events_from_midi_message(&[0x80, 60, 0], &[mapping.clone()]).is_empty());
         mapping.feedback = Some(protocol::MidiControlFeedback {
-            off: Some(MidiFeedbackMessage { message: MidiControlMessage::NoteOn, channel: 0, number: 60, value: 0 }),
-            on: Some(MidiFeedbackMessage { message: MidiControlMessage::NoteOn, channel: 0, number: 60, value: 127 }),
+            off: Some(MidiFeedbackMessage {
+                message: MidiControlMessage::NoteOn,
+                channel: 0,
+                number: 60,
+                value: 0,
+            }),
+            on: Some(MidiFeedbackMessage {
+                message: MidiControlMessage::NoteOn,
+                channel: 0,
+                number: 60,
+                value: 127,
+            }),
             unknown: None,
         });
         let mut snapshot = EngineSnapshot::default();
-        assert_eq!(build_feedback_messages(&snapshot, &[mapping.clone()]), vec![vec![0x90,60,0]]);
-        snapshot.active_group_cue_ids.insert("front".into(),9);
-        assert_eq!(build_feedback_messages(&snapshot, &[mapping.clone()]), vec![vec![0x90,60,127]]);
+        assert_eq!(
+            build_feedback_messages(&snapshot, &[mapping.clone()]),
+            vec![vec![0x90, 60, 0]]
+        );
+        snapshot.active_group_cue_ids.insert("front".into(), 9);
+        assert_eq!(
+            build_feedback_messages(&snapshot, &[mapping.clone()]),
+            vec![vec![0x90, 60, 127]]
+        );
         snapshot.active_group_cue_ids.clear();
-        assert_eq!(build_feedback_messages(&snapshot, &[mapping]), vec![vec![0x90,60,0]]);
+        assert_eq!(
+            build_feedback_messages(&snapshot, &[mapping]),
+            vec![vec![0x90, 60, 0]]
+        );
     }
 
     #[test]

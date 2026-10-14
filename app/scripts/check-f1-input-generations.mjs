@@ -68,7 +68,11 @@ async function run() {
   ], "F1 Learn authority boundary");
   assertNeedles(dmx, "crates/io/src/dmx_input.rs", [
     "let mut last_packet_at: Option<Instant> = None",
-    "Some((universe, data)) if universe == config.universe",
+    // Classified packets (parser hardening): only levels for the configured
+    // universe refresh liveness; invalid packets are counted, not accepted.
+    "DmxInputPacket::Levels { universe, data }",
+    "if universe == config.universe =>",
+    "DmxInputPacket::Invalid",
     "last_packet_at = Some(Instant::now())",
     "last.elapsed() >= Duration::from_millis(config.timeout_ms.max(100))",
     "SignalLost",

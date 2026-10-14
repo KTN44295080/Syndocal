@@ -5854,7 +5854,8 @@ impl PendingHeadSlot {
         // A poisoned counter refuses: the slot accounting can no longer be trusted.
         let mut state = counters.state.lock().ok()?;
         let held_by_ip = state.per_ip.get(&ip).copied().unwrap_or(0);
-        if state.total >= REMOTE_MAX_PENDING_HEADS || held_by_ip >= REMOTE_MAX_PENDING_HEADS_PER_IP {
+        if state.total >= REMOTE_MAX_PENDING_HEADS || held_by_ip >= REMOTE_MAX_PENDING_HEADS_PER_IP
+        {
             return None;
         }
         state.total += 1;
@@ -8740,26 +8741,42 @@ mod tests {
         let counters = Arc::new(PendingHeadCounters::default());
         let first: IpAddr = "192.0.2.1".parse().unwrap();
         let per_ip = (0..REMOTE_MAX_PENDING_HEADS_PER_IP)
-            .map(|_| PendingHeadSlot::acquire(&counters, first).expect("slot within the per-address cap"))
+            .map(|_| {
+                PendingHeadSlot::acquire(&counters, first).expect("slot within the per-address cap")
+            })
             .collect::<Vec<_>>();
-        assert!(PendingHeadSlot::acquire(&counters, first).is_none(), "one address cannot exceed its cap");
+        assert!(
+            PendingHeadSlot::acquire(&counters, first).is_none(),
+            "one address cannot exceed its cap"
+        );
         // Other hosts are not locked out by the first one.
         let mut others = Vec::new();
         for host in 2..=4 {
             let ip: IpAddr = format!("192.0.2.{host}").parse().unwrap();
             for _ in 0..REMOTE_MAX_PENDING_HEADS_PER_IP {
-                others.push(PendingHeadSlot::acquire(&counters, ip).expect("another host still gets slots"));
+                others.push(
+                    PendingHeadSlot::acquire(&counters, ip).expect("another host still gets slots"),
+                );
             }
         }
         // 4 hosts x 8 = 32 = the total cap.
         let fifth: IpAddr = "192.0.2.5".parse().unwrap();
-        assert!(PendingHeadSlot::acquire(&counters, fifth).is_none(), "the total cap still applies");
+        assert!(
+            PendingHeadSlot::acquire(&counters, fifth).is_none(),
+            "the total cap still applies"
+        );
         drop(per_ip);
-        assert!(PendingHeadSlot::acquire(&counters, fifth).is_some(), "released slots are reusable");
+        assert!(
+            PendingHeadSlot::acquire(&counters, fifth).is_some(),
+            "released slots are reusable"
+        );
         drop(others);
         let state = counters.state.lock().unwrap();
         assert_eq!(state.total, 0);
-        assert!(state.per_ip.is_empty(), "released addresses leave no entries behind");
+        assert!(
+            state.per_ip.is_empty(),
+            "released addresses leave no entries behind"
+        );
     }
 
     #[test]
