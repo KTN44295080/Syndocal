@@ -323,6 +323,7 @@ mod serial_dmx_machine;
 #[cfg(test)]
 mod serial_show_dmx_route_tests;
 mod show_serial_dmx_route;
+mod mtc_output;
 mod recording_lease;
 mod recording_ownership;
 mod recording_receipts;
@@ -3155,6 +3156,8 @@ struct AppState {
     midi_clock: Mutex<Option<MidiClockInput>>,
     midi_control: Mutex<Option<MidiControlInput>>,
     midi_feedback: Arc<Mutex<Option<MidiFeedbackOutput>>>,
+    /// MIDI Time Code output following the Timeline (machine-local).
+    mtc_output: Mutex<Option<mtc_output::MtcOutputRuntime>>,
     midi_feedback_runtime: Mutex<Option<MidiFeedbackRuntime>>,
     midi_feedback_last_error: Arc<Mutex<Option<String>>>,
     osc_input: Mutex<Option<OscInput>>,
@@ -25357,6 +25360,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "start_asio_program_cue_output",
     "start_dmx_input",
     "start_live_audio_input",
+    "start_mtc_output_v1",
     "start_osc_input",
     "start_remote_control",
     "start_show_clock",
@@ -25365,6 +25369,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "stop_close_asio_program_cue_output",
     "stop_dmx_input",
     "stop_live_audio_input",
+    "stop_mtc_output_v1",
     "stop_osc_input",
     "stop_remote_control",
     "stop_show_clock",
@@ -30573,6 +30578,18 @@ fn connect_midi_feedback(
     drop(previous);
     let connection =
         io::midi::connect_midi_feedback_output_named(output_index, expected_output_name.as_deref()).map_err(|error| error.to_string())?;
+    let mtc_port = state
+        .mtc_output
+        .lock()
+        .map_err(|_| "MTC output lock was poisoned".to_string())?
+        .as_ref()
+        .and_then(mtc_output::MtcOutputRuntime::port_name);
+    if mtc_port.is_some_and(|port| port == connection.telemetry().port_name) {
+        drop(connection);
+        return Err(
+            "This MIDI output already sends MTC; choose another output for feedback".to_string(),
+        );
+    }
     if !project_input_installation_is_current(
         coordinator.epoch,
         coordinator_epoch,
@@ -30704,6 +30721,78 @@ fn set_midi_feedback_auto(
         last_error: None,
         output: midi_feedback_output_status(&state)?,
     })
+}
+
+fn current_mtc_output_status(state: &AppState) -> Result<mtc_output::MtcOutputStatus, String> {
+    Ok(state
+        .mtc_output
+        .lock()
+        .map_err(|_| "MTC output lock was poisoned".to_string())?
+        .as_ref()
+        .map(mtc_output::MtcOutputRuntime::status)
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+fn start_mtc_output_v1(
+    state: State<'_, AppState>,
+    output_index: usize,
+    expected_output_name: String,
+    frame_rate: mtc_output::MtcOutputFrameRate,
+) -> Result<mtc_output::MtcOutputStatus, String> {
+    let feedback_port = state
+        .midi_feedback
+        .lock()
+        .map_err(|_| "MIDI feedback state lock was poisoned".to_string())?
+        .as_ref()
+        .map(|output| output.telemetry().port_name);
+    if feedback_port.as_deref() == Some(expected_output_name.as_str()) {
+        return Err(
+            "This MIDI output already sends controller feedback; choose another output for MTC"
+                .to_string(),
+        );
+    }
+    let mut slot = state
+        .mtc_output
+        .lock()
+        .map_err(|_| "MTC output lock was poisoned".to_string())?;
+    // Reopening the same port must close it first (Windows MIDI outputs are
+    // exclusive); a different port opens before the running one closes, so
+    // a failed switch keeps the old output.
+    if slot.as_ref().is_some_and(|runtime| {
+        runtime.port_name().as_deref() == Some(expected_output_name.as_str())
+    }) {
+        drop(slot.take());
+    }
+    let output = io::mtc_output::connect_mtc_output_named(output_index, &expected_output_name)
+        .map_err(|error| error.to_string())?;
+    drop(slot.take());
+    let runtime = mtc_output::MtcOutputRuntime::start(state.engine.clone(), output, frame_rate)?;
+    let status = runtime.status();
+    *slot = Some(runtime);
+    Ok(status)
+}
+
+#[tauri::command]
+fn stop_mtc_output_v1(state: State<'_, AppState>) -> Result<mtc_output::MtcOutputStatus, String> {
+    let runtime = state
+        .mtc_output
+        .lock()
+        .map_err(|_| "MTC output lock was poisoned".to_string())?
+        .take();
+    drop(runtime);
+    current_mtc_output_status(&state)
+}
+
+#[tauri::command]
+async fn mtc_output_status_v1(
+    app: tauri::AppHandle,
+) -> Result<mtc_output::MtcOutputStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        current_mtc_output_status(&app.state::<AppState>())
+    })
+    .await
+    .map_err(|error| format!("MTC output status query worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -91710,6 +91799,7 @@ pub(crate) mod tests {
                 midi_clock: Mutex::new(None),
                 midi_control: Mutex::new(None),
                 midi_feedback: Arc::new(Mutex::new(None)),
+                mtc_output: Mutex::new(None),
                 midi_feedback_runtime: Mutex::new(None),
                 midi_feedback_last_error: Arc::new(Mutex::new(None)),
                 osc_input: Mutex::new(None),
@@ -95913,6 +96003,7 @@ pub(crate) mod tests {
         for command in [
             "standby_sync_status",
             "video_output_recording_status",
+            "mtc_output_status_v1",
             "get_output_ownership_status",
             "get_engine_telemetry_report",
             "remote_control_status",
@@ -97212,7 +97303,7 @@ pub(crate) mod tests {
             );
         }
         // The extension setter owns its lifecycle authority inside the handler.
-        assert_eq!(runtime_routes.len(), 173);
+        assert_eq!(runtime_routes.len(), 175);
         assert_eq!(
             OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
                 + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),
@@ -133335,6 +133426,7 @@ fn main() {
             midi_clock: Mutex::new(None),
             midi_control: Mutex::new(None),
             midi_feedback: Arc::new(Mutex::new(None)),
+            mtc_output: Mutex::new(None),
             midi_feedback_runtime: Mutex::new(None),
             midi_feedback_last_error: Arc::new(Mutex::new(None)),
             osc_input: Mutex::new(None),
@@ -133575,6 +133667,9 @@ fn main() {
             disconnect_midi_feedback,
             set_midi_feedback_auto,
             midi_feedback_status,
+            start_mtc_output_v1,
+            stop_mtc_output_v1,
+            mtc_output_status_v1,
             send_midi_feedback,
             learn_midi_control,
             save_midi_mappings,

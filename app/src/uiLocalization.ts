@@ -1782,6 +1782,24 @@ const japaneseText: Record<string, string> = {
   "This PC runs as Standby; only the Primary records.": "このPCはStandbyで動作中です。録画できるのはPrimaryだけです。",
   "Standby sync is changing; recording waits until it settles.": "Standby同期を切り替え中です。完了するまで録画は開始できません。",
   "Takeover recording folder": "引継ぎ録画フォルダー",
+  "MTC output (optional)": "MTC出力（任意）",
+  "Sends MIDI Time Code that follows the Timeline to another device. Only a PC whose output is armed sends.":
+    "Timelineに追従するMIDIタイムコードを他の機器へ送ります。出力をArmしたPCだけが送信します。",
+  "MIDI output": "MIDI出力",
+  "Select output": "出力を選択",
+  "Frame rate": "フレームレート",
+  "24 fps": "24 fps",
+  "25 fps": "25 fps",
+  "29.97 fps drop-frame": "29.97 fps ドロップフレーム",
+  "30 fps": "30 fps",
+  "Start MTC": "MTC送信開始",
+  "Stop MTC": "MTC送信停止",
+  "Ready · sends while the Timeline plays": "待機中・Timeline再生中に送信します",
+  "This PC does not own output; MTC waits until output is armed": "このPCは出力を担当していません。出力をArmするまでMTCは送信されません",
+  "This MIDI output already sends MTC; choose another output for feedback":
+    "このMIDI出力はMTCの送信に使われています。フィードバックには別の出力を選んでください",
+  "This MIDI output already sends controller feedback; choose another output for MTC":
+    "このMIDI出力はコントローラーのフィードバックに使われています。MTCには別の出力を選んでください",
   "Takeover recording": "引継ぎ録画",
   "After Take Over and Arm, the previous Primary's recording continues here once its take has ended.":
     "Take OverしてArmすると、前のPrimaryの録画が終わり次第、このフォルダーで録画を自動的に引き継ぎます。",

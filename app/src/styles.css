@@ -22644,6 +22644,18 @@ h3 {
   min-width: 0;
 }
 
+.mtcOutputControls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 12rem) auto;
+  align-items: end;
+  gap: 6px;
+}
+
+.mtcOutputState {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
 .takeoverRecordingRow {
   display: grid;
   gap: 4px;

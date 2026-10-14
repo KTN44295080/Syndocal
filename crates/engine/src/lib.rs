@@ -2455,6 +2455,15 @@ mod realtime_thread {
     }
 }
 
+/// Configures the calling thread for timing-critical output (1 ms timer
+/// resolution and MMCSS "Pro Audio" on Windows; user-interactive QoS on
+/// macOS) until the guard is dropped.
+pub fn configure_realtime_thread() -> RealtimeThreadGuard {
+    realtime_thread::configure()
+}
+
+pub use realtime_thread::Guard as RealtimeThreadGuard;
+
 #[derive(Debug, Error)]
 pub enum EngineError {
     #[error("engine command queue is full")]

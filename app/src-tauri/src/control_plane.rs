@@ -70,9 +70,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 573;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 576;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "43580b608ce5df6ba60850ced0fb7f863d85f1bd101f204e52c32aa2e35ee818";
+    "826742443fe2742403dcc1aaf9610c4ceba1f6892be4f85497baa0f0a3072429";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -387,6 +387,7 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "live_audio_input_levels"
             | "live_audio_input_status"
             | "midi_feedback_status"
+            | "mtc_output_status_v1"
             | "poll_control_plane_observation_events"
             | "poll_project_authority_bundle"
             | "preview_custom_fixture_profile"
@@ -574,6 +575,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "start_asio_program_cue_output"
             | "start_dmx_input"
             | "start_live_audio_input"
+            | "start_mtc_output_v1"
             | "start_osc_input"
             | "start_remote_control"
             | "start_show_clock"
@@ -582,6 +584,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "stop_close_asio_program_cue_output"
             | "stop_dmx_input"
             | "stop_live_audio_input"
+            | "stop_mtc_output_v1"
             | "stop_osc_input"
             | "stop_remote_control"
             | "stop_show_clock"
@@ -2575,11 +2578,11 @@ mod tests {
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
             31
         );
-        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 110);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 111);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 11);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 8);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 173);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 175);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 29);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 28);
@@ -2657,7 +2660,7 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 493;
+        const FRONTEND_INVOKE_COUNT: usize = 496;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 210);
         assert_eq!(
             registry.operations.len(),
@@ -2667,7 +2670,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1676);
+        assert_eq!(registry.operations.len(), 1682);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -3057,15 +3060,15 @@ mod tests {
         const ENGINE_COUNT: usize = 284;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 210;
-        const FRONTEND_COUNT: usize = 493;
+        const FRONTEND_COUNT: usize = 496;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1676);
-        assert_eq!(SOURCE_TOTAL, 1709);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1682);
+        assert_eq!(SOURCE_TOTAL, 1715);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 76);
 
@@ -3484,9 +3487,10 @@ mod tests {
         // two frontend sources remain aliases rather than new external operations.
         // MIDI PitchBend and RelativeControlChange are input message shapes,
         // not external operations; they stay unclassified like the other four.
-        // configure_takeover_recording_v1 is a local runtime route (its
-        // folder dialog), not an external canonical operation.
-        assert_eq!(unclassified.len(), 1135);
+        // configure_takeover_recording_v1 (its folder dialog) and the three
+        // MTC output routes are local runtime routes, not external canonical
+        // operations.
+        assert_eq!(unclassified.len(), 1138);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -4250,11 +4254,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both the native and frontend missing-publication resolver.
-        assert_eq!(legacy.operations.len(), 1676);
+        assert_eq!(legacy.operations.len(), 1682);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1676);
+        assert_eq!(operations.len(), 1682);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

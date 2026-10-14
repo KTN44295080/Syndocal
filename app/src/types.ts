@@ -1769,6 +1769,21 @@ export type VideoRecordingState = "Idle" | "Preparing" | "Recording" | "Finalizi
 /** Why the current or last take ended (DEC-RECORD-OWN-001). */
 export type VideoRecordingEndReason = "operator_stop" | "ownership_revoked" | "fault";
 
+export type MtcOutputFrameRate = "fps24" | "fps25" | "fps2997_drop" | "fps30";
+
+/** MIDI Time Code output following the Timeline (machine-local). */
+export interface MtcOutputStatus {
+  running: boolean;
+  port_name: string | null;
+  frame_rate: MtcOutputFrameRate | null;
+  transmitting: boolean;
+  held_reason: string | null;
+  timecode: string | null;
+  quarter_frames_sent: number;
+  full_frames_sent: number;
+  last_error: string | null;
+}
+
 export type TakeoverRecordingState = "idle" | "pending" | "blocked" | "started" | "failed" | "cancelled";
 
 /** After Take Over and Arm, the previous Primary's recording continues here. */

@@ -78,6 +78,7 @@ import { DmxOutputConfigPanel } from "./components/DmxOutputConfigPanel";
 import type { ExtensionStatus } from "./extensionsStatus";
 import { IoDisclosure, SetupIoConnectionDeck, type IoConnectionId } from "./components/IoConnectionDeck";
 import { StandbySyncPanel } from "./components/StandbySyncPanel";
+import { MtcOutputSection } from "./components/MtcOutputSection";
 import { ShowClockStatusPanel } from "./components/ShowClockStatusPanel";
 import { DmxInputPanel } from "./components/DmxInputPanel";
 import { DmxRawMonitor } from "./components/DmxRawMonitor";
@@ -29512,6 +29513,7 @@ export default function App() {
             onRemoveMapping={removeMidiMapping}
             onUpdateMapping={updateMidiMapping}
           />
+          <MtcOutputSection backendAvailable={isTauriRuntime()} invokeCommand={invoke} midiOutputs={midiOutputs()} />
           </section>
             ) : connection === "osc" ? (
           <section class="ioUnifiedZone ioCompactZone" data-io-zone="osc">

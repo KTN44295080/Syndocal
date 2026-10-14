@@ -149,16 +149,12 @@ pub struct MtcTimecode {
     pub frame_rate: MtcFrameRate,
 }
 
-impl MtcFrameRate {
-    fn fps(self) -> f64 {
-        match self {
-            Self::Fps24 => 24.0,
-            Self::Fps25 => 25.0,
-            Self::Fps2997Drop => 29.97,
-            Self::Fps30 => 30.0,
-        }
-    }
+/// Frames in one 10-minute drop-frame block (29.97 fps).
+const DROP_FRAME_TEN_MINUTE_FRAMES: u64 = 17_982;
+/// Frames in each drop-frame minute after the first of a 10-minute block.
+const DROP_FRAME_MINUTE_FRAMES: u64 = 1_798;
 
+impl MtcFrameRate {
     fn max_frame_count(self) -> u8 {
         match self {
             Self::Fps24 => 24,
@@ -166,19 +162,127 @@ impl MtcFrameRate {
             Self::Fps2997Drop | Self::Fps30 => 30,
         }
     }
+
+    /// Frame labels per second (30 for 29.97 drop-frame).
+    pub fn nominal_fps(self) -> u64 {
+        u64::from(self.max_frame_count())
+    }
+
+    /// The two MTC rate bits.
+    pub fn rate_bits(self) -> u8 {
+        match self {
+            Self::Fps24 => 0,
+            Self::Fps25 => 1,
+            Self::Fps2997Drop => 2,
+            Self::Fps30 => 3,
+        }
+    }
+
+    /// Real frames in 24 hours; timecode wraps there.
+    pub fn frames_per_day(self) -> u64 {
+        match self {
+            Self::Fps2997Drop => 24 * 6 * DROP_FRAME_TEN_MINUTE_FRAMES,
+            rate => rate.nominal_fps() * 86_400,
+        }
+    }
+
+    /// The real frame showing at `position_ms` (rounded down).
+    pub fn frame_at_ms(self, position_ms: u64) -> u64 {
+        match self {
+            // 30000/1001 real frames per second.
+            Self::Fps2997Drop => position_ms.saturating_mul(30) / 1_001,
+            rate => position_ms.saturating_mul(rate.nominal_fps()) / 1_000,
+        }
+    }
+
+    /// The first whole millisecond inside real frame `frame` (rounded up,
+    /// so `frame_at_ms(frame_start_ms(frame)) == frame`).
+    pub fn frame_start_ms(self, frame: u64) -> u64 {
+        match self {
+            Self::Fps2997Drop => (frame.saturating_mul(1_001) + 29) / 30,
+            rate => {
+                let fps = rate.nominal_fps();
+                (frame.saturating_mul(1_000) + fps - 1) / fps
+            }
+        }
+    }
+
+    /// One real frame in milliseconds.
+    pub fn frame_duration_ms(self) -> f64 {
+        match self {
+            Self::Fps2997Drop => 1_001.0 / 30.0,
+            rate => 1_000.0 / rate.nominal_fps() as f64,
+        }
+    }
 }
 
 impl MtcTimecode {
+    /// Real frames since 00:00:00:00. Drop-frame labels skip frame numbers
+    /// 0 and 1 at the start of every minute not divisible by 10.
+    pub fn frame_count(self) -> u64 {
+        let nominal = self.frame_rate.nominal_fps();
+        let total_minutes = u64::from(self.hours) * 60 + u64::from(self.minutes);
+        let seconds = total_minutes * 60 + u64::from(self.seconds);
+        let labelled = seconds * nominal + u64::from(self.frames);
+        if self.frame_rate == MtcFrameRate::Fps2997Drop {
+            labelled.saturating_sub(2 * (total_minutes - total_minutes / 10))
+        } else {
+            labelled
+        }
+    }
+
+    /// The label of real frame `frame`, wrapping at 24 hours.
+    pub fn from_frame_count(frame: u64, frame_rate: MtcFrameRate) -> Self {
+        let mut labelled = frame % frame_rate.frames_per_day();
+        if frame_rate == MtcFrameRate::Fps2997Drop {
+            let blocks = labelled / DROP_FRAME_TEN_MINUTE_FRAMES;
+            let within = labelled % DROP_FRAME_TEN_MINUTE_FRAMES;
+            labelled += 18 * blocks;
+            if within >= 2 {
+                labelled += 2 * ((within - 2) / DROP_FRAME_MINUTE_FRAMES);
+            }
+        }
+        let nominal = frame_rate.nominal_fps();
+        let seconds = labelled / nominal;
+        Self {
+            hours: ((seconds / 3_600) % 24) as u8,
+            minutes: ((seconds / 60) % 60) as u8,
+            seconds: (seconds % 60) as u8,
+            frames: (labelled % nominal) as u8,
+            frame_rate,
+        }
+    }
+
+    /// The label showing at `position_ms`.
+    pub fn from_position_ms(position_ms: u64, frame_rate: MtcFrameRate) -> Self {
+        Self::from_frame_count(frame_rate.frame_at_ms(position_ms), frame_rate)
+    }
+
+    /// This label `frames` real frames later.
+    pub fn advanced(self, frames: u64) -> Self {
+        Self::from_frame_count(self.frame_count() + frames, self.frame_rate)
+    }
+
     pub fn position_ms(self) -> u64 {
-        let seconds =
-            u64::from(self.hours) * 3_600 + u64::from(self.minutes) * 60 + u64::from(self.seconds);
-        let frame_ms = (f64::from(self.frames) * 1_000.0 / self.frame_rate.fps()).round() as u64;
-        seconds * 1_000 + frame_ms
+        self.frame_rate.frame_start_ms(self.frame_count())
+    }
+
+    /// `HH:MM:SS:FF`, with `;` before the frames for drop-frame.
+    pub fn label(self) -> String {
+        let separator = if self.frame_rate == MtcFrameRate::Fps2997Drop {
+            ';'
+        } else {
+            ':'
+        };
+        format!(
+            "{:02}:{:02}:{:02}{separator}{:02}",
+            self.hours, self.minutes, self.seconds, self.frames
+        )
     }
 }
 
 #[derive(Debug, Clone, Default)]
-struct MtcQuarterFrameDecoder {
+pub(crate) struct MtcQuarterFrameDecoder {
     nibbles: [Option<u8>; 8],
     updated_mask: u8,
     last_timecode: Option<MtcTimecode>,
@@ -1551,7 +1655,7 @@ fn song_position_pointer(message: &[u8]) -> Option<u16> {
     Some(u16::from(lsb) | (u16::from(msb) << 7))
 }
 
-fn mtc_full_frame_timecode(message: &[u8]) -> Option<MtcTimecode> {
+pub(crate) fn mtc_full_frame_timecode(message: &[u8]) -> Option<MtcTimecode> {
     if message.len() != 10
         || message.first().copied() != Some(0xf0)
         || message.get(1).copied() != Some(0x7f)
@@ -1587,7 +1691,10 @@ fn mtc_full_frame_timecode(message: &[u8]) -> Option<MtcTimecode> {
 }
 
 impl MtcQuarterFrameDecoder {
-    fn push_message(&mut self, message: &[u8]) -> Option<MtcTimecode> {
+    /// A quarter-frame sequence carries the frame at which its first piece
+    /// was sent; when the eighth piece arrives two frames have passed, so the
+    /// decoded position is two frames later (MIDI Time Code specification).
+    pub(crate) fn push_message(&mut self, message: &[u8]) -> Option<MtcTimecode> {
         if message.first().copied() != Some(0xf1) {
             return None;
         }
@@ -1598,8 +1705,13 @@ impl MtcQuarterFrameDecoder {
         let piece = ((data >> 4) & 0x07) as usize;
         let value = data & 0x0f;
         self.nibbles[piece] = Some(value);
+        // A sequence starts at piece 0 and is complete at piece 7; joining
+        // mid-stream must not combine two sequences.
+        if piece == 0 {
+            self.updated_mask = 0;
+        }
         self.updated_mask |= 1 << piece;
-        if self.updated_mask != 0xff {
+        if piece != 7 || self.updated_mask != 0xff {
             return None;
         }
         self.updated_mask = 0;
@@ -1608,7 +1720,7 @@ impl MtcQuarterFrameDecoder {
             return None;
         }
         self.last_timecode = Some(timecode);
-        Some(timecode)
+        Some(timecode.advanced(2))
     }
 
     fn timecode(&self) -> Option<MtcTimecode> {
@@ -2582,17 +2694,18 @@ mod tests {
         }
         let timecode = decoder.push_message(&messages[7]).unwrap();
 
+        // 01:02:03:04 was sent with the first piece; two frames have passed.
         assert_eq!(
             timecode,
             MtcTimecode {
                 hours: 1,
                 minutes: 2,
                 seconds: 3,
-                frames: 4,
+                frames: 6,
                 frame_rate: MtcFrameRate::Fps25,
             }
         );
-        assert_eq!(timecode.position_ms(), 3_723_160);
+        assert_eq!(timecode.position_ms(), 3_723_240);
         assert_eq!(decoder.push_message(&messages[7]), None);
     }
 
@@ -2623,13 +2736,14 @@ mod tests {
         for message in &initial[..7] {
             assert_eq!(decoder.push_message(message), None);
         }
+        // 00:00:59:24 plus the two quarter-frame transport frames.
         assert_eq!(
             decoder.push_message(&initial[7]),
             Some(MtcTimecode {
                 hours: 0,
-                minutes: 0,
-                seconds: 59,
-                frames: 24,
+                minutes: 1,
+                seconds: 0,
+                frames: 1,
                 frame_rate: MtcFrameRate::Fps25,
             })
         );
@@ -2643,7 +2757,7 @@ mod tests {
                 hours: 0,
                 minutes: 1,
                 seconds: 0,
-                frames: 0,
+                frames: 2,
                 frame_rate: MtcFrameRate::Fps25,
             })
         );

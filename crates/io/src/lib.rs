@@ -4,6 +4,7 @@ pub mod artnet;
 mod control_plane;
 pub mod dmx_input;
 pub mod midi;
+pub mod mtc_output;
 #[cfg(feature = "ndi")]
 pub mod ndi;
 pub mod osc;
