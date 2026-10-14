@@ -14,6 +14,8 @@ interface EffectActionControlsPanelProps {
   addDisabled: boolean;
   submitLabel: string;
   editing: boolean;
+  /** Scene FX: the form differs from the saved FX (undefined = not tracked). */
+  dirty?: boolean;
   editingLabel: string | null;
   onLow: (low: number) => void;
   onHigh: (high: number) => void;
@@ -79,10 +81,13 @@ export function EffectActionControlsPanel(props: EffectActionControlsPanelProps)
           <option value="Multiply">Multiply</option>
         </select>
       </label>
-      <div class="effectSubmitActions">
+      <div class="effectSubmitActions" data-effect-dirty={props.dirty ? "true" : undefined}>
         <Show when={props.editingLabel}>
           {(label) => (
             <span class="effectEditBadge" title={`Editing ${label()}`}>
+              <Show when={props.dirty}>
+                <span class="effectUnsavedMark" data-effect-unsaved title="Unsaved changes">Unsaved</span>{" "}
+              </Show>
               Editing {label()}
             </span>
           )}
@@ -91,7 +96,7 @@ export function EffectActionControlsPanel(props: EffectActionControlsPanelProps)
           {props.submitLabel}
         </button>
         <Show when={props.editing}>
-          <button onClick={props.onCancelEdit}>Cancel Edit</button>
+          <button onClick={props.onCancelEdit} disabled={props.dirty === false} title={props.dirty === false ? "No unsaved changes" : undefined}>Cancel Edit</button>
         </Show>
       </div>
     </div>

@@ -1890,6 +1890,13 @@ const japaneseText: Record<string, string> = {
   "Audio Input": "音声入力",
   "Audio Output": "音声出力",
   "Encoder CC": "エンコーダーCC",
+  "Discard unsaved changes to this FX?": "このFXの保存していない変更を破棄しますか？",
+  Unsaved: "未保存",
+  "Unsaved changes": "保存していない変更があります",
+  "No unsaved changes": "保存していない変更はありません",
+  "Each button adds a new FX to this scene.": "ボタンを押すたびに、このシーンへ新しいFXを追加します。",
+  "Pick a family to add an FX, then set 1 Target fixtures and 2 Channels to move below, adjust it, and Save.":
+    "FXの種類を押して追加し、下の「1 対象の灯体」「2 動かすチャンネル」を決めて動きを調整し、保存します。",
   "Target fixtures": "対象の灯体",
   "Channels to move": "動かすチャンネル",
   "FX channels": "FXのチャンネル",

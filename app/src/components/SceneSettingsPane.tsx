@@ -380,9 +380,9 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
             <section class="sceneSettingsSection sceneFxChooserSection" data-scene-fx-chooser>
               <header>
                 <strong class="uiMicroLabel">Add FX</strong>
-                <span>Select a family to create a cue-owned FX.</span>
+                <span>Each button adds a new FX to this scene.</span>
               </header>
-              <p class="hint sceneFxCreationGuide">Choose an FX family, select its fixtures and attribute, then adjust the effect and save below.</p>
+              <p class="hint sceneFxCreationGuide">Pick a family to add an FX, then set 1 Target fixtures and 2 Channels to move below, adjust it, and Save.</p>
               <EffectFamilyChooser
                 activeFamily={props.activeFamily}
                 onSelectFamily={props.onSelectFamily}

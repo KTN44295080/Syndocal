@@ -16,7 +16,7 @@ import { listen as tauriListen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { batch, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, type ComponentProps } from "solid-js";
+import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, untrack, type ComponentProps } from "solid-js";
 import { Portal } from "solid-js/web";
 import type { FrontendTauriInvokeCommand } from "./tauriInvokeCommands";
 import {
@@ -7599,6 +7599,17 @@ export default function App() {
       false,
     ),
   );
+  // Chaser steps follow the FX target while they still equal the previous
+  // target's order; once the operator edits the steps they are kept.
+  const chaserStepTargetKey = (steps: readonly { fixture_ids: number[]; target_group_ids: string[] }[]) =>
+    JSON.stringify(steps.map((step) => [step.fixture_ids, step.target_group_ids]));
+  createEffect(on(chaserCurrentTargetSteps, (next, previous) => {
+    if (previous === undefined || untrack(effectType) !== "Chaser") return;
+    const current = untrack(chaserSteps);
+    if (chaserStepTargetKey(current) !== chaserStepTargetKey(previous)) return;
+    if (chaserStepTargetKey(next) === chaserStepTargetKey(current)) return;
+    setChaserSteps(chaserStepsFromTargets(next.flatMap((step) => step.fixture_ids), [], true));
+  }, { defer: true }));
   const prepareChaserDraftFromCurrentTarget = (forceReset = false) => {
     const fixtureIds = effectTargetMode() === "video"
       ? selectedFixture() ? [selectedFixture()!.id] : []
@@ -23400,7 +23411,11 @@ export default function App() {
     }
   };
 
-  const buildEffectRequestFromForm = (): EffectRequestDraft | null => {
+  const buildEffectRequestFromForm = (options: { silent?: boolean } = {}): EffectRequestDraft | null => {
+    // The unsaved-change probe builds the same request silently.
+    const report = (message: string) => {
+      if (!options.silent) setMessage(message);
+    };
     const fixture = selectedFixture();
     const attribute = selectedEffectAttribute();
     const targetMode = effectTargetMode();
@@ -23415,7 +23430,7 @@ export default function App() {
     if (moveEffect) {
       const error = currentMoveDraftError();
       if (error) {
-        setMessage(error);
+        report(error);
         return null;
       }
       return {
@@ -23447,7 +23462,7 @@ export default function App() {
     if (chaserEffect) {
       const error = currentChaserDraftError();
       if (error) {
-        setMessage(error);
+        report(error);
         return null;
       }
       const features = chaserFeatures().map((feature) => ({
@@ -23482,18 +23497,18 @@ export default function App() {
     }
     const includesVideoTarget = !wholeFixtureColorEffect && (isVideoTarget || effectVideoTargetLinked());
     if (!preservesImportedLfoTargets && wholeFixtureColorEffect && (isVideoTarget || effectVideoTargetLinked())) {
-      setMessage("Color and Colour Mapping effects target complete lighting fixtures and cannot link a video parameter.");
+      report("Color and Colour Mapping effects target complete lighting fixtures and cannot link a video parameter.");
       return null;
     }
     if (!preservesImportedLfoTargets
       && targetMode === "fixture"
       && (!fixture || (!wholeFixtureColorEffect && !multiFeatureEffect && !attribute))) {
-      setMessage("Select a fixture and attribute first.");
+      report("Select a fixture and attribute first.");
       return null;
     }
     const selectedMapFixtureIds = selectedMappingFixtures().map((candidate) => candidate.id);
     if (!preservesImportedLfoTargets && targetMode === "selection" && selectedMapFixtureIds.length === 0) {
-      setMessage("Select one or more fixtures on the 2D mapping stage first.");
+      report("Select one or more fixtures on the 2D mapping stage first.");
       return null;
     }
     if (!preservesImportedLfoTargets
@@ -23501,12 +23516,12 @@ export default function App() {
       && !multiFeatureEffect
       && targetMode === "selection"
       && !attribute) {
-      setMessage("Select a fixture profile attribute before targeting a map selection.");
+      report("Select a fixture profile attribute before targeting a map selection.");
       return null;
     }
     const targetGroupIds = parseGroupIds(effectTargetGroups());
     if (!preservesImportedLfoTargets && targetMode === "group" && targetGroupIds.length === 0) {
-      setMessage("Enter at least one target group.");
+      report("Enter at least one target group.");
       return null;
     }
     if (!preservesImportedLfoTargets
@@ -23514,12 +23529,12 @@ export default function App() {
       && !multiFeatureEffect
       && targetMode === "group"
       && !attribute) {
-      setMessage("Select a fixture profile attribute before targeting a group.");
+      report("Select a fixture profile attribute before targeting a group.");
       return null;
     }
     const videoLayerId = selectedEffectVideoLayerId();
     if (!preservesImportedLfoTargets && includesVideoTarget && videoLayerId === null) {
-      setMessage(isVideoTarget ? "Add a video layer before adding a video effect." : "Add a video layer before linking video to this effect.");
+      report(isVideoTarget ? "Add a video layer before adding a video effect." : "Add a video layer before linking video to this effect.");
       return null;
     }
     const lightAttribute = attribute ?? "";
@@ -23547,7 +23562,7 @@ export default function App() {
     if (effectType() === "Value") {
       const error = currentValueDraftError();
       if (error) {
-        setMessage(error);
+        report(error);
         return null;
       }
       const features = scalarEffectFeatures().map((feature) => ({
@@ -23582,7 +23597,7 @@ export default function App() {
     if (effectType() === "Curve") {
       const error = currentCurveDraftError();
       if (error) {
-        setMessage(error);
+        report(error);
         return null;
       }
       const features = scalarEffectFeatures().map((feature) => ({
@@ -23615,7 +23630,7 @@ export default function App() {
     if (effectType() === "Mapping") {
       const error = currentMappingDraftError();
       if (error) {
-        setMessage(error);
+        report(error);
         return null;
       }
       const features = scalarEffectFeatures().map((feature) => ({
@@ -23651,7 +23666,7 @@ export default function App() {
     if (colorMappingEffect) {
       const error = currentColorMappingDraftError();
       if (error) {
-        setMessage(error);
+        report(error);
         return null;
       }
       const targetFixtureIds = new Set(effectTargetFixtures().map((candidate) => candidate.id));
@@ -23686,7 +23701,7 @@ export default function App() {
     }
     if (colorEffect) {
       if (!colorEffectDraftValid()) {
-        setMessage("Color effects require 1 to 255 ordered palette stops with valid colors.");
+        report("Color effects require 1 to 255 ordered palette stops with valid colors.");
         return null;
       }
       return {
@@ -24116,15 +24131,41 @@ export default function App() {
     return cueOwnedEffectSummary(target, source);
   };
 
+  // Unsaved FX edits: the saved draft's request signature is captured after
+  // a load or save settles; the editor is dirty while the form differs.
+  const [sceneEffectDraftBaseline, setSceneEffectDraftBaseline] = createSignal<string | null>(null);
+  const sceneEffectDraftSignature = () => {
+    const draft = buildEffectRequestFromForm({ silent: true });
+    return draft ? JSON.stringify(draft) : null;
+  };
+  const rebaselineSceneEffectDraft = () => {
+    setSceneEffectDraftBaseline(null);
+    setTimeout(() => setSceneEffectDraftBaseline(untrack(sceneEffectDraftSignature)), 0);
+  };
+  const sceneEffectDraftDirty = createMemo(() => {
+    const baseline = sceneEffectDraftBaseline();
+    return baseline !== null
+      && selectedSceneEffectId() !== null
+      && sceneEffectDraftSignature() !== baseline;
+  });
+  // Every selection change (create, duplicate, remove, select) re-baselines
+  // once the synchronously loaded draft has settled.
+  createEffect(on(selectedSceneEffectId, () => rebaselineSceneEffectDraft(), { defer: true }));
+  const confirmDiscardSceneEffectDraft = () =>
+    !sceneEffectDraftDirty()
+    || window.confirm(translateUiText("Discard unsaved changes to this FX?", uiLocale()));
+
   loadSceneEffectDraft = (cueId: number, effectId: number) => {
     const effect = sceneEffectForCue(cueId, effectId);
     if (effect) useEffectAsDraft(effect);
+    rebaselineSceneEffectDraft();
   };
 
   const selectSceneEffect = (effectId: number) => {
     const cue = selectedSceneCue();
     const target = cue?.effect_targets.find((candidate) => candidate.effect_id === effectId);
     if (!cue || !target) return;
+    if (effectId !== selectedSceneEffectId() && !confirmDiscardSceneEffectDraft()) return;
     setSelectedSceneEffectId(effectId);
     setSceneFxStagePreview(target.enabled && target.params
       ? { cueId: cue.id, effectId, params: target.params, startedAt: performance.now() }
@@ -24397,6 +24438,7 @@ export default function App() {
       snapshot().effects.find((candidate) => candidate.id === effectId) ?? null,
     );
     if (effect) useEffectAsDraft(effect);
+    rebaselineSceneEffectDraft();
     await previewAndRunSceneEffect(cue.id, effectId, params);
     setMessage(`Saved cue-owned ${draft.effectType} FX for scene ${cue.id}.`);
     return true;
@@ -24786,6 +24828,7 @@ export default function App() {
       addDisabled: effectSubmitDisabled(),
       submitLabel: "Save cue-owned FX",
       editing: true,
+      dirty: sceneEffectDraftDirty(),
       editingLabel: selectedSceneEffects()
         .find((effect) => effect.id === selectedSceneEffectId())?.label ?? null,
       onLow: setEffectLow,
