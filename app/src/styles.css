@@ -22644,6 +22644,27 @@ h3 {
   min-width: 0;
 }
 
+.dmxUniverseTable {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 11px;
+}
+
+.dmxUniverseTable th,
+.dmxUniverseTable td {
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--ui-border);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dmxUniverseTable th:nth-child(1) { width: 4.5rem; }
+.dmxUniverseTable th:nth-child(2) { width: 9rem; }
+.dmxUniverseTable th:nth-child(4) { width: 34%; }
+
 .ltcInputControls {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 6rem) auto auto;

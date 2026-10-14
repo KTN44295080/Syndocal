@@ -80,6 +80,8 @@ import { IoDisclosure, SetupIoConnectionDeck, type IoConnectionId } from "./comp
 import { StandbySyncPanel } from "./components/StandbySyncPanel";
 import { MtcOutputSection } from "./components/MtcOutputSection";
 import { LtcInputPanel } from "./components/LtcInputPanel";
+import { DmxUniverseOverview } from "./components/DmxUniverseOverview";
+import { dmxUniverseOverviewRows } from "./dmxUniverseOverview";
 import { ShowClockStatusPanel } from "./components/ShowClockStatusPanel";
 import { DmxInputPanel } from "./components/DmxInputPanel";
 import { DmxRawMonitor } from "./components/DmxRawMonitor";
@@ -29277,6 +29279,17 @@ export default function App() {
             renderWorkbench={(connection) => connection === "dmx" ? (
           <section class="ioUnifiedZone ioUnifiedDmxZone" data-io-zone="dmx">
           <div class="ioOperatorSurface dmxOperatorSurface">
+          <DmxUniverseOverview
+            rows={dmxUniverseOverviewRows({
+              routes: snapshot().dmx_outputs.length > 0 ? snapshot().dmx_outputs : [snapshot().output],
+              routeTelemetry: snapshot().telemetry.last_dmx_route_results,
+              showDmxBinding: serialDmxMachineBindingStatus(),
+              showDmxWorker: showSerialDmxSafetyBlackoutRouteStatus(),
+              usbCables: usbDmxUniverses(),
+              safetyBlackoutEngaged: snapshot().safety_blackout_engaged,
+            })}
+            safetyBlackoutEngaged={snapshot().safety_blackout_engaged}
+          />
           <DmxOutputConfigPanel
             output={output()}
             serialPorts={serialPorts()}
