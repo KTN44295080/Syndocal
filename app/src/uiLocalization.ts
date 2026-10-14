@@ -1890,9 +1890,13 @@ const japaneseText: Record<string, string> = {
   "Audio Input": "音声入力",
   "Audio Output": "音声出力",
   "Encoder CC": "エンコーダーCC",
+  "Edits are saved automatically and a playing scene shows them at once. Turn on Blind to edit without changing the output.":
+    "編集は自動で保存され、再生中のシーンにはすぐ反映されます。出力を変えずに編集するときはBlindをオンにしてください。",
+  "Blind: edits are saved but the output does not change until the scene is triggered again.":
+    "Blind中：編集は保存されますが、シーンを再度再生するまで出力は変わりません。",
   Rejected: "拒否",
-  "Packets with an invalid signature or a replayed/out-of-order sequence. They are ignored; a rising count means another device on the network is sending ShowClock traffic.":
-    "署名が不正、または再送・順序違いのパケットです。使わずに捨てています。増え続ける場合は、ネットワーク上の別の機器がShowClockの通信を送っています。",
+  "Packets with an invalid signature or a replayed/late sequence are ignored and counted here.":
+    "署名が不正なパケットや、再送・遅れて届いたパケットは使わずに捨て、ここで数えます。",
   Scene: "シーン",
   Props: "設定",
   "Discard unsaved changes to this FX?": "このFXの保存していない変更を破棄しますか？",
@@ -3936,6 +3940,8 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [/^Last refused: (.+)\. Refused packets are ignored; a rising count means another device is sending ShowClock traffic or packets arrive late\.$/,
+    (reason) => `最後に拒否した理由：${reason}。拒否したパケットは使いません。増え続ける場合は、別の機器がShowClockの通信を送っているか、パケットが遅れて届いています。`],
   [/^(\d+) mapped fixtures?$/, (count) => `${count}台`],
   [/^(\d+)\/(\d+) fixtures$/, (compatible, total) => `${compatible}/${total}台`],
   [/^(\d+) common attributes?$/, (count) => `共通チャンネル ${count}`],

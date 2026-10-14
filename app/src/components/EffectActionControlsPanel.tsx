@@ -16,6 +16,8 @@ interface EffectActionControlsPanelProps {
   editing: boolean;
   /** Scene FX: the form differs from the saved FX (undefined = not tracked). */
   dirty?: boolean;
+  /** Scene FX: whether settled edits reach the output ("live") or not ("blind"). */
+  outputMode?: "live" | "blind";
   editingLabel: string | null;
   onLow: (low: number) => void;
   onHigh: (high: number) => void;
@@ -82,6 +84,19 @@ export function EffectActionControlsPanel(props: EffectActionControlsPanelProps)
         </select>
       </label>
       <div class="effectSubmitActions" data-effect-dirty={props.dirty ? "true" : undefined}>
+        <Show when={props.outputMode}>
+          {(mode) => (
+            <span
+              class={`effectOutputModeBadge ${mode()}`}
+              data-effect-output-mode={mode()}
+              title={mode() === "live"
+                ? "Edits are saved automatically and a playing scene shows them at once. Turn on Blind to edit without changing the output."
+                : "Blind: edits are saved but the output does not change until the scene is triggered again."}
+            >
+              {mode() === "live" ? "LIVE" : "BLIND"}
+            </span>
+          )}
+        </Show>
         <Show when={props.editingLabel}>
           {(label) => (
             <span class="effectEditBadge" title={`Editing ${label()}`}>

@@ -20210,6 +20210,12 @@ struct DjLinkTimelineStartRollbackImage {
 #[derive(Clone)]
 enum PendingCommandRollback {
     KeepApplied,
+    /// A Cue FX edit that was also applied to the running activations: undo
+    /// the authored change and put the running activations back.
+    RestoreCueEffectTargetsLive {
+        cue_rollback: Box<PendingCommandRollback>,
+        effect_activations: Vec<RuntimeEffectActivation>,
+    },
     RestoreOutputBlackout {
         lighting: bool,
         video: bool,
@@ -20592,6 +20598,7 @@ impl PendingCommandRollback {
                 | Self::RestoreCueLists { .. }
                 | Self::RestoreCueListDeletion { .. }
                 | Self::RestoreCueRemoval { .. }
+                | Self::RestoreCueEffectTargetsLive { .. }
                 | Self::RestoreTimelineEvents { .. }
                 | Self::RestoreTimelineItems { .. }
                 | Self::RestoreTimelineLayers { .. }
@@ -26547,10 +26554,23 @@ impl EngineRuntime {
                     timeline_jump_landed_event_id: self.timeline_jump_landed_event_id,
                     last_error: previous_last_error.clone(),
                 };
+                let effect_activations_before = self.effect_activations.clone();
                 let result = if Instant::now() > expires_at {
                     Err("Cue effect-target update expired before engine execution".to_string())
                 } else {
                     self.set_cue_effect_targets_state(cue_id, effect_targets)
+                };
+                // An FX edit on a running scene reaches the output at once
+                // (unless Blind); a rolled-back publication restores both.
+                let rollback = if result.is_ok()
+                    && self.reapply_active_cue_effect_params(cue_id, Instant::now())
+                {
+                    PendingCommandRollback::RestoreCueEffectTargetsLive {
+                        cue_rollback: Box::new(rollback),
+                        effect_activations: effect_activations_before,
+                    }
+                } else {
+                    rollback
                 };
                 self.last_error = if result.is_ok() {
                     None
@@ -31431,6 +31451,13 @@ impl EngineRuntime {
 
     fn rollback_pending_command(&mut self, rollback: PendingCommandRollback) {
         match rollback {
+            PendingCommandRollback::RestoreCueEffectTargetsLive {
+                cue_rollback,
+                effect_activations,
+            } => {
+                self.rollback_pending_command(*cue_rollback);
+                self.effect_activations = effect_activations;
+            }
             PendingCommandRollback::KeepApplied
             | PendingCommandRollback::SafetyBlackoutKeepApplied
             | PendingCommandRollback::ProjectSnapshotApplied => {}
@@ -40834,6 +40861,46 @@ impl EngineRuntime {
             }
         }
         self.reapply_cue_live_step_modifier(cue_index, now, jump_segment);
+    }
+
+    /// Rewrite a Cue's prepared FX activations from its just-updated authored
+    /// params, keeping each activation's timing, so an edit to a playing
+    /// scene reaches the output without restarting it (an idle scene's
+    /// prepared activations simply stay current). Returns false (nothing
+    /// changed) when the programmer is Blind, the Cue has no activations, or
+    /// its enabled FX line-up no longer matches the slots; the output is then
+    /// left alone and a re-trigger rebuilds a changed line-up.
+    fn reapply_active_cue_effect_params(&mut self, cue_id: CueId, now: Instant) -> bool {
+        if self.programmer_blind {
+            return false;
+        }
+        let Some(cue_index) = self.cues.iter().position(|cue| cue.id == cue_id) else {
+            return false;
+        };
+        let range = self.cues[cue_index].effect_activation_range;
+        if range.is_empty() || range.end() > self.effect_activations.len() {
+            return false;
+        }
+        let running = self.effect_activations[range.start..range.end()]
+            .iter()
+            .map(|activation| activation.effect.id)
+            .collect::<Vec<_>>();
+        let authored = self.cues[cue_index]
+            .effect_targets
+            .iter()
+            .filter(|target| target.enabled)
+            .filter_map(|target| {
+                let params = target.params.as_ref()?;
+                self.runtime_effect_from_params_snapshot(target.effect_id, params, now)
+                    .ok()
+                    .map(|_| target.effect_id)
+            })
+            .collect::<Vec<_>>();
+        if running != authored {
+            return false;
+        }
+        self.reapply_cue_live_modifier(cue_index, now, false);
+        true
     }
 
     fn reapply_cue_live_modifier_by_id(&mut self, cue_id: CueId, now: Instant, jump_segment: bool) {
@@ -70363,6 +70430,89 @@ mod tests {
             RuntimeEffectKind::Lfo(runtime) => runtime.request.clone(),
             _ => panic!("expected Lfo activation"),
         }
+    }
+
+    #[test]
+    fn cue_effect_target_edits_reach_running_activations_in_place_unless_blind() {
+        let request = |period_ms: u64, high: u16| {
+            test_lfo_request(
+                "Owned",
+                LfoShape::Sine,
+                period_ms,
+                0.25,
+                EffectBlendMode::Override,
+                1_000,
+                high,
+            )
+        };
+        let publish = |runtime: &mut EngineRuntime, targets: Vec<CueEffectTarget>| {
+            let (ack, _receiver) = mpsc::sync_channel(1);
+            runtime.apply_command(EngineCommand::SetCueEffectTargetsPublished {
+                cue_id: 1,
+                effect_targets: targets,
+                expires_at: Instant::now() + Duration::from_secs(2),
+                ack,
+            });
+            assert_eq!(runtime.last_error, None);
+        };
+        let mut runtime = runtime_with_lfo_effects(&[(7, false), (8, false)]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![owned_lfo_target(7, request(1_000, 41_000))],
+        );
+        let now = Instant::now();
+        runtime.rebuild_effect_activations(now);
+        runtime.start_cue(1, now, PendingCueTriggerSource::Manual);
+        let slot = runtime.cues[0].effect_activation_range.start;
+        let created_at = runtime.effect_activations[slot].effect.created_at;
+
+        // An edit reaches the running activation at once and keeps its timing.
+        publish(&mut runtime, vec![owned_lfo_target(7, request(500, 21_000))]);
+        let live = activation_lfo_request(&runtime, 1);
+        assert_eq!((live.period_ms, live.high), (500, 21_000));
+        assert_eq!(runtime.effect_activations[slot].effect.created_at, created_at);
+
+        // A rolled-back publication restores the authored FX and the activation.
+        let pending = runtime
+            .pending_command_acks
+            .pop()
+            .expect("published edit awaits its ack");
+        assert!(matches!(
+            pending.rollback,
+            PendingCommandRollback::RestoreCueEffectTargetsLive { .. }
+        ));
+        publish(&mut runtime, vec![owned_lfo_target(7, request(250, 11_000))]);
+        let rolled_back = runtime.pending_command_acks.pop().unwrap();
+        runtime.rollback_pending_command(rolled_back.rollback);
+        assert_eq!(activation_lfo_request(&runtime, 1).period_ms, 500);
+        let authored = runtime.cues[0].effect_targets[0].params.clone();
+        assert!(
+            matches!(authored, Some(EffectParamsSnapshot::Lfo(ref lfo)) if lfo.period_ms == 500),
+            "{authored:?}"
+        );
+        runtime.pending_command_acks.clear();
+
+        // Blind: the authored FX changes, the output does not.
+        runtime.programmer_blind = true;
+        publish(&mut runtime, vec![owned_lfo_target(7, request(2_000, 61_000))]);
+        assert_eq!(activation_lfo_request(&runtime, 1).period_ms, 500);
+        assert!(matches!(
+            runtime.pending_command_acks.pop().unwrap().rollback,
+            PendingCommandRollback::RestoreCueRemoval { .. }
+        ));
+        runtime.programmer_blind = false;
+
+        // A changed FX line-up is not patched in place (a re-trigger rebuilds it).
+        publish(
+            &mut runtime,
+            vec![
+                owned_lfo_target(7, request(3_000, 51_000)),
+                owned_lfo_target(8, request(3_000, 51_000)),
+            ],
+        );
+        assert_eq!(runtime.cues[0].effect_activation_range.len, 1);
+        assert_eq!(activation_lfo_request(&runtime, 1).period_ms, 500);
     }
 
     #[test]
