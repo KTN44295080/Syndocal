@@ -96788,7 +96788,7 @@ pub(crate) mod tests {
             );
         }
         // The extension setter owns its lifecycle authority inside the handler.
-        assert_eq!(runtime_routes.len(), 170);
+        assert_eq!(runtime_routes.len(), 172);
         assert_eq!(
             OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
                 + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),
