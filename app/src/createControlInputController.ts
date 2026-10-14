@@ -28,6 +28,7 @@ import {
   sameMidiSource,
   sameOscSource,
   type ControlMappingTarget,
+  midiContinuousActions,
 } from "./controlMappingLearn";
 import {
   projectAuthorityLearnContinuation,
@@ -261,7 +262,7 @@ export function createControlInputController(options: ControlInputControllerOpti
     const mapping: MidiControlMapping = {
       channel: options.midiMapChannel() >= 0 ? options.midiMapChannel() : null,
       message: options.midiMapMessage(),
-      number: Math.max(0, Math.min(127, Math.round(options.midiMapNumber()))),
+      number: options.midiMapMessage() === "PitchBend" ? 0 : Math.max(0, Math.min(127, Math.round(options.midiMapNumber()))),
       action,
       fixture_id: action === "FixtureAttribute" || isFixtureFlagMappingAction(action) ? fixture?.id ?? null : null,
       attribute: action === "FixtureAttribute" ? attribute
@@ -419,7 +420,13 @@ export function createControlInputController(options: ControlInputControllerOpti
       applyLearnedMidiControl(learned);
       if (!learnAuthorityIsCurrent(authority)) return false;
       const replaced = previousMappings.filter((mapping) => sameMidiSource(mapping, learned));
-      const learnedMappings = midiMappingsFromLearnedControl(targets, learned);
+      // Re-learning a knob already switched to Relative encoder keeps it relative.
+      const keepRelative = learned.message === "ControlChange"
+        && replaced.some((mapping) => mapping.message === "RelativeControlChange");
+      const learnedMappings = midiMappingsFromLearnedControl(targets, learned).map((mapping) =>
+        keepRelative && midiContinuousActions.has(mapping.action)
+          ? { ...mapping, message: "RelativeControlChange" as const }
+          : mapping);
       const nextMappings = [
         ...previousMappings.filter((mapping) => !sameMidiSource(mapping, learned)),
         ...learnedMappings,
@@ -473,6 +480,8 @@ export function createControlInputController(options: ControlInputControllerOpti
       // A single detent of an endless encoder (Mackie V-Pot) reads 1-15 up or
       // 65-79 down; point at the Relative encoder switch rather than guessing.
       const encoderHint = learned.message === "ControlChange"
+        && !keepRelative
+        && learnedMappings.some((mapping) => midiContinuousActions.has(mapping.action))
         && ((learned.value >= 1 && learned.value <= 15) || (learned.value >= 65 && learned.value <= 79))
         ? "; if this is an endless knob, turn on Relative encoder for it in Setup > I/O > MIDI"
         : "";

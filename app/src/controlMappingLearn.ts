@@ -153,8 +153,28 @@ export const dmxMappingsFromLearnedControl = (
     ...mappingFieldsForTarget(normalizedTarget(target)),
   }));
 
+/** Positional targets; relative encoders map only to these (mirrors Rust). */
+export const midiContinuousActions: ReadonlySet<string> = new Set([
+  "FixtureAttribute",
+  "SelectedFeatureFader",
+  "VideoParam",
+  "VideoLayerFade",
+  "VideoOutputOpacity",
+  "VideoOutputFade",
+  "VideoOutputMappingField",
+  "TimelineSeek",
+  "SetBpm",
+  "LightingMaster",
+  "GroupSubmaster",
+  "VideoMaster",
+]);
+
+// A relative encoder is still the same physical CC.
+const midiSourceMessage = (message: MidiControlMapping["message"]) =>
+  message === "RelativeControlChange" ? "ControlChange" : message;
+
 export const sameMidiSource = (mapping: MidiControlMapping, learned: LearnedMidiControl) =>
-  mapping.message === learned.message
+  midiSourceMessage(mapping.message) === midiSourceMessage(learned.message)
   && mapping.number === learned.number
   && (mapping.channel ?? null) === learned.channel;
 

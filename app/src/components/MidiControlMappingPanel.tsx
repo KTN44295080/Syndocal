@@ -19,6 +19,7 @@ import type {
   VideoParam,
 } from "../types";
 import { formatMidiFeedbackMessage, type MidiFeedbackOutputStatus } from "../midiLearnFeedback";
+import { midiContinuousActions } from "../controlMappingLearn";
 
 interface MidiControlMappingPanelProps {
   snapshot: EngineSnapshot;
@@ -117,7 +118,12 @@ const defaultFeedbackMessage = (mapping: MidiControlMapping, value: number): Mid
 });
 
 const feedbackMessageLabel = (message: MidiFeedbackMessage) => (
-  `${message.message === "ControlChange" ? "CC" : message.message === "NoteOn" ? "Note On" : message.message === "NoteOff" ? "Note Off" : "Program"} · Ch ${message.channel + 1} · #${message.number} · ${message.value}`
+  `${message.message === "ControlChange" ? "CC"
+    : message.message === "NoteOn" ? "Note On"
+      : message.message === "NoteOff" ? "Note Off"
+        : message.message === "PitchBend" ? "Pitch bend"
+          : message.message === "RelativeControlChange" ? "Encoder CC"
+            : "Program"} · Ch ${message.channel + 1} · #${message.number} · ${message.value}`
 );
 
 export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
@@ -541,7 +547,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
                 <Show when={mapping.message !== "PitchBend"}>{" "}<span data-no-localize>{mapping.number}</span></Show>
               </strong>
               <span>{mapping.channel === null || mapping.channel === undefined ? "Any ch" : `Ch ${mapping.channel + 1}`} / {props.mappingTargetLabel(mapping)}</span>
-              <Show when={mapping.message === "ControlChange" || mapping.message === "RelativeControlChange"}>
+              <Show when={(mapping.message === "ControlChange" || mapping.message === "RelativeControlChange") && midiContinuousActions.has(mapping.action)}>
                 <label class="checkbox mappingRelativeToggle" title="Turn on for endless knobs (DAW mode V-Pots) that send up/down steps instead of a position">
                   <input
                     type="checkbox"

@@ -30929,6 +30929,13 @@ fn validate_midi_control_mapping(
     if mapping.message == protocol::MidiControlMessage::PitchBend && mapping.number != 0 {
         return Err(format!("{owner} pitch bend mappings use number 0"));
     }
+    if mapping.message == protocol::MidiControlMessage::RelativeControlChange
+        && !io::midi::midi_action_is_continuous(&mapping.action)
+    {
+        return Err(format!(
+            "{owner} relative encoder mappings need a fader, master, or attribute target"
+        ));
+    }
     validate_mapping_range(&owner, mapping.low, mapping.high)?;
     validate_midi_feedback(&owner, mapping.feedback.as_ref())?;
     validate_mapping_required_fields_for_midi(&owner, &mut mapping)?;
@@ -30971,6 +30978,14 @@ fn validate_midi_feedback_message(
         return Err(format!(
             "{owner} MIDI feedback {state} control number must be 0-127"
         ));
+    }
+    if message.message == protocol::MidiControlMessage::RelativeControlChange {
+        return Err(format!(
+            "{owner} MIDI feedback {state} cannot be a relative encoder message"
+        ));
+    }
+    if message.message == protocol::MidiControlMessage::PitchBend && message.number != 0 {
+        return Err(format!("{owner} MIDI feedback {state} pitch bend uses number 0"));
     }
     if message.value > 127 {
         return Err(format!("{owner} MIDI feedback {state} value must be 0-127"));

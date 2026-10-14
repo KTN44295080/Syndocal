@@ -855,8 +855,9 @@ pub struct RelativeControlState {
 const RELATIVE_CONTROL_RESYNC_AFTER: Duration = Duration::from_millis(300);
 
 /// Relative encoders step from the target's current position: `current`
-/// reads it (normalized in the mapping's low..high range); otherwise the last
-/// value this input produced is used, starting from 0.
+/// reads it (normalized in the mapping's low..high range) when a turn starts;
+/// while turning, the value this input produced is the base. An unreadable
+/// target or a non-continuous action produces no event.
 pub fn events_from_midi_message_with_relative_state(
     message: &[u8],
     mappings: &[MidiControlMapping],
@@ -874,18 +875,28 @@ pub fn events_from_midi_message_with_relative_state(
             if mapping.message != MidiControlMessage::RelativeControlChange {
                 return event_from_mapping(mapping, &parsed);
             }
+            // Steps only make sense for a continuous target; a trigger or
+            // toggle would fire on every detent.
+            if !midi_feedback_action_is_continuous(&mapping.action) {
+                return None;
+            }
             let steps = relative_encoder_steps(parsed.value);
             if steps == 0 {
                 return None;
             }
             let now = Instant::now();
-            let last = state.last_by_mapping.get(&index).copied();
-            let turning = last.filter(|(_, at)| now.duration_since(*at) < RELATIVE_CONTROL_RESYNC_AFTER);
-            let base = turning
-                .map(|(value, _)| value)
-                .or_else(|| current(mapping).filter(|value| value.is_finite()))
-                .or(last.map(|(value, _)| value))
-                .unwrap_or(0.0);
+            let turning = state
+                .last_by_mapping
+                .get(&index)
+                .copied()
+                .filter(|(_, at)| now.duration_since(*at) < RELATIVE_CONTROL_RESYNC_AFTER);
+            // A new turn starts from the target's readable position. When it
+            // cannot be read (no fixture, mixed selection) nothing moves:
+            // guessing a base would jump the target.
+            let base = match turning {
+                Some((value, _)) => value,
+                None => current(mapping).filter(|value| value.is_finite())?,
+            };
             let next = (base + steps as f32 / 127.0).clamp(0.0, 1.0);
             state.last_by_mapping.insert(index, (next, now));
             let stepped = MidiMessage {
@@ -905,7 +916,22 @@ pub fn current_normalized_value_for_mapping(
     mapping: &MidiControlMapping,
     operator_selection: Option<&OperatorSelectionContext>,
 ) -> Option<f32> {
-    feedback_value_for_mapping(snapshot, mapping, operator_selection)
+    let value = feedback_value_for_mapping(snapshot, mapping, operator_selection)?;
+    Some(match mapping.action {
+        // Masters report raw 0..1 levels; inputs apply the mapping range.
+        MidiControlAction::LightingMaster
+        | MidiControlAction::VideoMaster
+        | MidiControlAction::GroupSubmaster => {
+            normalize_feedback_range(value, mapping.low, mapping.high, 0.0, 1.0)
+        }
+        _ => value,
+    })
+}
+
+/// Actions whose input is a position (faders, masters, attributes), as
+/// opposed to triggers and toggles. Relative encoders map only to these.
+pub fn midi_action_is_continuous(action: &MidiControlAction) -> bool {
+    midi_feedback_action_is_continuous(action)
 }
 
 fn feedback_value_for_mapping(
@@ -1463,9 +1489,17 @@ fn seven_bit_normalized(value: u8) -> f32 {
 }
 
 /// Signed step of a relative encoder CC (Mackie Control V-Pot encoding:
-/// bit 6 set = down, bits 0-5 = step count).
+/// bit 6 set = down, bits 0-5 = step count). Mackie encoders send at most 15
+/// steps per message; larger counts come from other encodings (two's
+/// complement, binary offset) whose small moves would decode as huge jumps
+/// here, so they are ignored rather than applied.
+const RELATIVE_ENCODER_MAX_STEPS: i32 = 15;
+
 fn relative_encoder_steps(value: u8) -> i32 {
     let steps = i32::from(value & 0x3f);
+    if steps > RELATIVE_ENCODER_MAX_STEPS {
+        return 0;
+    }
     if value & 0x40 != 0 {
         -steps
     } else {
@@ -2089,15 +2123,32 @@ mod tests {
         let down = dimmer_value(&events_from_midi_message_with_relative_state(&[0xb0, 16, 0x43], mappings, &mut state, &at_half));
         assert_eq!(down, ((0.5_f32 - 1.0 / 127.0) * 65_535.0).round() as u16);
 
-        // An unreadable target starts from zero and never leaves the range.
+        // An unreadable target never moves (no guessed base), and the
+        // stepped value never leaves the range.
         let mut fresh = RelativeControlState::default();
         let unknown = |_: &MidiControlMapping| None;
-        assert_eq!(dimmer_value(&events_from_midi_message_with_relative_state(&[0xb0, 16, 0x41], mappings, &mut fresh, &unknown)), 0);
-        assert_eq!(dimmer_value(&events_from_midi_message_with_relative_state(&[0xb0, 16, 0x3f], mappings, &mut fresh, &unknown)), ((63.0_f32 / 127.0) * 65_535.0).round() as u16);
+        assert!(events_from_midi_message_with_relative_state(&[0xb0, 16, 0x41], mappings, &mut fresh, &unknown).is_empty());
+        assert!(events_from_midi_message_with_relative_state(&[0xb0, 16, 0x01], mappings, &mut fresh, &unknown).is_empty());
+        let at_top = |_: &MidiControlMapping| Some(1.0);
+        assert_eq!(dimmer_value(&events_from_midi_message_with_relative_state(&[0xb0, 16, 0x0f], mappings, &mut fresh, &at_top)), 65_535);
+        // Only Mackie step counts (1-15) are applied: a two's-complement
+        // "-1" (0x7f) or binary-offset "-1" (0x3f) would otherwise jump.
+        assert!(events_from_midi_message_with_relative_state(&[0xb0, 16, 0x7f], mappings, &mut fresh, &at_half).is_empty());
+        assert!(events_from_midi_message_with_relative_state(&[0xb0, 16, 0x3f], mappings, &mut fresh, &at_half).is_empty());
         // A zero step and other numbers do nothing; absolute CC mappings are unchanged.
-        assert!(events_from_midi_message_with_relative_state(&[0xb0, 16, 0x00], mappings, &mut fresh, &unknown).is_empty());
-        assert!(events_from_midi_message_with_relative_state(&[0xb0, 17, 0x01], mappings, &mut fresh, &unknown).is_empty());
+        assert!(events_from_midi_message_with_relative_state(&[0xb0, 16, 0x00], mappings, &mut fresh, &at_half).is_empty());
+        assert!(events_from_midi_message_with_relative_state(&[0xb0, 17, 0x01], mappings, &mut fresh, &at_half).is_empty());
         assert_eq!(dimmer_value(&events_from_midi_message(&[0xb0, 7, 127], &[fixture_cc_mapping()])), 65_535);
+
+        // Triggers and toggles never take relative steps.
+        let mut toggle = fixture_cc_mapping();
+        toggle.message = MidiControlMessage::RelativeControlChange;
+        toggle.action = MidiControlAction::ToggleCue;
+        toggle.cue_id = Some(9);
+        let mut toggle_state = RelativeControlState::default();
+        assert!(events_from_midi_message_with_relative_state(&[0xb0, 7, 0x01], std::slice::from_ref(&toggle), &mut toggle_state, &at_half).is_empty());
+        assert!(!midi_action_is_continuous(&MidiControlAction::ToggleCue));
+        assert!(midi_action_is_continuous(&MidiControlAction::LightingMaster));
     }
 
     #[test]
