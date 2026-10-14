@@ -23,6 +23,11 @@ interface SceneBankSceneCreationControllerOptions {
   refreshSnapshot: () => Promise<EngineSnapshot | null>;
   invoke: FrontendTauriInvoke;
   projectTransactionOwnerId: string;
+  /**
+   * Browser preview only (no desktop backend), like Bank create/rename:
+   * create the empty Scene locally and return its id, or null.
+   */
+  createLocalPreviewScene?: (cueListId: number) => number | null;
 }
 
 export function createSceneBankSceneCreationController(
@@ -35,6 +40,19 @@ export function createSceneBankSceneCreationController(
     }
     options.setSelectedCueListId(cueListId);
     const beforeCueIds = new Set(options.snapshot().cues.map((cue) => cue.id));
+    if (options.createLocalPreviewScene) {
+      const cueId = options.createLocalPreviewScene(cueListId);
+      if (cueId === null) {
+        options.setMessage("New Scene ID could not be allocated safely.");
+        return false;
+      }
+      options.setCueLabel("New Scene");
+      options.setSelectedSceneCueId(cueId);
+      options.setSelectedSceneEffectId(null);
+      options.setSceneSettingsSurface("contents");
+      options.setMessage(`Created scene in ${cueList.label}`);
+      return true;
+    }
     try {
       const flushedEpoch = await options.flushProjectControlMappingsBeforeMutation();
       const currentAuthority = options.projectMappingsAuthority();

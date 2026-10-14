@@ -25247,11 +25247,36 @@ async function installSceneMatrixBankMutationCapture(client) {
       const revision = stale ? Math.max(0, capture.revision - 1) : ++capture.revision;
       const checkpointHash = stale ? "a".repeat(64) : hashFor(revision);
       const history = historyFor(revision, checkpointHash, label);
+      // The authority bundle carries the engine-owned timeline transport
+      // fence and runtime projection; a bundle without them is rejected.
+      const timelineRuntime = {
+        transport_epoch: 1,
+        transport_generation: 1,
+        loop_runtime: { generation: 0, status: "disabled", a_ms: null, b_ms: null, wrap_count: 0 },
+        follow_runtime: {
+          epoch: 1,
+          generation: 0,
+          status: "idle",
+          admission_reason: null,
+          outcome: null,
+          source_timeline_id: null,
+          target_timeline_id: null,
+          elapsed_ms: 0,
+          duration_ms: 0,
+          progress_millis: 0,
+          fault: null,
+          transition_hold_active: false,
+          waiting_for_pedal_start: false,
+        },
+      };
       const result = {
         authority: {
           project_epoch: 0,
           project_revision: revision,
           checkpoint_hash: checkpointHash,
+          timeline_transport_epoch: 1,
+          timeline_transport_generation: 1,
+          timeline_runtime: timelineRuntime,
           publication_generation: revision,
           publication_kind: "mutation",
           mapping_replacement_generation: 0,
@@ -25293,19 +25318,23 @@ async function installSceneMatrixBankMutationCapture(client) {
         throw new Error(`Scene Matrix Bank ${command} escaped the strict nested request envelope.`);
       }
       const request = args.request;
+      // Every strict Bank mutation carries an idempotency requestId
+      // (a9a635fa: reply-loss recovery for project transactions).
       const required = command === "create_cue_list"
-        ? ["expectedCheckpointHash", "expectedEpoch", "expectedRevision", "label", "ownerId"]
+        ? ["expectedCheckpointHash", "expectedEpoch", "expectedRevision", "label", "ownerId", "requestId"]
         : command === "rename_cue_list"
-          ? ["cueListId", "expectedCheckpointHash", "expectedEpoch", "expectedRevision", "label", "ownerId"]
+          ? ["cueListId", "expectedCheckpointHash", "expectedEpoch", "expectedRevision", "label", "ownerId", "requestId"]
           : command === "delete_cue_list"
-            ? ["cueListId", "expectedCheckpointHash", "expectedEpoch", "expectedRevision", "ownerId"]
-            : ["cueListIds", "expectedCheckpointHash", "expectedEpoch", "expectedRevision", "ownerId"];
+            ? ["cueListId", "expectedCheckpointHash", "expectedEpoch", "expectedRevision", "ownerId", "requestId"]
+            : ["cueListIds", "expectedCheckpointHash", "expectedEpoch", "expectedRevision", "ownerId", "requestId"];
       if (JSON.stringify(Object.keys(request).sort()) !== JSON.stringify(required)
         || request.expectedEpoch !== 0
         || request.expectedRevision !== capture.revision
         || typeof request.expectedCheckpointHash !== "string"
         || typeof request.ownerId !== "string"
-        || request.ownerId !== capture.ownerRegistrationArgs?.ownerId) {
+        || request.ownerId !== capture.ownerRegistrationArgs?.ownerId
+        || typeof request.requestId !== "string"
+        || !/^project-op:\S+$/.test(request.requestId)) {
         throw new Error(`Scene Matrix Bank ${command} received an invalid E/R/H/owner fence.`);
       }
       return request;

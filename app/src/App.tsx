@@ -18979,6 +18979,32 @@ export default function App() {
     refreshSnapshot,
     invoke,
     projectTransactionOwnerId,
+    get createLocalPreviewScene() {
+      if (isTauriRuntime()) return undefined;
+      return (cueListId: number) => {
+        const cues = snapshot().cues;
+        const template = cues[0];
+        const cueId = Math.max(0, ...cues.map((cue) => cue.id)) + 1;
+        if (!template || !Number.isSafeInteger(cueId)) return null;
+        const scene: CueSummary = {
+          ...template,
+          id: cueId,
+          cue_number: String(cueId),
+          cue_list_id: cueListId,
+          label: "New Scene",
+          targets: [],
+          palette_targets: [],
+          video_targets: [],
+          video_output_targets: [],
+          node_graph_targets: [],
+          effect_targets: [],
+          steps: [],
+          child_timeline: null,
+        };
+        setSnapshot((current) => ({ ...current, cues: [...current.cues, scene] }));
+        return cueId;
+      };
+    },
   });
 
   const renameCueList = async (): Promise<boolean> => {
