@@ -217,7 +217,9 @@ pub struct VideoRenderInputIsfStageError {
 pub struct FrameQueue {
     key: protocol::VideoRenderInputKey,
     layer_id: VideoLayerId,
-    slots: Vec<Option<VideoFrame>>,
+    /// Frames are shared so composition can read them without copying the
+    /// pixels out of the queue every tick.
+    slots: Vec<Option<Arc<VideoFrame>>>,
     start: usize,
     len: usize,
 }
@@ -2179,17 +2181,17 @@ impl FrameQueue {
                     .is_some_and(|existing| existing.pts_ms == frame.pts_ms)
             })
         {
-            self.slots[index] = Some(frame);
+            self.slots[index] = Some(Arc::new(frame));
             return FrameQueuePush::Inserted;
         }
         let result = if self.len == self.capacity() {
             let index = self.start;
-            self.slots[index] = Some(frame);
+            self.slots[index] = Some(Arc::new(frame));
             self.start = (self.start + 1) % self.capacity();
             FrameQueuePush::DroppedOldest
         } else {
             let index = (self.start + self.len) % self.capacity();
-            self.slots[index] = Some(frame);
+            self.slots[index] = Some(Arc::new(frame));
             self.len += 1;
             FrameQueuePush::Inserted
         };
@@ -2198,12 +2200,21 @@ impl FrameQueue {
     }
 
     pub fn nearest(&self, target_ms: u64) -> Option<&VideoFrame> {
-        self.iter()
-            .min_by_key(|frame| frame.pts_ms.abs_diff(target_ms))
+        self.nearest_shared(target_ms).map(|frame| &**frame)
     }
 
     pub fn frame_at_or_before(&self, target_ms: u64) -> Option<&VideoFrame> {
-        self.iter()
+        self.frame_at_or_before_shared(target_ms)
+            .map(|frame| &**frame)
+    }
+
+    fn nearest_shared(&self, target_ms: u64) -> Option<&Arc<VideoFrame>> {
+        self.iter_shared()
+            .min_by_key(|frame| frame.pts_ms.abs_diff(target_ms))
+    }
+
+    fn frame_at_or_before_shared(&self, target_ms: u64) -> Option<&Arc<VideoFrame>> {
+        self.iter_shared()
             .filter(|frame| frame.pts_ms <= target_ms)
             .max_by_key(|frame| frame.pts_ms)
     }
@@ -2221,6 +2232,10 @@ impl FrameQueue {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &VideoFrame> {
+        self.iter_shared().map(|frame| &**frame)
+    }
+
+    fn iter_shared(&self) -> impl Iterator<Item = &Arc<VideoFrame>> {
         (0..self.len).filter_map(|offset| {
             let index = (self.start + offset) % self.capacity();
             self.slots[index].as_ref()
@@ -2232,7 +2247,7 @@ impl FrameQueue {
         self.rebuild_from_sorted(&mut frames);
     }
 
-    fn drain_frames(&mut self) -> Vec<VideoFrame> {
+    fn drain_frames(&mut self) -> Vec<Arc<VideoFrame>> {
         let frames = (0..self.len)
             .filter_map(|offset| {
                 let index = (self.start + offset) % self.capacity();
@@ -2244,7 +2259,7 @@ impl FrameQueue {
         frames
     }
 
-    fn rebuild_from_sorted(&mut self, frames: &mut Vec<VideoFrame>) {
+    fn rebuild_from_sorted(&mut self, frames: &mut Vec<Arc<VideoFrame>>) {
         frames.sort_by_key(|frame| frame.pts_ms);
         for slot in &mut self.slots {
             *slot = None;
@@ -2379,7 +2394,7 @@ impl VideoRuntime {
         height: u32,
     ) -> Result<VideoFrame, VideoRuntimeError> {
         let frames = self.select_frames_for_plan(plan);
-        composite_rgba8(plan, &frames, width, height).map_err(VideoRuntimeError::from)
+        composite_frames_rgba8(plan, &frames, width, height).map_err(VideoRuntimeError::from)
     }
 
     pub fn compose_input_mix(
@@ -2392,7 +2407,7 @@ impl VideoRuntime {
         composite_input_mix_rgba8(mix, &frames, width, height).map_err(VideoRuntimeError::from)
     }
 
-    fn select_frames_for_plan(&self, plan: &CompositionPlan) -> Vec<VideoFrame> {
+    fn select_frames_for_plan(&self, plan: &CompositionPlan) -> Vec<Arc<VideoFrame>> {
         plan.layers
             .iter()
             .filter_map(|layer| {
@@ -2401,8 +2416,8 @@ impl VideoRuntime {
                     .find(|queue| queue.layer_id() == layer.layer_id)
                     .and_then(|queue| {
                         queue
-                            .frame_at_or_before(layer.position_ms)
-                            .or_else(|| queue.nearest(layer.position_ms))
+                            .frame_at_or_before_shared(layer.position_ms)
+                            .or_else(|| queue.nearest_shared(layer.position_ms))
                     })
                     .cloned()
             })
@@ -4834,7 +4849,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 blackout: plan.blackout,
                 layers: group_layers,
             };
-            let group_frame = composite_rgba8(&group_plan, &frames, width, height)?;
+            let group_frame = composite_frames_rgba8(&group_plan, &frames, width, height)?;
             let (group_frame, group_faults) = self
                 .apply_resolved_effect_chain_to_frame_with_cancellation(
                     chain,
@@ -4882,11 +4897,11 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         Ok((frame, faults))
     }
 
-    fn compose_plan_layers_with_groups_with_cancellation(
+    fn compose_plan_layers_with_groups_with_cancellation<F: std::borrow::Borrow<VideoFrame>>(
         &mut self,
         snapshot: &VideoSnapshot,
         plan: &CompositionPlan,
-        frames: &[VideoFrame],
+        frames: &[F],
         width: u32,
         height: u32,
         cancellation: Option<&dyn VideoRenderCancellation>,
@@ -4941,7 +4956,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 blackout: plan.blackout,
                 layers: group_layers,
             };
-            let group_frame = composite_rgba8(&group_plan, frames, width, height)?;
+            let group_frame = composite_frames_rgba8(&group_plan, frames, width, height)?;
             let (group_frame, group_faults) = self
                 .apply_resolved_effect_chain_to_frame_with_cancellation(
                     chain,
@@ -4989,7 +5004,12 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .map(|layer| layer.layer_id)
             .collect::<Vec<_>>();
         self.prepare_frames(snapshot, &layer_ids, width, height)?;
-        let frames = self.runtime.select_frames_for_plan(&plan.composition);
+        let frames = self
+            .runtime
+            .select_frames_for_plan(&plan.composition)
+            .into_iter()
+            .map(Arc::unwrap_or_clone)
+            .collect();
         Ok(PreparedVideoOutput { plan, frames })
     }
 
@@ -6163,6 +6183,17 @@ pub fn composite_rgba8(
     width: u32,
     height: u32,
 ) -> Result<VideoFrame, CpuCompositeError> {
+    composite_frames_rgba8(plan, frames, width, height)
+}
+
+/// `composite_rgba8` over owned or shared (`Arc`) frames, so the renderer
+/// can composite queued frames without copying them.
+fn composite_frames_rgba8<F: std::borrow::Borrow<VideoFrame>>(
+    plan: &CompositionPlan,
+    frames: &[F],
+    width: u32,
+    height: u32,
+) -> Result<VideoFrame, CpuCompositeError> {
     if width == 0 || height == 0 {
         return Err(CpuCompositeError::InvalidOutputSize);
     }
@@ -6195,7 +6226,8 @@ pub fn composite_rgba8(
             .filter_map(|layer| {
                 frames
                     .iter()
-                    .filter(|frame| frame.layer_id == layer.layer_id)
+                    .map(std::borrow::Borrow::borrow)
+                    .filter(|frame: &&VideoFrame| frame.layer_id == layer.layer_id)
                     .map(|frame| frame.pts_ms)
                     .max()
             })
@@ -6212,9 +6244,9 @@ pub fn composite_rgba8(
 /// applies. `None` deliberately leaves malformed, converted, or transformed
 /// inputs on the established compositor path so its errors and sampling rules
 /// remain unchanged.
-fn try_identity_composition_rgba8(
+fn try_identity_composition_rgba8<F: std::borrow::Borrow<VideoFrame>>(
     layer: &CompositionLayerPlan,
-    frames: &[VideoFrame],
+    frames: &[F],
     width: u32,
     height: u32,
 ) -> Result<Option<Vec<u8>>, CpuCompositeError> {
@@ -6228,7 +6260,8 @@ fn try_identity_composition_rgba8(
     }
     let Some(frame) = frames
         .iter()
-        .filter(|frame| frame.layer_id == layer.layer_id)
+        .map(std::borrow::Borrow::borrow)
+        .filter(|frame: &&VideoFrame| frame.layer_id == layer.layer_id)
         .max_by_key(|frame| frame.pts_ms)
     else {
         return Ok(None);
@@ -6253,16 +6286,17 @@ fn try_identity_composition_rgba8(
     Ok(Some(output))
 }
 
-fn blend_composition_layer_onto(
+fn blend_composition_layer_onto<F: std::borrow::Borrow<VideoFrame>>(
     output: &mut [u8],
     layer: &CompositionLayerPlan,
-    frames: &[VideoFrame],
+    frames: &[F],
     width: u32,
     height: u32,
 ) -> Result<(), CpuCompositeError> {
     let frame = frames
         .iter()
-        .filter(|frame| frame.layer_id == layer.layer_id)
+        .map(std::borrow::Borrow::borrow)
+        .filter(|frame: &&VideoFrame| frame.layer_id == layer.layer_id)
         .max_by_key(|frame| frame.pts_ms)
         .ok_or(CpuCompositeError::MissingFrame {
             layer_id: layer.layer_id,

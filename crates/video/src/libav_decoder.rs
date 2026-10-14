@@ -371,21 +371,19 @@ impl LibavFrameDecoder {
             return Ok(Some(frame));
         }
 
-        let cached_entry = self
-            .entries
-            .iter()
-            .find(|entry| {
-                render_input_cache_owner_matches(key, request.layer_id, entry.key, entry.layer_id)
-            })
-            .cloned();
+        // The cached entry is read in place: cloning it would copy the whole
+        // frame on every request, decoded or not.
+        let cached_entry_index = self.entries.iter().position(|entry| {
+            render_input_cache_owner_matches(key, request.layer_id, entry.key, entry.layer_id)
+        });
         let session_index = self.session_index(key, request.layer_id);
         let session_matches = session_index
             .is_some_and(|index| self.sessions[index].matches(request, &path, &signature));
         let decision = if session_matches {
             session_decision(
                 self.sessions[session_index.expect("matching session index")].last_request_ms,
-                cached_entry.as_ref().map(|entry| entry.frame.pts_ms),
-                cached_entry.is_some(),
+                cached_entry_index.map(|index| self.entries[index].frame.pts_ms),
+                cached_entry_index.is_some(),
                 self.sessions[session_index.expect("matching session index")].decoder_drained,
                 request.position_ms,
             )
@@ -394,7 +392,9 @@ impl LibavFrameDecoder {
         };
 
         if decision == LibavSessionDecision::ReuseFrame {
-            let mut entry = cached_entry.expect("frame reuse requires a cached frame");
+            let mut entry = self
+                .entries
+                .remove(cached_entry_index.expect("frame reuse requires a cached frame"));
             entry.position_ms = request.position_ms;
             let frame = entry.frame.clone();
             self.replace_layer_cache_entry(entry);
@@ -436,8 +436,10 @@ impl LibavFrameDecoder {
         };
 
         let seek_before_decode = decision == LibavSessionDecision::Reopen;
+        // Only a continuation falls back on its previous frame; nothing has
+        // changed `entries` since the index was taken on that path.
         let terminal_frame = (decision == LibavSessionDecision::Continue)
-            .then(|| cached_entry.as_ref().map(|entry| &entry.frame))
+            .then(|| cached_entry_index.map(|index| &self.entries[index].frame))
             .flatten();
         let primary_decode = decode_libav_session_frame(
             request,
