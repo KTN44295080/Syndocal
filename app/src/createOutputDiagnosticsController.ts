@@ -31,6 +31,7 @@ import type {
   SerialDmxMachineBindingStatus,
   SerialPortSummary,
   ShowSerialDmxSafetyBlackoutRouteStatus,
+  UsbDmxUniversesStatus,
 } from "./types";
 import { showDmxStageLabel } from "./showDmxStageLabels";
 
@@ -177,6 +178,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     createSignal<SerialDmxMachineBindingStatus | null>(null);
   const [showSerialDmxSafetyBlackoutRouteStatus, setShowSerialDmxSafetyBlackoutRouteStatus] =
     createSignal<ShowSerialDmxSafetyBlackoutRouteStatus | null>(null);
+  const [usbDmxUniverses, setUsbDmxUniverses] = createSignal<UsbDmxUniversesStatus | null>(null);
   const [showDmxPreparationBusy, setShowDmxPreparationBusy] = createSignal(false);
   const [showDmxPreparationStage, setShowDmxPreparationStage] = createSignal<string | null>(null);
   let showDmxPreparationPromise: Promise<void> | null = null;
@@ -588,6 +590,79 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     }
   };
 
+  // Independent USB-DMX cables (Universe 1 and up). Bindings are
+  // machine-local; start/stop are lease-bound OutputControl actions.
+  // Polled while the panel is open: an unavailable status is shown in the
+  // panel (cables stay unarmable) rather than repeated in the status line.
+  const refreshUsbDmxUniverses = async () => {
+    try {
+      setUsbDmxUniverses(await options.invoke<UsbDmxUniversesStatus>("get_usb_dmx_universes_v1"));
+    } catch {
+      setUsbDmxUniverses(null);
+    }
+  };
+
+  const bindUsbDmxUniverse = async (universe: number, port: SerialPortSummary) => {
+    try {
+      const request = { universe, ...serialDmxConfirmationRequest(port) };
+      setUsbDmxUniverses(await options.invoke<UsbDmxUniversesStatus>(
+        "select_usb_dmx_universe_binding_v1",
+        { request },
+      ));
+      options.setMessage(`USB-DMX cable bound to Universe ${universe}. Project files were not changed.`);
+    } catch (error) {
+      options.setMessage(String(error));
+      await refreshUsbDmxUniverses();
+    }
+  };
+
+  const clearUsbDmxUniverse = async (universe: number) => {
+    try {
+      setUsbDmxUniverses(await options.invoke<UsbDmxUniversesStatus>(
+        "clear_usb_dmx_universe_binding_v1",
+        { request: { universe } },
+      ));
+      options.setMessage(`USB-DMX cable removed from Universe ${universe}.`);
+    } catch (error) {
+      options.setMessage(String(error));
+      await refreshUsbDmxUniverses();
+    }
+  };
+
+  const startUsbDmxUniverse = (universe: number) => runShowOutputAction(`usb-dmx-${universe}`, async () => {
+    const authority = options.captureProjectAuthorityIdentity();
+    try {
+      await ensureBothOutputLease();
+      const lease = await selectFreshBothOutputLease();
+      await executeOutputControl(options.invoke, { kind: "enable_usb_dmx_universe_route", universe, lease });
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
+      options.setMessage(
+        `USB-DMX Universe ${universe} started after its initial zero frame; the existing safety blackout state is unchanged.`,
+      );
+    } catch (error) {
+      if (options.isProjectAuthorityIdentityCurrent(authority)) options.setMessage(String(error));
+    } finally {
+      await refreshUsbDmxUniverses();
+    }
+  });
+
+  const stopUsbDmxUniverse = async (universe: number) => {
+    const authority = options.captureProjectAuthorityIdentity();
+    try {
+      const lease = selectOnlyActiveOutputLease(
+        await queryOutputLeaseAuthority(options.invoke),
+        ["lighting", "video"],
+      );
+      await executeOutputControl(options.invoke, { kind: "stop_usb_dmx_universe_route", universe, lease });
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
+      options.setMessage(`USB-DMX Universe ${universe} stopped. No project route was changed.`);
+    } catch (error) {
+      if (options.isProjectAuthorityIdentityCurrent(authority)) options.setMessage(String(error));
+    } finally {
+      await refreshUsbDmxUniverses();
+    }
+  };
+
   const sendDsf2026ArtNetAcceptanceProbe = async () => {
     const authority = options.captureProjectAuthorityIdentity();
     try {
@@ -760,6 +835,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
       options.setMessage(String(error));
     } finally {
       await refreshAuthoritativeSerialDmxRuntimeStatuses();
+      await refreshUsbDmxUniverses();
     }
   };
 
@@ -783,6 +859,12 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     showSerialDmxSafetyBlackoutRouteStatus,
     showDmxPreparationBusy,
     showDmxPreparationStage,
+    usbDmxUniverses,
+    refreshUsbDmxUniverses,
+    bindUsbDmxUniverse,
+    clearUsbDmxUniverse,
+    startUsbDmxUniverse,
+    stopUsbDmxUniverse,
     refreshEngineTelemetryReport,
     refreshSerialDmxRuntimeStatuses,
     handleSerialDmxRouteStatusEvent,

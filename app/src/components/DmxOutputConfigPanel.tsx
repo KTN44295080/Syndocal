@@ -1,4 +1,5 @@
 import { serialDmxDeviceInstance } from "../serialDmxDeviceInstance";
+import { hasExactMachineLocalOpenDmxIdentity } from "../usbDmxIdentity";
 import { createSignal } from "solid-js";
 import type {
   DmxOutputConfig,
@@ -64,34 +65,6 @@ const usbHex = (value: number | null | undefined) => value === null || value ===
   : `0x${value.toString(16).padStart(4, "0").toUpperCase()}`;
 
 const rawUsbValue = (value: string | null | undefined) => value?.trim() || "missing";
-
-const hasNonemptyUsbIdentityText = (value: string | null | undefined) =>
-  typeof value === "string" && value.trim().length > 0;
-
-/**
- * This UI eligibility is deliberately as strict as the native machine-local
- * binding boundary. A visible COM/PnP row with a missing or zero VID/PID is
- * diagnostic data only: it must never become a Confirm candidate.
- */
-const hasExactMachineLocalOpenDmxIdentity = (
-  port: SerialPortSummary | undefined,
-): port is SerialPortSummary => Boolean(
-  port
-  && hasNonemptyUsbIdentityText(port.name)
-  && hasNonemptyUsbIdentityText(port.port_type)
-  && typeof port.usb_vid === "number"
-  && Number.isInteger(port.usb_vid)
-  && port.usb_vid > 0
-  && port.usb_vid <= 0xffff
-  && typeof port.usb_pid === "number"
-  && Number.isInteger(port.usb_pid)
-  && port.usb_pid > 0
-  && port.usb_pid <= 0xffff
-  && hasNonemptyUsbIdentityText(port.serial_number)
-  && hasNonemptyUsbIdentityText(port.manufacturer)
-  && hasNonemptyUsbIdentityText(port.product)
-  && Boolean(serialDmxDeviceInstance(port)),
-);
 
 function RawUsbDmxIdentity(props: {
   dataAttribute: "data-io-usb-dmx-observed-identity" | "data-io-usb-dmx-confirmed-identity";

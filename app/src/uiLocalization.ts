@@ -440,6 +440,27 @@ const japaneseText: Record<string, string> = {
   "· U": "・U",
   "DMX output is ready. No USB-DMX device was selected.": "DMX出力の準備ができました。USB-DMX機器は選択されていません。",
   "Network universes": "ネットワークユニバース",
+  "USB-DMX cables": "USB-DMXケーブル",
+  "Give a universe its own USB-DMX cable. One cable outputs one universe; Universe 0 uses Show DMX above.":
+    "ユニバースごとに専用のUSB-DMXケーブルを割り当てます。1本のケーブルは1つのユニバースだけを出力します。ユニバース0は上の「公演DMX」を使います。",
+  "USB-DMX cable status is unavailable; cables cannot be changed.":
+    "USB-DMXケーブルの状態を取得できないため、ケーブルを変更できません。",
+  "Add a cable": "ケーブルを追加",
+  "Add cable": "ケーブルを追加",
+  "Rescan devices": "デバイスを再検出",
+  "Select a device": "デバイスを選択",
+  "No free USB-DMX device": "空いているUSB-DMXデバイスがありません",
+  "Cable missing": "ケーブルが見つかりません",
+  "Armed · S0": "準備完了 · S0中",
+  "Shutdown pending": "停止処理中",
+  Sending: "送信中",
+  "Fault · S0 latched": "障害 · S0保持中",
+  "Opens the cable and writes one zero frame first; the safety blackout state is unchanged.":
+    "ケーブルを開き、最初に全チャンネル0のフレームを1回送ります。セーフティブラックアウトの状態は変わりません。",
+  "Writes one zero frame, then stops the cable. A faulted cable is taken out of service.":
+    "全チャンネル0のフレームを1回送ってからケーブルを停止します。障害中のケーブルは使用停止にします。",
+  "Stopping a cable requires the safety blackout (S0).":
+    "ケーブルを停止するには、セーフティブラックアウト（S0）をオンにしてください。",
   "Add an Art-Net or sACN destination for each additional universe. One USB-DMX interface outputs one universe.": "追加のユニバースごとにArt-Net／sACNの出力先を追加します。USB-DMX機器1台で出せるのは1ユニバースです。",
   "+ Art-Net": "Art-Netを追加",
   "+ sACN": "sACNを追加",

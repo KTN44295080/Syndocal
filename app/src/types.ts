@@ -313,6 +313,35 @@ export interface SerialDmxMachineBindingStatus {
   routeStatusRevision: string;
 }
 
+/** A universe's machine-local USB-DMX cable binding (Universe 1 and up). */
+export interface UsbDmxUniverseBindingStatus {
+  universe: number;
+  state: SerialDmxMachineBindingState;
+  identity: SerialDmxMachineBindingIdentity;
+  detail: string;
+}
+
+/** One engine cable slot; queue state is never a fixture/wire proof. */
+export interface UsbDmxCableStatus {
+  slot: number;
+  universe: number | null;
+  routeStatusRevision: string;
+  active: boolean;
+  zeroFrameQueued: boolean;
+  zeroFramePhysicalWriteCompleted: boolean;
+  liveFrameQueued: boolean;
+  workerShutdownCompleted: boolean;
+  faulted: boolean;
+  detail: string;
+}
+
+export interface UsbDmxUniversesStatus {
+  bindings: UsbDmxUniverseBindingStatus[];
+  cables: UsbDmxCableStatus[];
+  /** Set when the machine-local binding file cannot be read; cables stay off. */
+  persistenceError: string | null;
+}
+
 /** Runtime-only Open DMX worker truth; queue state is never a fixture/wire proof. */
 export interface ShowSerialDmxSafetyBlackoutRouteStatus {
   /** Decimal process-local route revision; must match the paired binding read. */

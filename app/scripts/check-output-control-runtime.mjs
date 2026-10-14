@@ -1074,6 +1074,8 @@ const [
   engineSource,
   engineShowSerialDmxTestsSource,
   registrySource,
+  usbDmxIdentitySource,
+  usbDmxCablesPanelSource,
 ] = await Promise.all([
   read("src/tauriInvokeCommands.ts"),
   read("src/tauri-invoke-manifest.json"),
@@ -1093,6 +1095,8 @@ const [
   read("../crates/engine/src/lib.rs"),
   read("../crates/engine/src/show_serial_dmx_tests.rs"),
   read("../crates/protocol/src/control_plane_registry_v2.rs"),
+  read("src/usbDmxIdentity.ts"),
+  read("src/components/UsbDmxCablesPanel.tsx"),
 ]);
 const outputDiagnosticsPanelSource = await read("src/components/OutputDiagnosticsPanel.tsx");
 const serialDmxStatusPollerRuntime = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(
@@ -1636,9 +1640,24 @@ assert.match(dmxOutputPanelSource, /<strong>Enttec Open DMX<\/strong>/,
 assert.match(dmxOutputPanelSource, /Worker unavailable · S0 required/,
   "unknown USB-DMX worker state must remain visible without a prose block");
 assert.match(
-  dmxOutputPanelSource,
-  /const hasExactMachineLocalOpenDmxIdentity[\s\S]*port\.usb_vid > 0[\s\S]*port\.usb_pid > 0[\s\S]*serial_number[\s\S]*serialDmxDeviceInstance/,
+  usbDmxIdentitySource,
+  /export const hasExactMachineLocalOpenDmxIdentity[\s\S]*port\.usb_vid > 0[\s\S]*port\.usb_pid > 0[\s\S]*serial_number[\s\S]*serialDmxDeviceInstance/,
   "a USB-DMX Confirm candidate must require a complete nonzero USB/PnP identity",
+);
+assert.match(
+  dmxOutputPanelSource,
+  /import \{ hasExactMachineLocalOpenDmxIdentity \} from "\.\.\/usbDmxIdentity";/,
+  "the Show DMX panel must use the shared identity predicate",
+);
+assert.match(
+  usbDmxCablesPanelSource,
+  /hasExactMachineLocalOpenDmxIdentity\(port\)[\s\S]*sameUsbDmxCable\(props\.showDmxCable, port\)/,
+  "a USB-DMX cable candidate needs a complete identity and must not be the Universe 0 cable",
+);
+assert.match(
+  usbDmxCablesPanelSource,
+  /disabled=\{!props\.safetyBlackoutEngaged/,
+  "stopping a USB-DMX cable must require the engaged safety blackout",
 );
 assert.match(
   dmxOutputPanelSource,

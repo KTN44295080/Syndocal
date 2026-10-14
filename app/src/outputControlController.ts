@@ -36,6 +36,13 @@ export const OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID =
   "syndocal.output.show_serial_dmx_s0_route.enable.v1";
 export const OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID =
   "syndocal.output.show_serial_dmx_s0_route.stop.v1";
+export const OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID =
+  "syndocal.output.usb_dmx_universe_route.enable.v1";
+export const OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID =
+  "syndocal.output.usb_dmx_universe_route.stop.v1";
+/** Universes an independent USB-DMX cable may output (Universe 0 is Show DMX). */
+export const USB_DMX_CABLE_MIN_UNIVERSE = 1;
+export const USB_DMX_CABLE_MAX_UNIVERSE = 32_767;
 export const OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID =
   "syndocal.output.dsf2026_artnet_acceptance_probe.send.v1";
 export const OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID =
@@ -171,6 +178,18 @@ export type OutputShowSerialDmxSafetyBlackoutRouteStopAction = {
   kind: "stop_show_serial_dmx_safety_blackout_route";
   lease: OutputLeaseAuthority;
 };
+/** Start one universe's machine-local USB-DMX cable; only the universe travels. */
+export type OutputUsbDmxUniverseRouteEnableAction = {
+  kind: "enable_usb_dmx_universe_route";
+  universe: number;
+  lease: OutputLeaseAuthority;
+};
+/** Stop one universe's USB-DMX cable under the engaged S0. */
+export type OutputUsbDmxUniverseRouteStopAction = {
+  kind: "stop_usb_dmx_universe_route";
+  universe: number;
+  lease: OutputLeaseAuthority;
+};
 /** A fixed, one-shot local ArtDmx proof frame; it accepts no mutable payload. */
 export type OutputDsf2026ArtNetAcceptanceProbeAction = {
   kind: "send_dsf2026_artnet_acceptance_probe";
@@ -197,6 +216,8 @@ export type OutputControlAction =
   | OutputShowArtNetLoopbackRouteEnableAction
   | OutputShowSerialDmxSafetyBlackoutRouteEnableAction
   | OutputShowSerialDmxSafetyBlackoutRouteStopAction
+  | OutputUsbDmxUniverseRouteEnableAction
+  | OutputUsbDmxUniverseRouteStopAction
   | OutputDsf2026ArtNetAcceptanceProbeAction
   | OutputDsf2026ArtNetAcceptanceProbeReconcileAction
   | OutputShowSpoutOutputsEnableAction
@@ -478,6 +499,8 @@ const operationIdForAction = (action: OutputControlOperationAction): string => {
     case "enable_show_art_net_loopback_route": return OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID;
     case "enable_show_serial_dmx_safety_blackout_route": return OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID;
     case "stop_show_serial_dmx_safety_blackout_route": return OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID;
+    case "enable_usb_dmx_universe_route": return OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID;
+    case "stop_usb_dmx_universe_route": return OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID;
     case "send_dsf2026_artnet_acceptance_probe": return OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID;
     case "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt": return OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID;
     case "enable_show_spout_outputs": return OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID;
@@ -508,6 +531,8 @@ type OutputControlInvokeCommand =
   | "enable_show_art_net_loopback_route_v1"
   | "enable_show_serial_dmx_safety_blackout_route_v1"
   | "stop_show_serial_dmx_safety_blackout_route_v1"
+  | "enable_usb_dmx_universe_route_v1"
+  | "stop_usb_dmx_universe_route_v1"
   | "send_dsf2026_artnet_acceptance_probe_v1"
   | "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1"
   | "enable_show_spout_outputs_v2"
@@ -537,6 +562,8 @@ const commandForAction = (action: OutputControlOperationAction): OutputControlIn
     case "enable_show_art_net_loopback_route": return "enable_show_art_net_loopback_route_v1";
     case "enable_show_serial_dmx_safety_blackout_route": return "enable_show_serial_dmx_safety_blackout_route_v1";
     case "stop_show_serial_dmx_safety_blackout_route": return "stop_show_serial_dmx_safety_blackout_route_v1";
+    case "enable_usb_dmx_universe_route": return "enable_usb_dmx_universe_route_v1";
+    case "stop_usb_dmx_universe_route": return "stop_usb_dmx_universe_route_v1";
     case "send_dsf2026_artnet_acceptance_probe": return "send_dsf2026_artnet_acceptance_probe_v1";
     case "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt": return "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1";
     case "enable_show_spout_outputs": return "enable_show_spout_outputs_v2";
@@ -867,6 +894,16 @@ const assertAction = (action: OutputControlOperationAction): void => {
     assertLeaseAuthority(action.lease, "Show serial DMX safety worker lease was invalid; nothing was applied.");
     return;
   }
+  if (action.kind === "enable_usb_dmx_universe_route" || action.kind === "stop_usb_dmx_universe_route") {
+    if (!hasExactKeys(record, ["kind", "universe", "lease"])
+      || !Number.isInteger(action.universe)
+      || action.universe < USB_DMX_CABLE_MIN_UNIVERSE
+      || action.universe > USB_DMX_CABLE_MAX_UNIVERSE) {
+      throw new Error("USB-DMX cable action was invalid; nothing was applied.");
+    }
+    assertLeaseAuthority(action.lease, "USB-DMX cable lease was invalid; nothing was applied.");
+    return;
+  }
   if (action.kind === "send_dsf2026_artnet_acceptance_probe") {
     if (!hasExactKeys(record, ["kind", "lease"])) {
       throw new Error("DSF2026 Art-Net acceptance probe action was invalid; nothing was sent.");
@@ -1053,6 +1090,8 @@ const assertLeaseResult = (value: unknown, action: OutputControlOperationAction)
     case "enable_show_art_net_loopback_route":
     case "enable_show_serial_dmx_safety_blackout_route":
     case "stop_show_serial_dmx_safety_blackout_route":
+    case "enable_usb_dmx_universe_route":
+    case "stop_usb_dmx_universe_route":
     case "send_dsf2026_artnet_acceptance_probe":
     case "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt":
     case "enable_show_spout_outputs":
@@ -1180,6 +1219,8 @@ const assertResponse = (
     || action.kind === "launch_video_clip"
     || action.kind === "enable_show_serial_dmx_safety_blackout_route"
     || action.kind === "stop_show_serial_dmx_safety_blackout_route"
+    || action.kind === "enable_usb_dmx_universe_route"
+    || action.kind === "stop_usb_dmx_universe_route"
     || action.kind === "send_dsf2026_artnet_acceptance_probe"
     || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
     || action.kind === "enable_show_spout_outputs";
@@ -1232,6 +1273,8 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
     || action.kind === "enable_show_art_net_loopback_route" && selected[0].status !== "held_active"
     || action.kind === "enable_show_serial_dmx_safety_blackout_route" && selected[0].status !== "held_active"
     || action.kind === "stop_show_serial_dmx_safety_blackout_route" && selected[0].status !== "held_active"
+    || action.kind === "enable_usb_dmx_universe_route" && selected[0].status !== "held_active"
+    || action.kind === "stop_usb_dmx_universe_route" && selected[0].status !== "held_active"
     || action.kind === "send_dsf2026_artnet_acceptance_probe" && selected[0].status !== "held_active"
     || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt" && selected[0].status !== "held_active"
     || action.kind === "enable_show_spout_outputs" && selected[0].status !== "held_active"
@@ -1260,6 +1303,8 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
     || action.kind === "enable_show_art_net_loopback_route"
     || action.kind === "enable_show_serial_dmx_safety_blackout_route"
     || action.kind === "stop_show_serial_dmx_safety_blackout_route"
+    || action.kind === "enable_usb_dmx_universe_route"
+    || action.kind === "stop_usb_dmx_universe_route"
     || action.kind === "send_dsf2026_artnet_acceptance_probe"
     || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
     || action.kind === "enable_show_spout_outputs"
