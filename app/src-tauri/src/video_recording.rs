@@ -1,7 +1,7 @@
 //! FFmpeg recording orchestration; UI/runtime ownership stays in the application adapter.
 use super::{
-    capture_video_output_preview_effect_snapshot, recording_artifact, VideoRecordingState,
-    VideoRecordingStatus,
+    capture_video_output_preview_effect_snapshot, recording_artifact, VideoRecordingEndReason,
+    VideoRecordingState, VideoRecordingStatus,
 };
 use engine::EngineHandle;
 use protocol::VideoOutputId;
@@ -153,6 +153,9 @@ pub(super) fn video_recording_ffmpeg_command(
 
 pub(super) struct VideoOutputRecordingContext {
     pub(super) engine: EngineHandle,
+    /// The output ownership epoch the take was admitted in; every frame
+    /// re-proves it (DEC-RECORD-OWN-001).
+    pub(super) owner_epoch: u64,
     pub(super) input_sources: RecordingExternalFrameSources,
     pub(super) output_id: VideoOutputId,
     pub(super) path: PathBuf,
@@ -167,6 +170,7 @@ pub(super) struct VideoOutputRecordingContext {
 pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
     let VideoOutputRecordingContext {
         engine,
+        owner_epoch,
         input_sources,
         output_id,
         path,
@@ -232,10 +236,19 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
     }
     let mut frames_written = 0_u64;
     let mut recording_error = None;
+    let mut ownership_revoked = false;
     let frame_interval = Duration::from_secs_f64(1.0 / frame_rate as f64);
     let mut next_frame_at = Instant::now();
     while !stop.load(Ordering::Acquire) {
+        // Re-prove video ownership in the admitted epoch for every frame. The
+        // permit is held only for the snapshot capture (never the render or
+        // the encoder write), so it cannot delay an ownership transition.
+        let Ok(permit) = engine.acquire_video_output_in_epoch(owner_epoch) else {
+            ownership_revoked = true;
+            break;
+        };
         let output_preview = capture_video_output_preview_effect_snapshot(&engine);
+        drop(permit);
         let request = RecordingRenderRequest {
             video: output_preview.snapshot.video.clone(),
             clip_runtime: output_preview.snapshot.video_clip_runtime.clone(),
@@ -295,6 +308,28 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
     }
     drop(renderer);
     drop(stdin);
+    if let Ok(mut current) = status.lock() {
+        current.end_reason = Some(if recording_error.is_some() {
+            VideoRecordingEndReason::Fault
+        } else if ownership_revoked {
+            VideoRecordingEndReason::OwnershipRevoked
+        } else {
+            VideoRecordingEndReason::OperatorStop
+        });
+        // A revoked or failed take finalizes like an operator stop does.
+        if matches!(
+            current.state,
+            VideoRecordingState::Preparing | VideoRecordingState::Recording
+        ) {
+            current.set_state(VideoRecordingState::Finalizing);
+        }
+    }
+    if ownership_revoked && frames_written == 0 && recording_error.is_none() {
+        recording_error = Some(
+            "Video output ownership changed before the first frame; nothing was recorded"
+                .to_string(),
+        );
+    }
     let encoded = match recording_error {
         Some(error) => encoder.fail(error),
         None => encoder.finish(),
@@ -383,6 +418,11 @@ pub(super) fn finish_video_recording_status(
     error: Option<String>,
 ) {
     if let Ok(mut current) = status.lock() {
+        // Keep why the take ended (for example ownership_revoked) when its
+        // publication then fails; only an unexplained failure is a Fault.
+        if error.is_some() && current.end_reason.is_none() {
+            current.end_reason = Some(VideoRecordingEndReason::Fault);
+        }
         current.set_state(if error.is_some() {
             VideoRecordingState::Fault
         } else {

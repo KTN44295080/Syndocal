@@ -19,6 +19,8 @@ const engine = await read("../../crates/engine/src/lib.rs");
 const video = await read("../../crates/video/src/lib.rs");
 const protocol = await read("../../crates/protocol/src/lib.rs");
 const qa = await read("../../qa/SYNDOCAL_2PC_TRANCHE1_OUTPUT_OWNERSHIP.md");
+const recordingOwnership = await read("../../app/src-tauri/src/recording_ownership.rs");
+const recordingWorker = await read("../../app/src-tauri/src/video_recording.rs");
 
 const indexOfOrFail = (source, marker, label, fromIndex = 0) => {
   const index = source.indexOf(marker, fromIndex);
@@ -463,7 +465,50 @@ const recordingStart = sliceBetween(
   "fn recording_audio_inputs",
   "local video recording start path",
 );
-assert.doesNotMatch(recordingStart, /ensure_video_output_allowed/);
+// DEC-RECORD-OWN-001: only the video output owner records, on every setup.
+// Admission is checked before the save dialog and must be unchanged after it.
+assertOrderedMarkers(
+  recordingStart,
+  [
+    "let admission = recording_ownership::admit_recording(&state)?;",
+    ".save_file()",
+    "if recording_ownership::admit_recording(&state)? != admission {",
+    "runtime.ensure_recording_worker_available()?;",
+    "owner_epoch: admission.owner_epoch,",
+  ],
+  "recording start must admit video ownership before and after the save dialog",
+);
+assert.match(
+  recordingOwnership,
+  /ownership\.state != protocol::OutputOwnershipState::Ready \|\| !ownership\.video_allowed/,
+);
+assert.match(recordingOwnership, /if sync\.running_as_standby \{/);
+assert.match(recordingOwnership, /if sync\.split_brain \{/);
+const recordingFrameLoop = sliceBetween(
+  recordingWorker,
+  "while !stop.load(Ordering::Acquire) {",
+  "drop(renderer);",
+  "recording frame loop",
+);
+assertOrderedMarkers(
+  recordingFrameLoop,
+  [
+    "engine.acquire_video_output_in_epoch(owner_epoch) else {",
+    "ownership_revoked = true;",
+    "capture_video_output_preview_effect_snapshot(&engine);",
+    "drop(permit);",
+    "renderer.render(&request, &stop)",
+    "stdin.write_all(&frame.data)",
+  ],
+  "every recorded frame must re-prove the admitted video ownership epoch, and the permit must never span the render or the encoder write",
+);
+assert.match(recordingOwnership, /state\.standby_sync\.try_lock\(\)/);
+assert.match(appBackend, /async fn video_output_recording_status\(/);
+assert.match(recordingWorker, /VideoRecordingEndReason::OwnershipRevoked/);
+assert.match(engine, /pub fn acquire_in_epoch\(/);
+assert.match(engine, /if epoch\.is_some_and\(\|epoch\| epoch != state\.status\.epoch\) \{/);
+assert.match(qa, /Local file recording follows video output ownership/);
+assert.doesNotMatch(qa, /Local file recording is deliberately not owned by this gate/);
 assert.match(engine, /SetOutputOwnershipRole/);
 assert.match(engine, /OutputOwnershipGate/);
 assert.match(engine, /state\.transition_active = false/);

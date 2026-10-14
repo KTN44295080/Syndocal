@@ -1776,6 +1776,13 @@ const japaneseText: Record<string, string> = {
   "Choosing file": "ファイルを選択中",
   "Committing": "コミット中",
   "Finalizing": "確定処理中",
+  "Recording needs this PC to own video output: arm output as Video or Both first.":
+    "録画にはこのPCが映像出力を担当している必要があります。先にVideoまたはBothで出力をArmしてください。",
+  "Recording needs this PC to own video output.": "録画にはこのPCが映像出力を担当している必要があります。",
+  "This PC runs as Standby; only the Primary records.": "このPCはStandbyで動作中です。録画できるのはPrimaryだけです。",
+  "Standby sync is changing; recording waits until it settles.": "Standby同期を切り替え中です。完了するまで録画は開始できません。",
+  "Two Primary sessions were detected; recording stays off until only one remains.":
+    "Primaryが2台検出されました。1台になるまで録画は停止したままです。",
   "Hash mismatch": "ハッシュ不一致",
   "Hashing / probing": "ハッシュ／メタデータ検査中",
   "Import media": "メディアを読み込み",

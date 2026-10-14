@@ -90,8 +90,8 @@ mod video_recording_lifecycle;
 mod video_recording_runtime;
 mod video_recording_renderer_process;
 use video_recording_runtime::{
-    stop_video_output_recording_runtime, VideoRecordingRuntime, VideoRecordingState,
-    VideoRecordingStatus,
+    stop_video_output_recording_runtime, VideoRecordingEndReason, VideoRecordingRuntime,
+    VideoRecordingState, VideoRecordingStatus,
 };
 mod video_recording;
 use video_recording::{run_video_output_recording, RecordingAudioInput, VideoOutputRecordingContext};
@@ -323,6 +323,7 @@ mod serial_dmx_machine;
 #[cfg(test)]
 mod serial_show_dmx_route_tests;
 mod show_serial_dmx_route;
+mod recording_ownership;
 mod usb_dmx_universes;
 mod network_dmx_routes;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
@@ -78572,6 +78573,9 @@ fn start_video_output_recording(
         return Err("Recording output dimensions must be between 1 and 4096 pixels".to_string());
     }
     let frame_rate = frame_rate.unwrap_or(30).clamp(1, 60);
+    // Only the video output owner records (DEC-RECORD-OWN-001). Checked
+    // before the save dialog, and again after it below.
+    let admission = recording_ownership::admit_recording(&state)?;
     let audio_requested = include_audio.unwrap_or(false);
     let audio_inputs = if audio_requested {
         let media_audio = state
@@ -78594,6 +78598,13 @@ fn start_video_output_recording(
     else {
         return Ok(None);
     };
+    // The dialog can stay open across a role change or project swap.
+    if recording_ownership::admit_recording(&state)? != admission {
+        return Err(
+            "Video output ownership changed while choosing the file; nothing was recorded"
+                .to_string(),
+        );
+    }
     let mut runtime = state
         .video_recording
         .lock()
@@ -78618,6 +78629,10 @@ fn start_video_output_recording(
         renderer_force_termination: true,
         stop_deadline_ms: video_recording_lifecycle::TOTAL_STOP_DEADLINE.as_millis() as u64,
         last_error: None,
+        owner_epoch: Some(admission.owner_epoch),
+        end_reason: None,
+        admission_allowed: true,
+        admission_reason: None,
     }));
     let worker_stop = Arc::clone(&stop);
     let worker_status = Arc::clone(&status);
@@ -78636,6 +78651,7 @@ fn start_video_output_recording(
         .spawn(move || {
             run_video_output_recording(VideoOutputRecordingContext {
                 engine,
+                owner_epoch: admission.owner_epoch,
                 input_sources,
                 output_id,
                 path,
@@ -78777,17 +78793,26 @@ fn capture_video_output_effect_runtime_context(
 #[tauri::command]
 fn stop_video_output_recording(state: State<'_, AppState>) -> Result<VideoRecordingStatus, String> {
     stop_video_output_recording_runtime(&state.video_recording)
+        .map(|status| recording_ownership::with_current_admission(&state, status))
 }
 
 #[tauri::command]
-fn video_output_recording_status(
-    state: State<'_, AppState>,
+async fn video_output_recording_status(
+    app: tauri::AppHandle,
 ) -> Result<VideoRecordingStatus, String> {
-    let runtime = state
-        .video_recording
-        .lock()
-        .map_err(|_| "Video recording state lock was poisoned".to_string())?;
-    runtime.status_snapshot()
+    // Polled every second: never on the event loop (see
+    // io_mount_query_commands_are_async_and_off_event_loop).
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let status = state
+            .video_recording
+            .lock()
+            .map_err(|_| "Video recording state lock was poisoned".to_string())?
+            .status_snapshot()?;
+        Ok(recording_ownership::with_current_admission(&state, status))
+    })
+    .await
+    .map_err(|error| format!("Video recording status query worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -95489,6 +95514,7 @@ pub(crate) mod tests {
         let source = include_str!("main.rs");
         for command in [
             "standby_sync_status",
+            "video_output_recording_status",
             "get_output_ownership_status",
             "get_engine_telemetry_report",
             "remote_control_status",

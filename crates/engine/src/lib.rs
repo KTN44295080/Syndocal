@@ -1520,11 +1520,37 @@ impl OutputOwnershipGate {
     }
 
     pub fn acquire(&self, capability: OutputCapability) -> Result<OutputOwnershipPermit, String> {
+        self.acquire_checked(capability, None)
+    }
+
+    /// As `acquire`, but only within ownership `epoch`: any transition,
+    /// project swap or failure fence since then refuses the permit, even if
+    /// the same capability is allowed again in a later epoch.
+    pub fn acquire_in_epoch(
+        &self,
+        capability: OutputCapability,
+        epoch: u64,
+    ) -> Result<OutputOwnershipPermit, String> {
+        self.acquire_checked(capability, Some(epoch))
+    }
+
+    fn acquire_checked(
+        &self,
+        capability: OutputCapability,
+        epoch: Option<u64>,
+    ) -> Result<OutputOwnershipPermit, String> {
         let mut state = self
             .inner
             .state
             .lock()
             .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
+        if epoch.is_some_and(|epoch| epoch != state.status.epoch) {
+            return Err(format!(
+                "Output ownership changed (epoch {} -> {}); the earlier {capability:?} authority ended",
+                epoch.unwrap_or_default(),
+                state.status.epoch
+            ));
+        }
         if state.transition_active || state.status.state != OutputOwnershipState::Ready {
             return Err(output_capability_blocked_message(
                 capability,
@@ -11489,6 +11515,16 @@ impl EngineHandle {
 
     pub fn acquire_video_output(&self) -> Result<OutputOwnershipPermit, String> {
         self.output_ownership_gate.acquire(OutputCapability::Video)
+    }
+
+    /// A video permit only within ownership `epoch` (see
+    /// `OutputOwnershipGate::acquire_in_epoch`).
+    pub fn acquire_video_output_in_epoch(
+        &self,
+        epoch: u64,
+    ) -> Result<OutputOwnershipPermit, String> {
+        self.output_ownership_gate
+            .acquire_in_epoch(OutputCapability::Video, epoch)
     }
 
     pub fn publish_output_ownership_startup_preference(
@@ -71779,6 +71815,51 @@ mod tests {
         assert_eq!(status.role, MachineOutputRole::Standby);
         assert!(!status.lighting_allowed);
         assert!(!status.video_allowed);
+    }
+
+    #[test]
+    fn output_ownership_gate_epoch_permit_never_spans_a_role_round_trip() {
+        let gate = OutputOwnershipGate::for_role(MachineOutputRole::Both);
+        let video = OutputCapability::Video;
+        let epoch = gate.status().epoch;
+        drop(gate.acquire_in_epoch(video, epoch).unwrap());
+        let next = epoch.wrapping_add(1);
+        assert!(gate.acquire_in_epoch(video, next).is_err());
+        for role in [MachineOutputRole::Standby, MachineOutputRole::Both] {
+            gate.begin_transition(role).unwrap().complete().unwrap();
+        }
+        let status = gate.status();
+        assert!(status.video_allowed && status.epoch != epoch, "{status:?}");
+        // Video is allowed again, but only in the new epoch: a recording
+        // admitted in the old one must end instead of resuming.
+        let error = gate.acquire_in_epoch(video, epoch).unwrap_err();
+        assert!(error.contains("Output ownership changed"), "{error}");
+        drop(gate.acquire_in_epoch(video, status.epoch).unwrap());
+    }
+
+    #[test]
+    fn output_ownership_gate_epoch_permit_ends_on_project_retirement_and_failure_fence() {
+        let video = OutputCapability::Video;
+        let both = MachineOutputRole::Both;
+        // Project open, swap and Undo/Redo retire output this way.
+        let gate = OutputOwnershipGate::for_role(both);
+        let epoch = gate.status().epoch;
+        let retirement = gate
+            .reserve_retirement(MachineOutputRole::Standby, &[])
+            .unwrap();
+        assert!(gate.acquire_in_epoch(video, epoch).is_err());
+        retirement.finish_retirement().unwrap().complete().unwrap();
+        gate.begin_transition(both).unwrap().complete().unwrap();
+        assert!(gate.status().video_allowed);
+        assert!(gate.acquire_in_epoch(video, epoch).is_err());
+        // A failure fence ends it too, even after a later re-arm.
+        let gate = OutputOwnershipGate::for_role(both);
+        let epoch = gate.status().epoch;
+        drop(gate.begin_failure_fence("injected output failure"));
+        assert!(gate.acquire_in_epoch(video, epoch).is_err());
+        gate.begin_transition(both).unwrap().complete().unwrap();
+        assert!(gate.status().video_allowed);
+        assert!(gate.acquire_in_epoch(video, epoch).is_err());
     }
 
     #[test]

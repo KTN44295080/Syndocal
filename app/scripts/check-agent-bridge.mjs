@@ -180,12 +180,36 @@ groups++;
       state: 'Recording', active: true, output_id: 2, path: 'C:/recordings/take.mp4', width: 1920, height: 1080,
       frame_rate: 30, frames_written: 12, dropped_frames: 0, audio_requested: true,
       audio_included: true, audio_track_count: 1, started_unix_ms: 1234, last_error: null,
+      owner_epoch: 7, end_reason: null, admission_allowed: true, admission_reason: null,
     };
   }, request('recording.get_status'));
   assert.equal(recordingStatus.ok, true);
   assert.equal(recordingStatus.recording.state, 'Recording');
   assert.equal(recordingStatus.recording.active, true);
   assert.equal(recordingStatus.recording.frames_written, 12);
+  assert.equal(recordingStatus.recording.owner_epoch, 7);
+  assert.equal(recordingStatus.recording.admission_allowed, true);
+  const revokedRecording = await execute(async () => ({
+    state: 'Complete', active: false, output_id: 2, path: 'C:/recordings/take.mp4', width: 1920, height: 1080,
+    frame_rate: 30, frames_written: 40, dropped_frames: 0, audio_requested: false,
+    audio_included: false, audio_track_count: 0, started_unix_ms: 1234, last_error: null,
+    owner_epoch: 7, end_reason: 'ownership_revoked', admission_allowed: false,
+    admission_reason: 'This PC runs as Standby; only the Primary records.',
+  }), request('recording.get_status'));
+  assert.equal(revokedRecording.recording.end_reason, 'ownership_revoked');
+  assert.equal(revokedRecording.recording.admission_allowed, false);
+  assert.match(revokedRecording.recording.admission_reason, /Standby/);
+  const legacyRecording = await execute(async () => ({
+    active: false, width: 0, height: 0, frame_rate: 30, frames_written: 0, dropped_frames: 0,
+    audio_requested: false, audio_included: false, audio_track_count: 0,
+  }), request('recording.get_status'));
+  assert.equal(legacyRecording.recording.admission_allowed, false);
+  assert.equal(legacyRecording.recording.end_reason, null);
+  const invalidEndReason = await execute(async () => ({
+    active: false, width: 0, height: 0, frame_rate: 30, frames_written: 0, dropped_frames: 0,
+    audio_requested: false, audio_included: false, audio_track_count: 0, end_reason: 'crashed',
+  }), request('recording.get_status'));
+  assert.equal(invalidEndReason.ok, false);
   const canonical = await execute(async (command, args) => {
     assert.equal(command, 'get_control_plane_query_capabilities');
     assert.deepEqual(args, {});

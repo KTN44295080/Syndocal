@@ -1766,6 +1766,9 @@ export interface VideoAudioMonitorStatus {
 
 export type VideoRecordingState = "Idle" | "Preparing" | "Recording" | "Finalizing" | "Complete" | "Fault";
 
+/** Why the current or last take ended (DEC-RECORD-OWN-001). */
+export type VideoRecordingEndReason = "operator_stop" | "ownership_revoked" | "fault";
+
 export interface VideoRecordingStatus {
   /** Additive lifecycle truth; legacy peers may omit it and use active/error fallback. */
   state?: VideoRecordingState;
@@ -1785,6 +1788,12 @@ export interface VideoRecordingStatus {
   renderer_force_termination: boolean;
   stop_deadline_ms: number;
   last_error?: string | null;
+  /** The video output ownership epoch the current or last take was admitted in. */
+  owner_epoch?: number | null;
+  end_reason?: VideoRecordingEndReason | null;
+  /** Whether this PC may start a take now; only the video output owner records. */
+  admission_allowed?: boolean;
+  admission_reason?: string | null;
 }
 
 export interface LiveAudioInputStatus {

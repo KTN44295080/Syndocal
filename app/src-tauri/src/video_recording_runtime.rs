@@ -15,6 +15,19 @@ pub(crate) enum VideoRecordingState {
     Fault,
 }
 
+/// Why a take ended (None while it runs or before the first take).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum VideoRecordingEndReason {
+    /// The operator stopped it.
+    OperatorStop,
+    /// This PC stopped owning video output (role change, project swap,
+    /// Standby or failure fence); the captured frames were still published.
+    OwnershipRevoked,
+    /// Encoding, rendering or publication failed.
+    Fault,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct VideoRecordingStatus {
     pub(crate) state: VideoRecordingState,
@@ -34,6 +47,12 @@ pub(crate) struct VideoRecordingStatus {
     pub(crate) renderer_force_termination: bool,
     pub(crate) stop_deadline_ms: u64,
     pub(crate) last_error: Option<String>,
+    /// The output ownership epoch the current or last take was admitted in.
+    pub(crate) owner_epoch: Option<u64>,
+    pub(crate) end_reason: Option<VideoRecordingEndReason>,
+    /// Whether this PC may start a take now (filled in on each status read).
+    pub(crate) admission_allowed: bool,
+    pub(crate) admission_reason: Option<String>,
 }
 
 impl Default for VideoRecordingStatus {
@@ -56,6 +75,10 @@ impl Default for VideoRecordingStatus {
             renderer_force_termination: true,
             stop_deadline_ms: video_recording_lifecycle::TOTAL_STOP_DEADLINE.as_millis() as u64,
             last_error: None,
+            owner_epoch: None,
+            end_reason: None,
+            admission_allowed: false,
+            admission_reason: None,
         }
     }
 }

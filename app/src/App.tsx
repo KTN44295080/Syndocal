@@ -2791,6 +2791,10 @@ export default function App() {
     renderer_force_termination: true,
     stop_deadline_ms: 10_000,
     last_error: null,
+    owner_epoch: null,
+    end_reason: null,
+    admission_allowed: false,
+    admission_reason: null,
   });
   const [liveAudioInputDevices, setLiveAudioInputDevices] = createSignal<LiveAudioInputDeviceSummary[]>([]);
   const [liveAudioInputBackends, setLiveAudioInputBackends] =
@@ -22789,9 +22793,9 @@ export default function App() {
         ) {
           void refreshVideoAudioMonitorStatus(true);
         }
-        if (videoRecordingStatus().active) {
-          void refreshVideoRecordingStatus();
-        }
+        // Polled while idle too: whether this PC may record follows video
+        // output ownership, which can change at any time.
+        void refreshVideoRecordingStatus();
         void refreshLiveAudioInputStatus();
       }, 1000)
     : null;

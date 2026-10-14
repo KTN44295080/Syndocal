@@ -4,6 +4,8 @@ const MAX_PATH_LENGTH = 2048;
 const MAX_ERROR_LENGTH = 1024;
 const RECORDING_STATES = ["Idle", "Preparing", "Recording", "Finalizing", "Complete", "Fault"] as const;
 type RecordingState = typeof RECORDING_STATES[number];
+const RECORDING_END_REASONS = ["operator_stop", "ownership_revoked", "fault"] as const;
+type RecordingEndReason = typeof RECORDING_END_REASONS[number];
 
 const optionalText = (value: unknown, name: string, maxLength: number): string | null => {
   if (value === null || value === undefined) return null;
@@ -41,6 +43,15 @@ export async function executeAgentBridgeRecordingStatus(invoke: FrontendTauriInv
     ? null : finiteNonNegative(raw.output_id, "output_id");
   const startedUnixMs = raw.started_unix_ms === null || raw.started_unix_ms === undefined
     ? null : finiteNonNegative(raw.started_unix_ms, "started_unix_ms");
+  const ownerEpoch = raw.owner_epoch === null || raw.owner_epoch === undefined
+    ? null : finiteNonNegative(raw.owner_epoch, "owner_epoch");
+  if (raw.end_reason !== null && raw.end_reason !== undefined
+    && !(RECORDING_END_REASONS as readonly unknown[]).includes(raw.end_reason)) {
+    throw new Error("Recording status field is invalid: end_reason");
+  }
+  if (raw.admission_allowed !== undefined && typeof raw.admission_allowed !== "boolean") {
+    throw new Error("Recording status field is invalid: admission_allowed");
+  }
   return {
     ok: true,
     recording: {
@@ -58,6 +69,11 @@ export async function executeAgentBridgeRecordingStatus(invoke: FrontendTauriInv
       audio_track_count: finiteNonNegative(raw.audio_track_count, "audio_track_count"),
       started_unix_ms: startedUnixMs,
       last_error: optionalText(raw.last_error, "last_error", MAX_ERROR_LENGTH),
+      owner_epoch: ownerEpoch,
+      end_reason: (raw.end_reason ?? null) as RecordingEndReason | null,
+      // A legacy peer without the field is reported as not admitted.
+      admission_allowed: raw.admission_allowed === true,
+      admission_reason: optionalText(raw.admission_reason, "admission_reason", MAX_ERROR_LENGTH),
     },
     control_boundary: "Read-only observation; recording start/stop/finalize remains a separately fenced operation.",
   };

@@ -13,11 +13,18 @@ export function VideoRecordingStatusBar(props: VideoRecordingStatusBarProps) {
   const recordingState = createMemo(() => props.recordingStatus.state
     ?? (props.recordingStatus.active ? "Recording" : props.recordingStatus.last_error ? "Fault" : "Idle"));
   const recordingInProgress = createMemo(() => ["Preparing", "Recording", "Finalizing"].includes(recordingState()));
+  // Only the video output owner records (DEC-RECORD-OWN-001); the backend
+  // refuses a start anyway, this only keeps the button truthful.
+  const recordingBlocked = createMemo(() => !recordingInProgress()
+    && props.recordingStatus.admission_allowed === false);
   const recordingStatusText = createMemo(() => recordingInProgress()
     ? `${recordingState()} · ${props.recordingStatus.dropped_frames} dropped · ${props.recordingStatus.frames_written} frames · ${props.recordingStatus.width}x${props.recordingStatus.height} @ ${props.recordingStatus.frame_rate}fps · ${props.recordingStatus.audio_included ? `${props.recordingStatus.audio_track_count} audio` : "silent"}`
     : recordingState() === "Complete"
-      ? `Complete · ${props.recordingStatus.frames_written} frames · ${props.recordingStatus.path ?? "artifact published"}`
-      : props.recordingStatus.last_error ?? `Ready · records H.264 MP4${props.programAudioEnabled ? " and active Program audio" : " without audio"}.`);
+      ? `${props.recordingStatus.end_reason === "ownership_revoked" ? "Ended: video output ownership changed" : "Complete"} · ${props.recordingStatus.frames_written} frames · ${props.recordingStatus.path ?? "artifact published"}`
+      : props.recordingStatus.last_error
+        ?? (recordingBlocked()
+          ? props.recordingStatus.admission_reason ?? "Recording needs this PC to own video output."
+          : `Ready · records H.264 MP4${props.programAudioEnabled ? " and active Program audio" : " without audio"}.`));
 
   return (
     <div class={`videoRecordingBar ${recordingInProgress() ? "active" : ""}`} aria-live="polite">
@@ -33,7 +40,9 @@ export function VideoRecordingStatusBar(props: VideoRecordingStatusBarProps) {
       </div>
       <button
         class={recordingInProgress() ? "danger" : ""}
-        disabled={recordingState() === "Finalizing" || (!recordingInProgress() && props.selectedOutputId === null)}
+        disabled={recordingState() === "Finalizing"
+          || (!recordingInProgress() && (props.selectedOutputId === null || recordingBlocked()))}
+        title={recordingBlocked() ? props.recordingStatus.admission_reason ?? undefined : undefined}
         onClick={() => recordingInProgress()
           ? recordingState() !== "Finalizing" && void props.onStopRecording()
           : props.selectedOutputId !== null && void props.onStartRecording(props.selectedOutputId, props.programAudioEnabled)}
