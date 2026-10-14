@@ -187,3 +187,53 @@ Evidence:
 - An independent review approved with no P0–P2 findings.
 
 Browser evidence only; no native or physical ASIO claim.
+
+## Control skin, DAW-mode MIDI and FX usability (later 2026-10-14)
+
+All on main and pushed. Commits are rebased on the separate ASIO-check fix
+`eaec2479`.
+
+- Control skin `0dc10769`: one slider/fader/progress language. Range and
+  progress sizes are unchanged before and after at 1920x1080.
+- MIDI `499c74c9` + review fixes `45a2b36c` + `7e9a49d6`. The SMC-Mixer
+  lights its button LEDs only from fixed notes, so DAW mode is the working
+  LED mode (the user confirmed the LEDs light in DAW mode). Its faders send
+  14-bit pitch bend and its V-Pots send Mackie relative steps; both can now
+  be learned. Relative steps are allowed only for continuous targets and
+  fail closed when the target position is unreadable.
+  - An independent review found 2 blocking and 3 should-fix defects. All
+    were fixed, and the re-review found no blocking defect.
+  - io `midi::`/`control_plane::` 45 passed. The syndocal control-plane /
+    midi / admission / dvc / validate filter 257 passed.
+  - `project_replacement_control_plane_legacy_open_matches_acknowledged_engine_persistence`
+    is intermittent: it fails on varying fixtures and passed 2 of 3
+    isolated reruns plus the final filtered run.
+  - Physical fader/encoder movement on the SMC-Mixer is not yet observed.
+- FX editor `025c66bb`, `141b1e30`, `68369f3b` (read-only audit first):
+  - numbered steps (target fixtures, then channels to move);
+  - per-family channel guidance;
+  - a pinned Save dock with an Unsaved mark and a discard confirmation;
+  - Chaser steps follow an untouched target;
+  - family buttons read as add-actions;
+  - corrected wording;
+  - labelled surface rail.
+  The Scene Settings scroller's auto rows were sized by leftover height,
+  which was the long-standing `settingsUseInternalScrollWithoutHorizontalEscape`
+  failure. With max-content rows, viewport `--scene-settings-only` and
+  `--scene-fx-block-only` now pass at all five sizes.
+- Windows native gate on the MIDI/FX build (`141b1e30` content):
+  - `tauri build --no-bundle` took 433 s with 0 first-party warnings.
+  - `syndocal.exe` 1.2.0-alpha.82, 70,540,800 bytes, SHA-256
+    `2df8afd5890a8318d7ef89cece1f08c6176b483b11d0c25dd4c04a43d23ed722`.
+  - The exe ran as one responsive `Syndocal` window, maximized
+    (`showCmd=3`), and closed gracefully.
+
+Checks that fail identically on unchanged parents (stale contracts, not
+regressions):
+
+- `--live-edit-types-only` expects a 7-entry category rail; the rail now
+  has 8.
+- `--workspace-operator-only` cannot find `.workspaceOperationsButton`
+  after the one-row header.
+- Several flows hit `Page.navigate` timeouts once a project is dirty
+  (beforeunload prompt).
