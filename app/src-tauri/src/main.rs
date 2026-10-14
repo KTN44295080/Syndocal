@@ -329,6 +329,9 @@ mod recording_lease;
 mod recording_ownership;
 mod recording_receipts;
 mod takeover_recording;
+#[cfg(test)]
+#[path = "tests/vj_benchmark_tests.rs"]
+mod vj_benchmark_tests;
 mod usb_dmx_universes;
 mod network_dmx_routes;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]

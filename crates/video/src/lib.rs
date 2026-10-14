@@ -8276,10 +8276,74 @@ struct BlendTransformedRgba8Params<'a> {
     fx: &'a VideoFxAdjust,
 }
 
+/// Layers covering fewer output pixels than this are blended on the calling
+/// thread; below it, handing bands to the pool costs more than it saves.
+const PARALLEL_BLEND_MIN_PIXELS: usize = 1 << 18;
+/// Upper bound on the bands one layer blend is split into. The bands run on
+/// rayon's global pool, which every output shares and which starts its
+/// threads once.
+const MAX_BLEND_BANDS: usize = 8;
+/// Layers covering at least this many output pixels build a 64 KiB blend
+/// table for their opaque source pixels. Building it is 65 536 single-channel
+/// blends, roughly the work of 22 000 pixels.
+const BLEND_TABLE_MIN_PIXELS: usize = 1 << 17;
+
+/// How many bands a blend over `pixels` output pixels in `rows` rows uses.
+fn blend_band_count(pixels: usize, rows: u32) -> usize {
+    if pixels < PARALLEL_BLEND_MIN_PIXELS {
+        return 1;
+    }
+    rayon::current_num_threads()
+        .min(MAX_BLEND_BANDS)
+        .min(rows as usize)
+        .max(1)
+}
+
+/// Runs `blend_rows(band, first_row)` over up to `bands` horizontal bands of
+/// the rows `rows` of `destination` (`width * 4` bytes per row), on rayon's
+/// pool when there is more than one band. Each output pixel depends only on
+/// its own destination value and the source frame, so the bytes are
+/// identical to one pass.
+fn for_each_row_band<F>(
+    destination: &mut [u8],
+    width: u32,
+    rows: std::ops::Range<u32>,
+    bands: usize,
+    blend_rows: F,
+) where
+    F: Fn(&mut [u8], u32) + Sync + Send,
+{
+    use rayon::prelude::*;
+    let row_bytes = width as usize * 4;
+    let row_count = rows.end.saturating_sub(rows.start) as usize;
+    if row_bytes == 0 || row_count == 0 {
+        return;
+    }
+    let span = &mut destination[rows.start as usize * row_bytes..rows.end as usize * row_bytes];
+    let rows_per_band = row_count.div_ceil(bands.max(1)).max(1);
+    if rows_per_band >= row_count {
+        blend_rows(span, rows.start);
+        return;
+    }
+    span.par_chunks_mut(rows_per_band * row_bytes)
+        .enumerate()
+        .for_each(|(index, band)| blend_rows(band, rows.start + (index * rows_per_band) as u32));
+}
+
+/// The rows `first_row..` covered by a band of `band_len` bytes, clipped to
+/// the output height.
+fn band_rows(band_len: usize, width: u32, height: u32, first_row: u32) -> std::ops::Range<u32> {
+    let rows = (band_len / (width as usize * 4).max(1)).min(u32::MAX as usize) as u32;
+    first_row..first_row.saturating_add(rows).min(height)
+}
+
 fn blend_transformed_rgba8(params: BlendTransformedRgba8Params<'_>) {
-    if params.opacity == 1.0
-        && *params.blend_mode == VideoBlendMode::Normal
-        && *params.color == VideoColorAdjust::default()
+    blend_transformed_rgba8_in_bands(params, None);
+}
+
+/// `bands` overrides the band count chosen from the covered area (tests).
+fn blend_transformed_rgba8_in_bands(params: BlendTransformedRgba8Params<'_>, bands: Option<usize>) {
+    if *params.color == VideoColorAdjust::default()
         && *params.fx == VideoFxAdjust::default()
         && params.transform.rotation_deg == 0.0
         && params.transform.x.is_finite()
@@ -8291,24 +8355,34 @@ fn blend_transformed_rgba8(params: BlendTransformedRgba8Params<'_>) {
         && params.transform.crop_top.is_finite()
         && params.transform.crop_bottom.is_finite()
     {
-        blend_axis_aligned_identity_adjustments(params);
+        blend_axis_aligned_identity_adjustments(params, bands);
     } else {
-        blend_transformed_rgba8_generic(params);
+        blend_transformed_rgba8_generic_in_bands(params, bands);
     }
 }
 
 // Preserve the general sampler's pixel-center, crop, nearest-neighbor and alpha
-// rules while sharing horizontal sampling across rows. Artistic adjustments and
-// rotated layers retain the general path.
-fn blend_axis_aligned_identity_adjustments(params: BlendTransformedRgba8Params<'_>) {
+// rules while sharing horizontal sampling across rows. Opacity and blend mode
+// go through the same `blend_pixel` as the general path. Artistic adjustments
+// and rotated layers retain the general path. Only the rows the layer covers
+// are visited, so a small or off-screen layer costs little.
+fn blend_axis_aligned_identity_adjustments(
+    params: BlendTransformedRgba8Params<'_>,
+    bands: Option<usize>,
+) {
     let BlendTransformedRgba8Params {
         destination,
         frame,
         width,
         height,
+        opacity,
+        blend_mode,
         transform,
         ..
     } = params;
+    if opacity <= 0.0 {
+        return;
+    }
     let left = transform.crop_left.clamp(0.0, 1.0);
     let top = transform.crop_top.clamp(0.0, 1.0);
     let right = (1.0 - transform.crop_right.clamp(0.0, 1.0)).clamp(0.0, 1.0);
@@ -8330,33 +8404,76 @@ fn blend_axis_aligned_identity_adjustments(params: BlendTransformedRgba8Params<'
             })
         })
         .collect::<Vec<_>>();
-    for y in 0..height {
+    let covered_columns = source_columns
+        .iter()
+        .filter(|column| column.is_some())
+        .count();
+    let row_local = |y: u32| {
         let centered = (y as f32 + 0.5) / height as f32 - 0.5 - transform.y;
-        let local = centered / scale_y + 0.5;
-        if !(0.0..1.0).contains(&local) {
-            continue;
-        }
-        let source_y = ((top + local * (bottom - top)) * frame.height as f32)
-            .floor()
-            .clamp(0.0, (frame.height - 1) as f32) as usize;
-        let source_row = source_y * frame.width as usize * 4;
-        let destination_row = y as usize * width as usize * 4;
-        for (x, source_x) in source_columns.iter().enumerate() {
-            let Some(source_x) = source_x else {
+        centered / scale_y + 0.5
+    };
+    let row_covered = |y: u32| (0.0..1.0).contains(&row_local(y));
+    let Some(first_covered_row) = (0..height).find(|&y| row_covered(y)) else {
+        return;
+    };
+    if covered_columns == 0 {
+        return;
+    }
+    let last_covered_row = (first_covered_row..height)
+        .rev()
+        .find(|&y| row_covered(y))
+        .unwrap_or(first_covered_row);
+    let covered_rows = last_covered_row - first_covered_row + 1;
+    let covered_pixels = covered_columns.saturating_mul(covered_rows as usize);
+    // An opaque source pixel over Normal at full opacity is a plain copy;
+    // `blend_pixel` would produce the same bytes. Other opaque source pixels
+    // of a large layer go through the lookup table.
+    let copy_opaque = opacity == 1.0 && *blend_mode == VideoBlendMode::Normal;
+    let opaque_table = (!copy_opaque && covered_pixels >= BLEND_TABLE_MIN_PIXELS)
+        .then(|| OpaqueSourceBlendTable::new(opacity, blend_mode))
+        .flatten();
+    let bands = bands.unwrap_or_else(|| blend_band_count(covered_pixels, covered_rows));
+    let rows = first_covered_row..last_covered_row + 1;
+    for_each_row_band(destination, width, rows, bands, |band, first_row| {
+        for y in band_rows(band.len(), width, height, first_row) {
+            let local = row_local(y);
+            if !(0.0..1.0).contains(&local) {
                 continue;
-            };
-            let source = &frame.data[source_row + source_x..source_row + source_x + 4];
-            let target = &mut destination[destination_row + x * 4..destination_row + x * 4 + 4];
-            if source[3] == 255 {
-                target.copy_from_slice(source);
-            } else {
-                blend_pixel(target, source, 1.0, &VideoBlendMode::Normal);
+            }
+            let source_y = ((top + local * (bottom - top)) * frame.height as f32)
+                .floor()
+                .clamp(0.0, (frame.height - 1) as f32) as usize;
+            let source_row = source_y * frame.width as usize * 4;
+            let destination_row = (y - first_row) as usize * width as usize * 4;
+            for (x, source_x) in source_columns.iter().enumerate() {
+                let Some(source_x) = source_x else {
+                    continue;
+                };
+                let source = &frame.data[source_row + source_x..source_row + source_x + 4];
+                let target = &mut band[destination_row + x * 4..destination_row + x * 4 + 4];
+                if source[3] != 255 {
+                    blend_pixel(target, source, opacity, blend_mode);
+                } else if copy_opaque {
+                    target.copy_from_slice(source);
+                } else if let Some(table) = &opaque_table {
+                    table.apply(target, source);
+                } else {
+                    blend_pixel(target, source, opacity, blend_mode);
+                }
             }
         }
-    }
+    });
 }
 
+#[cfg(test)]
 fn blend_transformed_rgba8_generic(params: BlendTransformedRgba8Params<'_>) {
+    blend_transformed_rgba8_generic_in_bands(params, Some(1));
+}
+
+fn blend_transformed_rgba8_generic_in_bands(
+    params: BlendTransformedRgba8Params<'_>,
+    bands: Option<usize>,
+) {
     let BlendTransformedRgba8Params {
         destination,
         frame,
@@ -8387,38 +8504,43 @@ fn blend_transformed_rgba8_generic(params: BlendTransformedRgba8Params<'_>) {
     let scale_x = transform.scale_x.max(0.001);
     let scale_y = transform.scale_y.max(0.001);
 
-    for y in 0..height {
-        let centered_y = (y as f32 + 0.5) / height as f32 - 0.5 - transform.y;
-        for x in 0..width {
-            let centered_x = (x as f32 + 0.5) / width as f32 - 0.5 - transform.x;
-            let rotated_x = centered_x * cos - centered_y * sin;
-            let rotated_y = centered_x * sin + centered_y * cos;
-            let local_x = rotated_x / scale_x + 0.5;
-            let local_y = rotated_y / scale_y + 0.5;
-            if !(0.0..1.0).contains(&local_x) || !(0.0..1.0).contains(&local_y) {
-                continue;
-            }
+    let bands = bands.unwrap_or_else(|| {
+        blend_band_count((width as usize).saturating_mul(height as usize), height)
+    });
+    for_each_row_band(destination, width, 0..height, bands, |band, first_row| {
+        for y in band_rows(band.len(), width, height, first_row) {
+            let centered_y = (y as f32 + 0.5) / height as f32 - 0.5 - transform.y;
+            for x in 0..width {
+                let centered_x = (x as f32 + 0.5) / width as f32 - 0.5 - transform.x;
+                let rotated_x = centered_x * cos - centered_y * sin;
+                let rotated_y = centered_x * sin + centered_y * cos;
+                let local_x = rotated_x / scale_x + 0.5;
+                let local_y = rotated_y / scale_y + 0.5;
+                if !(0.0..1.0).contains(&local_x) || !(0.0..1.0).contains(&local_y) {
+                    continue;
+                }
 
-            let src_u = crop_left + local_x * (crop_right - crop_left);
-            let src_v = crop_top + local_y * (crop_bottom - crop_top);
-            let src_x = (src_u * frame.width as f32)
-                .floor()
-                .clamp(0.0, (frame.width - 1) as f32) as u32;
-            let src_y = (src_v * frame.height as f32)
-                .floor()
-                .clamp(0.0, (frame.height - 1) as f32) as u32;
-            let dst_index = ((y * width + x) * 4) as usize;
-            let sample = sample_rgba_pixel(frame, src_x, src_y, &fx);
-            let mut adjusted = adjust_rgba_pixel(&sample, color);
-            apply_color_key(&mut adjusted, &fx);
-            blend_pixel(
-                &mut destination[dst_index..dst_index + 4],
-                &adjusted,
-                opacity,
-                blend_mode,
-            );
+                let src_u = crop_left + local_x * (crop_right - crop_left);
+                let src_v = crop_top + local_y * (crop_bottom - crop_top);
+                let src_x = (src_u * frame.width as f32)
+                    .floor()
+                    .clamp(0.0, (frame.width - 1) as f32) as u32;
+                let src_y = (src_v * frame.height as f32)
+                    .floor()
+                    .clamp(0.0, (frame.height - 1) as f32) as u32;
+                let dst_index = (((y - first_row) * width + x) * 4) as usize;
+                let sample = sample_rgba_pixel(frame, src_x, src_y, &fx);
+                let mut adjusted = adjust_rgba_pixel(&sample, color);
+                apply_color_key(&mut adjusted, &fx);
+                blend_pixel(
+                    &mut band[dst_index..dst_index + 4],
+                    &adjusted,
+                    opacity,
+                    blend_mode,
+                );
+            }
         }
-    }
+    });
 }
 
 fn sample_rgba_pixel(
@@ -8595,9 +8717,9 @@ fn adjust_rgba_pixel(src: &[u8], color: &VideoColorAdjust) -> [u8; 4] {
     blue = apply_tone_adjust(blue, &color);
 
     [
-        (red * 255.0).round().clamp(0.0, 255.0) as u8,
-        (green * 255.0).round().clamp(0.0, 255.0) as u8,
-        (blue * 255.0).round().clamp(0.0, 255.0) as u8,
+        round_clamp_u8(red * 255.0),
+        round_clamp_u8(green * 255.0),
+        round_clamp_u8(blue * 255.0),
         src[3],
     ]
 }
@@ -8635,23 +8757,85 @@ fn blend_pixel(dst: &mut [u8], src: &[u8], opacity: f32, blend_mode: &VideoBlend
     }
 
     for channel in 0..3 {
-        let dst_value = dst[channel] as f32;
-        let src_value = src[channel] as f32;
-        let blended = match blend_mode {
-            VideoBlendMode::Normal => src_value,
-            VideoBlendMode::Add => (dst_value + src_value).min(255.0),
-            VideoBlendMode::Multiply => dst_value * src_value / 255.0,
-            VideoBlendMode::Screen => 255.0 - ((255.0 - dst_value) * (255.0 - src_value) / 255.0),
-        };
-        dst[channel] = (dst_value + (blended - dst_value) * src_alpha)
-            .round()
-            .clamp(0.0, 255.0) as u8;
+        dst[channel] = blend_channel(dst[channel], src[channel], src_alpha, blend_mode);
+    }
+    dst[3] = blend_alpha(dst[3], src_alpha);
+}
+
+#[inline(always)]
+fn blend_channel(dst: u8, src: u8, src_alpha: f32, blend_mode: &VideoBlendMode) -> u8 {
+    let dst_value = dst as f32;
+    let src_value = src as f32;
+    let blended = match blend_mode {
+        VideoBlendMode::Normal => src_value,
+        VideoBlendMode::Add => (dst_value + src_value).min(255.0),
+        VideoBlendMode::Multiply => dst_value * src_value / 255.0,
+        VideoBlendMode::Screen => 255.0 - ((255.0 - dst_value) * (255.0 - src_value) / 255.0),
+    };
+    round_clamp_u8(dst_value + (blended - dst_value) * src_alpha)
+}
+
+#[inline(always)]
+fn blend_alpha(dst: u8, src_alpha: f32) -> u8 {
+    let dst_alpha = dst as f32 / 255.0;
+    round_clamp_u8((src_alpha + dst_alpha * (1.0 - src_alpha)) * 255.0)
+}
+
+/// `blend_pixel` for one layer's opacity and blend mode over a fully opaque
+/// source pixel, as lookup tables built from the same channel and alpha
+/// functions, so every byte is identical. A blended channel depends only on
+/// the destination and source channel once the source alpha is fixed.
+struct OpaqueSourceBlendTable {
+    /// Indexed by `destination * 256 + source`.
+    channel: Vec<u8>,
+    /// Indexed by the destination alpha.
+    alpha: [u8; 256],
+}
+
+impl OpaqueSourceBlendTable {
+    /// `None` when `blend_pixel` would leave an opaque-source pixel untouched.
+    fn new(opacity: f32, blend_mode: &VideoBlendMode) -> Option<Self> {
+        let src_alpha = (255_u8 as f32 / 255.0) * opacity;
+        if src_alpha <= 0.0 {
+            return None;
+        }
+        let mut channel = vec![0; 256 * 256];
+        for (index, value) in channel.iter_mut().enumerate() {
+            *value = blend_channel((index / 256) as u8, index as u8, src_alpha, blend_mode);
+        }
+        Some(Self {
+            channel,
+            alpha: std::array::from_fn(|dst| blend_alpha(dst as u8, src_alpha)),
+        })
     }
 
-    let dst_alpha = dst[3] as f32 / 255.0;
-    dst[3] = ((src_alpha + dst_alpha * (1.0 - src_alpha)) * 255.0)
-        .round()
-        .clamp(0.0, 255.0) as u8;
+    /// Requires `source[3] == 255`.
+    #[inline(always)]
+    fn apply(&self, target: &mut [u8], source: &[u8]) {
+        for channel in 0..3 {
+            target[channel] =
+                self.channel[usize::from(target[channel]) * 256 + usize::from(source[channel])];
+        }
+        target[3] = self.alpha[usize::from(target[3])];
+    }
+}
+
+/// Exactly `value.round().clamp(0.0, 255.0) as u8` for every `f32`,
+/// including NaN and the infinities. On the baseline x86-64 target `round`
+/// is a library call, which made it the main cost of a blended pixel.
+#[inline(always)]
+fn round_clamp_u8(value: f32) -> u8 {
+    // Clamping first gives the same byte (a value that rounds below 0 or
+    // above 255 is clamped either way), and makes the truncating cast exact.
+    // NaN survives the clamp and casts to 0, as before.
+    let clamped = value.clamp(0.0, 255.0);
+    let truncated = clamped as u8;
+    // Exact: `truncated` is the floor of a non-negative `clamped`.
+    if clamped - truncated as f32 >= 0.5 {
+        truncated + 1
+    } else {
+        truncated
+    }
 }
 
 pub fn sanitize_layer_state(mut state: VideoLayerState) -> VideoLayerState {
