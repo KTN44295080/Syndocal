@@ -3281,16 +3281,17 @@ export default function App() {
   let latestEngineSnapshot = initialEngineSnapshot;
   const [snapshotRevision, setSnapshotRevision] = createSignal<number | null>(null);
   let loadSceneEffectDraft = (_cueId: number, _effectId: number) => {};
-  // Stores a settled-but-unsaved FX edit before the editor moves away from it;
-  // false when an unsavable draft should be kept (the operator declined).
-  let flushSceneEffectDraft = () => true;
+  // Stores a settled-but-unsaved FX edit before the editor moves away from it.
+  // An unsavable draft is discarded when `discardUnsavable`, otherwise the
+  // operator is asked; false means they kept it and the move is cancelled.
+  let flushSceneEffectDraft = (_options: { discardUnsavable?: boolean } = {}) => true;
   // Bumped whenever the FX form is reloaded or closed, so a save that was in
   // flight meanwhile does not touch the form that replaced it.
   let sceneEffectFormGeneration = 0;
   const selectSceneCue = (cueId: number) => {
     const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
     if (!cue) return;
-    if (!flushSceneEffectDraft()) return;
+    flushSceneEffectDraft({ discardUnsavable: true });
     const currentEffectId = selectedSceneEffectId();
     const effectId = cue.effect_targets.some((target) => target.effect_id === currentEffectId)
       ? currentEffectId
@@ -3305,7 +3306,7 @@ export default function App() {
     if (controlMode() === "edit") void changeControlFaderWriteMode("edit");
   };
   const closeSceneSettings = () => {
-    if (!flushSceneEffectDraft()) return;
+    flushSceneEffectDraft({ discardUnsavable: true });
     sceneEffectFormGeneration += 1;
     sceneEffectStoredParamsJson = null;
     setSelectedSceneCueId(null);
@@ -24268,11 +24269,11 @@ export default function App() {
   // at a time and is applied to the scene's latest stored list, so a save
   // and a bypass/remove/move/duplicate can never revert each other.
   let sceneEffectSaveQueue: Promise<unknown> = Promise.resolve();
-  let sceneEffectOperationsPending = 0;
+  const [sceneEffectOperationsPending, setSceneEffectOperationsPending] = createSignal(0);
   const enqueueSceneEffectOperation = <T,>(operation: () => Promise<T>): Promise<T> => {
-    sceneEffectOperationsPending += 1;
+    setSceneEffectOperationsPending((pending) => pending + 1);
     const result = sceneEffectSaveQueue.then(operation, operation)
-      .finally(() => { sceneEffectOperationsPending -= 1; });
+      .finally(() => setSceneEffectOperationsPending((pending) => pending - 1));
     sceneEffectSaveQueue = result.catch(() => undefined);
     return result;
   };
@@ -24318,6 +24319,18 @@ export default function App() {
     const quickFamily = quickSceneFxFamilies.includes(family as QuickSceneFxFamily)
       ? family as QuickSceneFxFamily
       : null;
+    if (!flushSceneEffectDraft()) return;
+    // The form is rebuilt for the new FX below: detach it from the selected
+    // FX first, so no auto-save can write the new form into that FX.
+    const previousEffectId = selectedSceneEffectId();
+    setSelectedSceneEffectId(null);
+    sceneEffectFormGeneration += 1;
+    const restorePreviousSelection = () => {
+      if (previousEffectId === null || selectedSceneEffectId() !== null) return;
+      if (!latestSceneCue(cue.id)?.effect_targets.some((target) => target.effect_id === previousEffectId)) return;
+      setSelectedSceneEffectId(previousEffectId);
+      loadSceneEffectDraft(cue.id, previousEffectId);
+    };
     let params: EffectParamsSnapshot;
     let effectLabel: string;
     if (quickFamily) {
@@ -24326,6 +24339,7 @@ export default function App() {
         setMessage(quickFamily === "MOVE FX"
           ? "MOVE FX requires a scene fixture with paired Pan/Tilt controls."
           : "This scene has no compatible fixture target for the selected FX block.");
+        restorePreviousSelection();
         return;
       }
       params = defaultParams;
@@ -24335,7 +24349,10 @@ export default function App() {
       prepareSceneEffectTarget(cue);
       await selectEffectFamily(family);
       const draft = buildEffectRequestFromForm();
-      if (!draft) return;
+      if (!draft) {
+        restorePreviousSelection();
+        return;
+      }
       params = effectParamsSnapshotFromDraft(draft);
       effectLabel = draft.effectType;
     }
@@ -24345,7 +24362,10 @@ export default function App() {
       const effectId = Math.max(900, ...snapshot().effects.map((effect) => effect.id), ...cueEffectIds) + 1;
       const effectTarget: CueEffectTarget = { effect_id: effectId, enabled: true, params };
       const effect = cueOwnedEffectSummary(effectTarget, null);
-      if (!effect) return;
+      if (!effect) {
+        restorePreviousSelection();
+        return;
+      }
       setSnapshot((current) => ({
         ...current,
         cues: current.cues.map((candidate) =>
@@ -24380,6 +24400,7 @@ export default function App() {
         : `Created cue-owned ${effectLabel} FX for scene ${cue.id} in one gesture.`);
     } catch (error) {
       setMessage(String(error));
+      restorePreviousSelection();
     }
   };
 
@@ -24401,8 +24422,11 @@ export default function App() {
     setSceneFxStagePreview(enabled && target.params
       ? { cueId, effectId, params: target.params, startedAt: performance.now() }
       : null);
-    // A playing scene picks the change up in place; only an idle one starts.
-    if (!snapshot().programmer.blind && !sceneIsPlaying(cueId)) await triggerCue(cueId);
+    // A playing scene picks an owned FX change up in place. A global-effect
+    // reference is switched only when its scene starts, so that re-triggers.
+    if (!snapshot().programmer.blind && (!sceneIsPlaying(cueId) || !target.params)) {
+      await triggerCue(cueId);
+    }
     setMessage(`${enabled ? "Enabled" : "Bypassed"} cue-owned FX ${effectId}.`);
   };
 
@@ -24416,10 +24440,13 @@ export default function App() {
       const cue = latestSceneCue(cueId);
       if (!cue || !cue.effect_targets.some((target) => target.effect_id === effectId)) return null;
       const nextTargets = cue.effect_targets.filter((target) => target.effect_id !== effectId);
-      return await persistSceneEffectTargets(cue.id, nextTargets) ? { cue, nextTargets } : null;
+      const globalReference = !cue.effect_targets.find((target) => target.effect_id === effectId)?.params;
+      return await persistSceneEffectTargets(cue.id, nextTargets)
+        ? { cue, nextTargets, globalReference }
+        : null;
     });
     if (!removed) return;
-    const { cue, nextTargets } = removed;
+    const { cue, nextTargets, globalReference } = removed;
     const nextTarget = nextTargets[0] ?? null;
     setSelectedSceneEffectId(nextTarget?.effect_id ?? null);
     setSceneFxStagePreview(nextTarget?.enabled && nextTarget.params
@@ -24441,7 +24468,7 @@ export default function App() {
     if (!snapshot().programmer.blind) {
       if (!keepsExecutableContent) {
         if (wasRunning) await releaseCueById(cue.id);
-      } else if (!sceneIsPlaying(cue.id)) {
+      } else if (!sceneIsPlaying(cue.id) || globalReference) {
         await triggerCue(cue.id);
       }
     }
@@ -24581,25 +24608,33 @@ export default function App() {
   // shows it at once (Blind holds the output until Blind ends). An invalid
   // draft waits silently until it becomes valid.
   let sceneEffectAutoSaveTimer: ReturnType<typeof setTimeout> | undefined;
-  flushSceneEffectDraft = () => {
+  flushSceneEffectDraft = (options = {}) => {
     clearTimeout(sceneEffectAutoSaveTimer);
     if (!untrack(sceneEffectDraftDirty)) return true;
-    if (untrack(sceneEffectDraftSignature) === null) return confirmDiscardSceneEffectDraft();
+    if (untrack(sceneEffectDraftSignature) === null) {
+      return options.discardUnsavable ? true : confirmDiscardSceneEffectDraft();
+    }
     void saveSceneEffectDraft({ auto: true });
     return true;
   };
   // The stored FX changed underneath a clean form (Undo/Redo, MIDI/OSC,
   // another editor): show the stored values, so the next edit does not
   // quietly write the old ones back. A form being edited is left alone.
+  let observedStoredParams: unknown;
+  let observedStoredParamsJson = "null";
   createEffect(() => {
     const cue = selectedSceneCue();
     const effectId = selectedSceneEffectId();
-    if (!cue || effectId === null) return;
-    const stored = JSON.stringify(cue.effect_targets
-      .find((target) => target.effect_id === effectId)?.params ?? null);
+    if (!cue || effectId === null || sceneEffectOperationsPending() > 0) return;
+    const params = cue.effect_targets.find((target) => target.effect_id === effectId)?.params ?? null;
+    if (params !== observedStoredParams) {
+      observedStoredParams = params;
+      observedStoredParamsJson = JSON.stringify(params);
+    }
+    const stored = observedStoredParamsJson;
     untrack(() => {
       if (sceneEffectStoredParamsJson === null || stored === sceneEffectStoredParamsJson) return;
-      if (sceneEffectDraftDirty() || sceneEffectOperationsPending > 0) return;
+      if (sceneEffectDraftDirty()) return;
       loadSceneEffectDraft(cue.id, effectId);
     });
   });
