@@ -237,3 +237,245 @@ regressions):
   after the one-row header.
 - Several flows hit `Page.navigate` timeouts once a project is dirty
   (beforeunload prompt).
+
+## Operator lock, ShowClock, Remote cap and live FX (later 2026-10-14)
+
+Owner decisions taken in this round (AskUserQuestion, 2026-10-14):
+
+- ShowClock: drop invalid packets and warn.
+- Web Remote: at most 8 pending HTTP heads per peer address.
+- Recording: one owner, with explicit takeover.
+- FX edits: reach the output at once; Blind is how to edit without output.
+
+Commits:
+
+- Viewport checker `1ffc6f4f`: brought the three stale contracts listed above
+  up to date (8-entry category rail, header operations button, auto-accepted
+  beforeunload) plus the fx-visual re-entry. The workspace flow then exposed
+  a real defect: with a Partial Lock, Unlock was unreachable. Fixed in
+  `1f1fe2e2` (lock badge and Unlock stay in the header) and `0e61794e` (the
+  project menu closes when a lock engages; layout save/delete/reset refuse
+  while locked).
+- ShowClock `4a0c85ef` + `611785c8`:
+  - These are refused and counted, without faulting the standby:
+    - a sample with a bad authentication tag;
+    - a replayed sample;
+    - a late (reordered) sample.
+  - The count is `rejected_packets` and the reason is `last_rejection`.
+  - These still fail closed:
+    - an authentic newer sample whose sender or show time ran backwards
+      (`ClockRegressed`);
+    - an authentic action that is older or reuses a sequence.
+- Remote `a3613d74`: per-address cap of 8 pending heads inside the existing
+  total of 32. A connection whose peer address cannot be read is refused.
+- `5f0b382c`: DEC-RECORD-OWN-001 accepted (single owner with takeover). The
+  implementation stays open under COV-RECORDING-001.
+- `2855e8b5`: rustfmt of the touched io files; F1 DMX liveness needles.
+- Live FX `3aa4243f`, `782f010d`, `d8f7e10a`, `564829a7`:
+  - The review of `3aa4243f` found two things.
+    - The publication rebuild after every `SetCueEffectTargetsPublished`
+      already carries a stored FX into a running scene with its timing kept,
+      so the in-place reapply was dead weight.
+    - Blind held nothing.
+  - `782f010d` removes the reapply and adds a per-Cue Blind hold.
+    - While Blind, the first FX edit of a Cue keeps that Cue's previous
+      targets for every runtime builder.
+    - Blind off (mode change, Clear, Commit) releases the holds and rebuilds,
+      with timing kept.
+    - A rolled-back Blind edit drops the hold it created.
+  - App changes in `782f010d`:
+    - One save queue; each save patches only its own FX into the latest list.
+    - A save that lands after the selection moved leaves the new form alone.
+    - Auto-save keeps a bypassed FX bypassed.
+    - Switching scene or FX, or closing the pane, flushes a pending edit.
+  - `d8f7e10a` moves hold creation into every cue body change, so an
+    Update or re-record during Blind is held too. The hold is taken before
+    the tempo re-conform, and the conformed rate reads the held FX.
+    Rebuild no longer prunes holds, and a rollback restores the exact
+    prior hold.
+  - `d8f7e10a` also changes the app:
+    - Every FX rack action goes through the one save queue and applies to
+      the latest list.
+    - A clean form reloads when the stored FX change underneath it.
+  - `564829a7` re-triggers the scene for a global-reference FX bypass. It
+    also detaches the form from the old FX before an add.
+
+Evidence:
+
+- Engine test
+  `cue_effect_target_edits_reach_a_running_scene_and_blind_holds_them_until_it_ends`
+  runs through `publish_pending_command_acks`. It covers:
+  - live edit with timing kept;
+  - Blind edits stored but held, including a line-up change;
+  - a rolled-back Blind edit dropping its hold;
+  - release on Blind off.
+- More engine tests:
+  - `blind_fx_hold_keeps_the_conformed_rate_until_blind_ends`;
+  - `blind_fx_hold_survives_a_rolled_back_scene_bank_delete`.
+- Full engine lib: 1115, 1117 and 1121 passed on successive runs, with
+  14 ignored. The only failure in each run was
+  `max_loop_pre_wait_and_follow_dispatch_128000_occurrences_without_loss`:
+  a 75 ms / 25 ms wall-clock threshold under parallel load. It passed alone
+  in 0.05 s.
+- Browser probes on the scene-matrix fixture:
+  - an edit followed at once by an FX switch keeps its value;
+  - a bypassed FX stays bypassed after an auto-save;
+  - an edit followed at once by a scene switch keeps its value.
+- App checks passed:
+  - localization;
+  - scene-settings (5 sizes);
+  - scene-fx-block;
+  - effect-draft;
+  - fx-visual;
+  - fx-palettes;
+  - fx-scroll;
+  - cue-effect-recall;
+  - scene-edit-write-barrier.
+- Reviews:
+  - The re-review of `611785c8`/`2855e8b5`/`a3613d74` found no blocking
+    defect.
+  - The review of `782f010d`: three review rounds.
+    - Round 1 found two engine leaks:
+      - the tempo-conform rate ignored the hold;
+      - a rolled-back bank delete lost the hold.
+    - Round 1 also found three app defects:
+      - rack actions bypassed the save queue;
+      - a stale form after Undo re-saved the undone values;
+      - Update and re-record bypassed the hold.
+    - All of them were fixed in `d8f7e10a`.
+    - Round 2 found two app defects:
+      - a global-reference bypass did not reach the output;
+      - adding an FX could write into the previously selected FX.
+    - Those were fixed in `564829a7`.
+    - Round 3 found no blocking defect.
+  - CI on `564829a7`: Ubuntu passed (fmt, Rust tests, release checks);
+    the Windows job passed its tests and was bundling at the time of
+    writing.
+- Windows native gate: on `782f010d`, and again on `4bead66c` (which
+  includes `d8f7e10a` and `564829a7`). On `782f010d`, `tauri build --no-bundle`
+  took 6 min 09 s with 0 first-party warnings.
+  - `syndocal.exe` is 70,583,808 bytes, SHA-256
+    `690f2080c8a51ece231fc227b3e56178058d9bf59fcf17577d2f9946f95bcc1f`.
+  - One user-facing `Syndocal` window opened, maximized (`showCmd=3`) and
+    responding, and closed gracefully (exit 0).
+  - The only other visible top-level window was the single-instance
+    plugin's 13x13 layered, transparent, no-activate tool window
+    (`jp.seraf.ktn.syndocal-siw`).
+  - On `4bead66c`, the build took 6 min 52 s with 0 warnings.
+    `syndocal.exe` is 70,638,592 bytes, SHA-256
+    `0d2233ec71b3cf5c52b230f788c8dcbfeb09542754a68f3309ad1a05f32d9cdc`.
+    It opened the same single maximized, responding window and exited 0.
+
+## Multi-cable USB-DMX (later 2026-10-14)
+
+Owner input: two or more FTDI cables, with each universe on its own
+cable. The plan is in [MULTI_USB_DMX_PLAN_2026-10-14.md](MULTI_USB_DMX_PLAN_2026-10-14.md).
+
+The two open owner questions were resolved with the fail-closed defaults:
+
+- the Universe 0 Unity-mirror coupling is unchanged;
+- S0 stays global, so a fault on one cable zeros every cable and route.
+
+Commits:
+
+- **Phase 1, `4bead66c` + `21e4a92c` (engine/io):**
+  - `OpenDmxSafetyWriteGate::device_gate()` gives each cable its own write
+    mutex and zero holds, but a shared S0 latch.
+  - Up to 3 independent cables for Universes 1–32767.
+  - Each cable starts zero-first and is kept only after its physical zero
+    receipt.
+  - A fault engages global S0, and S0 cannot be released while any cable
+    fault is latched.
+  - A joined faulted cable can be taken out of service under S0.
+  - Managed fail-stop and retirement stop or fault the cables; a faulted
+    or detached cable keeps them InDoubt.
+  - Engine commands reuse the Universe 0 variants with a `universe`
+    field, so the engine command inventory is unchanged.
+- **Phase 2, `deecf6d7` + `06fd5436` (protocol/Tauri):**
+  - OutputControl actions `EnableUsbDmxUniverseRoute` /
+    `StopUsbDmxUniverseRoute` carry {universe, lease}, with canonical
+    tags 27 and 28.
+  - Cable bindings live in a separate machine-local file,
+    `usb-dmx-universe-bindings-v1.json`.
+  - Commands: `get_`, `select_` and `clear_usb_dmx_universe_binding_v1`
+    / `get_usb_dmx_universes_v1`, plus
+    `enable_`/`stop_usb_dmx_universe_route_v1`.
+  - The Universe 0 cable and the universe cables are kept disjoint at
+    bind time and at start (Tauri and engine). An unreadable binding file
+    on either side fails closed.
+  - Inventories:
+    - Tauri routes 572;
+    - frontend invokes 492;
+    - registry 1674, sources 1707;
+    - canonical ops 76, OutputControl ops 28.
+- **Phase 3, `6ad2f3e2` (UI):**
+  - A "USB-DMX cables" section in Setup > I/O > DMX, between Show DMX and
+    the network universes.
+  - It shows one row per universe with state and Start / Stop (S0) /
+    Remove, plus an add row with Rescan.
+  - Follow-up `b44c8d56`:
+    - rows also come from running or faulted engine cables;
+    - the last known state is shown as stale when a read fails;
+    - Start needs the existing Both lease (Prepare first);
+    - the status command is async.
+
+Evidence:
+
+- io: 29 `serial_dmx` tests pass, including the device-gate test (shared
+  S0, separate holds, a wedged A does not block B).
+- Engine: 10 `independent_usb_dmx` tests:
+  - zero-first start, with each cable carrying its own universe;
+  - a fault on B zeros A and blocks release until B is stopped;
+  - rejections;
+  - ownership loss;
+  - configured retirement;
+  - exact-show refusal;
+  - re-arm after a failed first zero;
+  - B's start never zeros a live A;
+  - a faulted cable is not absent;
+  - one cable never serves Universe 0 and another universe.
+- Full engine lib: 1127 passed. The only failure was the known
+  wall-clock stress threshold, which passes alone.
+- Protocol: 265 passed, including the tag 27/28 shape, forged fields,
+  range checks and receipts.
+- Tauri: 5 `usb_dmx` tests (store, rejections, fail-closed parsing,
+  disjointness, exact restore) and 42 `control_plane` tests pass.
+  `project_replacement_control_plane_legacy_open_matches_acknowledged_engine_persistence`
+  stays intermittent under parallel runs and passed twice alone.
+- App checks:
+  - check:release:static, check:localization (100%),
+    check-dmx-show-setup and check-usb-dmx-platform-browser pass;
+  - viewport `--setup-dmx-only` passes at 1920x1080, 1920x1032,
+    2048x1152, 1366x768 and 1280x720.
+  - check:network-dmx-routes needs Playwright's bundled browser, which is
+    not installed on this machine.
+- Reviews: every phase was reviewed independently, and every
+  blocking finding was fixed before push.
+  - Phase 1 found two blocking defects, fixed in `21e4a92c`:
+    - a faulted cable counted as absent in fail-stop proofs;
+    - out-of-service left a slot that could not be re-armed.
+  - Phase 2 found two blocking defects, fixed in `06fd5436`:
+    - an unreadable Universe 0 file skipped the disjointness check;
+    - disjointness was checked only when binding.
+  - Phase 3 found no blocking defect. Its should-fix items are in
+    `b44c8d56`:
+    - rows and Stop are kept from engine slots and stale state;
+    - Start does not enable output by itself;
+    - the status poll runs off the UI thread.
+- Windows native gate: on `6ad2f3e2`, `tauri build --no-bundle` took
+  6 min 12 s with 0 warnings.
+  - `syndocal.exe` is 70,829,056 bytes, SHA-256
+    `674b9d31bdca5768af463ffbd2d74db087684e308eb0147942277e8ddf944e4f`.
+  - One user-facing `Syndocal` window opened, maximized (`showCmd=3`) and
+    responding, and exited 0.
+  - The gate was rerun on `b44c8d56` before that push (async status
+    command): the build took 3 min 55 s with 0 warnings. `syndocal.exe` is 71,300,608 bytes, SHA-256 `3fc5e2bc2aef515ef3fcd5b06fbcc745a7318eb878c5bae79f7e293a5c3634f4`; it opened one maximized, responding window and exited 0.
+
+Not yet verified: physical output on two FTDI cables. Use
+[PHYSICAL_TEST_DAY_RUNBOOK_2026-10-14.md](PHYSICAL_TEST_DAY_RUNBOOK_2026-10-14.md)
+blocks C–E with Universe 0 on cable A and Universe 1 on cable B:
+
+- both cables should run at about 32.5 fps at once;
+- unplugging B should put everything to S0 and A to zeros;
+- B is then re-armed or taken out of service, and S0 is released;
+- run New/Open with both cables.
