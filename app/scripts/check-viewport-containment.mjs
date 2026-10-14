@@ -833,6 +833,7 @@ class CdpClient {
     this.socket = null;
     this.closedReason = null;
     this.runtimeExceptions = [];
+    this.autoAcceptedBeforeUnloadCount = 0;
   }
 
   async connect() {
@@ -878,6 +879,21 @@ class CdpClient {
       if (data.method === "Runtime.exceptionThrown") {
         const detail = data.params?.exceptionDetails;
         this.runtimeExceptions.push(detail?.exception?.description ?? detail?.text ?? "runtime exception");
+        return;
+      }
+      // A dirty project prompts on every navigation. A beforeunload prompt
+      // that no flow is waiting for would block Page.navigate until it times
+      // out, so accept it; flows that assert the prompt register a waiter
+      // first and keep handling it themselves.
+      if (
+        data.method === "Page.javascriptDialogOpening"
+        && data.params?.type === "beforeunload"
+        && !this.eventWaiters.has(data.method)
+      ) {
+        this.autoAcceptedBeforeUnloadCount += 1;
+        const id = this.nextId;
+        this.nextId += 1;
+        this.socket.send(JSON.stringify({ id, method: "Page.handleJavaScriptDialog", params: { accept: true } }));
         return;
       }
       if (data.method && this.eventWaiters.has(data.method)) {
@@ -35618,7 +35634,10 @@ async function runFxVisualViewport(client, viewport) {
       const canvas = document.querySelector(
         "[data-scene-settings] .moveEffectPathCanvas",
       );
-      canvas?.scrollIntoView({ block: "center", inline: "nearest" });
+      // On short desks the canvas is taller than the Scene Settings column;
+      // bring the dragged point itself into view, as an operator would.
+      const handle = canvas?.querySelector(".moveEffectPointHandle");
+      (handle ?? canvas)?.scrollIntoView({ block: "center", inline: "nearest" });
       await new Promise((resolveFrame) =>
         requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     });
@@ -35629,6 +35648,10 @@ async function runFxVisualViewport(client, viewport) {
 
   await client.send("Page.navigate", { url: fixtureUrl("fx-visual") });
   await waitForApp(client);
+  // The reload boots into Control > Live; the Scene Matrix edit strips are
+  // owned by Control > Edit, as at the start of this run.
+  await clickWorkspaceOption(client, "control");
+  await selectControlSurface(client, "edit");
   await clickSceneSettingsStrip(client, '[data-scene-matrix-edit-strip="401"]');
   await clickSceneSettingsTarget(client, '[data-scene-settings-surface-control="fx"]');
   await clickVisibleByText(client, "[data-scene-fx-chooser] .effectFamilyChooser button", "STEPS");
@@ -35690,11 +35713,24 @@ async function runFxVisualViewport(client, viewport) {
 
   await client.send("Page.navigate", { url: fixtureUrl("fx-visual") });
   await waitForApp(client);
+  await clickWorkspaceOption(client, "control");
+  await selectControlSurface(client, "edit");
   await clickSceneSettingsStrip(client, '[data-scene-matrix-edit-strip="401"]');
   await clickSceneSettingsTarget(client, '[data-scene-settings-surface-control="fx"]');
   await waitForClientCondition(client, "document.querySelectorAll('[data-scene-fx-chooser] .effectFamilyChooser button').length === 8", "T16 Scene FX chooser reload");
   await clickVisibleByText(client, "[data-scene-fx-chooser] .effectFamilyChooser button", "TIMELINE");
   await sleep(180);
+  // Since the one-row Timeline header (9be5479b) the child-Timeline return
+  // control lives in the Timeline tools disclosure; open it as an operator
+  // would before measuring (check-timeline-authority-browser does the same).
+  await evaluatePageFunction(client, async () => {
+    const disclosure = document.querySelector("details.timelineToolsDisclosure");
+    if (disclosure instanceof HTMLDetailsElement && !disclosure.open) {
+      disclosure.querySelector(":scope > summary")?.click();
+    }
+    await new Promise((resolveFrame) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+  });
   const superSceneNavigation = await evaluatePageFunction(client, () => ({
     breadcrumbVisible: (() => {
       const breadcrumb = document.querySelector("[data-timeline-breadcrumb]");
@@ -36676,12 +36712,10 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
   });
   const position = multipleCategoryStates.Position;
   const color = multipleCategoryStates.Color;
+  // Since the unified left rail (2ee235d2), every category, Fader included,
+  // keeps the same eight-entry rail (Dimmer..Other plus Fader) on the left.
   const categoryRailLayoutIsExpected = (category, state) =>
-    category === "Fader"
-      ? state.categoryRailButtonCount === 0 &&
-        state.categoryRailWidth === 0 &&
-        state.categoryRailHeight === 0
-      : state.categoryRailButtonCount === 7 &&
+      state.categoryRailButtonCount === 8 &&
         state.categoryRailWidth >= 85.5 &&
         state.categoryRailWidth <= 86.5 &&
         state.categoryRailButtonLeftSpread <= 1 &&
@@ -36779,7 +36813,7 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       && Math.abs(multiple.sharedHeaderHeight - 34) <= 1
     ],
     ["legacyEditorHiddenForMultipleSelection", () => multiple.legacyFaderGridCount === 0 && multiple.legacyDimmerPanelCount === 0],
-    ["categoryRailPreservedForMultipleSelection", () => multiple.categoryRailButtonCount === 7 && multiple.activeCategoryLabel.includes("Dimmer")],
+    ["categoryRailPreservedForMultipleSelection", () => multiple.categoryRailButtonCount === 8 && multiple.activeCategoryLabel.includes("Dimmer")],
     ["allMultipleSelectionCategoriesKeepTheRailLeftAndVertical", () =>
       Object.entries(multipleCategoryStates).every(([category, state]) =>
         categoryRailLayoutIsExpected(category, state)
@@ -36940,7 +36974,7 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       && single.compactReadout.includes(" · U0 A")
       && !single.compactReadout.includes("GENERIC 1")
     ],
-    ["categoryRailPreservedForSingleSelection", () => single.categoryRailButtonCount === 7 && single.activeCategoryLabel.includes("Dimmer")],
+    ["categoryRailPreservedForSingleSelection", () => single.categoryRailButtonCount === 8 && single.activeCategoryLabel.includes("Dimmer")],
     ["allSingleSelectionCategoriesKeepTheRailLeftAndVertical", () =>
       Object.entries(singleCategoryStates).every(([category, state]) =>
         categoryRailLayoutIsExpected(category, state)
@@ -39378,6 +39412,8 @@ async function main() {
           failedChecks: result.failedChecks,
           initial: result.initial,
           editors: result.editors,
+          stepsNavigation: result.stepsNavigation,
+          superSceneNavigation: result.superSceneNavigation,
           move: result.move,
         })))}`);
       }

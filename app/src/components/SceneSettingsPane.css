@@ -133,3 +133,11 @@
 .sceneSettingsPane:not([data-scene-settings-wide="true"]) .sceneSettingsScroller {
   grid-auto-rows: max-content;
 }
+
+/* On short desks the Scene Settings column is only ~220 px tall; a pinned
+   dock would cover half of it, so it returns to the end of the form there. */
+@media (max-height: 860px) {
+  .sceneSettingsPane .sceneFxEditor .effectActionDock {
+    position: static;
+  }
+}
