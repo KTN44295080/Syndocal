@@ -1769,6 +1769,16 @@ export type VideoRecordingState = "Idle" | "Preparing" | "Recording" | "Finalizi
 /** Why the current or last take ended (DEC-RECORD-OWN-001). */
 export type VideoRecordingEndReason = "operator_stop" | "ownership_revoked" | "fault";
 
+export type TakeoverRecordingState = "idle" | "pending" | "blocked" | "started" | "failed" | "cancelled";
+
+/** After Take Over and Arm, the previous Primary's recording continues here. */
+export interface TakeoverRecordingStatus {
+  state: TakeoverRecordingState;
+  folder: string | null;
+  reason: string | null;
+  predecessor_take_id: string | null;
+}
+
 export interface VideoRecordingStatus {
   /** Additive lifecycle truth; legacy peers may omit it and use active/error fallback. */
   state?: VideoRecordingState;
@@ -1793,6 +1803,10 @@ export interface VideoRecordingStatus {
   /** The video output ownership epoch the current or last take was admitted in. */
   owner_epoch?: number | null;
   end_reason?: VideoRecordingEndReason | null;
+  /** Why ownership was revoked when the gate alone does not say. */
+  end_detail?: string | null;
+  /** The takeover take (DEC-RECORD-OWN-001 phase 3). */
+  takeover?: TakeoverRecordingStatus | null;
   /** Whether this PC may start a take now; only the video output owner records. */
   admission_allowed?: boolean;
   admission_reason?: string | null;

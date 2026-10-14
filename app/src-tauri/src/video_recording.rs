@@ -1,7 +1,7 @@
 //! FFmpeg recording orchestration; UI/runtime ownership stays in the application adapter.
 use super::{
-    capture_video_output_preview_effect_snapshot, recording_artifact, recording_receipts,
-    VideoRecordingEndReason, VideoRecordingState, VideoRecordingStatus,
+    capture_video_output_preview_effect_snapshot, recording_artifact, recording_lease,
+    recording_receipts, VideoRecordingEndReason, VideoRecordingState, VideoRecordingStatus,
 };
 use engine::EngineHandle;
 use protocol::VideoOutputId;
@@ -158,6 +158,8 @@ pub(super) struct VideoOutputRecordingContext {
     pub(super) owner_epoch: u64,
     /// The receipt journal directory (DEC-RECORD-OWN-001 phase 2).
     pub(super) receipts: PathBuf,
+    /// What the recording lease sees of Standby sync (phase 3).
+    pub(super) lease_observe: recording_lease::LeaseObserver,
     pub(super) input_sources: RecordingExternalFrameSources,
     pub(super) output_id: VideoOutputId,
     pub(super) path: PathBuf,
@@ -174,6 +176,7 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
         engine,
         owner_epoch,
         receipts,
+        lease_observe,
         input_sources,
         output_id,
         path,
@@ -194,7 +197,10 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
     // No take records before its start receipt is durable; from here on
     // every exit writes exactly one end receipt.
     let started_unix_ms = recording_receipts::take_start_unix_ms(
-        status.lock().ok().and_then(|current| current.started_unix_ms),
+        status
+            .lock()
+            .ok()
+            .and_then(|current| current.started_unix_ms),
     );
     let take_id = recording_receipts::new_take_id(started_unix_ms);
     let journal = match recording_receipts::TakeJournal::begin(
@@ -220,9 +226,31 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
             return;
         }
     };
+    let audio_requested = status
+        .lock()
+        .map(|current| current.audio_requested)
+        .unwrap_or(false);
     if let Ok(mut current) = status.lock() {
-        current.take_id = Some(take_id);
+        current.take_id = Some(take_id.clone());
     }
+    // A Primary's take renews a lease in the sync folder; a take that is
+    // already superseded, or whose first lease cannot be written, never
+    // records (phase 3).
+    let lease = match recording_lease::RecordingLeaseKeeper::start(
+        recording_lease::LeaseTake {
+            take_id,
+            output_id,
+            frame_rate,
+            audio_requested,
+        },
+        lease_observe,
+    ) {
+        Ok(lease) => lease,
+        Err(error) => {
+            end_failed_take(&status, &mut artifact, journal, error);
+            return;
+        }
+    };
     let ffmpeg = env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
     let mut command = video_recording_ffmpeg_command(
         ffmpeg,
@@ -272,12 +300,20 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
     let mut frames_written = 0_u64;
     let mut recording_error = None;
     let mut ownership_revoked = false;
+    let mut lease_revocation = None;
     let frame_interval = Duration::from_secs_f64(1.0 / frame_rate as f64);
     let mut next_frame_at = Instant::now();
     while !stop.load(Ordering::Acquire) {
         // Re-prove video ownership in the admitted epoch for every frame. The
         // permit is held only for the snapshot capture (never the render or
         // the encoder write), so it cannot delay an ownership transition.
+        // A Primary's take also ends when its recording lease does (another
+        // PC took over, split-brain, or the lease could not be renewed).
+        if let Err(reason) = lease.fence().check(Instant::now()) {
+            ownership_revoked = true;
+            lease_revocation = Some(reason);
+            break;
+        }
         let Ok(permit) = engine.acquire_video_output_in_epoch(owner_epoch) else {
             ownership_revoked = true;
             break;
@@ -343,6 +379,12 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
     }
     drop(renderer);
     drop(stdin);
+    // Ends the lease promptly, so a waiting takeover take can start.
+    drop(lease);
+    let revocation_detail = lease_revocation.clone();
+    if let (Some(reason), Ok(mut current)) = (lease_revocation, status.lock()) {
+        current.end_detail = Some(reason);
+    }
     let end_reason = if recording_error.is_some() {
         VideoRecordingEndReason::Fault
     } else if ownership_revoked {
@@ -361,10 +403,11 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
         }
     }
     if ownership_revoked && frames_written == 0 && recording_error.is_none() {
-        recording_error = Some(
-            "Video output ownership changed before the first frame; nothing was recorded"
+        recording_error = Some(match revocation_detail {
+            Some(reason) => format!("{reason}; nothing was recorded"),
+            None => "Video output ownership changed before the first frame; nothing was recorded"
                 .to_string(),
-        );
+        });
     }
     let encoded = match recording_error {
         Some(error) => encoder.fail(error),

@@ -1781,6 +1781,25 @@ const japaneseText: Record<string, string> = {
   "Recording needs this PC to own video output.": "録画にはこのPCが映像出力を担当している必要があります。",
   "This PC runs as Standby; only the Primary records.": "このPCはStandbyで動作中です。録画できるのはPrimaryだけです。",
   "Standby sync is changing; recording waits until it settles.": "Standby同期を切り替え中です。完了するまで録画は開始できません。",
+  "Takeover recording folder": "引継ぎ録画フォルダー",
+  "Takeover recording": "引継ぎ録画",
+  "After Take Over and Arm, the previous Primary's recording continues here once its take has ended.":
+    "Take OverしてArmすると、前のPrimaryの録画が終わり次第、このフォルダーで録画を自動的に引き継ぎます。",
+  "Not set: a takeover cannot continue the recording": "未設定: 引継ぎ時に録画を継続できません",
+  "Waiting for Arm": "Armを待っています",
+  "Waiting for the previous Primary's take to end": "前のPrimaryの録画が終わるのを待っています",
+  "Choose a takeover recording folder to continue the previous Primary's recording":
+    "前のPrimaryの録画を引き継ぐには、引継ぎ録画フォルダーを選んでください",
+  "Another project was opened after Take Over; the takeover take was cancelled":
+    "Take Over後に別のプロジェクトが開かれたため、引継ぎ録画を取り消しました",
+  "Cancelled by the operator": "オペレーターが取り消しました",
+  "Takeover take started": "引継ぎ録画を開始しました",
+  "This PC runs as Standby again; the takeover take was cancelled": "このPCが再びStandbyになったため、引継ぎ録画を取り消しました",
+  "A recording was started on this PC; the takeover take is not needed":
+    "このPCで録画が開始されたため、引継ぎ録画は不要になりました",
+  Pending: "待機中",
+  Failed: "失敗",
+  Cancelled: "取り消し済み",
   "Two Primary sessions were detected; recording stays off until only one remains.":
     "Primaryが2台検出されました。1台になるまで録画は停止したままです。",
   "Hash mismatch": "ハッシュ不一致",

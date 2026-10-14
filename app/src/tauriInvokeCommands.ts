@@ -92,6 +92,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "commit_programmer",
   "commit_project_transaction",
   "commit_timeline_loop_runtime_v1",
+  "configure_takeover_recording_v1",
   "connect_midi_clock",
   "connect_midi_control",
   "connect_midi_feedback",

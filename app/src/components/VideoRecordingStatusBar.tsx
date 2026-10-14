@@ -17,14 +17,19 @@ export function VideoRecordingStatusBar(props: VideoRecordingStatusBarProps) {
   // refuses a start anyway, this only keeps the button truthful.
   const recordingBlocked = createMemo(() => !recordingInProgress()
     && props.recordingStatus.admission_allowed === false);
+  const takeoverWaiting = createMemo(() => props.recordingStatus.takeover?.state === "pending"
+    || props.recordingStatus.takeover?.state === "blocked");
   const recordingStatusText = createMemo(() => recordingInProgress()
     ? `${recordingState()} · ${props.recordingStatus.dropped_frames} dropped · ${props.recordingStatus.frames_written} frames · ${props.recordingStatus.width}x${props.recordingStatus.height} @ ${props.recordingStatus.frame_rate}fps · ${props.recordingStatus.audio_included ? `${props.recordingStatus.audio_track_count} audio` : "silent"}`
-    : recordingState() === "Complete"
-      ? `${props.recordingStatus.end_reason === "ownership_revoked" ? "Ended: video output ownership changed" : "Complete"} · ${props.recordingStatus.frames_written} frames · ${props.recordingStatus.path ?? "artifact published"}${props.recordingStatus.last_error ? ` · ${props.recordingStatus.last_error}` : ""}`
-      : props.recordingStatus.last_error
-        ?? (recordingBlocked()
-          ? props.recordingStatus.admission_reason ?? "Recording needs this PC to own video output."
-          : `Ready · records H.264 MP4${props.programAudioEnabled ? " and active Program audio" : " without audio"}.`));
+    // A waiting takeover take matters most: it explains why nothing records yet.
+    : takeoverWaiting()
+      ? `Takeover recording ${props.recordingStatus.takeover?.state} · ${props.recordingStatus.takeover?.reason ?? ""}`
+      : recordingState() === "Complete"
+        ? `${props.recordingStatus.end_reason === "ownership_revoked" ? `Ended: ${props.recordingStatus.end_detail ?? "video output ownership changed"}` : "Complete"} · ${props.recordingStatus.frames_written} frames · ${props.recordingStatus.path ?? "artifact published"}${props.recordingStatus.last_error ? ` · ${props.recordingStatus.last_error}` : ""}`
+        : props.recordingStatus.last_error
+          ?? (recordingBlocked()
+            ? props.recordingStatus.admission_reason ?? "Recording needs this PC to own video output."
+            : `Ready · records H.264 MP4${props.programAudioEnabled ? " and active Program audio" : " without audio"}.`));
 
   return (
     <div class={`videoRecordingBar ${recordingInProgress() ? "active" : ""}`} aria-live="polite">

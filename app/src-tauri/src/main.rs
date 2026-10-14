@@ -323,8 +323,10 @@ mod serial_dmx_machine;
 #[cfg(test)]
 mod serial_show_dmx_route_tests;
 mod show_serial_dmx_route;
+mod recording_lease;
 mod recording_ownership;
 mod recording_receipts;
+mod takeover_recording;
 mod usb_dmx_universes;
 mod network_dmx_routes;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
@@ -3126,6 +3128,9 @@ struct AppState {
     video_preview: Arc<Mutex<AppVideoPreviewRenderer>>,
     native_thumbnail_work: native_thumbnail_work::NativeThumbnailWork,
     video_recording: Mutex<VideoRecordingRuntime>,
+    /// The takeover take waiting to continue a predecessor's recording
+    /// (DEC-RECORD-OWN-001 phase 3).
+    takeover_recording: Mutex<takeover_recording::TakeoverRecorder>,
     external_video_transport: Arc<Mutex<video::ExternalVideoTransportRuntime>>,
     external_video_transport_events: Arc<Mutex<Vec<ExternalVideoTransportDriverEvent>>>,
     capture_transport: Arc<Mutex<capture_transport::CaptureTransportState>>,
@@ -25269,6 +25274,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "close_pane_window",
     "close_video_output_window",
     "commit_timeline_loop_runtime_v1",
+    "configure_takeover_recording_v1",
     "connect_midi_clock",
     "connect_midi_control",
     "connect_midi_feedback",
@@ -64356,7 +64362,339 @@ fn take_over_standby_core_with_optional_lease(
         .lock()
         .map_err(|_| "Standby synchronization lock was poisoned".to_string())?;
     stop_standby_sync_runtime(&mut runtime);
+    drop(runtime);
+    arm_takeover_recording(state, &directory, &status_snapshot, force);
     Ok(result)
+}
+
+/// DEC-RECORD-OWN-001 phase 3: tell every superseded Primary that its take
+/// must end, and continue a predecessor's recording once it has.
+fn arm_takeover_recording(
+    state: &AppState,
+    directory: &Path,
+    status: &StandbySyncStatus,
+    force: bool,
+) {
+    // The followed Primary first, then any other active session.
+    let mut sessions = status.session_id.iter().cloned().collect::<Vec<_>>();
+    for session in &status.active_primary_sessions {
+        if !sessions.contains(session) {
+            sessions.push(session.clone());
+        }
+    }
+    sessions.retain(|session| recording_lease::valid_session_id(session));
+    let (predecessors, unreadable) =
+        takeover_recording::recording_predecessors(directory, &sessions);
+    let takeover = recording_lease::takeover_record(
+        standby_session_id(),
+        sessions,
+        predecessors.clone(),
+        force,
+    );
+    let receipt = recording_lease::write_takeover(directory, &takeover).map(|_| ());
+    let mut watched_sessions = predecessors
+        .iter()
+        .map(|lease| lease.session_id.clone())
+        .collect::<Vec<_>>();
+    watched_sessions.extend(unreadable.iter().map(|(session, _)| session.clone()));
+    let project_epoch = lock_project_coordinator(state).map(|coordinator| coordinator.epoch);
+    let app = state
+        .app_handle
+        .lock()
+        .ok()
+        .and_then(|handle| handle.clone());
+    let mut recorder = state
+        .takeover_recording
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(first) = predecessors.first() else {
+        let mut status = takeover_recording::TakeoverRecordingStatus::default();
+        if let Some((_, error)) = unreadable.first() {
+            // Never silent: the old Primary may have been recording.
+            status.state = takeover_recording::TakeoverRecordingState::Failed;
+            status.reason = Some(format!(
+                "The previous Primary's recording lease could not be read ({error}); start a recording manually if one was running"
+            ));
+        } else if let Err(error) = &receipt {
+            status.reason = Some(format!(
+                "Nothing was recording; the takeover receipt could not be written: {error}"
+            ));
+        }
+        recorder.supersede(status);
+        return;
+    };
+    let pending = takeover_recording::TakeoverRecordingStatus {
+        state: takeover_recording::TakeoverRecordingState::Pending,
+        folder: None,
+        reason: Some("Waiting for Arm".to_string()),
+        predecessor_take_id: Some(first.take_id.clone()),
+    };
+    let (Ok(project_epoch), Some(app)) = (project_epoch, app) else {
+        recorder.supersede(takeover_recording::TakeoverRecordingStatus {
+            state: takeover_recording::TakeoverRecordingState::Failed,
+            reason: Some("The takeover take could not be armed".to_string()),
+            ..pending
+        });
+        return;
+    };
+    let generation = recorder.supersede(pending);
+    let plan = takeover_recording::TakeoverPlan {
+        directory: directory.to_path_buf(),
+        predecessors,
+        watched_sessions,
+        takeover,
+        project_epoch,
+    };
+    drop(recorder);
+    if let Err(error) = std::thread::Builder::new()
+        .name("syndocal-takeover-recorder".to_string())
+        .spawn(move || run_takeover_recorder(app, plan, receipt.err(), generation))
+    {
+        let mut recorder = state
+            .takeover_recording
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        recorder.finish(
+            generation,
+            takeover_recording::TakeoverRecordingState::Failed,
+            Some(format!("The takeover recorder could not start: {error}")),
+        );
+    }
+}
+
+const TAKEOVER_RECORDER_POLL: Duration = Duration::from_millis(500);
+/// Start refusals retried before the takeover take is Failed.
+const TAKEOVER_START_ATTEMPTS: u32 = 3;
+
+/// Whether this PC runs Standby sync as Standby again.
+fn running_as_standby(state: &AppState) -> bool {
+    state
+        .standby_sync
+        .try_lock()
+        .ok()
+        .and_then(|runtime| {
+            runtime
+                .status
+                .lock()
+                .ok()
+                .map(|status| status.running && status.role == Some(StandbySyncRole::Standby))
+        })
+        .unwrap_or(false)
+}
+
+fn run_takeover_recorder(
+    app: tauri::AppHandle,
+    plan: takeover_recording::TakeoverPlan,
+    mut receipt_error: Option<String>,
+    generation: u64,
+) {
+    let mut probe = takeover_recording::PredecessorProbe::default();
+    let mut start_attempts = 0_u32;
+    loop {
+        std::thread::sleep(TAKEOVER_RECORDER_POLL);
+        let state = app.state::<AppState>();
+        if receipt_error.is_some() {
+            // Retried until the old Primary can see it; written means it
+            // reads back intact.
+            receipt_error = recording_lease::write_takeover(&plan.directory, &plan.takeover)
+                .err()
+                .filter(|_| {
+                    !recording_lease::takeover_written(&plan.directory, &plan.takeover.takeover_id)
+                });
+        }
+        let folder = takeover_recording_folder(&app);
+        let project_epoch = lock_project_coordinator(&state)
+            .map(|coordinator| coordinator.epoch)
+            .unwrap_or(u64::MAX);
+        let admission = recording_ownership::admit_recording(&state);
+        let predecessor = probe.observe(&plan, Instant::now());
+        let recording_active = state
+            .video_recording
+            .lock()
+            .ok()
+            .and_then(|runtime| runtime.status_snapshot().ok())
+            .is_some_and(|status| status.active);
+        let step = if running_as_standby(&state) {
+            takeover_recording::TakeoverStep::Cancel(
+                "This PC runs as Standby again; the takeover take was cancelled".to_string(),
+            )
+        } else if recording_active {
+            // The operator already records here; a second take is not needed.
+            takeover_recording::TakeoverStep::Cancel(
+                "A recording was started on this PC; the takeover take is not needed".to_string(),
+            )
+        } else {
+            match &folder {
+                Err(reason) => takeover_recording::TakeoverStep::Wait(
+                    takeover_recording::TakeoverRecordingState::Blocked,
+                    reason.clone(),
+                ),
+                Ok(folder) => takeover_recording::decide(
+                    &plan,
+                    takeover_recording::TakeoverObservation {
+                        folder: folder.as_deref(),
+                        project_epoch,
+                        admission: admission.clone().map(|_| ()),
+                        predecessor,
+                        receipt_error: receipt_error.as_deref(),
+                    },
+                ),
+            }
+        };
+        // Held across the start, so a Cancel cannot slip in between.
+        let mut recorder = state
+            .takeover_recording
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if recorder.generation != generation {
+            return;
+        }
+        match step {
+            takeover_recording::TakeoverStep::Wait(next, reason) => {
+                recorder.status.state = next;
+                recorder.status.reason = Some(reason);
+            }
+            takeover_recording::TakeoverStep::Cancel(reason) => {
+                recorder.finish(
+                    generation,
+                    takeover_recording::TakeoverRecordingState::Cancelled,
+                    Some(reason),
+                );
+                return;
+            }
+            takeover_recording::TakeoverStep::Start => {
+                let (Ok(Some(folder)), Ok(admission)) = (folder, admission) else {
+                    continue;
+                };
+                match start_takeover_take(&app, &state, &plan, &folder, admission) {
+                    Ok(_) => {
+                        recorder.finish(
+                            generation,
+                            takeover_recording::TakeoverRecordingState::Started,
+                            None,
+                        );
+                        return;
+                    }
+                    // A transient refusal (ownership moved between two
+                    // polls, a worker still finishing) is retried.
+                    Err(error) if start_attempts < TAKEOVER_START_ATTEMPTS => {
+                        start_attempts += 1;
+                        recorder.status.state = takeover_recording::TakeoverRecordingState::Pending;
+                        recorder.status.reason = Some(error);
+                    }
+                    Err(error) => {
+                        recorder.finish(
+                            generation,
+                            takeover_recording::TakeoverRecordingState::Failed,
+                            Some(error),
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn start_takeover_take(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    plan: &takeover_recording::TakeoverPlan,
+    folder: &str,
+    admission: recording_ownership::RecordingAdmission,
+) -> Result<Option<VideoRecordingStatus>, String> {
+    let predecessor = plan
+        .predecessors
+        .first()
+        .ok_or_else(|| "The takeover take has no predecessor to continue".to_string())?;
+    let output_id = predecessor.output_id;
+    let label = recording_output_label(state, output_id)?;
+    let path = PathBuf::from(folder).join(format!(
+        "{}-takeover-{}.mp4",
+        sanitize_file_name_component(&label),
+        current_unix_ms()
+    ));
+    begin_video_output_recording(
+        app,
+        state,
+        VideoRecordingStart {
+            output_id,
+            frame_rate: predecessor.frame_rate.clamp(1, 60),
+            audio_requested: predecessor.audio_requested,
+            path,
+            admission,
+        },
+    )
+}
+
+fn takeover_recording_settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_local_data_dir()
+        .map(|directory| takeover_recording::settings_path(&directory))
+        .map_err(|error| format!("No app data directory for takeover recording: {error}"))
+}
+
+/// The configured takeover folder; an error when it cannot be used.
+fn takeover_recording_folder(app: &tauri::AppHandle) -> Result<Option<String>, String> {
+    let settings = takeover_recording::load_settings(&takeover_recording_settings_path(app)?)?;
+    match settings.folder {
+        Some(folder) if !Path::new(&folder).is_dir() => Err(format!(
+            "The takeover recording folder was not found: {folder}"
+        )),
+        folder => Ok(folder),
+    }
+}
+
+/// The takeover recorder's status with the configured folder.
+pub(crate) fn takeover_recording_status(
+    state: &AppState,
+) -> takeover_recording::TakeoverRecordingStatus {
+    let mut status = state
+        .takeover_recording
+        .lock()
+        .map(|recorder| recorder.status.clone())
+        .unwrap_or_default();
+    let app = state
+        .app_handle
+        .lock()
+        .ok()
+        .and_then(|handle| handle.clone());
+    status.folder = app
+        .as_ref()
+        .and_then(|app| takeover_recording_settings_path(app).ok())
+        .and_then(|path| takeover_recording::load_settings(&path).ok())
+        .and_then(|settings| settings.folder);
+    status
+}
+
+#[tauri::command]
+fn configure_takeover_recording_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    action: takeover_recording::TakeoverRecordingAction,
+) -> Result<takeover_recording::TakeoverRecordingStatus, String> {
+    match action {
+        takeover_recording::TakeoverRecordingAction::ChooseFolder => {
+            if let Some(folder) = parented_file_dialog(&window).pick_folder() {
+                takeover_recording::persist_settings(
+                    &takeover_recording_settings_path(&app)?,
+                    Some(folder.to_string_lossy().to_string()),
+                )?;
+            }
+        }
+        takeover_recording::TakeoverRecordingAction::ClearFolder => {
+            takeover_recording::persist_settings(&takeover_recording_settings_path(&app)?, None)?;
+        }
+        takeover_recording::TakeoverRecordingAction::CancelPending => {
+            let mut recorder = state
+                .takeover_recording
+                .lock()
+                .map_err(|_| "Takeover recording lock was poisoned".to_string())?;
+            recorder.cancel_pending();
+        }
+    }
+    Ok(takeover_recording_status(&state))
 }
 
 #[tauri::command]
@@ -78564,32 +78902,14 @@ fn start_video_output_recording(
     frame_rate: Option<u32>,
     include_audio: Option<bool>,
 ) -> Result<Option<VideoRecordingStatus>, String> {
-    let snapshot = state.engine.video_snapshot();
-    let output = snapshot
-        .outputs
-        .iter()
-        .find(|output| output.id == output_id)
-        .ok_or_else(|| format!("Video output {output_id} was not found"))?;
-    if output.width == 0 || output.height == 0 || output.width > 4096 || output.height > 4096 {
-        return Err("Recording output dimensions must be between 1 and 4096 pixels".to_string());
-    }
+    let label = recording_output_label(&state, output_id)?;
     let frame_rate = frame_rate.unwrap_or(30).clamp(1, 60);
     // Only the video output owner records (DEC-RECORD-OWN-001). Checked
     // before the save dialog, and again after it below.
     let admission = recording_ownership::admit_recording(&state)?;
-    let audio_requested = include_audio.unwrap_or(false);
-    let audio_inputs = if audio_requested {
-        let media_audio = state
-            .media_audio
-            .lock()
-            .map_err(|_| "Media audio state lock was poisoned".to_string())?;
-        recording_audio_inputs(&snapshot, output_id, &media_audio.sources)
-    } else {
-        Vec::new()
-    };
     let default_name = format!(
         "{}-{}.mp4",
-        sanitize_file_name_component(&output.label),
+        sanitize_file_name_component(&label),
         current_unix_ms()
     );
     let Some(path) = parented_file_dialog(&window)
@@ -78599,13 +78919,80 @@ fn start_video_output_recording(
     else {
         return Ok(None);
     };
-    // The dialog can stay open across a role change or project swap.
-    if recording_ownership::admit_recording(&state)? != admission {
+    begin_video_output_recording(
+        window.app_handle(),
+        &state,
+        VideoRecordingStart {
+            output_id,
+            frame_rate,
+            audio_requested: include_audio.unwrap_or(false),
+            path,
+            admission,
+        },
+    )
+}
+
+/// The label of a recordable output.
+fn recording_output_label(state: &AppState, output_id: VideoOutputId) -> Result<String, String> {
+    let snapshot = state.engine.video_snapshot();
+    let output = snapshot
+        .outputs
+        .iter()
+        .find(|output| output.id == output_id)
+        .ok_or_else(|| format!("Video output {output_id} was not found"))?;
+    if output.width == 0 || output.height == 0 || output.width > 4096 || output.height > 4096 {
+        return Err("Recording output dimensions must be between 1 and 4096 pixels".to_string());
+    }
+    Ok(output.label.clone())
+}
+
+/// A take whose target is known: chosen in the save dialog, or the
+/// takeover folder.
+struct VideoRecordingStart {
+    output_id: VideoOutputId,
+    frame_rate: u32,
+    audio_requested: bool,
+    path: PathBuf,
+    admission: recording_ownership::RecordingAdmission,
+}
+
+fn begin_video_output_recording(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    start: VideoRecordingStart,
+) -> Result<Option<VideoRecordingStatus>, String> {
+    let VideoRecordingStart {
+        output_id,
+        frame_rate,
+        audio_requested,
+        path,
+        admission,
+    } = start;
+    // The dialog (or a takeover's wait) can span a role change or project swap.
+    if recording_ownership::admit_recording(state)? != admission {
         return Err(
-            "Video output ownership changed while choosing the file; nothing was recorded"
+            "Video output ownership changed before the take started; nothing was recorded"
                 .to_string(),
         );
     }
+    let snapshot = state.engine.video_snapshot();
+    let output = snapshot
+        .outputs
+        .iter()
+        .find(|output| output.id == output_id)
+        .ok_or_else(|| format!("Video output {output_id} was not found"))?;
+    if output.width == 0 || output.height == 0 || output.width > 4096 || output.height > 4096 {
+        return Err("Recording output dimensions must be between 1 and 4096 pixels".to_string());
+    }
+    let audio_inputs = if audio_requested {
+        let media_audio = state
+            .media_audio
+            .lock()
+            .map_err(|_| "Media audio state lock was poisoned".to_string())?;
+        recording_audio_inputs(&snapshot, output_id, &media_audio.sources)
+    } else {
+        Vec::new()
+    };
     let receipts = recording_receipts::journal_directory()?;
     let mut runtime = state
         .video_recording
@@ -78634,8 +79021,10 @@ fn start_video_output_recording(
         take_id: None,
         owner_epoch: Some(admission.owner_epoch),
         end_reason: None,
+        end_detail: None,
         admission_allowed: true,
         admission_reason: None,
+        takeover: None,
     }));
     let worker_stop = Arc::clone(&stop);
     let worker_status = Arc::clone(&status);
@@ -78649,6 +79038,9 @@ fn start_video_output_recording(
     let engine = state.engine.clone();
     let width = output.width;
     let height = output.height;
+    let lease_app = app.clone();
+    let lease_observe: recording_lease::LeaseObserver =
+        Box::new(move || recording_ownership::lease_observation(&lease_app.state::<AppState>()));
     let worker = std::thread::Builder::new()
         .name("syndocal-video-recorder".to_string())
         .spawn(move || {
@@ -78656,6 +79048,7 @@ fn start_video_output_recording(
                 engine,
                 owner_epoch: admission.owner_epoch,
                 receipts,
+                lease_observe,
                 input_sources,
                 output_id,
                 path,
@@ -91293,6 +91686,7 @@ pub(crate) mod tests {
                 )),
                 native_thumbnail_work: native_thumbnail_work::NativeThumbnailWork::default(),
                 video_recording: Mutex::new(VideoRecordingRuntime::default()),
+                takeover_recording: Mutex::new(takeover_recording::TakeoverRecorder::default()),
                 external_video_transport: Arc::new(Mutex::new(
                     video::ExternalVideoTransportRuntime::new(),
                 )),
@@ -96818,7 +97212,7 @@ pub(crate) mod tests {
             );
         }
         // The extension setter owns its lifecycle authority inside the handler.
-        assert_eq!(runtime_routes.len(), 172);
+        assert_eq!(runtime_routes.len(), 173);
         assert_eq!(
             OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
                 + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),
@@ -132917,6 +133311,7 @@ fn main() {
             )),
             native_thumbnail_work: native_thumbnail_work::NativeThumbnailWork::default(),
             video_recording: Mutex::new(VideoRecordingRuntime::default()),
+            takeover_recording: Mutex::new(takeover_recording::TakeoverRecorder::default()),
             external_video_transport: Arc::new(Mutex::new(
                 video::ExternalVideoTransportRuntime::new(),
             )),
@@ -133595,6 +133990,7 @@ fn main() {
             get_video_runtime_status,
             get_video_preview_diagnostics,
             start_video_output_recording,
+            configure_takeover_recording_v1,
             stop_video_output_recording,
             video_output_recording_status,
             get_video_layer_thumbnail,

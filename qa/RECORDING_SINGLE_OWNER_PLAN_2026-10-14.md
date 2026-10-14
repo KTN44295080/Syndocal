@@ -63,7 +63,8 @@ recording owner, with takeover. It closes part of COV-RECORDING-001.
        recovered in the same pass, and removes lone end receipts. It is
        best effort.
      - More than 50,000 receipts refuses recording with a restart hint.
-3. **Two-PC lease, supersede and takeover take**
+3. **Two-PC lease, supersede and takeover take** (implemented 2026-10-14:
+   `recording_lease.rs`, `takeover_recording.rs`, `configure_takeover_recording_v1`)
    - A 1 Hz recording lease in the shared folder while Primary is
      recording, with TTL < standby stale. The frame loop self-fences on the
      lease deadline.
@@ -75,7 +76,11 @@ recording owner, with takeover. It closes part of COV-RECORDING-001.
    - A forced takeover without evidence needs an explicit operator
      confirmation.
 4. **UI:** owner or blocked reason, take id, end reason, Pending, and the
-   takeover-recording folder in the Standby sync panel.
+   takeover-recording folder in the Standby sync panel. Implemented:
+   - the Record button's reason and end detail in the recording bar;
+   - Pending or Blocked takeover state in the recording bar;
+   - a "Takeover recording folder" row (Browse, Clear, Cancel) in
+     Active / Standby.
 5. **Physical two-PC acceptance:**
    - Standby cannot record.
    - Kill the Primary, then Take Over, Arm, and check that the new take
@@ -88,34 +93,57 @@ recording owner, with takeover. It closes part of COV-RECORDING-001.
 Phases 1 and 3 change runtime and safety behaviour, so each needs an
 independent review and the Windows native gate.
 
-## Phase 3 design notes (2026-10-14)
+## Phase 3 design notes (2026-10-14, as built)
 
 - **Lease file.** A take that observes Standby sync running as Primary binds
-  that sync folder for the rest of the take. It rewrites
-  `recording-lease-<session>.json` every second with a sequence number,
-  take id, output, frame rate and audio flag.
+  that sync folder and session. It rewrites
+  `syndocal-recording-lease-<session>.json` every second with a sequence
+  number, take id, output, frame rate and audio flag.
   - The lease TTL is 3 s, shorter than the 5 s standby stale threshold.
+  - Binding counts as a renewal.
+  - A restarted sync session re-binds the take. The old session's lease
+    is left to go quiet, never marked ended while the take still runs.
+    Receipts are checked in every folder the take was bound to.
+  - When the take really ends, every lease it renewed says `ended`.
   - The binding survives stopping sync, so a Standby never sees a silent
     but live recorder.
 - **Self-fence.** If the last successful renewal is older than the TTL on the
-  recorder's own clock, the frame loop ends the take as
-  `ownership_revoked`. It also ends the take on:
-  - a `recording-takeover-*.json` receipt that supersedes its session;
-  - split-brain (both Primaries fence).
-- **Predecessor clear.** No cross-PC clock comparison. The new owner treats
-  the predecessor as clear when any of these holds:
-  - its lease says `ended`;
-  - its lease is absent;
-  - its sequence has not changed for TTL + 2 s on the new owner's own clock.
+  recorder's own clock, the frame loop ends the take as `ownership_revoked`
+  with the reason in `end_detail`. It also ends the take on:
+  - a `syndocal-recording-takeover-*.json` receipt naming any session the
+    take was bound to;
+  - a split-brain that persists for 10 s. Both Primaries fence. A starting
+    Primary briefly reports old sessions of a reused folder as active, and
+    that must not end a take.
 
-  This assumes the sync folder makes writes visible within that margin, as
-  the existing 5 s heartbeat already does. A cloud-synced folder with long
-  latency is not a valid sync folder.
+  A take that is already superseded, or whose first lease cannot be
+  written, never starts.
+- **Predecessor state.** There is no cross-PC clock comparison. The new
+  owner sees each predecessor as one of:
+  - `Ended`: its lease says so;
+  - `Quiet`: its lease has stayed unchanged, or absent, for 5 s on the new
+    owner's own clock;
+  - `Recording`;
+  - `Unknown`: the lease cannot be read.
+
+  `Quiet` counts as ended only once the takeover receipt telling the old
+  Primary to stop has been written; a paused PC must not be mistaken for a
+  stopped one. This assumes the sync folder makes writes visible within
+  that margin, as the existing 5 s heartbeat already does. A cloud-synced
+  folder with long latency is not a valid sync folder.
 - **Takeover take.**
-  - Take Over writes `recording-takeover-<new session>.json`. It names the
-    superseded sessions and carries the predecessor's lease, if any.
-  - After Arm grants video, a takeover recorder waits for the predecessor to
-    be clear. It then starts the same output, frame rate and audio choice,
-    with no dialog, into the configured takeover folder.
-  - Until then the status is `Pending` with the reason. Without a configured
-    folder it is `Blocked`, never silent.
+  - Take Over writes an immutable `syndocal-recording-takeover-<id>.json`.
+    It names every superseded session and carries the predecessor leases
+    still recording. Unreadable predecessor leases are waited for too.
+  - A receipt counts as written only when it reads back intact.
+  - A failed write is retried. Receipts older than 7 days are pruned.
+  - After Arm grants video, a takeover recorder waits until every
+    predecessor has ended. It then starts the first predecessor's output,
+    frame rate and audio choice, with no dialog, into the configured
+    takeover folder.
+  - Until then the status is `Pending` with the reason. It is `Blocked`
+    when there is no folder, the folder is missing, or the receipt has not
+    been written while a lease is only quiet. Unreadable leases are
+    reported; nothing is silent.
+  - Opening another project, returning to Standby or the operator's Cancel
+    ends the plan.

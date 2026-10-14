@@ -472,7 +472,9 @@ assertOrderedMarkers(
   [
     "let admission = recording_ownership::admit_recording(&state)?;",
     ".save_file()",
-    "if recording_ownership::admit_recording(&state)? != admission {",
+    "begin_video_output_recording(\n        window.app_handle(),",
+    "fn begin_video_output_recording(",
+    "if recording_ownership::admit_recording(state)? != admission {",
     "runtime.ensure_recording_worker_available()?;",
     "owner_epoch: admission.owner_epoch,",
   ],
@@ -493,8 +495,10 @@ const recordingFrameLoop = sliceBetween(
 assertOrderedMarkers(
   recordingFrameLoop,
   [
+    "lease.fence().check(Instant::now())",
+    "lease_revocation = Some(reason);",
     "engine.acquire_video_output_in_epoch(owner_epoch) else {",
-    "ownership_revoked = true;",
+    "            ownership_revoked = true;\n            break;\n        };",
     "capture_video_output_preview_effect_snapshot(&engine);",
     "drop(permit);",
     "renderer.render(&request, &stop)",
@@ -505,6 +509,14 @@ assertOrderedMarkers(
 assert.match(recordingOwnership, /state\.standby_sync\.try_lock\(\)/);
 assert.match(appBackend, /async fn video_output_recording_status\(/);
 assert.match(recordingWorker, /VideoRecordingEndReason::OwnershipRevoked/);
+// Phase 3: the takeover take starts through the same admitted path, only
+// after a decision that requires the receipt for a merely quiet lease.
+const takeoverStart = sliceBetween(appBackend, "fn start_takeover_take(", "fn takeover_recording_settings_path(", "takeover take start");
+assert.match(takeoverStart, /begin_video_output_recording\(/);
+const takeoverDecision = await read("../../app/src-tauri/src/takeover_recording.rs");
+assert.match(takeoverDecision, /PredecessorState::Quiet => match observation\.receipt_error \{\s*None => TakeoverStep::Start,/);
+const recordingLease = await read("../../app/src-tauri/src/recording_lease.rs");
+assert.match(recordingLease, /now\.saturating_duration_since\(since\) >= SPLIT_BRAIN_FENCE_AFTER/);
 // Phase 2: the start receipt is durable before the encoder or any frame, and
 // both the normal end and every early failure write the end receipt.
 assertOrderedMarkers(
@@ -517,7 +529,8 @@ assertOrderedMarkers(
   ],
   "a take must write its start receipt before recording and its end receipt after",
 );
-assert.equal((recordingWorker.match(/end_failed_take\(&status, &mut artifact, journal, error\);/g) ?? []).length, 3);
+// Lease start (phase 3), FFmpeg spawn, FFmpeg stdin and renderer start.
+assert.equal((recordingWorker.match(/end_failed_take\(&status, &mut artifact, journal, error\);/g) ?? []).length, 4);
 assertOrderedMarkers(
   recordingWorker,
   ["let result = encoded.and_then(|_| artifact.publish(frames_written));", "let receipt = journal.end("],

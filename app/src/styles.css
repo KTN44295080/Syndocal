@@ -22644,6 +22644,26 @@ h3 {
   min-width: 0;
 }
 
+.takeoverRecordingRow {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.takeoverRecordingRow .standbyDirectoryRow {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.takeoverRecordingRow > small {
+  color: #8593a2;
+  font-size: 10px;
+}
+
+.takeoverRecordingRow > p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .standbyModeSummary {
   display: grid;
   align-content: end;

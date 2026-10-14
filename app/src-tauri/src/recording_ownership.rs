@@ -8,8 +8,9 @@
 //! Undo/Redo (each retires output), Standby or a failure fence ends the take;
 //! the frames already captured are finalized and published, never abandoned.
 //!
-//! A split-brain or another PC's Take Over that begins during a take does
-//! not end it yet: that needs the two-PC recording lease (plan phase 3).
+//! A take on a Standby-sync Primary also renews a recording lease in the
+//! sync folder (`recording_lease`); a takeover receipt, split-brain or an
+//! unrenewable lease ends it there (plan phase 3).
 
 use super::*;
 
@@ -83,7 +84,8 @@ pub(super) fn admit_recording(state: &AppState) -> Result<RecordingAdmission, St
     Ok(admission)
 }
 
-/// `status` with the admission as of now, not as of its take's start.
+/// `status` with the admission as of now, not as of its take's start, and
+/// the takeover take's state.
 pub(super) fn with_current_admission(
     state: &AppState,
     mut status: VideoRecordingStatus,
@@ -91,7 +93,44 @@ pub(super) fn with_current_admission(
     let admission = admit_recording(state);
     status.admission_allowed = admission.is_ok();
     status.admission_reason = admission.err();
+    status.takeover = Some(takeover_recording_status(state));
     status
+}
+
+/// What a take's recording lease sees of Standby sync right now. A busy or
+/// poisoned sync lock reports nothing new; a take already bound to a sync
+/// folder keeps renewing it.
+pub(super) fn lease_observation(state: &AppState) -> recording_lease::LeaseObservation {
+    let unknown = recording_lease::LeaseObservation {
+        primary: None,
+        split_brain: None,
+    };
+    let Ok(runtime) = state.standby_sync.try_lock() else {
+        return unknown;
+    };
+    let Ok(status) = runtime.status.lock() else {
+        return unknown;
+    };
+    if !status.running {
+        return recording_lease::LeaseObservation {
+            primary: None,
+            split_brain: Some(false),
+        };
+    }
+    let primary = if status.role == Some(StandbySyncRole::Primary) {
+        status
+            .directory
+            .clone()
+            .zip(status.session_id.clone())
+            .filter(|(_, session)| recording_lease::valid_session_id(session))
+            .map(|(directory, session)| (PathBuf::from(directory), session))
+    } else {
+        None
+    };
+    recording_lease::LeaseObservation {
+        primary,
+        split_brain: Some(status.split_brain),
+    }
 }
 
 #[cfg(test)]

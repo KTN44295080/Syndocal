@@ -571,11 +571,13 @@ assert.deepEqual(
   usbDmxCableManifestCommands,
   "the USB-DMX cable routes must be present exactly once",
 );
-// The network route and the five USB-DMX cable routes bring the manifest to
-// 492 routes, with the exact 135/31 mutation classifications checked against
-// both App and control_plane.rs below.
+// The network route, the five USB-DMX cable routes and the takeover
+// recording configuration (DEC-RECORD-OWN-001, a local runtime mutation)
+// bring the manifest to 493 routes, with the exact 135/31 mutation
+// classifications checked against both App and control_plane.rs below.
 assert(manifest.includes("set_network_dmx_routes_v1"), "network universes must use the canonical output-control route");
-assert.equal(manifest.length, 492, "frontend Tauri manifest count drifted");
+assert(manifest.includes("configure_takeover_recording_v1"), "the takeover recording folder route must stay inventoried");
+assert.equal(manifest.length, 493, "frontend Tauri manifest count drifted");
 assert.equal(backendRendererMutations.length, 135, "backend renderer-ticketed classification count drifted");
 assert.equal(backendServerMutations.length, 31, "backend authoritative classification count drifted");
 assert.deepEqual(

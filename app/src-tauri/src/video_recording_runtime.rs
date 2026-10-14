@@ -52,9 +52,14 @@ pub(crate) struct VideoRecordingStatus {
     /// The output ownership epoch the current or last take was admitted in.
     pub(crate) owner_epoch: Option<u64>,
     pub(crate) end_reason: Option<VideoRecordingEndReason>,
+    /// Why ownership was revoked when the gate alone does not say (another
+    /// PC took over, split-brain, an unrenewable recording lease).
+    pub(crate) end_detail: Option<String>,
     /// Whether this PC may start a take now (filled in on each status read).
     pub(crate) admission_allowed: bool,
     pub(crate) admission_reason: Option<String>,
+    /// The takeover take (filled in on each status read).
+    pub(crate) takeover: Option<super::takeover_recording::TakeoverRecordingStatus>,
 }
 
 impl Default for VideoRecordingStatus {
@@ -80,8 +85,10 @@ impl Default for VideoRecordingStatus {
             take_id: None,
             owner_epoch: None,
             end_reason: None,
+            end_detail: None,
             admission_allowed: false,
             admission_reason: None,
+            takeover: None,
         }
     }
 }

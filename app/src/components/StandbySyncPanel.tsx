@@ -16,6 +16,7 @@ import type {
   OutputLeaseResource,
 } from "../outputControlController";
 import type { MachineOutputRole, OutputOwnershipStatus } from "../types";
+import { TakeoverRecordingRow } from "./TakeoverRecordingRow";
 
 type StandbySyncRole = "primary" | "standby";
 
@@ -762,6 +763,8 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
           <button onClick={() => void chooseDirectory()} disabled={!props.backendAvailable || status().running || busy()}>Browse</button>
         </div>
       </label>
+
+      <TakeoverRecordingRow backendAvailable={props.backendAvailable} invokeCommand={props.invokeCommand} />
 
       <div class="split">
         <label>

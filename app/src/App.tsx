@@ -2794,6 +2794,8 @@ export default function App() {
     take_id: null,
     owner_epoch: null,
     end_reason: null,
+    end_detail: null,
+    takeover: null,
     admission_allowed: false,
     admission_reason: null,
   });
