@@ -146,8 +146,9 @@ fn validate_bindings(bindings: &[UsbDmxUniverseBindingV1]) -> Result<(), String>
 /// Read and validate the binding file; a missing file is no binding. Every
 /// identity is rebuilt through the strict constructor.
 pub(super) fn load_bindings(path: &Path) -> Result<Vec<UsbDmxUniverseBindingV1>, String> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
+    use std::io::Read;
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
             return Err(format!(
@@ -156,14 +157,31 @@ pub(super) fn load_bindings(path: &Path) -> Result<Vec<UsbDmxUniverseBindingV1>,
             ))
         }
     };
+    let mut bytes = Vec::new();
+    file.take(MAX_USB_DMX_UNIVERSE_BINDINGS_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            format!(
+                "Unable to read machine-local USB-DMX cables {}: {error}",
+                path.display()
+            )
+        })?;
     if bytes.len() as u64 > MAX_USB_DMX_UNIVERSE_BINDINGS_BYTES {
-        return Err("Machine-local USB-DMX cables exceed their safety limit".to_string());
+        return Err(format!(
+            "Machine-local USB-DMX cables {} exceed their safety limit",
+            path.display()
+        ));
     }
-    let file: UsbDmxUniverseBindingsFileV1 = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("Machine-local USB-DMX cables are invalid: {error}"))?;
+    let file: UsbDmxUniverseBindingsFileV1 = serde_json::from_slice(&bytes).map_err(|error| {
+        format!(
+            "Machine-local USB-DMX cables {} are invalid ({error}); remove the file to start over",
+            path.display()
+        )
+    })?;
     if file.version != USB_DMX_UNIVERSE_BINDINGS_VERSION {
         return Err(format!(
-            "Machine-local USB-DMX cable file version {} is unsupported",
+            "Machine-local USB-DMX cable file {} has unsupported version {}",
+            path.display(),
             file.version
         ));
     }
@@ -365,18 +383,19 @@ fn with_binding_mutation_locks<T>(
     operation()
 }
 
-/// Write the new bindings, then re-check admission; a changed admission
-/// restores the exact previous file.
-fn persist_admitted(
-    state: &AppState,
+/// Write the new bindings under `admission`, checked twice before the write
+/// (enumeration can be slow) and once after it; a late refusal restores the
+/// exact previous file.
+fn persist_admitted_with(
     path: &Path,
-    universe: u16,
     next: &[UsbDmxUniverseBindingV1],
+    admission: &mut dyn FnMut() -> Result<(), String>,
 ) -> Result<(), String> {
-    ensure_universe_binding_mutation_admissible(state, universe)?;
+    admission()?;
+    admission()?;
     let previous = serial_dmx_machine::capture_binding_file_snapshot(path)?;
     persist_bindings(path, next)?;
-    if let Err(admission_error) = ensure_universe_binding_mutation_admissible(state, universe) {
+    if let Err(admission_error) = admission() {
         serial_dmx_machine::restore_binding_file_snapshot(path, &previous).map_err(
             |restore_error| {
                 format!(
@@ -391,6 +410,95 @@ fn persist_admitted(
     Ok(())
 }
 
+/// Fail closed unless the Universe 0 binding is readable; refuse a cable that
+/// is the Universe 0 cable.
+fn ensure_not_the_universe_zero_cable(
+    u0: &serial_dmx_machine::SerialDmxMachineBindingStatusV1,
+    identity: &SerialDmxMachineBindingIdentityV2,
+) -> Result<(), String> {
+    if u0.state == SerialDmxMachineBindingStateV1::BlockedPersistence {
+        return Err(format!(
+            "The Universe 0 (Show DMX) cable binding cannot be read, so a cable cannot be bound or started for another universe: {}",
+            u0.detail
+        ));
+    }
+    if u0
+        .selected
+        .as_ref()
+        .is_some_and(|selected| same_cable(selected, identity))
+    {
+        return Err(
+            "This USB-DMX cable is the Universe 0 (Show DMX) cable; one cable outputs one universe"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// The binding rules without app state, so they can be tested: resolve the
+/// requested port, keep the cable disjoint from Universe 0 and the other
+/// universes, then persist under `admission`.
+pub(super) fn select_binding_from_ports(
+    path: &Path,
+    u0: &serial_dmx_machine::SerialDmxMachineBindingStatusV1,
+    request: &SelectUsbDmxUniverseBindingRequestV1,
+    ports: &[SerialPortSummary],
+    admission: &mut dyn FnMut() -> Result<(), String>,
+) -> Result<(), String> {
+    validate_universe(request.universe)?;
+    let port_name = request.port_name.trim();
+    let windows = request.windows_device_instance_id.as_deref();
+    let macos = request.macos_device_instance_id.as_deref();
+    if port_name.is_empty()
+        || windows.is_some() == macos.is_some()
+        || windows.or(macos).is_none_or(|id| id.trim().is_empty())
+    {
+        return Err(
+            "USB-DMX cable binding requires a port and exactly one Windows PnP or macOS IOKit instance"
+                .to_string(),
+        );
+    }
+    let matches = ports
+        .iter()
+        .filter(|port| {
+            port.name == port_name
+                && port.windows_device_instance_id.as_deref() == windows
+                && port.macos_device_instance_id.as_deref() == macos
+        })
+        .collect::<Vec<_>>();
+    let identity = match matches.as_slice() {
+        [port] => SerialDmxMachineBindingIdentityV2::from_summary(port)?,
+        [] => {
+            return Err(
+                "The selected USB-DMX cable is no longer enumerated; refresh and select again"
+                    .to_string(),
+            )
+        }
+        _ => {
+            return Err(
+                "The selected USB-DMX COM alias and instance are ambiguous; nothing was bound"
+                    .to_string(),
+            )
+        }
+    };
+    ensure_not_the_universe_zero_cable(u0, &identity)?;
+    let mut bindings = load_bindings(path)?;
+    if let Some(other) = bindings.iter().find(|binding| {
+        binding.universe != request.universe && same_cable(&binding.identity, &identity)
+    }) {
+        return Err(format!(
+            "This USB-DMX cable is already bound to Universe {}; one cable outputs one universe",
+            other.universe
+        ));
+    }
+    bindings.retain(|binding| binding.universe != request.universe);
+    bindings.push(UsbDmxUniverseBindingV1 {
+        universe: request.universe,
+        identity,
+    });
+    persist_admitted_with(path, &bindings, admission)
+}
+
 /// Bind one exact, currently enumerated cable to a universe. The cable must
 /// not already serve Universe 0 or another universe.
 pub(super) fn select_binding(
@@ -402,69 +510,15 @@ pub(super) fn select_binding(
     with_binding_mutation_locks(state, || {
         let ports = io::serial_dmx::list_serial_ports()
             .map_err(|error| format!("USB-DMX device enumeration failed: {error}"))?;
-        let port_name = request.port_name.trim();
-        let windows = request.windows_device_instance_id.as_deref();
-        let macos = request.macos_device_instance_id.as_deref();
-        if port_name.is_empty()
-            || windows.is_some() == macos.is_some()
-            || windows.or(macos).is_none_or(|id| id.trim().is_empty())
-        {
-            return Err(
-                "USB-DMX cable binding requires a port and exactly one Windows PnP or macOS IOKit instance"
-                    .to_string(),
-            );
-        }
-        let matches = ports
-            .iter()
-            .filter(|port| {
-                port.name == port_name
-                    && port.windows_device_instance_id.as_deref() == windows
-                    && port.macos_device_instance_id.as_deref() == macos
-            })
-            .collect::<Vec<_>>();
-        let identity =
-            match matches.as_slice() {
-                [port] => SerialDmxMachineBindingIdentityV2::from_summary(port)?,
-                [] => return Err(
-                    "The selected USB-DMX cable is no longer enumerated; refresh and select again"
-                        .to_string(),
-                ),
-                _ => return Err(
-                    "The selected USB-DMX COM alias and instance are ambiguous; nothing was bound"
-                        .to_string(),
-                ),
-            };
         let u0 = serial_dmx_machine::binding_status_from_path(
             &show_serial_dmx_route::serial_dmx_machine_binding_path(app)?,
             &ports,
         );
-        if u0
-            .selected
-            .as_ref()
-            .is_some_and(|selected| same_cable(selected, &identity))
-        {
-            return Err(
-                "This USB-DMX cable is the Universe 0 (Show DMX) cable; one cable outputs one universe"
-                    .to_string(),
-            );
-        }
         let path = bindings_path(app)?;
-        let mut bindings = load_bindings(&path)?;
-        if let Some(other) = bindings.iter().find(|binding| {
-            binding.universe != request.universe && same_cable(&binding.identity, &identity)
-        }) {
-            return Err(format!(
-                "This USB-DMX cable is already bound to Universe {}; one cable outputs one universe",
-                other.universe
-            ));
-        }
-        bindings.retain(|binding| binding.universe != request.universe);
-        bindings.push(UsbDmxUniverseBindingV1 {
-            universe: request.universe,
-            identity,
-        });
-        persist_admitted(state, &path, request.universe, &bindings)?;
-        status(state, app)
+        select_binding_from_ports(&path, &u0, &request, &ports, &mut || {
+            ensure_universe_binding_mutation_admissible(state, request.universe)
+        })?;
+        Ok(status_after_commit(state, &path, &ports))
     })
 }
 
@@ -476,15 +530,51 @@ pub(super) fn clear_binding(
 ) -> Result<UsbDmxUniversesStatusV1, String> {
     validate_universe(request.universe)?;
     with_binding_mutation_locks(state, || {
+        let ports = io::serial_dmx::list_serial_ports()
+            .map_err(|error| format!("USB-DMX device enumeration failed: {error}"))?;
         let path = bindings_path(app)?;
         let mut bindings = load_bindings(&path)?;
         let before = bindings.len();
         bindings.retain(|binding| binding.universe != request.universe);
         if bindings.len() != before {
-            persist_admitted(state, &path, request.universe, &bindings)?;
+            persist_admitted_with(&path, &bindings, &mut || {
+                ensure_universe_binding_mutation_admissible(state, request.universe)
+            })?;
         }
-        status(state, app)
+        Ok(status_after_commit(state, &path, &ports))
     })
+}
+
+/// The reply after a committed change, built from the ports already listed.
+/// A cable status that cannot be read is reported in the reply, never as a
+/// failure of the change that was already written.
+fn status_after_commit(
+    state: &AppState,
+    path: &Path,
+    ports: &[SerialPortSummary],
+) -> UsbDmxUniversesStatusV1 {
+    let (bindings, mut persistence_error) = match load_bindings(path) {
+        Ok(bindings) => (
+            bindings
+                .iter()
+                .map(|binding| binding_status(binding, ports))
+                .collect(),
+            None,
+        ),
+        Err(error) => (Vec::new(), Some(error)),
+    };
+    let cables = match cable_statuses(state) {
+        Ok(cables) => cables,
+        Err(error) => {
+            persistence_error.get_or_insert(format!("The change was saved; {error}"));
+            Vec::new()
+        }
+    };
+    UsbDmxUniversesStatusV1 {
+        bindings,
+        cables,
+        persistence_error,
+    }
 }
 
 /// The Universe 0 cable must not take a cable already bound to a universe.
@@ -520,6 +610,11 @@ fn verify_current_universe_cable(
     if status.state != SerialDmxMachineBindingStateV1::SelectedAndPresent {
         return Err(status.detail);
     }
+    let u0 = serial_dmx_machine::binding_status_from_path(
+        &show_serial_dmx_route::serial_dmx_machine_binding_path(app)?,
+        &ports,
+    );
+    ensure_not_the_universe_zero_cable(&u0, &binding.identity)?;
     show_serial_dmx_route::validate_exact_show_serial_dmx_device_matches(&ports, &binding.identity)
 }
 

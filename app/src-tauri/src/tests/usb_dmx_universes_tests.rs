@@ -117,3 +117,81 @@ fn usb_dmx_universe_bindings_fail_closed_on_unknown_versions_fields_and_size() {
     assert!(load_bindings(&path).unwrap_err().contains("safety limit"));
     let _ = std::fs::remove_file(path);
 }
+
+fn u0_status(
+    state: SerialDmxMachineBindingStateV1,
+    selected: Option<&SerialPortSummary>,
+) -> serial_dmx_machine::SerialDmxMachineBindingStatusV1 {
+    serial_dmx_machine::SerialDmxMachineBindingStatusV1 {
+        state,
+        selected: selected
+            .map(|port| SerialDmxMachineBindingIdentityV2::from_summary(port).unwrap()),
+        detail: "test".to_string(),
+    }
+}
+
+fn request(universe: u16, port: &SerialPortSummary) -> SelectUsbDmxUniverseBindingRequestV1 {
+    SelectUsbDmxUniverseBindingRequestV1 {
+        universe,
+        port_name: port.name.clone(),
+        windows_device_instance_id: port.windows_device_instance_id.clone(),
+        macos_device_instance_id: None,
+    }
+}
+
+#[test]
+fn usb_dmx_universe_binding_keeps_cables_disjoint_from_universe_zero_and_each_other() {
+    let path = path("disjoint");
+    let _ = std::fs::remove_file(&path);
+    let a = port("COM5", r"FTDIBUS\A\0000", "A-SERIAL");
+    let b = port("COM6", r"FTDIBUS\B\0000", "B-SERIAL");
+    let ports = [a.clone(), b.clone()];
+    let mut admitted = || Ok(());
+    let unreadable = u0_status(SerialDmxMachineBindingStateV1::BlockedPersistence, None);
+    let error =
+        select_binding_from_ports(&path, &unreadable, &request(1, &a), &ports, &mut admitted)
+            .unwrap_err();
+    assert!(error.contains("cannot be read"), "{error}");
+    let u0_is_a = u0_status(SerialDmxMachineBindingStateV1::SelectedAndPresent, Some(&a));
+    let error = select_binding_from_ports(&path, &u0_is_a, &request(1, &a), &ports, &mut admitted)
+        .unwrap_err();
+    assert!(error.contains("Universe 0"), "{error}");
+    select_binding_from_ports(&path, &u0_is_a, &request(1, &b), &ports, &mut admitted).unwrap();
+    let error = select_binding_from_ports(&path, &u0_is_a, &request(2, &b), &ports, &mut admitted)
+        .unwrap_err();
+    assert!(error.contains("already bound to Universe 1"), "{error}");
+    // Rebinding the same universe to the same cable is allowed.
+    select_binding_from_ports(&path, &u0_is_a, &request(1, &b), &ports, &mut admitted).unwrap();
+    assert_eq!(load_bindings(&path).unwrap().len(), 1);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn usb_dmx_universe_binding_restores_the_exact_file_when_admission_changes_after_the_write() {
+    let path = path("restore");
+    let _ = std::fs::remove_file(&path);
+    let a = port("COM5", r"FTDIBUS\A\0000", "A-SERIAL");
+    let b = port("COM6", r"FTDIBUS\B\0000", "B-SERIAL");
+    let ports = [a.clone(), b.clone()];
+    let u0 = u0_status(SerialDmxMachineBindingStateV1::MissingSelection, None);
+    select_binding_from_ports(&path, &u0, &request(1, &a), &ports, &mut || Ok(())).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let mut calls = 0;
+    let error = select_binding_from_ports(&path, &u0, &request(2, &b), &ports, &mut || {
+        calls += 1;
+        if calls >= 3 {
+            Err("the cable started meanwhile".to_string())
+        } else {
+            Ok(())
+        }
+    })
+    .unwrap_err();
+    assert_eq!(calls, 3, "checked twice before and once after the write");
+    assert!(error.contains("previous bindings were restored"), "{error}");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        before,
+        "the exact previous bytes"
+    );
+    let _ = std::fs::remove_file(path);
+}

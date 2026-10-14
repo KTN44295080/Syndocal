@@ -21069,6 +21069,9 @@ struct EngineRuntime {
     output: DmxOutputConfig,
     additional_dmx_outputs: Vec<RuntimeDmxOutput>,
     show_serial_dmx_route: Option<RuntimeShowSerialDmxRoute>,
+    /// The cable the Universe 0 route was started on; meaningful only while
+    /// `show_serial_dmx_route` exists (a cable may serve one route only).
+    show_serial_dmx_route_device: Option<io::serial_dmx::VerifiedUsbSerialPortIdentity>,
     independent_usb_dmx_routes:
         [Option<RuntimeIndependentUsbDmxRoute>; MAX_INDEPENDENT_USB_DMX_ROUTES],
     /// Set only after the complete one-shot Art-Net / Open DMX terminal proof
@@ -21512,6 +21515,7 @@ impl EngineRuntime {
             output,
             additional_dmx_outputs: Vec::new(),
             show_serial_dmx_route: None,
+            show_serial_dmx_route_device: None,
             independent_usb_dmx_routes: std::array::from_fn(|_| None),
             managed_show_dmx_fail_stop_completion: None,
             managed_show_dmx_fail_stop_completion_generation: 0,
@@ -51408,6 +51412,12 @@ impl EngineRuntime {
                     .to_string(),
             );
         }
+        if self.independent_usb_dmx_route_uses_device(expected_device) {
+            return Err(
+                "This USB-DMX cable already drives another universe; one cable outputs one universe"
+                    .to_string(),
+            );
+        }
         // A timed-out shutdown drops its JoinHandle to keep Stop bounded, but
         // the detached driver call may still resume later. Do not create a
         // second worker from `route = None`; authoritative status must prove
@@ -51576,6 +51586,7 @@ impl EngineRuntime {
         self.show_serial_dmx_route = Some(RuntimeShowSerialDmxRoute {
             sender: Some(sender),
         });
+        self.show_serial_dmx_route_device = Some(expected_device.clone());
         self.clear_managed_show_dmx_fail_stop_completion();
         shared_telemetry.set_show_serial_dmx_route_status(ShowSerialDmxRouteStatus {
             active: true,

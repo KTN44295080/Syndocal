@@ -421,6 +421,9 @@ fn verify_current_show_serial_dmx_device(
         &serial_dmx_machine_binding_path(app)?,
         &ports,
     )?;
+    // One cable outputs one universe: refuse a Universe 0 cable that is also
+    // bound to another universe (or when those bindings cannot be read).
+    super::usb_dmx_universes::ensure_cable_not_bound_to_a_universe(app, &selected)?;
     validate_exact_show_serial_dmx_device_matches(&ports, &selected)
 }
 

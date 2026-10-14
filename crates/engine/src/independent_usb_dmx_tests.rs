@@ -485,3 +485,48 @@ fn a_faulted_cable_is_not_absent_for_a_managed_retirement_proof() {
         "a faulted cable keeps the retirement InDoubt: {result:?}"
     );
 }
+
+#[test]
+fn one_cable_never_serves_universe_zero_and_another_universe() {
+    let shared = Arc::new(EngineSharedTelemetry::new());
+    let mut runtime = runtime_with_fixtures_on_u1_u2(&shared);
+    let (_, s0) = shared.engage_safety_blackout().unwrap();
+    runtime.safety_blackout_engaged = true;
+    let never =
+        |_: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
+         _: &OpenDmxSafetyWriteGate|
+         -> Result<DmxSender, String> { panic!("no sender may open for a shared cable") };
+
+    // The Universe 0 route runs on cable A: A cannot also serve Universe 1.
+    let cable_a = usb_identity("COM5", "CABLE-A");
+    runtime.show_serial_dmx_route = Some(RuntimeShowSerialDmxRoute { sender: None });
+    runtime.show_serial_dmx_route_device = Some(cable_a.clone());
+    let error = runtime
+        .apply_independent_usb_dmx_route_enable_with_sender_factory(
+            1,
+            &cable_a,
+            s0.epoch,
+            s0.generation,
+            never,
+        )
+        .unwrap_err();
+    assert!(error.contains("already drives another universe"), "{error}");
+    runtime.show_serial_dmx_route = None;
+
+    // Cable B serves Universe 1: the Universe 0 route cannot start on B.
+    let cable_b = usb_identity("COM6", "CABLE-B");
+    let (port_b, _cable_b) = io::serial_dmx::OpenDmxTestSerialPort::new();
+    start_cable(&mut runtime, 1, &cable_b, port_b).unwrap();
+    let error = runtime
+        .apply_show_serial_dmx_safety_blackout_route_enable_with_sender_factory(
+            &cable_b,
+            s0.epoch,
+            s0.generation,
+            never,
+        )
+        .unwrap_err();
+    assert!(error.contains("already drives another universe"), "{error}");
+    runtime
+        .apply_independent_usb_dmx_route_stop(1, s0.epoch, s0.generation)
+        .unwrap();
+}

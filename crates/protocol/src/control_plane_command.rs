@@ -5893,6 +5893,8 @@ mod tests {
         for operation_id in [
             OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID,
             OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID,
+            OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID,
+            OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID,
         ] {
             let receipt = OutputControlReceiptV2 {
                 operation_id: operation_id.to_string(),

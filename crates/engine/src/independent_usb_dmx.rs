@@ -222,11 +222,12 @@ impl EngineRuntime {
                 "USB-DMX Universe {universe} is already active; stop it before another activation"
             ));
         }
-        if self
-            .independent_usb_dmx_routes
-            .iter()
-            .flatten()
-            .any(|route| same_usb_dmx_device(&route.device, expected_device))
+        if self.independent_usb_dmx_route_uses_device(expected_device)
+            || (self.show_serial_dmx_route.is_some()
+                && self
+                    .show_serial_dmx_route_device
+                    .as_ref()
+                    .is_some_and(|device| same_usb_dmx_device(device, expected_device)))
         {
             return Err(
                 "This USB-DMX cable already drives another universe; one cable outputs one universe"
@@ -700,6 +701,17 @@ impl EngineRuntime {
             }
         }
         errors
+    }
+
+    /// Whether a running independent cable is this device.
+    pub(super) fn independent_usb_dmx_route_uses_device(
+        &self,
+        device: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
+    ) -> bool {
+        self.independent_usb_dmx_routes
+            .iter()
+            .flatten()
+            .any(|route| same_usb_dmx_device(&route.device, device))
     }
 
     pub(super) fn independent_usb_dmx_routes_absent(&self) -> bool {

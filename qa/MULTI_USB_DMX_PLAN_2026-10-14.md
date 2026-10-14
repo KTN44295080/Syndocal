@@ -43,12 +43,20 @@ path:
 - **S0 stays global** (fail-closed default). A fault on any cable engages S0,
   so every cable sends zeros within one frame. Releasing S0 is refused while
   any USB route is faulted.
-- **The machine-local binding store goes to version 3:** `selected` (U0, as
-  today) plus `universes: [{universe, identity}]`.
-  - Reading version 1 or 2 maps to `selected` with no universes.
-  - An older build fails closed on version 3.
-  - One physical identity may not be bound twice: same instance ID, same COM
-    name, or same VID+PID+serial.
+- **Cable bindings live in a separate machine-local file**,
+  `usb-dmx-universe-bindings-v1.json`: `{version: 1, universes: [{universe,
+  identity}]}`. This is the as-built decision (phase 2, `deecf6d7`): the
+  Universe 0 file and its version stay untouched instead of going to
+  version 3.
+  - One physical cable may not be bound twice: same instance ID, same COM
+    name, or same VID+PID+serial (a cloned serial counts as the same
+    cable).
+  - That rule is enforced across both files at bind time, and again when
+    either kind of cable starts (Tauri resolution and engine), because an
+    older build that ignores the universes file could rebind Universe 0.
+  - An unreadable Universe 0 file blocks binding or starting any other
+    universe; an unreadable universes file blocks Universe 0 binding and
+    start.
 - **Enable and stop go through the existing OutputControl lease/fence path**
   as new operations that carry the universe.
 - **The UI** becomes one universe list:
