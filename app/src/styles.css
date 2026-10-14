@@ -22598,6 +22598,11 @@ h3 {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.showClockStatusGrid .showClockRejectedWarning dt,
+.showClockStatusGrid .showClockRejectedWarning dd {
+  color: #f0bd72;
+}
+
 .showClockStatusGrid dd,
 .showClockEndpoint {
   min-width: 0;

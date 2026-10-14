@@ -119,9 +119,14 @@ pub struct ShowClockIpcStatus {
     /// paired address, plus on Windows any datagram too large to receive,
     /// whose sender the OS does not report.  Such noise never stops the
     /// worker; a rising count with no accepted samples points at a
-    /// misconfigured or hostile sender.  Well-formed envelopes that fail
-    /// authentication or sequencing still fault the worker.
+    /// misconfigured or hostile sender.
     pub dropped_datagrams: u64,
+    /// Well-formed envelopes the standby refused without faulting: a tag that
+    /// does not verify (anyone on the LAN can send one) or a replayed or
+    /// reordered sequence (capturable, or plain UDP reordering). They are
+    /// never applied. Authenticated envelopes that violate the session,
+    /// generation or schedule contract still fault the worker.
+    pub rejected_packets: u64,
     pub last_error: Option<String>,
 }
 
@@ -150,6 +155,7 @@ impl Default for ShowClockIpcStatus {
             last_action_id: None,
             last_action_status: None,
             dropped_datagrams: 0,
+            rejected_packets: 0,
             last_error: None,
         }
     }
@@ -368,6 +374,7 @@ impl ShowClockIpcState {
                 last_action_id: None,
                 last_action_status: None,
                 dropped_datagrams: 0,
+                rejected_packets: 0,
                 last_error: None,
             };
         }
@@ -1030,30 +1037,24 @@ fn run_standby(
         let received = match received {
             Ok(message) => message,
             Err(ShowClockLanError::Timeout) => {
-                let estimate = runtime
-                    .estimator
-                    .as_mut()
-                    .expect("standby estimator exists")
-                    .estimator_mut()
-                    .advance(monotonic_elapsed_us(origin, Instant::now()));
-                publish_estimate(
-                    status,
-                    &estimate,
-                    runtime
-                        .validator
-                        .as_ref()
-                        .expect("standby validator exists")
-                        .last_sequence(),
-                );
-                pump_actions(runtime, status, estimate.show_time_us, estimate.state)?;
+                advance_standby_without_sample(runtime, status, origin)?;
                 continue;
             }
             Err(error) => return Err(format!("ShowClock standby receive failed: {error}")),
         };
         match received {
             ShowClockLanMessage::Sample(sample) => {
+                if !runtime
+                    .validator
+                    .as_ref()
+                    .expect("standby validator exists")
+                    .sample_is_authentic(&sample)
+                {
+                    reject_standby_packet(runtime, status, origin)?;
+                    continue;
+                }
                 let received_at_us = monotonic_elapsed_us(origin, Instant::now());
-                runtime
+                match runtime
                     .estimator
                     .as_mut()
                     .expect("standby estimator exists")
@@ -1064,8 +1065,14 @@ fn run_standby(
                             .expect("standby validator exists"),
                         &sample,
                         received_at_us,
-                    )
-                    .map_err(|error| format!("ShowClock standby sample rejected: {error}"))?;
+                    ) {
+                    Ok(()) => {}
+                    Err(protocol::show_clock::ShowClockValidationError::Replay | protocol::show_clock::ShowClockValidationError::Reordered) => {
+                        reject_standby_packet(runtime, status, origin)?;
+                        continue;
+                    }
+                    Err(error) => return Err(format!("ShowClock standby sample rejected: {error}")),
+                }
                 let estimate = runtime
                     .estimator
                     .as_mut()
@@ -1084,12 +1091,28 @@ fn run_standby(
                 pump_actions(runtime, status, estimate.show_time_us, estimate.state)?;
             }
             ShowClockLanMessage::Action(action) => {
-                let admission = runtime
+                if !runtime
+                    .action_receiver
+                    .as_ref()
+                    .expect("standby action receiver exists")
+                    .action_is_authentic(&action)
+                {
+                    reject_standby_packet(runtime, status, origin)?;
+                    continue;
+                }
+                let admission = match runtime
                     .action_receiver
                     .as_mut()
                     .expect("standby action receiver exists")
                     .admit(&action)
-                    .map_err(|error| format!("ShowClock standby action rejected: {error}"))?;
+                {
+                    Ok(admission) => admission,
+                    Err(protocol::show_clock::ShowClockValidationError::Replay | protocol::show_clock::ShowClockValidationError::Reordered) => {
+                        reject_standby_packet(runtime, status, origin)?;
+                        continue;
+                    }
+                    Err(error) => return Err(format!("ShowClock standby action rejected: {error}")),
+                };
                 let action_id = hex_string(&action.body.action_id);
                 publish_action_admission(
                     status,
@@ -1127,6 +1150,45 @@ fn run_standby(
         }
     }
     Ok(())
+}
+
+/// No sample arrived (or the one that did was refused): advance the estimate
+/// from local time so holdover/lost detection and scheduled actions keep
+/// running. A stream of refused packets therefore cannot freeze the standby.
+fn advance_standby_without_sample(
+    runtime: &mut ShowClockWorkerRuntime,
+    status: &Arc<Mutex<ShowClockIpcStatus>>,
+    origin: Instant,
+) -> Result<(), String> {
+    let estimate = runtime
+        .estimator
+        .as_mut()
+        .expect("standby estimator exists")
+        .estimator_mut()
+        .advance(monotonic_elapsed_us(origin, Instant::now()));
+    publish_estimate(
+        status,
+        &estimate,
+        runtime
+            .validator
+            .as_ref()
+            .expect("standby validator exists")
+            .last_sequence(),
+    );
+    pump_actions(runtime, status, estimate.show_time_us, estimate.state)
+}
+
+/// Count a refused envelope (unverifiable tag, replayed or reordered
+/// sequence) and carry on as if nothing arrived. It is never applied.
+fn reject_standby_packet(
+    runtime: &mut ShowClockWorkerRuntime,
+    status: &Arc<Mutex<ShowClockIpcStatus>>,
+    origin: Instant,
+) -> Result<(), String> {
+    update_status(status, |current| {
+        current.rejected_packets = current.rejected_packets.saturating_add(1);
+    });
+    advance_standby_without_sample(runtime, status, origin)
 }
 
 fn drain_commands(
@@ -1697,31 +1759,81 @@ mod tests {
         status
     }
 
+    /// Runs a standby for `session`, sends `samples` from its paired address
+    /// and returns the status once `rejected` envelopes have been refused,
+    /// asserting the worker kept running.
+    fn standby_status_after_rejections(
+        session: &str,
+        samples: &[AuthenticatedShowClockSample],
+        rejected: u64,
+    ) -> ShowClockIpcStatus {
+        let primary_probe = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let standby_probe = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let primary_address = primary_probe.local_addr().unwrap();
+        let standby_address = standby_probe.local_addr().unwrap();
+        drop(primary_probe);
+        drop(standby_probe);
+        let mut standby_request = request(
+            ShowClockIpcRole::Standby,
+            standby_address.to_string(),
+            primary_address.to_string(),
+            "node-standby",
+            "node-primary",
+        );
+        standby_request.session_id = session.to_string();
+        let standby = ShowClockIpcState::default();
+        standby.start(standby_request).unwrap();
+        let sender = ShowClockLanTransport::bind(primary_address, standby_address).unwrap();
+        for sample in samples {
+            sender.send_sample(sample).unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while standby.status().unwrap().rejected_packets < rejected {
+            assert!(
+                Instant::now() < deadline,
+                "standby did not refuse {rejected} envelope(s): {:?}",
+                standby.status().unwrap()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        // Give a wrongly faulting worker time to stop before asserting.
+        thread::sleep(Duration::from_millis(100));
+        let status = standby.status().unwrap();
+        assert!(status.running, "{status:?}");
+        assert_ne!(status.state, ShowClockIpcPhase::Fault, "{status:?}");
+        assert_eq!(status.dropped_datagrams, 0, "well-formed envelopes are not noise");
+        standby.stop().unwrap();
+        status
+    }
+
     #[test]
-    fn well_formed_unauthenticated_or_replayed_samples_still_fault_the_standby() {
+    fn unauthenticated_or_replayed_samples_are_refused_without_faulting_the_standby() {
         let key = [0x42; 32];
         let wrong_key = [0x24; 32];
-        let session = "fail-closed-mac-session";
-        let bad_mac = standby_fault_after(session, &[signed_peer_sample(session, 1, &wrong_key)]);
-        assert!(
-            bad_mac
-                .last_error
-                .as_deref()
-                .is_some_and(|error| error.contains("authentication tag is invalid")),
-            "{bad_mac:?}"
+        // Anyone on the LAN can send a well-formed envelope with a bad tag;
+        // it is refused, counted and never applied.
+        let session = "drop-bad-mac-session";
+        let bad_mac = standby_status_after_rejections(
+            session,
+            &[signed_peer_sample(session, 1, &wrong_key)],
+            1,
         );
+        assert_eq!(bad_mac.rejected_packets, 1);
+        assert_eq!(bad_mac.accepted_samples, 0, "{bad_mac:?}");
 
-        let session = "fail-closed-replay-session";
+        // A captured authentic sample replayed later is refused the same way;
+        // the original is still accepted.
+        let session = "drop-replay-session";
         let replayed = signed_peer_sample(session, 1, &key);
-        let replay = standby_fault_after(session, &[replayed.clone(), replayed]);
-        assert!(
-            replay
-                .last_error
-                .as_deref()
-                .is_some_and(|error| error.contains("sequence was already accepted")),
-            "{replay:?}"
-        );
+        let replay =
+            standby_status_after_rejections(session, &[replayed.clone(), replayed], 1);
+        assert_eq!(replay.rejected_packets, 1);
+        assert_eq!(replay.accepted_samples, 1, "{replay:?}");
+    }
 
+    #[test]
+    fn authenticated_contract_violations_still_fault_the_standby() {
+        let key = [0x42; 32];
         let mismatch = standby_fault_after(
             "fail-closed-standby-session",
             &[signed_peer_sample("fail-closed-other-session", 1, &key)],

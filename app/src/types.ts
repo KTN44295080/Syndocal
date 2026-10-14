@@ -64,6 +64,8 @@ export interface ShowClockIpcStatus {
   last_action_status: string | null;
   /** Oversized or undecodable datagrams the standby dropped without stopping. */
   dropped_datagrams: number;
+  /** Well-formed envelopes refused (bad tag, replay, reorder); never applied. */
+  rejected_packets?: number;
   last_error: string | null;
 }
 

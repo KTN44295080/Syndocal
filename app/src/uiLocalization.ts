@@ -1890,6 +1890,9 @@ const japaneseText: Record<string, string> = {
   "Audio Input": "音声入力",
   "Audio Output": "音声出力",
   "Encoder CC": "エンコーダーCC",
+  Rejected: "拒否",
+  "Packets with an invalid signature or a replayed/out-of-order sequence. They are ignored; a rising count means another device on the network is sending ShowClock traffic.":
+    "署名が不正、または再送・順序違いのパケットです。使わずに捨てています。増え続ける場合は、ネットワーク上の別の機器がShowClockの通信を送っています。",
   Scene: "シーン",
   Props: "設定",
   "Discard unsaved changes to this FX?": "このFXの保存していない変更を破棄しますか？",

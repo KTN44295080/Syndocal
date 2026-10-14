@@ -577,6 +577,13 @@ impl ShowClockPeerValidator {
         self.last_sender_monotonic_us = Some(sample.sender_monotonic_us);
     }
 
+    /// Whether `sample` carries a valid tag for this peer's key. A sample that
+    /// fails here cannot be attributed to the paired peer (anyone on the LAN
+    /// can send one), so receivers drop it instead of faulting.
+    pub fn sample_is_authentic(&self, sample: &AuthenticatedShowClockSample) -> bool {
+        sample.verify_and_canonical(self.peer.key.as_bytes()).is_ok()
+    }
+
     pub fn last_sequence(&self) -> u64 {
         self.last_sequence
     }
@@ -842,6 +849,12 @@ pub struct ShowClockActionReceiver {
 }
 
 impl ShowClockActionReceiver {
+    /// Whether `action` carries a valid tag for this peer's key; see
+    /// [`ShowClockPeerValidator::sample_is_authentic`].
+    pub fn action_is_authentic(&self, action: &AuthenticatedShowClockAction) -> bool {
+        action.verify_and_canonical(self.peer.key.as_bytes()).is_ok()
+    }
+
     pub fn new(
         expected_session: ShowClockSessionId,
         expected_sender: ShowClockNodeId,
