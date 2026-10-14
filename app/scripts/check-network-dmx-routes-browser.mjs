@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { writeFile, unlink } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { createServer } from "vite";
 
 const require = createRequire(import.meta.url);
@@ -25,7 +26,17 @@ render(()=><div style={{height:'100vh',overflow:'auto',padding:'12px'}}><Network
   server = await createServer({root, server: {host: "127.0.0.1", port: 0}, plugins:[{name:"network-route-fixture",configureServer(vite){vite.middlewares.use((request,response,next)=>{if(request.url?.split("?")[0]!=="/network-routes-proof")return next();response.setHeader("Content-Type","text/html");response.end('<html><head><link rel="icon" href="data:,"></head><body><script type="module" src="/'+name+'"></script></body></html>');});}}]});
   await server.listen();
   const url = "http://127.0.0.1:" + server.httpServer.address().port;
-  browser = await chromium.launch({headless: true}); const page = await browser.newPage(); page.on("pageerror",error=>console.log("PAGE ERROR",error.message));
+  // Prefer Playwright's bundled browser; fall back to an installed Chrome/Edge.
+  const executablePath = process.env.SYNDOCAL_UI_TEST_BROWSER ?? [
+    "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+  ].find(existsSync);
+  try { browser = await chromium.launch({headless: true}); }
+  catch (error) {
+    if (!executablePath) throw error;
+    browser = await chromium.launch({headless: true, executablePath});
+  }
+  const page = await browser.newPage(); page.on("pageerror",error=>console.log("PAGE ERROR",error.message));
   const open = async () => {await page.goto(url+"/network-routes-proof");await page.locator('[data-network-dmx-routes]').waitFor();};
   for (const viewport of [{width:1920,height:1080},{width:1920,height:1032},{width:2048,height:1152},{width:1366,height:768},{width:1280,height:720}]) {
     await page.setViewportSize(viewport); await open();
