@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { createSignal, For, onCleanup, Show, type JSX } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show, type JSX } from "solid-js";
 import {
   projectRecoverySourceLabel,
   projectRecoveryTimeLabel,
@@ -253,6 +253,11 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
 
   window.addEventListener("pointerdown", handleWindowPointerDown);
   window.addEventListener("keydown", handleWindowKeyDown, true);
+  // A lock engaged from inside the project menu (Lock Now, another window)
+  // must not leave that menu open and clickable under the lock.
+  createEffect(() => {
+    if (props.operatorLockMode !== null) setProjectMenuOpen(false);
+  });
   onCleanup(() => {
     window.removeEventListener("pointerdown", handleWindowPointerDown);
     window.removeEventListener("keydown", handleWindowKeyDown, true);

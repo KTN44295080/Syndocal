@@ -4052,6 +4052,11 @@ export default function App() {
     }));
   };
   const saveNamedWorkspace = async (name: string) => {
+    // Fail closed in the handler too; disabled buttons are not the boundary.
+    if (operatorLockMode() !== null) {
+      setMessage("Unlock operator mode before changing the workspace layout.");
+      return;
+    }
     try {
       const placements = await capturePaneWindowPlacements();
       const next = upsertNamedWorkspace(namedWorkspaces(), name, currentWorkspaceLayout(), placements);
@@ -4122,6 +4127,11 @@ export default function App() {
     }
   };
   const deleteNamedWorkspace = (profile: NamedWorkspaceProfile) => {
+    // Fail closed in the handler too; disabled buttons are not the boundary.
+    if (operatorLockMode() !== null) {
+      setMessage("Unlock operator mode before changing the workspace layout.");
+      return;
+    }
     const next = namedWorkspaces().filter((candidate) => candidate.id !== profile.id);
     if (!saveNamedWorkspaces(next)) {
       setMessage("Workspace delete failed: local workspace storage is unavailable.");
@@ -5782,6 +5792,11 @@ export default function App() {
     }
   });
   const resetWorkspaceLayout = () => {
+    // Fail closed in the handler too; disabled buttons are not the boundary.
+    if (operatorLockMode() !== null) {
+      setMessage("Unlock operator mode before changing the workspace layout.");
+      return;
+    }
     applyWorkspaceLayout(defaultWorkspaceLayout);
     setMessage("Workspace layout reset to the default desk.");
   };
