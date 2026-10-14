@@ -22,6 +22,11 @@ pub mod media_derived;
 mod move_path;
 mod project_load_preparation;
 pub use project_load_preparation::prepare_project_snapshot_persistence;
+mod independent_usb_dmx;
+pub use independent_usb_dmx::{
+    IndependentUsbDmxRouteStatusSnapshot, MAX_INDEPENDENT_USB_DMX_ROUTES,
+};
+use independent_usb_dmx::{IndependentUsbDmxSlotTelemetry, RuntimeIndependentUsbDmxRoute};
 mod show_serial_dmx_status;
 mod snapshot_public;
 mod snapshot_read;
@@ -4147,7 +4152,11 @@ define_engine_command! {
     /// Runtime-only USB-DMX worker activation. The logical route is fixed in
     /// this crate; the caller supplies only a previously exact-captured local
     /// device identity. This command never changes the project snapshot.
+    ///
+    /// `universe` 0 is the fixed Unity-mirror cable; another universe starts
+    /// an independent cable that needs no Art-Net route.
     EnableShowSerialDmxSafetyBlackoutRoute {
+        universe: u16,
         expected_device: io::serial_dmx::VerifiedUsbSerialPortIdentity,
         expected_safety_epoch: u64,
         expected_safety_generation: u64,
@@ -4157,6 +4166,7 @@ define_engine_command! {
     /// Retire only the runtime-only USB-DMX worker. No generic route can be
     /// disabled through this command and no project state is changed.
     StopShowSerialDmxSafetyBlackoutRoute {
+        universe: u16,
         expected_safety_epoch: u64,
         expected_safety_generation: u64,
         expires_at: Instant,
@@ -6680,10 +6690,17 @@ struct EngineSharedTelemetry {
     safety_blackout: Mutex<SafetyBlackoutAuthority>,
     safety_blackout_enqueue_reservations: Mutex<VecDeque<SafetyBlackoutEnqueueReservation>>,
     show_serial_dmx_route_status: ShowSerialDmxRouteStatusStore,
+    /// USB-DMX cables for universes other than the U0 Unity mirror. Each has
+    /// its own device gate sharing `open_dmx_safety_write_gate`'s S0 latch.
+    independent_usb_dmx: [IndependentUsbDmxSlotTelemetry; MAX_INDEPENDENT_USB_DMX_ROUTES],
 }
 
 impl EngineSharedTelemetry {
     fn new() -> Self {
+        let open_dmx_safety_write_gate = OpenDmxSafetyWriteGate::new();
+        let independent_usb_dmx = std::array::from_fn(|_| {
+            IndependentUsbDmxSlotTelemetry::new(&open_dmx_safety_write_gate)
+        });
         Self {
             video_render_sampling: RwLock::new(video_render_sample::VideoSamplingPublication::default()),
             queue_push_failure_count: AtomicU64::new(0),
@@ -6691,7 +6708,7 @@ impl EngineSharedTelemetry {
             live_audio_take_gate: Mutex::new(()),
             timeline_audio_live_fence: TimelineAudioLiveFence::default(),
             safety_blackout_enqueue_gate: Mutex::new(()),
-            open_dmx_safety_write_gate: OpenDmxSafetyWriteGate::new(),
+            open_dmx_safety_write_gate,
             safety_blackout: Mutex::new(SafetyBlackoutAuthority {
                 engaged: false,
                 epoch: 1,
@@ -6699,6 +6716,7 @@ impl EngineSharedTelemetry {
             }),
             safety_blackout_enqueue_reservations: Mutex::new(VecDeque::new()),
             show_serial_dmx_route_status: ShowSerialDmxRouteStatusStore::new(),
+            independent_usb_dmx,
         }
     }
 
@@ -6804,6 +6822,24 @@ impl EngineSharedTelemetry {
         ),
         String,
     > {
+        self.engage_safety_blackout_for_usb_device_fault(timeout, &self.open_dmx_safety_write_gate)
+    }
+
+    /// As `engage_safety_blackout_for_usb_fault`, with the bounded physical
+    /// observation taken on the faulting cable's own gate. The S0 latch is
+    /// shared by every cable gate.
+    fn engage_safety_blackout_for_usb_device_fault(
+        &self,
+        timeout: Duration,
+        physical_gate: &OpenDmxSafetyWriteGate,
+    ) -> Result<
+        (
+            SafetyBlackoutEngageDisposition,
+            SafetyBlackoutAuthority,
+            Result<(), String>,
+        ),
+        String,
+    > {
         self.open_dmx_safety_write_gate.latch_blackout();
         let mut authority = self
             .safety_blackout
@@ -6829,9 +6865,7 @@ impl EngineSharedTelemetry {
         let disposition = SafetyBlackoutEngageDisposition::Applied;
         let committed = *authority;
         drop(authority);
-        let physical_gate = self
-            .open_dmx_safety_write_gate
-            .engage_blackout_bounded(timeout);
+        let physical_gate = physical_gate.engage_blackout_bounded(timeout);
         Ok((disposition, committed, physical_gate))
     }
 
@@ -6952,6 +6986,12 @@ impl EngineSharedTelemetry {
         if self.show_serial_dmx_route_status().faulted {
             return Err(
                 "Safety blackout release is rejected while the USB-DMX route fault remains latched; re-arm and verify the exact machine-local route before releasing S0"
+                    .to_string(),
+            );
+        }
+        if self.any_independent_usb_dmx_route_faulted() {
+            return Err(
+                "Safety blackout release is rejected while a USB-DMX cable fault remains latched; re-arm or stop that cable before releasing S0"
                     .to_string(),
             );
         }
@@ -7627,8 +7667,30 @@ impl EngineHandle {
         expected_safety_generation: u64,
         expires_at: Instant,
     ) -> Result<(), String> {
+        self.enable_usb_dmx_universe_route(
+            SHOW_SERIAL_DMX_UNIVERSE,
+            expected_device,
+            expected_safety_epoch,
+            expected_safety_generation,
+            expires_at,
+        )
+    }
+
+    /// Start the USB-DMX cable of one universe from an exact-captured local
+    /// device identity: Universe 0 is the Unity-mirror cable, any other
+    /// universe an independent cable. The acknowledgement means the device
+    /// opened and its initial all-zero transaction completed.
+    pub fn enable_usb_dmx_universe_route(
+        &self,
+        universe: u16,
+        expected_device: io::serial_dmx::VerifiedUsbSerialPortIdentity,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expires_at: Instant,
+    ) -> Result<(), String> {
         let (ack, receiver) = mpsc::sync_channel(1);
         self.send(EngineCommand::EnableShowSerialDmxSafetyBlackoutRoute {
+            universe,
             expected_device,
             expected_safety_epoch,
             expected_safety_generation,
@@ -7650,8 +7712,25 @@ impl EngineHandle {
         expected_safety_generation: u64,
         expires_at: Instant,
     ) -> Result<(), String> {
+        self.stop_usb_dmx_universe_route(
+            SHOW_SERIAL_DMX_UNIVERSE,
+            expected_safety_epoch,
+            expected_safety_generation,
+            expires_at,
+        )
+    }
+
+    /// Stop the USB-DMX cable of one universe under the exact engaged S0.
+    pub fn stop_usb_dmx_universe_route(
+        &self,
+        universe: u16,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expires_at: Instant,
+    ) -> Result<(), String> {
         let (ack, receiver) = mpsc::sync_channel(1);
         self.send(EngineCommand::StopShowSerialDmxSafetyBlackoutRoute {
+            universe,
             expected_safety_epoch,
             expected_safety_generation,
             expires_at,
@@ -7758,6 +7837,25 @@ impl EngineHandle {
         self.shared_telemetry
             .show_serial_dmx_route_status
             .set_observer(observer)
+    }
+
+    /// Per-cable status of the independent USB-DMX universes (not Universe 0).
+    pub fn try_independent_usb_dmx_route_statuses(
+        &self,
+    ) -> Result<Vec<IndependentUsbDmxRouteStatusSnapshot>, String> {
+        self.shared_telemetry
+            .try_independent_usb_dmx_route_statuses()
+    }
+
+    /// Observe status transitions of every independent USB-DMX cable.
+    pub fn set_independent_usb_dmx_route_status_observer(
+        &self,
+        observer: Option<Arc<dyn Fn(ShowSerialDmxRouteStatusSnapshot) + Send + Sync>>,
+    ) -> Result<(), String> {
+        for slot in &self.shared_telemetry.independent_usb_dmx {
+            slot.status.set_observer(observer.clone())?;
+        }
+        Ok(())
     }
 
     /// Send the single fixed DSF2026 ArtDmx acceptance probe through the
@@ -20971,6 +21069,8 @@ struct EngineRuntime {
     output: DmxOutputConfig,
     additional_dmx_outputs: Vec<RuntimeDmxOutput>,
     show_serial_dmx_route: Option<RuntimeShowSerialDmxRoute>,
+    independent_usb_dmx_routes:
+        [Option<RuntimeIndependentUsbDmxRoute>; MAX_INDEPENDENT_USB_DMX_ROUTES],
     /// Set only after the complete one-shot Art-Net / Open DMX terminal proof
     /// succeeds. It prevents a duplicate priority-queue command from
     /// faulting a safely completed terminal state merely because the USB
@@ -21412,6 +21512,7 @@ impl EngineRuntime {
             output,
             additional_dmx_outputs: Vec::new(),
             show_serial_dmx_route: None,
+            independent_usb_dmx_routes: std::array::from_fn(|_| None),
             managed_show_dmx_fail_stop_completion: None,
             managed_show_dmx_fail_stop_completion_generation: 0,
             output_ownership_role,
@@ -21504,6 +21605,9 @@ impl EngineRuntime {
                 "output ownership transition retired the USB-DMX route before a normal stop",
             );
         }
+        self.fault_all_independent_usb_dmx_routes(
+            "output ownership transition retired the cable before a normal stop",
+        );
         self.dmx_sender = None;
         self.dmx_sender_recovery = DmxRouteRecovery::default();
         for output in &mut self.additional_dmx_outputs {
@@ -24502,6 +24606,7 @@ impl EngineRuntime {
                 });
             }
             EngineCommand::EnableShowSerialDmxSafetyBlackoutRoute {
+                universe,
                 expected_device,
                 expected_safety_epoch,
                 expected_safety_generation,
@@ -24513,8 +24618,15 @@ impl EngineRuntime {
                         "Show serial DMX worker activation expired before engine execution"
                             .to_string(),
                     )
-                } else {
+                } else if universe == SHOW_SERIAL_DMX_UNIVERSE {
                     self.apply_show_serial_dmx_safety_blackout_route_enable(
+                        &expected_device,
+                        expected_safety_epoch,
+                        expected_safety_generation,
+                    )
+                } else {
+                    self.apply_independent_usb_dmx_route_enable(
+                        universe,
                         &expected_device,
                         expected_safety_epoch,
                         expected_safety_generation,
@@ -24526,6 +24638,7 @@ impl EngineRuntime {
                 let _ = ack.send(result);
             }
             EngineCommand::StopShowSerialDmxSafetyBlackoutRoute {
+                universe,
                 expected_safety_epoch,
                 expected_safety_generation,
                 expires_at,
@@ -24533,8 +24646,14 @@ impl EngineRuntime {
             } => {
                 let result = if Instant::now() > expires_at {
                     Err("Show serial DMX worker stop expired before engine execution".to_string())
-                } else {
+                } else if universe == SHOW_SERIAL_DMX_UNIVERSE {
                     self.apply_show_serial_dmx_safety_blackout_route_stop(
+                        expected_safety_epoch,
+                        expected_safety_generation,
+                    )
+                } else {
+                    self.apply_independent_usb_dmx_route_stop(
+                        universe,
                         expected_safety_epoch,
                         expected_safety_generation,
                     )
@@ -33374,6 +33493,11 @@ impl EngineRuntime {
                 }
             });
         enforce_show_serial_dmx_u0_invariants(&mut show_serial_u0_frame);
+        let independent_usb_dmx_frames = self.capture_independent_usb_dmx_frames(
+            &frames_by_universe,
+            effective_safety_blackout,
+            now,
+        );
         self.last_frame = frame;
         self.last_frames_by_universe = frames_by_universe.clone();
 
@@ -33524,6 +33648,11 @@ impl EngineRuntime {
                 }
             }
         }
+        self.send_independent_usb_dmx_frames(
+            &independent_usb_dmx_frames,
+            lighting_allowed,
+            effective_safety_blackout,
+        );
         if self.last_dmx_output_count > 0 {
             if intentional_early_tick {
                 self.record_dmx_output_tick_kind(now, true);
@@ -51580,8 +51709,12 @@ impl EngineRuntime {
                 "Managed show DMX fail-stop requires the physical Open DMX S0 latch".to_string(),
             );
         }
-        if (scope == ManagedDmxRetirementScope::ExactShow && !self.additional_dmx_outputs.is_empty())
-            || self.dmx_input_frames.contains_key(&SHOW_ARTNET_LOOPBACK_UNIVERSE)
+        if (scope == ManagedDmxRetirementScope::ExactShow
+            && (!self.additional_dmx_outputs.is_empty()
+                || !self.independent_usb_dmx_routes_absent()))
+            || self
+                .dmx_input_frames
+                .contains_key(&SHOW_ARTNET_LOOPBACK_UNIVERSE)
         {
             return Err(
                 "Managed show DMX fail-stop rejects additional DMX routes and Universe 0 input/merge state"
@@ -51630,6 +51763,7 @@ impl EngineRuntime {
     fn managed_show_dmx_terminal_absent(&self) -> bool {
         self.dmx_sender.is_none()
             && self.show_serial_dmx_route.is_none()
+            && self.independent_usb_dmx_routes_absent()
             && self
                 .additional_dmx_outputs
                 .iter()
@@ -51773,6 +51907,7 @@ impl EngineRuntime {
         if !absent_usb {
             self.fault_show_serial_dmx_route(cause);
         }
+        self.fault_all_independent_usb_dmx_routes(cause);
         // `fault_show_serial_dmx_route` snapshots Art-Net truth before this
         // cleanup clears the primary sender. Re-publish the same USB fault
         // facts after sender retirement so an observer cannot retain a stale
@@ -51957,6 +52092,16 @@ impl EngineRuntime {
         // exact S0 check itself, so a concurrent release fails closed rather
         // than deadlocking this one irreversible transaction.
         drop(_safety_enqueue_gate);
+
+        // Independent cables stop with their own physical zero receipt.
+        let cable_errors = self
+            .stop_all_independent_usb_dmx_routes(expected_safety_epoch, expected_safety_generation);
+        if !cable_errors.is_empty() {
+            return Err(ManagedShowDmxFailStopError::in_doubt(format!(
+                "Managed show DMX fail-stop USB-DMX cable retirement did not complete: {}",
+                cable_errors.join("; ")
+            )));
+        }
 
         if usb_required {
             self.apply_show_serial_dmx_safety_blackout_route_stop(
@@ -137866,6 +138011,8 @@ mod tests {
     mod network_dmx_route_tests;
     #[path = "../show_serial_dmx_tests.rs"]
     mod show_serial_dmx_tests;
+    #[path = "../independent_usb_dmx_tests.rs"]
+    mod independent_usb_dmx_tests;
     fn staged_show_artnet_loopback_output() -> DmxOutputConfig {
         DmxOutputConfig {
             enabled: false,

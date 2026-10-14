@@ -350,6 +350,26 @@ impl OpenDmxSafetyWriteGate {
         }
     }
 
+    /// The gate for one more Open DMX cable. It shares this gate's S0 latch,
+    /// so S0 (and every USB fault, which latches it) selects zero on every
+    /// cable at its next frame. It has its own physical-write mutex and
+    /// zero-write holds:
+    /// - cables never wait on each other's wire transaction;
+    /// - a startup or stop zero hold on one cable never zeros another;
+    /// - a wedged driver stalls only its own cable.
+    pub fn device_gate(&self) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(())),
+            blackout_latched: Arc::clone(&self.blackout_latched),
+            zero_write_holds: Arc::new(AtomicU32::new(0)),
+        }
+    }
+
+    /// Whether `other` selects zero from this gate's S0 latch.
+    pub fn shares_s0_latch_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.blackout_latched, &other.blackout_latched)
+    }
+
     /// Atomically reserve the safer physical direction before the priority S0
     /// command becomes observable.  The caller may hold other engine gates;
     /// this method itself contains no serial I/O.
@@ -1724,6 +1744,67 @@ mod tests {
             selected.iter().all(|value| *value == 0),
             "the latch proves only future selection is zero-only; it does not claim a prior zero transaction"
         );
+    }
+
+    fn selected_is_zero(gate: &OpenDmxSafetyWriteGate) -> bool {
+        let mut requested = [0u8; 512];
+        requested[0] = 200;
+        gate.write_selected_frame(&requested, |_| Ok(()))
+            .expect("an unheld gate must select a frame")
+            .1
+    }
+
+    #[test]
+    fn open_dmx_device_gates_share_s0_but_not_holds_or_physical_writes() {
+        let root = OpenDmxSafetyWriteGate::new();
+        let cable_a = root.device_gate();
+        let cable_b = root.device_gate();
+        assert!(cable_a.shares_s0_latch_with(&root) && cable_b.shares_s0_latch_with(&cable_a));
+        assert!(!selected_is_zero(&cable_a) && !selected_is_zero(&cable_b));
+
+        // A startup zero hold on B never zeros A.
+        let b_startup = cable_b
+            .reserve_startup_zero_write_bounded(Duration::from_millis(50))
+            .expect("B reserves its own startup zero");
+        assert!(
+            selected_is_zero(&cable_b),
+            "B selects zero while it is held"
+        );
+        assert!(!selected_is_zero(&cable_a), "B's hold must not zero A");
+        drop(b_startup);
+        assert!(!selected_is_zero(&cable_b));
+
+        // A wedged physical write on A never blocks B.
+        let a_wedged = cable_a.lock().expect("A's physical gate");
+        let started = Instant::now();
+        let b_write = cable_b.lock_bounded(Duration::from_millis(50));
+        assert!(b_write.is_ok(), "B must not wait on A's physical mutex");
+        assert!(started.elapsed() < Duration::from_millis(40));
+        drop(b_write);
+
+        // S0 through any gate selects zero on every cable, even with A wedged.
+        root.latch_blackout();
+        assert!(cable_b.blackout_engaged().unwrap());
+        assert!(selected_is_zero(&cable_b));
+        drop(a_wedged);
+        assert!(selected_is_zero(&cable_a));
+
+        // A release clears S0 for every cable, but a cable's own stop hold
+        // keeps that cable (only) zero.
+        let a_stop = cable_a
+            .reserve_zero_write_bounded(Duration::from_millis(50))
+            .expect("a stop hold needs S0 engaged");
+        root.set_blackout_engaged(false).unwrap();
+        assert!(
+            selected_is_zero(&cable_a),
+            "A's stop hold outlives the release"
+        );
+        assert!(
+            !selected_is_zero(&cable_b),
+            "B is live again after the release"
+        );
+        drop(a_stop);
+        assert!(!selected_is_zero(&cable_a));
     }
 
     #[test]

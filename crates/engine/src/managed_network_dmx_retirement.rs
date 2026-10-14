@@ -122,6 +122,10 @@ impl EngineRuntime {
             route.recovery = DmxRouteRecovery::default();
         }
         self.output_ownership_role = MachineOutputRole::Standby;
+        // Independent USB-DMX cables stop with their own physical zero
+        // receipt; that stop takes the S0 enqueue gate itself.
+        drop(_safety_gate);
+        errors.extend(self.stop_all_independent_usb_dmx_routes(safety_epoch, safety_generation));
         if !errors.is_empty() {
             return Err(ManagedShowDmxFailStopError::in_doubt(errors.join("; ")));
         }
