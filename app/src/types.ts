@@ -1784,6 +1784,27 @@ export interface MtcOutputStatus {
   last_error: string | null;
 }
 
+export interface LtcInputDeviceSummary {
+  name: string;
+  channels: number;
+  sample_rate: number;
+  is_default: boolean;
+}
+
+/** SMPTE LTC input chased by the Timeline (machine-local). */
+export interface LtcInputStatus {
+  running: boolean;
+  device_name: string | null;
+  channel_index: number;
+  sample_rate: number;
+  signal: boolean;
+  timecode: string | null;
+  frame_rate: string | null;
+  frames_decoded: number;
+  dropped_samples: number;
+  last_error: string | null;
+}
+
 export type TakeoverRecordingState = "idle" | "pending" | "blocked" | "started" | "failed" | "cancelled";
 
 /** After Take Over and Arm, the previous Primary's recording continues here. */

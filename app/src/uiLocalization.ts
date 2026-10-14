@@ -1783,6 +1783,19 @@ const japaneseText: Record<string, string> = {
   "Standby sync is changing; recording waits until it settles.": "Standby同期を切り替え中です。完了するまで録画は開始できません。",
   "Takeover recording folder": "引継ぎ録画フォルダー",
   "MTC output (optional)": "MTC出力（任意）",
+  "LTC input": "LTC入力",
+  "Stop LTC input before connecting MIDI Clock / MTC; two timecode sources would fight":
+    "MIDI Clock / MTCを接続する前にLTC入力を停止してください。2つのタイムコードが競合します",
+  "Disconnect MIDI Clock / MTC before following LTC; two timecode sources would fight":
+    "LTCに追従する前にMIDI Clock / MTCを切断してください。2つのタイムコードが競合します",
+  "The Timeline follows SMPTE timecode (LTC) on one channel of an audio input.":
+    "オーディオ入力の1チャンネルに入るSMPTEタイムコード（LTC）にTimelineが追従します。",
+  "Start LTC": "LTC受信開始",
+  "Stop LTC": "LTC受信停止",
+  "Chasing LTC": "LTCに追従中",
+  "Listening · no LTC signal": "受信待機中・LTC信号なし",
+  "Signal": "信号あり",
+  "No signal": "信号なし",
   "Sends MIDI Time Code that follows the Timeline to another device. Only a PC whose output is armed sends.":
     "Timelineに追従するMIDIタイムコードを他の機器へ送ります。出力をArmしたPCだけが送信します。",
   "MIDI output": "MIDI出力",

@@ -79,6 +79,7 @@ import type { ExtensionStatus } from "./extensionsStatus";
 import { IoDisclosure, SetupIoConnectionDeck, type IoConnectionId } from "./components/IoConnectionDeck";
 import { StandbySyncPanel } from "./components/StandbySyncPanel";
 import { MtcOutputSection } from "./components/MtcOutputSection";
+import { LtcInputPanel } from "./components/LtcInputPanel";
 import { ShowClockStatusPanel } from "./components/ShowClockStatusPanel";
 import { DmxInputPanel } from "./components/DmxInputPanel";
 import { DmxRawMonitor } from "./components/DmxRawMonitor";
@@ -29573,6 +29574,7 @@ export default function App() {
           <div class="ioOperatorSurface syncOperatorSurface">
             <StandbySyncPanel backendAvailable={isTauriRuntime()} invokeCommand={invoke} />
             <ShowClockStatusPanel backendAvailable={isTauriRuntime()} invokeCommand={invoke} />
+            <LtcInputPanel backendAvailable={isTauriRuntime()} invokeCommand={invoke} />
           </div>
           </section>
             ) : (

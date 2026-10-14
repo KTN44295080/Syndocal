@@ -22644,6 +22644,18 @@ h3 {
   min-width: 0;
 }
 
+.ltcInputControls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 6rem) auto auto;
+  align-items: end;
+  gap: 6px;
+}
+
+.ltcInputState {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
 .mtcOutputControls {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 12rem) auto;

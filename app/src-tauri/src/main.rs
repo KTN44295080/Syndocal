@@ -323,6 +323,7 @@ mod serial_dmx_machine;
 #[cfg(test)]
 mod serial_show_dmx_route_tests;
 mod show_serial_dmx_route;
+mod ltc_input;
 mod mtc_output;
 mod recording_lease;
 mod recording_ownership;
@@ -3158,6 +3159,8 @@ struct AppState {
     midi_feedback: Arc<Mutex<Option<MidiFeedbackOutput>>>,
     /// MIDI Time Code output following the Timeline (machine-local).
     mtc_output: Mutex<Option<mtc_output::MtcOutputRuntime>>,
+    /// SMPTE LTC input chased by the Timeline (machine-local).
+    ltc_input: Mutex<Option<ltc_input::LtcInputRuntime>>,
     midi_feedback_runtime: Mutex<Option<MidiFeedbackRuntime>>,
     midi_feedback_last_error: Arc<Mutex<Option<String>>>,
     osc_input: Mutex<Option<OscInput>>,
@@ -25360,6 +25363,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "start_asio_program_cue_output",
     "start_dmx_input",
     "start_live_audio_input",
+    "start_ltc_input_v1",
     "start_mtc_output_v1",
     "start_osc_input",
     "start_remote_control",
@@ -25369,6 +25373,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "stop_close_asio_program_cue_output",
     "stop_dmx_input",
     "stop_live_audio_input",
+    "stop_ltc_input_v1",
     "stop_mtc_output_v1",
     "stop_osc_input",
     "stop_remote_control",
@@ -30080,6 +30085,17 @@ fn connect_midi_clock(
     ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
     ensure_no_pending_project_transaction(&coordinator)?;
     let coordinator_epoch = coordinator.epoch;
+    if state
+        .ltc_input
+        .lock()
+        .map_err(|_| "LTC input lock was poisoned".to_string())?
+        .is_some()
+    {
+        return Err(
+            "Stop LTC input before connecting MIDI Clock / MTC; two timecode sources would fight"
+                .to_string(),
+        );
+    }
     let callback_epoch = Arc::clone(&state.project_callback_epoch);
     let captured_callback_epoch = callback_epoch.load(Ordering::Acquire);
     let previous = state
@@ -36682,6 +36698,86 @@ fn seek_timeline_beat(state: State<'_, AppState>, direction: i32) -> Result<(), 
         .engine
         .send(EngineCommand::SeekTimelineBeat { direction })
         .map_err(|error| error.to_string())
+}
+
+fn current_ltc_input_status(state: &AppState) -> Result<ltc_input::LtcInputStatus, String> {
+    Ok(state
+        .ltc_input
+        .lock()
+        .map_err(|_| "LTC input lock was poisoned".to_string())?
+        .as_ref()
+        .map(ltc_input::LtcInputRuntime::status)
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+async fn list_ltc_input_devices_v1() -> Result<Vec<ltc_input::LtcInputDeviceSummary>, String> {
+    tauri::async_runtime::spawn_blocking(ltc_input::list_devices)
+        .await
+        .map_err(|error| format!("LTC input device query worker failed: {error}"))?
+}
+
+#[tauri::command]
+fn start_ltc_input_v1(
+    state: State<'_, AppState>,
+    device_name: Option<String>,
+    channel_index: u16,
+) -> Result<ltc_input::LtcInputStatus, String> {
+    // Held through the start, so MIDI Clock cannot connect in between (lock
+    // order: midi_clock, then ltc_input, as in connect_midi_clock).
+    let midi_clock = state
+        .midi_clock
+        .lock()
+        .map_err(|_| "MIDI state lock was poisoned".to_string())?;
+    if midi_clock.is_some() {
+        return Err(
+            "Disconnect MIDI Clock / MTC before following LTC; two timecode sources would fight"
+                .to_string(),
+        );
+    }
+    let mut slot = state
+        .ltc_input
+        .lock()
+        .map_err(|_| "LTC input lock was poisoned".to_string())?;
+    drop(slot.take());
+    // LTC input is machine-local (it outlives projects): its commands are
+    // admitted like other external commands and held during a project
+    // transaction.
+    let engine = state.engine.clone();
+    let transaction_active = Arc::clone(&state.project_transaction_active);
+    let admission = Arc::clone(&state.project_external_command_admission);
+    let sender: ltc_input::TimecodeSender = Box::new(move |command| {
+        run_if_project_external_command_admitted(&admission, &transaction_active, || {
+            engine.send(command)
+        })
+        .is_some_and(|result| result.is_ok())
+    });
+    let runtime = ltc_input::LtcInputRuntime::start(
+        sender,
+        device_name.filter(|name| !name.trim().is_empty()),
+        channel_index,
+    )?;
+    let status = runtime.status();
+    *slot = Some(runtime);
+    Ok(status)
+}
+
+#[tauri::command]
+fn stop_ltc_input_v1(state: State<'_, AppState>) -> Result<ltc_input::LtcInputStatus, String> {
+    let runtime = state
+        .ltc_input
+        .lock()
+        .map_err(|_| "LTC input lock was poisoned".to_string())?
+        .take();
+    drop(runtime);
+    current_ltc_input_status(&state)
+}
+
+#[tauri::command]
+async fn ltc_input_status_v1(app: tauri::AppHandle) -> Result<ltc_input::LtcInputStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || current_ltc_input_status(&app.state::<AppState>()))
+        .await
+        .map_err(|error| format!("LTC input status query worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -91800,6 +91896,7 @@ pub(crate) mod tests {
                 midi_control: Mutex::new(None),
                 midi_feedback: Arc::new(Mutex::new(None)),
                 mtc_output: Mutex::new(None),
+                ltc_input: Mutex::new(None),
                 midi_feedback_runtime: Mutex::new(None),
                 midi_feedback_last_error: Arc::new(Mutex::new(None)),
                 osc_input: Mutex::new(None),
@@ -96004,6 +96101,8 @@ pub(crate) mod tests {
             "standby_sync_status",
             "video_output_recording_status",
             "mtc_output_status_v1",
+            "ltc_input_status_v1",
+            "list_ltc_input_devices_v1",
             "get_output_ownership_status",
             "get_engine_telemetry_report",
             "remote_control_status",
@@ -97303,7 +97402,7 @@ pub(crate) mod tests {
             );
         }
         // The extension setter owns its lifecycle authority inside the handler.
-        assert_eq!(runtime_routes.len(), 175);
+        assert_eq!(runtime_routes.len(), 177);
         assert_eq!(
             OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
                 + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),
@@ -133427,6 +133526,7 @@ fn main() {
             midi_control: Mutex::new(None),
             midi_feedback: Arc::new(Mutex::new(None)),
             mtc_output: Mutex::new(None),
+            ltc_input: Mutex::new(None),
             midi_feedback_runtime: Mutex::new(None),
             midi_feedback_last_error: Arc::new(Mutex::new(None)),
             osc_input: Mutex::new(None),
@@ -133670,6 +133770,10 @@ fn main() {
             start_mtc_output_v1,
             stop_mtc_output_v1,
             mtc_output_status_v1,
+            list_ltc_input_devices_v1,
+            start_ltc_input_v1,
+            stop_ltc_input_v1,
+            ltc_input_status_v1,
             send_midi_feedback,
             learn_midi_control,
             save_midi_mappings,
