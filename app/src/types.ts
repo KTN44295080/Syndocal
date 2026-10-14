@@ -66,6 +66,7 @@ export interface ShowClockIpcStatus {
   dropped_datagrams: number;
   /** Well-formed envelopes refused (bad tag, replay, reorder); never applied. */
   rejected_packets?: number;
+  last_rejection?: string | null;
   last_error: string | null;
 }
 

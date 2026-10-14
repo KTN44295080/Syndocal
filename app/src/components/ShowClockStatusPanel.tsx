@@ -41,6 +41,7 @@ const emptyStatus: ShowClockIpcStatus = {
   last_action_status: null,
   dropped_datagrams: 0,
   rejected_packets: 0,
+  last_rejection: null,
   last_error: null,
 };
 
@@ -329,7 +330,9 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
         <div><dt>Dropped</dt><dd>{status().dropped_datagrams}</dd></div>
         <div
           classList={{ showClockRejectedWarning: (status().rejected_packets ?? 0) > 0 }}
-          title="Packets with an invalid signature or a replayed/out-of-order sequence. They are ignored; a rising count means another device on the network is sending ShowClock traffic."
+          title={status().last_rejection
+            ? `Last refused: ${status().last_rejection}. Refused packets are ignored; a rising count means another device is sending ShowClock traffic or packets arrive late.`
+            : "Packets with an invalid signature or a replayed/late sequence are ignored and counted here."}
         >
           <dt>Rejected</dt><dd>{status().rejected_packets ?? 0}</dd>
         </div>

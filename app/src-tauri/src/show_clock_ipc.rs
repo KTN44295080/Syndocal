@@ -127,6 +127,8 @@ pub struct ShowClockIpcStatus {
     /// never applied. Authenticated envelopes that violate the session,
     /// generation or schedule contract still fault the worker.
     pub rejected_packets: u64,
+    /// Why the most recent envelope was refused, for the operator.
+    pub last_rejection: Option<String>,
     pub last_error: Option<String>,
 }
 
@@ -156,6 +158,7 @@ impl Default for ShowClockIpcStatus {
             last_action_status: None,
             dropped_datagrams: 0,
             rejected_packets: 0,
+            last_rejection: None,
             last_error: None,
         }
     }
@@ -375,6 +378,7 @@ impl ShowClockIpcState {
                 last_action_status: None,
                 dropped_datagrams: 0,
                 rejected_packets: 0,
+                last_rejection: None,
                 last_error: None,
             };
         }
@@ -1050,7 +1054,12 @@ fn run_standby(
                     .expect("standby validator exists")
                     .sample_is_authentic(&sample)
                 {
-                    reject_standby_packet(runtime, status, origin)?;
+                    reject_standby_packet(
+                        runtime,
+                        status,
+                        origin,
+                        "authentication tag is invalid",
+                    )?;
                     continue;
                 }
                 let received_at_us = monotonic_elapsed_us(origin, Instant::now());
@@ -1067,11 +1076,19 @@ fn run_standby(
                         received_at_us,
                     ) {
                     Ok(()) => {}
-                    Err(protocol::show_clock::ShowClockValidationError::Replay | protocol::show_clock::ShowClockValidationError::Reordered) => {
-                        reject_standby_packet(runtime, status, origin)?;
+                    Err(
+                        error @ (protocol::show_clock::ShowClockValidationError::Replay
+                        | protocol::show_clock::ShowClockValidationError::Reordered),
+                    ) => {
+                        // A replayed or late sample (capturable, or UDP
+                        // reordering) is refused; a newer authentic sample
+                        // whose clock moved backwards still faults below.
+                        reject_standby_packet(runtime, status, origin, &error.to_string())?;
                         continue;
                     }
-                    Err(error) => return Err(format!("ShowClock standby sample rejected: {error}")),
+                    Err(error) => {
+                        return Err(format!("ShowClock standby sample rejected: {error}"))
+                    }
                 }
                 let estimate = runtime
                     .estimator
@@ -1097,22 +1114,23 @@ fn run_standby(
                     .expect("standby action receiver exists")
                     .action_is_authentic(&action)
                 {
-                    reject_standby_packet(runtime, status, origin)?;
+                    reject_standby_packet(
+                        runtime,
+                        status,
+                        origin,
+                        "authentication tag is invalid",
+                    )?;
                     continue;
                 }
-                let admission = match runtime
+                // An exact replay of an accepted action is admitted as a
+                // Duplicate. An authentic action that is older or reuses a
+                // sequence means a real action was lost: fail closed.
+                let admission = runtime
                     .action_receiver
                     .as_mut()
                     .expect("standby action receiver exists")
                     .admit(&action)
-                {
-                    Ok(admission) => admission,
-                    Err(protocol::show_clock::ShowClockValidationError::Replay | protocol::show_clock::ShowClockValidationError::Reordered) => {
-                        reject_standby_packet(runtime, status, origin)?;
-                        continue;
-                    }
-                    Err(error) => return Err(format!("ShowClock standby action rejected: {error}")),
-                };
+                    .map_err(|error| format!("ShowClock standby action rejected: {error}"))?;
                 let action_id = hex_string(&action.body.action_id);
                 publish_action_admission(
                     status,
@@ -1178,15 +1196,17 @@ fn advance_standby_without_sample(
     pump_actions(runtime, status, estimate.show_time_us, estimate.state)
 }
 
-/// Count a refused envelope (unverifiable tag, replayed or reordered
-/// sequence) and carry on as if nothing arrived. It is never applied.
+/// Count a refused envelope (unverifiable tag, replayed or late sample)
+/// and carry on as if nothing arrived. It is never applied.
 fn reject_standby_packet(
     runtime: &mut ShowClockWorkerRuntime,
     status: &Arc<Mutex<ShowClockIpcStatus>>,
     origin: Instant,
+    reason: &str,
 ) -> Result<(), String> {
     update_status(status, |current| {
         current.rejected_packets = current.rejected_packets.saturating_add(1);
+        current.last_rejection = Some(reason.to_string());
     });
     advance_standby_without_sample(runtime, status, origin)
 }
@@ -1293,8 +1313,10 @@ fn pump_actions(
     current_show_time_us: u64,
     state: ShowClockEstimatorState,
 ) -> Result<(), String> {
-    if matches!(state, ShowClockEstimatorState::Stale | ShowClockEstimatorState::Fault)
-        && (runtime.output_gate.is_armed() || runtime.output_permit.is_some())
+    if matches!(
+        state,
+        ShowClockEstimatorState::Stale | ShowClockEstimatorState::Fault
+    ) && (runtime.output_gate.is_armed() || runtime.output_permit.is_some())
     {
         runtime.output_gate.disarm();
         runtime.output_permit.take();
@@ -1801,7 +1823,10 @@ mod tests {
         let status = standby.status().unwrap();
         assert!(status.running, "{status:?}");
         assert_ne!(status.state, ShowClockIpcPhase::Fault, "{status:?}");
-        assert_eq!(status.dropped_datagrams, 0, "well-formed envelopes are not noise");
+        assert_eq!(
+            status.dropped_datagrams, 0,
+            "well-formed envelopes are not noise"
+        );
         standby.stop().unwrap();
         status
     }
@@ -1825,10 +1850,31 @@ mod tests {
         // the original is still accepted.
         let session = "drop-replay-session";
         let replayed = signed_peer_sample(session, 1, &key);
-        let replay =
-            standby_status_after_rejections(session, &[replayed.clone(), replayed], 1);
+        let replay = standby_status_after_rejections(session, &[replayed.clone(), replayed], 1);
         assert_eq!(replay.rejected_packets, 1);
         assert_eq!(replay.accepted_samples, 1, "{replay:?}");
+        assert_eq!(replay.last_sequence, 1);
+        assert!(replay
+            .last_rejection
+            .as_deref()
+            .is_some_and(|reason| reason.contains("already accepted")));
+
+        // A sample arriving after a newer one (UDP reordering) is refused too.
+        let session = "drop-late-session";
+        let late = standby_status_after_rejections(
+            session,
+            &[
+                signed_peer_sample(session, 2, &key),
+                signed_peer_sample(session, 1, &key),
+            ],
+            1,
+        );
+        assert_eq!(late.accepted_samples, 1, "{late:?}");
+        assert_eq!(late.last_sequence, 2);
+        assert!(late
+            .last_rejection
+            .as_deref()
+            .is_some_and(|reason| reason.contains("older")));
     }
 
     #[test]

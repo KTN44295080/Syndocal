@@ -50,6 +50,9 @@ pub enum ShowClockValidationError {
     FencingGenerationMismatch,
     Replay,
     Reordered,
+    /// An authentic sample with a newer sequence whose sender or show time
+    /// moved backwards: the paired Primary itself is inconsistent.
+    ClockRegressed,
     ActionConflict,
     DuplicateAction,
     HoldRequired,
@@ -93,6 +96,7 @@ impl std::fmt::Display for ShowClockValidationError {
             Self::FencingGenerationMismatch => "ShowClock fencing generation does not match",
             Self::Replay => "ShowClock sequence was already accepted",
             Self::Reordered => "ShowClock sequence is older than the accepted sequence",
+            Self::ClockRegressed => "ShowClock sender time moved backwards",
             Self::ActionConflict => "ShowClock action id was reused with different content",
             Self::DuplicateAction => "ShowClock action was already accepted",
             Self::HoldRequired => "ShowClock peer must be in manual Hold",
@@ -560,13 +564,13 @@ impl ShowClockPeerValidator {
             .last_sender_monotonic_us
             .is_some_and(|last| sample.body.sender_monotonic_us < last)
         {
-            return Err(ShowClockValidationError::Reordered);
+            return Err(ShowClockValidationError::ClockRegressed);
         }
         if self
             .last_show_time_us
             .is_some_and(|last| sample.body.show_time_us < last)
         {
-            return Err(ShowClockValidationError::Reordered);
+            return Err(ShowClockValidationError::ClockRegressed);
         }
         Ok(())
     }
@@ -581,7 +585,9 @@ impl ShowClockPeerValidator {
     /// fails here cannot be attributed to the paired peer (anyone on the LAN
     /// can send one), so receivers drop it instead of faulting.
     pub fn sample_is_authentic(&self, sample: &AuthenticatedShowClockSample) -> bool {
-        sample.verify_and_canonical(self.peer.key.as_bytes()).is_ok()
+        sample
+            .verify_and_canonical(self.peer.key.as_bytes())
+            .is_ok()
     }
 
     pub fn last_sequence(&self) -> u64 {
@@ -852,7 +858,9 @@ impl ShowClockActionReceiver {
     /// Whether `action` carries a valid tag for this peer's key; see
     /// [`ShowClockPeerValidator::sample_is_authentic`].
     pub fn action_is_authentic(&self, action: &AuthenticatedShowClockAction) -> bool {
-        action.verify_and_canonical(self.peer.key.as_bytes()).is_ok()
+        action
+            .verify_and_canonical(self.peer.key.as_bytes())
+            .is_ok()
     }
 
     pub fn new(
@@ -1215,7 +1223,7 @@ mod tests {
         let stale = AuthenticatedShowClockSample::sign(sample(2, 999_000), &KEY).unwrap();
         assert_eq!(
             receiver.accept(&stale),
-            Err(ShowClockValidationError::Reordered)
+            Err(ShowClockValidationError::ClockRegressed)
         );
 
         let mut backwards_sender_time = sample(2, 1_002_000);
@@ -1224,7 +1232,7 @@ mod tests {
             AuthenticatedShowClockSample::sign(backwards_sender_time, &KEY).unwrap();
         assert_eq!(
             receiver.accept(&backwards_sender_time),
-            Err(ShowClockValidationError::Reordered)
+            Err(ShowClockValidationError::ClockRegressed)
         );
         assert_eq!(receiver.last_sequence(), 1);
         assert_eq!(receiver.last_sender_monotonic_us(), Some(1_000_000));
