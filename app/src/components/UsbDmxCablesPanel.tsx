@@ -16,6 +16,8 @@ const STATUS_REFRESH_MS = 2_000;
 
 interface UsbDmxCablesPanelProps {
   status: UsbDmxUniversesStatus | null;
+  /** The last read failed; `status` is the last known state. */
+  stale: boolean;
   serialPorts: SerialPortSummary[];
   /** The Universe 0 (Show DMX) cable, which no universe row may take. */
   showDmxCable: SerialDmxMachineBindingIdentity | null;
@@ -31,6 +33,13 @@ interface UsbDmxCablesPanelProps {
 const portKey = (port: SerialPortSummary) => `${port.name}\u0000${serialDmxDeviceInstance(port) ?? ""}`;
 
 type CableState = "missing" | "fault" | "sending" | "armed" | "stopping" | "stopped";
+
+/** A universe row: its binding (if readable) and its engine cable (if any). */
+interface CableRow {
+  universe: number;
+  binding: UsbDmxUniverseBindingStatus | null;
+  cable: UsbDmxCableStatus | null;
+}
 
 /**
  * One row per universe that has its own USB-DMX cable (Universe 1 and up).
@@ -52,6 +61,21 @@ export function UsbDmxCablesPanel(props: UsbDmxCablesPanelProps) {
     [...(props.status?.bindings ?? [])].sort((left, right) => left.universe - right.universe));
   const cableFor = (universe: number): UsbDmxCableStatus | undefined =>
     props.status?.cables.find((cable) => cable.universe === universe);
+  // A running, faulted or unjoined cable keeps its row (and Stop) even when
+  // its binding cannot be read.
+  const rows = createMemo<CableRow[]>(() => {
+    const byUniverse = new Map<number, CableRow>();
+    for (const binding of bindings()) {
+      byUniverse.set(binding.universe, { universe: binding.universe, binding, cable: cableFor(binding.universe) ?? null });
+    }
+    for (const cable of props.status?.cables ?? []) {
+      if (cable.universe === null || byUniverse.has(cable.universe)) continue;
+      if (cable.active || cable.faulted || !cable.workerShutdownCompleted || cable.liveFrameQueued) {
+        byUniverse.set(cable.universe, { universe: cable.universe, binding: null, cable });
+      }
+    }
+    return [...byUniverse.values()].sort((left, right) => left.universe - right.universe);
+  });
   const nextFreeUniverse = createMemo(() => {
     const used = new Set(bindings().map((binding) => binding.universe));
     let universe = MIN_UNIVERSE;
@@ -73,17 +97,28 @@ export function UsbDmxCablesPanel(props: UsbDmxCablesPanelProps) {
     return Number.isInteger(universe) && universe >= MIN_UNIVERSE && universe <= MAX_UNIVERSE
       && !bindings().some((binding) => binding.universe === universe);
   };
-  const canBind = () => !busy() && props.status !== null && bindings().length < MAX_CABLES
+  const canBind = () => !busy() && props.status !== null && !props.stale && bindings().length < MAX_CABLES
     && universeValid() && Boolean(selectedPort()) && !props.status?.persistenceError;
 
-  const cableState = (binding: UsbDmxUniverseBindingStatus): CableState => {
-    const cable = cableFor(binding.universe);
+  const cableState = (row: CableRow): CableState => {
+    const cable = row.cable;
     if (cable?.faulted) return "fault";
     if (cable?.active) return cable.liveFrameQueued ? "sending" : "armed";
     if (cable && !cable.workerShutdownCompleted) return "stopping";
-    if (binding.state !== "selected_and_present") return "missing";
+    if (cable?.zeroFrameQueued && !cable.zeroFramePhysicalWriteCompleted) return "stopping";
+    if (row.binding?.state !== "selected_and_present") return "missing";
     return "stopped";
   };
+  const present = (row: CableRow) => row.binding?.state === "selected_and_present";
+  const joined = (row: CableRow) => row.cable?.workerShutdownCompleted !== false;
+  // The same admission native code applies; it stays the authority.
+  const canStart = (row: CableRow) => !props.stale && present(row)
+    && (cableState(row) === "stopped" || (cableState(row) === "fault" && joined(row) && props.safetyBlackoutEngaged));
+  const canStop = (row: CableRow) => props.safetyBlackoutEngaged
+    && (cableState(row) === "sending" || cableState(row) === "armed" || (cableState(row) === "fault" && joined(row)));
+  const canRemove = (row: CableRow) => !props.stale && row.binding !== null
+    && (cableState(row) === "stopped" || cableState(row) === "missing"
+      || (cableState(row) === "fault" && joined(row) && props.safetyBlackoutEngaged));
   const stateLabel: Record<CableState, string> = {
     missing: "Cable missing",
     fault: "Fault · S0 latched",
@@ -120,26 +155,32 @@ export function UsbDmxCablesPanel(props: UsbDmxCablesPanelProps) {
       <p class="hint">
         Give a universe its own USB-DMX cable. One cable outputs one universe; Universe 0 uses Show DMX above.
       </p>
-      <Show when={props.status === null}>
-        <p class="hint" role="status" data-usb-dmx-cables-unavailable>USB-DMX cable status is unavailable; cables cannot be changed.</p>
+      <Show when={props.status === null || props.stale}>
+        <p class="hint" role="status" data-usb-dmx-cables-unavailable>
+          {props.status === null
+            ? "USB-DMX cable status is unavailable; cables cannot be changed."
+            : "USB-DMX cable status could not be refreshed; showing the last known state. Stop stays available."}
+        </p>
       </Show>
       <Show when={props.status?.persistenceError}>
         {(error) => <p class="fieldError" role="alert" data-no-localize>{error()}</p>}
       </Show>
       <div class="networkDmxRouteRows">
-        <For each={bindings()}>{(binding) => {
-          const state = () => cableState(binding);
-          const cable = () => cableFor(binding.universe);
+        <For each={rows()}>{(row) => {
+          const state = () => cableState(row);
+          const identity = () => row.binding?.identity;
           return (
-            <fieldset class="networkDmxRouteRow usbDmxCableRow" disabled={busy()} data-usb-dmx-cable={binding.universe}>
-              <legend data-no-localize>{`USB-DMX · U${binding.universe}`}</legend>
-              <span class="usbDmxCableDevice" data-no-localize title={binding.detail}>
-                {`${binding.identity.port_name} · ${binding.identity.manufacturer} / ${binding.identity.product} · ${binding.identity.serial_number}`}
+            <fieldset class="networkDmxRouteRow usbDmxCableRow" disabled={busy()} data-usb-dmx-cable={row.universe}>
+              <legend data-no-localize>{`USB-DMX · U${row.universe}`}</legend>
+              <span class="usbDmxCableDevice" data-no-localize title={row.binding?.detail ?? row.cable?.detail ?? ""}>
+                {identity()
+                  ? `${identity()!.port_name} · ${identity()!.manufacturer} / ${identity()!.product} · ${identity()!.serial_number}`
+                  : "—"}
               </span>
               <span
                 class={`ioConnectionState ${stateTone[state()]}`}
                 data-usb-dmx-cable-state={state()}
-                title={cable()?.detail ?? binding.detail}
+                title={row.cable?.detail ?? row.binding?.detail ?? ""}
               >
                 <i aria-hidden="true" />{stateLabel[state()]}
               </span>
@@ -147,26 +188,24 @@ export function UsbDmxCablesPanel(props: UsbDmxCablesPanelProps) {
                 type="button"
                 class="primary"
                 data-usb-dmx-cable-start
-                disabled={state() !== "stopped" && state() !== "fault"}
+                disabled={!canStart(row)}
                 title="Opens the cable and writes one zero frame first; the safety blackout state is unchanged."
-                onClick={() => void run(() => props.onStart(binding.universe))}
+                onClick={() => void run(() => props.onStart(row.universe))}
               >Start</button>
               <button
                 type="button"
                 data-usb-dmx-cable-stop
-                disabled={!props.safetyBlackoutEngaged
-                  || !(state() === "sending" || state() === "armed"
-                    || (state() === "fault" && cable()?.workerShutdownCompleted === true))}
+                disabled={!canStop(row)}
                 title={props.safetyBlackoutEngaged
                   ? "Writes one zero frame, then stops the cable. A faulted cable is taken out of service."
                   : "Stopping a cable requires the safety blackout (S0)."}
-                onClick={() => void run(() => props.onStop(binding.universe))}
+                onClick={() => void run(() => props.onStop(row.universe))}
               >Stop</button>
               <button
                 type="button"
                 data-usb-dmx-cable-remove
-                disabled={state() === "sending" || state() === "armed" || state() === "stopping"}
-                onClick={() => void run(() => props.onClear(binding.universe))}
+                disabled={!canRemove(row)}
+                onClick={() => void run(() => props.onClear(row.universe))}
               >Remove</button>
             </fieldset>
           );

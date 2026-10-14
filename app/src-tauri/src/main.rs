@@ -30026,9 +30026,10 @@ fn get_show_serial_dmx_safety_blackout_route_status_v1(
 }
 
 /// Read-only: machine-local USB-DMX cable bindings (Universes 1+) and every
-/// cable slot's runtime status.
+/// cable slot's runtime status. Async so the polled device enumeration never
+/// runs on the main (UI) thread.
 #[tauri::command]
-fn get_usb_dmx_universes_v1(
+async fn get_usb_dmx_universes_v1(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<usb_dmx_universes::UsbDmxUniversesStatusV1, String> {

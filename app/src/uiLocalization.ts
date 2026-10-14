@@ -445,6 +445,8 @@ const japaneseText: Record<string, string> = {
     "ユニバースごとに専用のUSB-DMXケーブルを割り当てます。1本のケーブルは1つのユニバースだけを出力します。ユニバース0は上の「公演DMX」を使います。",
   "USB-DMX cable status is unavailable; cables cannot be changed.":
     "USB-DMXケーブルの状態を取得できないため、ケーブルを変更できません。",
+  "USB-DMX cable status could not be refreshed; showing the last known state. Stop stays available.":
+    "USB-DMXケーブルの状態を更新できません。最後に分かっている状態を表示しています。停止は使えます。",
   "Add a cable": "ケーブルを追加",
   "Add cable": "ケーブルを追加",
   "Rescan devices": "デバイスを再検出",

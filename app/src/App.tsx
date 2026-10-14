@@ -5830,6 +5830,7 @@ export default function App() {
     showDmxPreparationBusy,
     showDmxPreparationStage,
     usbDmxUniverses,
+    usbDmxUniversesStale,
     refreshUsbDmxUniverses,
     bindUsbDmxUniverse,
     clearUsbDmxUniverse,
@@ -29257,6 +29258,7 @@ export default function App() {
           />
           <UsbDmxCablesPanel
             status={usbDmxUniverses()}
+            stale={usbDmxUniversesStale()}
             serialPorts={serialPorts()}
             showDmxCable={serialDmxMachineBindingStatus()?.selected ?? null}
             safetyBlackoutEngaged={snapshot().safety_blackout_engaged}

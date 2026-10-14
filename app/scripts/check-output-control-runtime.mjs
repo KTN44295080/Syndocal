@@ -1656,8 +1656,13 @@ assert.match(
 );
 assert.match(
   usbDmxCablesPanelSource,
-  /disabled=\{!props\.safetyBlackoutEngaged/,
+  /const canStop = \(row: CableRow\) => props\.safetyBlackoutEngaged/,
   "stopping a USB-DMX cable must require the engaged safety blackout",
+);
+assert.match(
+  usbDmxCablesPanelSource,
+  /data-usb-dmx-cable-stop\s+disabled=\{!canStop\(row\)\}/,
+  "the Stop button must use the S0-gated predicate",
 );
 assert.match(
   dmxOutputPanelSource,

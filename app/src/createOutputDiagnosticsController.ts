@@ -179,6 +179,10 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
   const [showSerialDmxSafetyBlackoutRouteStatus, setShowSerialDmxSafetyBlackoutRouteStatus] =
     createSignal<ShowSerialDmxSafetyBlackoutRouteStatus | null>(null);
   const [usbDmxUniverses, setUsbDmxUniverses] = createSignal<UsbDmxUniversesStatus | null>(null);
+  // True when the last read failed; the last known state is kept on screen
+  // (so Stop stays reachable) but marked stale.
+  const [usbDmxUniversesStale, setUsbDmxUniversesStale] = createSignal(false);
+  let usbDmxUniversesRequest = 0;
   const [showDmxPreparationBusy, setShowDmxPreparationBusy] = createSignal(false);
   const [showDmxPreparationStage, setShowDmxPreparationStage] = createSignal<string | null>(null);
   let showDmxPreparationPromise: Promise<void> | null = null;
@@ -592,20 +596,30 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
 
   // Independent USB-DMX cables (Universe 1 and up). Bindings are
   // machine-local; start/stop are lease-bound OutputControl actions.
-  // Polled while the panel is open: an unavailable status is shown in the
-  // panel (cables stay unarmable) rather than repeated in the status line.
+  // Polled while the panel is open. Only the newest read is applied; a
+  // failed read keeps the last known state marked stale instead of hiding
+  // running cables, and is not repeated in the status line.
+  const applyUsbDmxUniverses = (status: UsbDmxUniversesStatus) => {
+    usbDmxUniversesRequest += 1;
+    setUsbDmxUniverses(status);
+    setUsbDmxUniversesStale(false);
+  };
   const refreshUsbDmxUniverses = async () => {
+    const request = ++usbDmxUniversesRequest;
     try {
-      setUsbDmxUniverses(await options.invoke<UsbDmxUniversesStatus>("get_usb_dmx_universes_v1"));
+      const status = await options.invoke<UsbDmxUniversesStatus>("get_usb_dmx_universes_v1");
+      if (request !== usbDmxUniversesRequest) return;
+      setUsbDmxUniverses(status);
+      setUsbDmxUniversesStale(false);
     } catch {
-      setUsbDmxUniverses(null);
+      if (request === usbDmxUniversesRequest) setUsbDmxUniversesStale(true);
     }
   };
 
   const bindUsbDmxUniverse = async (universe: number, port: SerialPortSummary) => {
     try {
       const request = { universe, ...serialDmxConfirmationRequest(port) };
-      setUsbDmxUniverses(await options.invoke<UsbDmxUniversesStatus>(
+      applyUsbDmxUniverses(await options.invoke<UsbDmxUniversesStatus>(
         "select_usb_dmx_universe_binding_v1",
         { request },
       ));
@@ -618,7 +632,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
 
   const clearUsbDmxUniverse = async (universe: number) => {
     try {
-      setUsbDmxUniverses(await options.invoke<UsbDmxUniversesStatus>(
+      applyUsbDmxUniverses(await options.invoke<UsbDmxUniversesStatus>(
         "clear_usb_dmx_universe_binding_v1",
         { request: { universe } },
       ));
@@ -632,8 +646,14 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
   const startUsbDmxUniverse = (universe: number) => runShowOutputAction(`usb-dmx-${universe}`, async () => {
     const authority = options.captureProjectAuthorityIdentity();
     try {
-      await ensureBothOutputLease();
-      const lease = await selectFreshBothOutputLease();
+      // Like the Universe 0 cable's own Start, this never enables output by
+      // itself: it needs the active Both lease (Show DMX > Prepare).
+      let lease: OutputLeaseAuthority;
+      try {
+        lease = await selectFreshBothOutputLease();
+      } catch {
+        throw new Error("Enable DMX output first (Show DMX › Prepare); the USB-DMX cable was not started.");
+      }
       await executeOutputControl(options.invoke, { kind: "enable_usb_dmx_universe_route", universe, lease });
       if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage(
@@ -860,6 +880,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     showDmxPreparationBusy,
     showDmxPreparationStage,
     usbDmxUniverses,
+    usbDmxUniversesStale,
     refreshUsbDmxUniverses,
     bindUsbDmxUniverse,
     clearUsbDmxUniverse,
