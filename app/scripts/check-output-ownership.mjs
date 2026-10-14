@@ -505,6 +505,37 @@ assertOrderedMarkers(
 assert.match(recordingOwnership, /state\.standby_sync\.try_lock\(\)/);
 assert.match(appBackend, /async fn video_output_recording_status\(/);
 assert.match(recordingWorker, /VideoRecordingEndReason::OwnershipRevoked/);
+// Phase 2: the start receipt is durable before the encoder or any frame, and
+// both the normal end and every early failure write the end receipt.
+assertOrderedMarkers(
+  recordingWorker,
+  [
+    "recording_receipts::TakeJournal::begin(",
+    "encoder::RecordingEncoder::spawn(",
+    "current.set_state(VideoRecordingState::Recording);",
+    "let receipt = journal.end(",
+  ],
+  "a take must write its start receipt before recording and its end receipt after",
+);
+assert.equal((recordingWorker.match(/end_failed_take\(&status, &mut artifact, journal, error\);/g) ?? []).length, 3);
+assertOrderedMarkers(
+  recordingWorker,
+  ["let result = encoded.and_then(|_| artifact.publish(frames_written));", "let receipt = journal.end("],
+  "the end receipt records whether the take was published",
+);
+const failedBegin = sliceBetween(
+  recordingWorker,
+  "recording_receipts::TakeJournal::begin(",
+  "encoder::RecordingEncoder::spawn(",
+  "start receipt failure path",
+);
+assert.match(failedBegin, /nothing was recorded"\),\s*\);\s*return;/);
+assert.match(appBackend, /recording_receipts::initialize\(\s*local_data_dir\.join\(recording_receipts::RECORDING_RECEIPT_DIRECTORY\),/);
+assert.match(appBackend, /recording_receipts::initialize_unavailable\(error\);/);
+const receipts = await read("../../app/src-tauri/src/recording_receipts.rs");
+assert.match(receipts, /impl Drop for TakeJournal \{/);
+assert.match(receipts, /\.create_new\(true\)/);
+assert.match(recordingOwnership, /recording_receipts::journal_directory\(\)\?;/);
 assert.match(engine, /pub fn acquire_in_epoch\(/);
 assert.match(engine, /if epoch\.is_some_and\(\|epoch\| epoch != state\.status\.epoch\) \{/);
 assert.match(qa, /Local file recording follows video output ownership/);

@@ -47,6 +47,8 @@ pub(crate) struct VideoRecordingStatus {
     pub(crate) renderer_force_termination: bool,
     pub(crate) stop_deadline_ms: u64,
     pub(crate) last_error: Option<String>,
+    /// The current or last take's receipt id (`recording-receipts`).
+    pub(crate) take_id: Option<String>,
     /// The output ownership epoch the current or last take was admitted in.
     pub(crate) owner_epoch: Option<u64>,
     pub(crate) end_reason: Option<VideoRecordingEndReason>,
@@ -75,6 +77,7 @@ impl Default for VideoRecordingStatus {
             renderer_force_termination: true,
             stop_deadline_ms: video_recording_lifecycle::TOTAL_STOP_DEADLINE.as_millis() as u64,
             last_error: None,
+            take_id: None,
             owner_epoch: None,
             end_reason: None,
             admission_allowed: false,

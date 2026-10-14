@@ -77,7 +77,10 @@ fn recording_sync_context(state: &AppState) -> Result<RecordingSyncContext, Stri
 /// Whether this machine may start a take now.
 pub(super) fn admit_recording(state: &AppState) -> Result<RecordingAdmission, String> {
     let sync = recording_sync_context(state)?;
-    recording_admission_from(&state.engine.output_ownership_status(), sync)
+    let admission = recording_admission_from(&state.engine.output_ownership_status(), sync)?;
+    // No take records without its receipt journal (phase 2).
+    recording_receipts::journal_directory()?;
+    Ok(admission)
 }
 
 /// `status` with the admission as of now, not as of its take's start.

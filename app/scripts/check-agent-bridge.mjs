@@ -180,7 +180,8 @@ groups++;
       state: 'Recording', active: true, output_id: 2, path: 'C:/recordings/take.mp4', width: 1920, height: 1080,
       frame_rate: 30, frames_written: 12, dropped_frames: 0, audio_requested: true,
       audio_included: true, audio_track_count: 1, started_unix_ms: 1234, last_error: null,
-      owner_epoch: 7, end_reason: null, admission_allowed: true, admission_reason: null,
+      take_id: '00000000001700000000-42-0', owner_epoch: 7, end_reason: null,
+      admission_allowed: true, admission_reason: null,
     };
   }, request('recording.get_status'));
   assert.equal(recordingStatus.ok, true);
@@ -188,6 +189,7 @@ groups++;
   assert.equal(recordingStatus.recording.active, true);
   assert.equal(recordingStatus.recording.frames_written, 12);
   assert.equal(recordingStatus.recording.owner_epoch, 7);
+  assert.equal(recordingStatus.recording.take_id, '00000000001700000000-42-0');
   assert.equal(recordingStatus.recording.admission_allowed, true);
   const revokedRecording = await execute(async () => ({
     state: 'Complete', active: false, output_id: 2, path: 'C:/recordings/take.mp4', width: 1920, height: 1080,

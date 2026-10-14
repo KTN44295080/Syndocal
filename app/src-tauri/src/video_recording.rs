@@ -1,7 +1,7 @@
 //! FFmpeg recording orchestration; UI/runtime ownership stays in the application adapter.
 use super::{
-    capture_video_output_preview_effect_snapshot, recording_artifact, VideoRecordingEndReason,
-    VideoRecordingState, VideoRecordingStatus,
+    capture_video_output_preview_effect_snapshot, recording_artifact, recording_receipts,
+    VideoRecordingEndReason, VideoRecordingState, VideoRecordingStatus,
 };
 use engine::EngineHandle;
 use protocol::VideoOutputId;
@@ -156,6 +156,8 @@ pub(super) struct VideoOutputRecordingContext {
     /// The output ownership epoch the take was admitted in; every frame
     /// re-proves it (DEC-RECORD-OWN-001).
     pub(super) owner_epoch: u64,
+    /// The receipt journal directory (DEC-RECORD-OWN-001 phase 2).
+    pub(super) receipts: PathBuf,
     pub(super) input_sources: RecordingExternalFrameSources,
     pub(super) output_id: VideoOutputId,
     pub(super) path: PathBuf,
@@ -171,6 +173,7 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
     let VideoOutputRecordingContext {
         engine,
         owner_epoch,
+        receipts,
         input_sources,
         output_id,
         path,
@@ -188,6 +191,38 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
             return;
         }
     };
+    // No take records before its start receipt is durable; from here on
+    // every exit writes exactly one end receipt.
+    let started_unix_ms = recording_receipts::take_start_unix_ms(
+        status.lock().ok().and_then(|current| current.started_unix_ms),
+    );
+    let take_id = recording_receipts::new_take_id(started_unix_ms);
+    let journal = match recording_receipts::TakeJournal::begin(
+        &receipts,
+        &recording_receipts::TakeStartedReceipt {
+            version: recording_receipts::RECORDING_RECEIPT_VERSION,
+            take_id: take_id.clone(),
+            owner_epoch,
+            output_id,
+            target_path: path.to_string_lossy().to_string(),
+            staging_path: artifact.path().to_string_lossy().to_string(),
+            started_unix_ms,
+            process_id: std::process::id(),
+        },
+    ) {
+        Ok(journal) => journal,
+        Err(error) => {
+            finish_failed_video_recording(
+                &status,
+                &mut artifact,
+                format!("Recording refused: its start receipt could not be written ({error}); nothing was recorded"),
+            );
+            return;
+        }
+    };
+    if let Ok(mut current) = status.lock() {
+        current.take_id = Some(take_id);
+    }
     let ffmpeg = env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
     let mut command = video_recording_ffmpeg_command(
         ffmpeg,
@@ -200,7 +235,7 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
     let mut encoder = match encoder::RecordingEncoder::spawn(&mut command, Arc::clone(&stop)) {
         Ok(encoder) => encoder,
         Err(error) => {
-            finish_failed_video_recording(&status, &mut artifact, error);
+            end_failed_take(&status, &mut artifact, journal, error);
             return;
         }
     };
@@ -208,7 +243,7 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
         let error = encoder
             .fail("FFmpeg stdin was unavailable".into())
             .unwrap_err();
-        finish_failed_video_recording(&status, &mut artifact, error);
+        end_failed_take(&status, &mut artifact, journal, error);
         return;
     };
     let renderer = match video_recording_renderer_process::RecordingRendererProcess::spawn(
@@ -225,7 +260,7 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
                 }
                 Err(error) => error,
             };
-            finish_failed_video_recording(&status, &mut artifact, error);
+            end_failed_take(&status, &mut artifact, journal, error);
             return;
         }
     };
@@ -308,14 +343,15 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
     }
     drop(renderer);
     drop(stdin);
+    let end_reason = if recording_error.is_some() {
+        VideoRecordingEndReason::Fault
+    } else if ownership_revoked {
+        VideoRecordingEndReason::OwnershipRevoked
+    } else {
+        VideoRecordingEndReason::OperatorStop
+    };
     if let Ok(mut current) = status.lock() {
-        current.end_reason = Some(if recording_error.is_some() {
-            VideoRecordingEndReason::Fault
-        } else if ownership_revoked {
-            VideoRecordingEndReason::OwnershipRevoked
-        } else {
-            VideoRecordingEndReason::OperatorStop
-        });
+        current.end_reason = Some(end_reason);
         // A revoked or failed take finalizes like an operator stop does.
         if matches!(
             current.state,
@@ -335,10 +371,51 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
         None => encoder.finish(),
     };
     let result = encoded.and_then(|_| artifact.publish(frames_written));
-    match result {
-        Ok(()) => finish_video_recording_status(&status, None),
-        Err(error) => finish_failed_video_recording(&status, &mut artifact, error),
+    let receipt = journal.end(
+        end_reason.into(),
+        result.is_ok(),
+        frames_written,
+        result.as_ref().err().cloned(),
+    );
+    match (result, receipt) {
+        (Ok(()), Ok(())) => finish_video_recording_status(&status, None),
+        (Ok(()), Err(receipt_error)) => {
+            // Published; only the end receipt is missing, so the next startup
+            // records this take as interrupted_unknown.
+            finish_video_recording_status(&status, None);
+            if let Ok(mut current) = status.lock() {
+                current.last_error = Some(format!(
+                    "Recording was published, but its end receipt could not be written: {receipt_error}"
+                ));
+            }
+        }
+        (Err(error), receipt) => {
+            let error = match receipt {
+                Ok(()) => error,
+                Err(receipt_error) => format!("{error}; end receipt failed: {receipt_error}"),
+            };
+            finish_failed_video_recording(&status, &mut artifact, error);
+        }
     }
+}
+
+/// A take with a start receipt failed before recording a frame.
+fn end_failed_take(
+    status: &Mutex<VideoRecordingStatus>,
+    artifact: &mut recording_artifact::RecordingArtifact,
+    journal: recording_receipts::TakeJournal,
+    error: String,
+) {
+    let error = match journal.end(
+        recording_receipts::TakeEndReason::Fault,
+        false,
+        0,
+        Some(error.clone()),
+    ) {
+        Ok(()) => error,
+        Err(receipt_error) => format!("{error}; end receipt failed: {receipt_error}"),
+    };
+    finish_failed_video_recording(status, artifact, error);
 }
 
 fn finish_failed_video_recording(

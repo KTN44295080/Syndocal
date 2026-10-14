@@ -20,7 +20,7 @@ export function VideoRecordingStatusBar(props: VideoRecordingStatusBarProps) {
   const recordingStatusText = createMemo(() => recordingInProgress()
     ? `${recordingState()} · ${props.recordingStatus.dropped_frames} dropped · ${props.recordingStatus.frames_written} frames · ${props.recordingStatus.width}x${props.recordingStatus.height} @ ${props.recordingStatus.frame_rate}fps · ${props.recordingStatus.audio_included ? `${props.recordingStatus.audio_track_count} audio` : "silent"}`
     : recordingState() === "Complete"
-      ? `${props.recordingStatus.end_reason === "ownership_revoked" ? "Ended: video output ownership changed" : "Complete"} · ${props.recordingStatus.frames_written} frames · ${props.recordingStatus.path ?? "artifact published"}`
+      ? `${props.recordingStatus.end_reason === "ownership_revoked" ? "Ended: video output ownership changed" : "Complete"} · ${props.recordingStatus.frames_written} frames · ${props.recordingStatus.path ?? "artifact published"}${props.recordingStatus.last_error ? ` · ${props.recordingStatus.last_error}` : ""}`
       : props.recordingStatus.last_error
         ?? (recordingBlocked()
           ? props.recordingStatus.admission_reason ?? "Recording needs this PC to own video output."

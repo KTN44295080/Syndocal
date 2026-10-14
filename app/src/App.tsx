@@ -2791,6 +2791,7 @@ export default function App() {
     renderer_force_termination: true,
     stop_deadline_ms: 10_000,
     last_error: null,
+    take_id: null,
     owner_epoch: null,
     end_reason: null,
     admission_allowed: false,

@@ -2,6 +2,7 @@ import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 
 const MAX_PATH_LENGTH = 2048;
 const MAX_ERROR_LENGTH = 1024;
+const MAX_TAKE_ID_LENGTH = 64;
 const RECORDING_STATES = ["Idle", "Preparing", "Recording", "Finalizing", "Complete", "Fault"] as const;
 type RecordingState = typeof RECORDING_STATES[number];
 const RECORDING_END_REASONS = ["operator_stop", "ownership_revoked", "fault"] as const;
@@ -69,6 +70,7 @@ export async function executeAgentBridgeRecordingStatus(invoke: FrontendTauriInv
       audio_track_count: finiteNonNegative(raw.audio_track_count, "audio_track_count"),
       started_unix_ms: startedUnixMs,
       last_error: optionalText(raw.last_error, "last_error", MAX_ERROR_LENGTH),
+      take_id: optionalText(raw.take_id, "take_id", MAX_TAKE_ID_LENGTH),
       owner_epoch: ownerEpoch,
       end_reason: (raw.end_reason ?? null) as RecordingEndReason | null,
       // A legacy peer without the field is reported as not admitted.

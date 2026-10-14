@@ -324,6 +324,7 @@ mod serial_dmx_machine;
 mod serial_show_dmx_route_tests;
 mod show_serial_dmx_route;
 mod recording_ownership;
+mod recording_receipts;
 mod usb_dmx_universes;
 mod network_dmx_routes;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
@@ -78605,6 +78606,7 @@ fn start_video_output_recording(
                 .to_string(),
         );
     }
+    let receipts = recording_receipts::journal_directory()?;
     let mut runtime = state
         .video_recording
         .lock()
@@ -78629,6 +78631,7 @@ fn start_video_output_recording(
         renderer_force_termination: true,
         stop_deadline_ms: video_recording_lifecycle::TOTAL_STOP_DEADLINE.as_millis() as u64,
         last_error: None,
+        take_id: None,
         owner_epoch: Some(admission.owner_epoch),
         end_reason: None,
         admission_allowed: true,
@@ -78652,6 +78655,7 @@ fn start_video_output_recording(
             run_video_output_recording(VideoOutputRecordingContext {
                 engine,
                 owner_epoch: admission.owner_epoch,
+                receipts,
                 input_sources,
                 output_id,
                 path,
@@ -132726,6 +132730,25 @@ fn main() {
                         authority.block("startup_listener_or_network_validation_failed");
                     }
                     eprintln!("DJ Link auto-start remains blocked: {error}");
+                }
+            }
+            // DEC-RECORD-OWN-001 phase 2: end every take a crash or power
+            // loss left open before any new take can start.
+            match app.path().app_local_data_dir() {
+                Ok(local_data_dir) => match recording_receipts::initialize(
+                    local_data_dir.join(recording_receipts::RECORDING_RECEIPT_DIRECTORY),
+                ) {
+                    Ok(recovered) if !recovered.is_empty() => eprintln!(
+                        "Recording receipts: {} interrupted take(s) recorded as interrupted_unknown",
+                        recovered.len()
+                    ),
+                    Ok(_) => {}
+                    Err(error) => eprintln!("Recording stays unavailable: {error}"),
+                },
+                Err(error) => {
+                    let error = format!("no app data directory for its receipts: {error}");
+                    eprintln!("Recording stays unavailable: {error}");
+                    recording_receipts::initialize_unavailable(error);
                 }
             }
             let cue_settings_path = timeline_cue_audio::timeline_cue_audio_settings_path(

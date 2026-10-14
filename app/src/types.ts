@@ -1788,6 +1788,8 @@ export interface VideoRecordingStatus {
   renderer_force_termination: boolean;
   stop_deadline_ms: number;
   last_error?: string | null;
+  /** The current or last take's receipt id. */
+  take_id?: string | null;
   /** The video output ownership epoch the current or last take was admitted in. */
   owner_epoch?: number | null;
   end_reason?: VideoRecordingEndReason | null;

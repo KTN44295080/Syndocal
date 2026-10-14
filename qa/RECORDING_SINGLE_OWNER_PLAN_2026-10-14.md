@@ -47,12 +47,22 @@ recording owner, with takeover. It closes part of COV-RECORDING-001.
      Split-brain and another PC's Take Over end a running take only in
      phase 3.
    - Invert the old exemption in the checker and the 2PC document.
-2. **Local receipt journal**
+2. **Local receipt journal** (implemented 2026-10-14, `recording_receipts.rs`)
    - Immutable V1 receipts: `TakeStarted` is written before Recording,
      `TakeEnded` at the end.
    - A start whose receipt cannot be written is refused.
    - At startup, every orphaned `TakeStarted` gets one
      `TakeEnded{InterruptedUnknown}`; the partial is never published.
+   - As built:
+     - Receipts live in app-local `recording-receipts/` and are created
+       with `create_new` plus a sync; a failed write removes the file.
+     - A worker panic still writes a `fault` end through a drop guard.
+       Its `published` and `frames_written` stay null, because the outcome
+       is unknown; interrupted ends use null too.
+     - Pruning keeps the newest 1,000 completed takes, never a take
+       recovered in the same pass, and removes lone end receipts. It is
+       best effort.
+     - More than 50,000 receipts refuses recording with a restart hint.
 3. **Two-PC lease, supersede and takeover take**
    - A 1 Hz recording lease in the shared folder while Primary is
      recording, with TTL < standby stale. The frame loop self-fences on the
