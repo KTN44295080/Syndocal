@@ -32,15 +32,15 @@ impl VideoFrameDecoder for RecordingDecoder {
         Ok(Some(solid(request)))
     }
 
-    fn decode_input_frames(
+    fn decode_input_frames_shared(
         &mut self,
         inputs: &[VideoRenderInput],
-    ) -> Vec<Result<Option<VideoFrame>, VideoDecodeError>> {
+    ) -> Vec<Result<Option<Arc<VideoFrame>>, VideoDecodeError>> {
         self.batches
             .push(inputs.iter().map(|input| input.request.layer_id).collect());
         inputs
             .iter()
-            .map(|input| Ok(Some(solid(&input.request))))
+            .map(|input| Ok(Some(Arc::new(solid(&input.request)))))
             .collect()
     }
 }
@@ -201,5 +201,84 @@ struct NeverCancelled;
 impl VideoRenderCancellation for NeverCancelled {
     fn is_cancelled(&self) -> bool {
         false
+    }
+}
+
+/// Hands out the same shared frame for every request of a layer.
+#[derive(Default)]
+struct SharedDecoder {
+    frames: Vec<Arc<VideoFrame>>,
+}
+
+impl VideoFrameDecoder for SharedDecoder {
+    fn retain_layers(&mut self, _layer_ids: &[VideoLayerId]) {}
+
+    fn decode_frame(
+        &mut self,
+        request: &VideoFrameRequest,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        self.decode_input_frame_shared(&VideoRenderInput::legacy(request.clone()))
+            .map(|frame| frame.map(Arc::unwrap_or_clone))
+    }
+
+    fn decode_input_frame_shared(
+        &mut self,
+        input: &VideoRenderInput,
+    ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
+        let request = &input.request;
+        if let Some(frame) = self
+            .frames
+            .iter()
+            .find(|frame| frame.layer_id == request.layer_id)
+        {
+            return Ok(Some(Arc::clone(frame)));
+        }
+        let frame = Arc::new(solid(request));
+        self.frames.push(Arc::clone(&frame));
+        Ok(Some(frame))
+    }
+}
+
+#[test]
+fn a_layer_without_effects_queues_the_decoders_own_frame() {
+    let snapshot = two_layer_snapshot();
+    let clip_runtime = VideoClipRuntimeSnapshot::default();
+    let transitions = VideoLayerTransitionRuntimeSnapshot::default();
+    let context = VideoEffectRenderContext {
+        clip_runtime: &clip_runtime,
+        project_render_epoch: 1,
+    };
+    let mut renderer = VideoPreviewRenderer::with_frame_provider(
+        VideoRuntimeConfig::default(),
+        DecoderBackedFrameProvider::new(SharedDecoder::default()),
+    );
+    for _ in 0..3 {
+        renderer
+            .prepare_output_artistic_render_result_preview_with_effects_and_transitions(
+                &snapshot,
+                context,
+                &transitions,
+                6,
+                32,
+                18,
+            )
+            .unwrap();
+    }
+    let decoded = &renderer.frame_provider().decoder().frames;
+    assert_eq!(decoded.len(), 2);
+    for frame in decoded {
+        let queued = renderer
+            .runtime
+            .queues
+            .iter()
+            .find(|queue| queue.layer_id() == frame.layer_id)
+            .and_then(|queue| queue.iter_shared().next())
+            .unwrap();
+        assert!(
+            Arc::ptr_eq(queued, frame),
+            "layer {} queued a copy",
+            frame.layer_id
+        );
+        assert_eq!(Arc::strong_count(frame), 2, "decoder and queue only");
     }
 }

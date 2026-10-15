@@ -202,3 +202,58 @@ fn the_preferred_decoder_batches_file_inputs_with_the_same_fallbacks() {
     assert!(together.diagnostics().cli_fallback_failures > 0);
     let _ = std::fs::remove_file(&corrupt);
 }
+
+#[test]
+fn the_preferred_decoder_keeps_libav_frames_shared() {
+    let path = fixture("preferred-shared", 1);
+    let mut decoder = PreferredVideoFrameDecoder::with_software_libav_for_tests(
+        FfmpegCliFrameDecoder::new("missing-shared-test-ffmpeg.exe"),
+    );
+    let first = decoder
+        .decode_input_frame_shared(&input(1, &path, 16))
+        .unwrap()
+        .unwrap();
+    for position in [16, 20] {
+        let again = decoder
+            .decode_input_frame_shared(&input(1, &path, position))
+            .unwrap()
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &again), "position {position}");
+    }
+    let batch = decoder.decode_input_frames_shared(&[input(1, &path, 20), input(2, &path, 0)]);
+    assert!(Arc::ptr_eq(
+        &first,
+        batch[0].as_ref().unwrap().as_ref().unwrap()
+    ));
+}
+
+#[test]
+fn reused_and_repeated_frames_are_shared_not_copied() {
+    let path = fixture("shared", 1);
+    let mut decoder = LibavFrameDecoder::software_for_tests();
+    decoder
+        .decode_input_frame_shared(&input(1, &path, 0))
+        .unwrap();
+    let first = decoder
+        .decode_input_frame_shared(&input(1, &path, 16))
+        .unwrap()
+        .unwrap();
+    // An exact repeat, and a later position the decoded frame already
+    // covers, reuse it.
+    for position in [16, 20] {
+        let again = decoder
+            .decode_input_frame_shared(&input(1, &path, position))
+            .unwrap()
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &again), "position {position}");
+    }
+    assert!(decoder.session_diagnostics().frame_reuses >= 2);
+    // The owned form is an equal copy.
+    assert_eq!(
+        decoder
+            .decode_input_frame(&input(1, &path, 20))
+            .unwrap()
+            .unwrap(),
+        *first
+    );
+}

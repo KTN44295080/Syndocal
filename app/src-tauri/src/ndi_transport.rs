@@ -131,6 +131,28 @@ impl NdiAwareVideoFrameDecoder {
         }
     }
 
+    /// A file request with no injected frame, which `decode_frame` hands to
+    /// the file decoder as a legacy input.
+    fn is_plain_file(&self, request: &video::VideoFrameRequest) -> bool {
+        request.source.kind == VideoSourceKind::File
+            && !self.injected_frames.contains_key(&request.layer_id)
+    }
+
+    /// `decode_frame` as a shared frame: a file frame comes back as the file
+    /// decoder's own shared frame, without a copy.
+    fn decode_frame_shared(
+        &mut self,
+        request: &video::VideoFrameRequest,
+    ) -> Result<Option<Arc<video::VideoFrame>>, video::VideoDecodeError> {
+        if self.is_plain_file(request) {
+            return video::VideoFrameDecoder::decode_input_frame_shared(
+                &mut self.files,
+                &video::VideoRenderInput::legacy(request.clone()),
+            );
+        }
+        video::VideoFrameDecoder::decode_frame(self, request).map(|frame| frame.map(Arc::new))
+    }
+
     pub fn replace_injected_frames(&mut self, frames: HashMap<u64, video::VideoFrame>) {
         self.injected_frames = frames;
     }
@@ -256,28 +278,42 @@ impl video::VideoFrameDecoder for NdiAwareVideoFrameDecoder {
         video::VideoFrameDecoder::decode_frame(&mut self.files, request)
     }
 
-    /// A tick of plain file inputs (none injected) decodes together in the
-    /// file decoder, handed over as the legacy inputs `decode_frame` passes
-    /// one by one; any other tick keeps `decode_frame` for every input.
     fn decode_input_frames(
         &mut self,
         inputs: &[video::VideoRenderInput],
     ) -> Vec<Result<Option<video::VideoFrame>, video::VideoDecodeError>> {
-        let files_only = inputs.iter().all(|input| {
-            input.request.source.kind == VideoSourceKind::File
-                && !self.injected_frames.contains_key(&input.request.layer_id)
-        });
+        self.decode_input_frames_shared(inputs)
+            .into_iter()
+            .map(|decoded| decoded.map(|frame| frame.map(Arc::unwrap_or_clone)))
+            .collect()
+    }
+
+    fn decode_input_frame_shared(
+        &mut self,
+        input: &video::VideoRenderInput,
+    ) -> Result<Option<Arc<video::VideoFrame>>, video::VideoDecodeError> {
+        self.decode_frame_shared(&input.request)
+    }
+
+    /// A tick of plain file inputs (none injected) decodes together in the
+    /// file decoder, handed over as the legacy inputs `decode_frame` passes
+    /// one by one; any other tick keeps `decode_frame` for every input.
+    fn decode_input_frames_shared(
+        &mut self,
+        inputs: &[video::VideoRenderInput],
+    ) -> Vec<Result<Option<Arc<video::VideoFrame>>, video::VideoDecodeError>> {
+        let files_only = inputs.iter().all(|input| self.is_plain_file(&input.request));
         if !files_only {
             return inputs
                 .iter()
-                .map(|input| self.decode_frame(&input.request))
+                .map(|input| self.decode_frame_shared(&input.request))
                 .collect();
         }
         let legacy = inputs
             .iter()
             .map(|input| video::VideoRenderInput::legacy(input.request.clone()))
             .collect::<Vec<_>>();
-        video::VideoFrameDecoder::decode_input_frames(&mut self.files, &legacy)
+        video::VideoFrameDecoder::decode_input_frames_shared(&mut self.files, &legacy)
     }
 
     fn decode_input_frame_with_cancellation(
@@ -1612,6 +1648,38 @@ mod capture_decoder_tests {
         assert_eq!(together.decode_input_frames(&inputs), expected);
         assert_eq!(together.diagnostics(), one_by_one.diagnostics());
         assert_eq!(together.diagnostics().libav_requests, 3);
+    }
+
+    #[test]
+    fn a_shared_single_decode_matches_the_owned_one_for_each_source() {
+        let mut owned = missing_cli_decoder();
+        let mut shared = missing_cli_decoder();
+        let injected = video::VideoFrame {
+            layer_id: 5,
+            width: 16,
+            height: 9,
+            pts_ms: 0,
+            duration_ms: 0,
+            format: video::VideoPixelFormat::Rgba8,
+            data: vec![3; 16 * 9 * 4],
+        };
+        for decoder in [&mut owned, &mut shared] {
+            decoder.replace_injected_frames(HashMap::from([(5, injected.clone())]));
+        }
+        let mut camera = file_input(31, 6, "unused");
+        camera.request.source.kind = VideoSourceKind::Camera;
+        for input in [
+            file_input(30, 5, "missing-shared-injected.mp4"),
+            file_input(32, 7, "missing-shared-file.mp4"),
+            camera,
+        ] {
+            let expected = owned.decode_input_frame(&input);
+            let actual = shared
+                .decode_input_frame_shared(&input)
+                .map(|frame| frame.map(Arc::unwrap_or_clone));
+            assert_eq!(actual, expected, "{:?}", input.request.source.kind);
+        }
+        assert_eq!(shared.diagnostics(), owned.diagnostics());
     }
 
     #[test]

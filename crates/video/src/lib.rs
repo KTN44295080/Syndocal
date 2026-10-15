@@ -1753,6 +1753,17 @@ pub trait VideoFrameProvider {
     /// decoded together. A later request for exactly one of these inputs
     /// returns its result; any other request decodes as before.
     fn decode_inputs_ahead(&mut self, _inputs: &[VideoRenderInput]) {}
+    /// `frames_for_layer` as shared frames, which a provider that keeps its
+    /// frames shared hands out without copying them.
+    fn frames_for_layer_shared(
+        &mut self,
+        layer: &VideoLayerSummary,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<Arc<VideoFrame>>, VideoFrameProviderError> {
+        self.frames_for_layer(layer, width, height)
+            .map(|frames| frames.into_iter().map(Arc::new).collect())
+    }
 }
 
 pub trait VideoFrameDecoder {
@@ -1804,6 +1815,29 @@ pub trait VideoFrameDecoder {
             .map(|input| self.decode_input_frame(input))
             .collect()
     }
+    /// `decode_input_frame` as a shared frame. A decoder that keeps its
+    /// frames shared hands a reused frame back without copying it; it then
+    /// overrides this and writes `decode_input_frame` in terms of it (the
+    /// default here calls `decode_input_frame`, so overriding only the owned
+    /// one as a call to this would recurse).
+    fn decode_input_frame_shared(
+        &mut self,
+        input: &VideoRenderInput,
+    ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
+        self.decode_input_frame(input)
+            .map(|frame| frame.map(Arc::new))
+    }
+    /// `decode_input_frames` as shared frames. A decoder that overrides
+    /// `decode_input_frames` to decode a tick together overrides this too.
+    fn decode_input_frames_shared(
+        &mut self,
+        inputs: &[VideoRenderInput],
+    ) -> Vec<Result<Option<Arc<VideoFrame>>, VideoDecodeError>> {
+        inputs
+            .iter()
+            .map(|input| self.decode_input_frame_shared(input))
+            .collect()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -1830,7 +1864,7 @@ pub struct DecoderBackedFrameProvider<D = NullVideoDecoder> {
     /// the retained inputs change, so a result never outlives its tick.
     decoded_ahead: Vec<(
         VideoRenderInput,
-        Result<Option<VideoFrame>, VideoDecodeError>,
+        Result<Option<Arc<VideoFrame>>, VideoDecodeError>,
     )>,
 }
 
@@ -2206,8 +2240,16 @@ impl FrameQueue {
         self.len == 0
     }
 
-    pub fn push(&mut self, mut frame: VideoFrame) -> FrameQueuePush {
-        frame.layer_id = self.layer_id;
+    pub fn push(&mut self, frame: VideoFrame) -> FrameQueuePush {
+        self.push_shared(Arc::new(frame))
+    }
+
+    /// `push` of a shared frame: the queue keeps the same frame rather than a
+    /// copy of it.
+    fn push_shared(&mut self, mut frame: Arc<VideoFrame>) -> FrameQueuePush {
+        if frame.layer_id != self.layer_id {
+            Arc::make_mut(&mut frame).layer_id = self.layer_id;
+        }
         if let Some(index) = (0..self.len)
             .map(|offset| (self.start + offset) % self.capacity())
             .find(|index| {
@@ -2216,17 +2258,17 @@ impl FrameQueue {
                     .is_some_and(|existing| existing.pts_ms == frame.pts_ms)
             })
         {
-            self.slots[index] = Some(Arc::new(frame));
+            self.slots[index] = Some(frame);
             return FrameQueuePush::Inserted;
         }
         let result = if self.len == self.capacity() {
             let index = self.start;
-            self.slots[index] = Some(Arc::new(frame));
+            self.slots[index] = Some(frame);
             self.start = (self.start + 1) % self.capacity();
             FrameQueuePush::DroppedOldest
         } else {
             let index = (self.start + self.len) % self.capacity();
-            self.slots[index] = Some(Arc::new(frame));
+            self.slots[index] = Some(frame);
             self.len += 1;
             FrameQueuePush::Inserted
         };
@@ -2359,6 +2401,11 @@ impl VideoRuntime {
     }
 
     pub fn push_frame(&mut self, frame: VideoFrame) -> FrameQueuePush {
+        self.push_shared_frame(Arc::new(frame))
+    }
+
+    /// `push_frame` of a shared frame, which the queue keeps without a copy.
+    fn push_shared_frame(&mut self, frame: Arc<VideoFrame>) -> FrameQueuePush {
         let layer_id = frame.layer_id;
         if !self.queues.iter().any(|queue| queue.layer_id() == layer_id) {
             self.queues
@@ -2368,7 +2415,7 @@ impl VideoRuntime {
             .iter_mut()
             .find(|queue| queue.layer_id() == layer_id)
             .expect("queue exists after insertion")
-            .push(frame)
+            .push_shared(frame)
     }
 
     pub fn push_input_frame(
@@ -3307,8 +3354,28 @@ impl<D: VideoFrameDecoder> VideoFrameProvider for DecoderBackedFrameProvider<D> 
         if ahead.len() < 2 {
             return;
         }
-        let results = self.decoder.decode_input_frames(&ahead);
+        let results = self.decoder.decode_input_frames_shared(&ahead);
         self.decoded_ahead = ahead.into_iter().zip(results).collect();
+    }
+
+    fn frames_for_layer_shared(
+        &mut self,
+        layer: &VideoLayerSummary,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<Arc<VideoFrame>>, VideoFrameProviderError> {
+        let positions = preview_prefetch_positions_ms(
+            layer,
+            self.prefetch_count,
+            self.prefetch_interval_ms,
+            self.bpm,
+        );
+        let mut frames = Vec::with_capacity(positions.len());
+        for position_ms in positions {
+            let input = legacy_layer_input(layer, width, height, Some(position_ms));
+            frames.push(self.decode_or_placeholder_for_input_shared(&input)?);
+        }
+        Ok(frames)
     }
 
     fn frame_for_layer(
@@ -3414,7 +3481,7 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
     fn take_decoded_ahead(
         &mut self,
         input: &VideoRenderInput,
-    ) -> Option<Result<Option<VideoFrame>, VideoDecodeError>> {
+    ) -> Option<Result<Option<Arc<VideoFrame>>, VideoDecodeError>> {
         let index = self
             .decoded_ahead
             .iter()
@@ -3458,6 +3525,14 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
         &mut self,
         input: &VideoRenderInput,
     ) -> Result<VideoFrame, VideoFrameProviderError> {
+        self.decode_or_placeholder_for_input_shared(input)
+            .map(Arc::unwrap_or_clone)
+    }
+
+    fn decode_or_placeholder_for_input_shared(
+        &mut self,
+        input: &VideoRenderInput,
+    ) -> Result<Arc<VideoFrame>, VideoFrameProviderError> {
         let request = &input.request;
         if matches!(request.source.kind, VideoSourceKind::StillImage) {
             self.decoder.release_input(input);
@@ -3480,6 +3555,7 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
                     request.width,
                     request.height,
                 )
+                .map(Arc::new)
                 .map_err(|error| VideoFrameProviderError::StillImage {
                     layer_id: request.layer_id,
                     label: request.label.clone(),
@@ -3489,16 +3565,16 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
 
         let decoded = match self.take_decoded_ahead(input) {
             Some(decoded) => decoded,
-            None => self.decoder.decode_input_frame(input),
+            None => self.decoder.decode_input_frame_shared(input),
         };
         match decoded {
             Ok(Some(frame)) => Ok(frame),
-            Ok(None) if self.placeholder_when_missing => Ok(debug_solid_frame_for_layer(
+            Ok(None) if self.placeholder_when_missing => Ok(Arc::new(debug_solid_frame_for_layer(
                 request.layer_id,
                 request.position_ms,
                 request.width,
                 request.height,
-            )),
+            ))),
             Ok(None) => Err(VideoFrameProviderError::Decode {
                 layer_id: request.layer_id,
                 label: request.label.clone(),
@@ -3563,7 +3639,7 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
                 drop(decoded);
                 Err(VideoDecodeError::Cancelled)
             }
-            Some(decoded) => decoded,
+            Some(decoded) => decoded.map(|frame| frame.map(Arc::unwrap_or_clone)),
             None => self
                 .decoder
                 .decode_input_frame_with_cancellation(input, cancellation),
@@ -5443,14 +5519,17 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 self.runtime.push_frame(frame);
                 continue;
             }
-            let frames = match cancellation {
-                Some(cancellation) => self.frame_provider.frames_for_layer_with_cancellation(
-                    layer,
-                    width,
-                    height,
-                    cancellation,
-                ),
-                None => self.frame_provider.frames_for_layer(layer, width, height),
+            // The live path takes shared frames: a layer without effects
+            // queues the decoder's frame itself, so a frame reused from one
+            // tick to the next is never copied.
+            let frames: Vec<Arc<VideoFrame>> = match cancellation {
+                Some(cancellation) => self
+                    .frame_provider
+                    .frames_for_layer_with_cancellation(layer, width, height, cancellation)
+                    .map(|frames| frames.into_iter().map(Arc::new).collect()),
+                None => self
+                    .frame_provider
+                    .frames_for_layer_shared(layer, width, height),
             }
             .map_err(VideoPreviewError::from)?;
             for frame in frames {
@@ -5460,33 +5539,49 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     .iter()
                     .find(|runtime| runtime.layer_id == layer.id)
                     .and_then(|runtime| runtime.active_slot_id);
-                let (frame, clip_faults) = match active_slot_id {
-                    Some(slot_id) => {
-                        let scope = VideoEffectScope::Clip {
+                let clip_chain = active_slot_id.map(|slot_id| {
+                    resolve_video_effect_chain(
+                        snapshot,
+                        &VideoEffectScope::Clip {
                             layer_id: layer.id,
                             slot_id,
-                        };
-                        match resolve_video_effect_chain(snapshot, &scope) {
-                            Ok(Some(chain)) => self
-                                .apply_resolved_effect_chain_to_frame_with_cancellation(
-                                    &chain,
-                                    frame,
-                                    None,
-                                    cancellation,
-                                )
-                                .map_err(VideoPreviewError::Runtime)?,
-                            Ok(None) => (frame, Vec::new()),
-                            Err(fault) => (frame, vec![*fault]),
+                        },
+                    )
+                });
+                let layer_chain = resolve_effective_layer_chain(snapshot, layer);
+                if !matches!(clip_chain, Some(Ok(Some(_)))) && !matches!(layer_chain, Ok(Some(_))) {
+                    let clip_fault = match clip_chain {
+                        Some(Err(fault)) => Some(*fault),
+                        _ => None,
+                    };
+                    let layer_fault = layer_chain.err().map(|fault| *fault);
+                    for fault in clip_fault.into_iter().chain(layer_fault) {
+                        if !effect_faults.contains(&fault) {
+                            effect_faults.push(fault);
                         }
                     }
-                    None => (frame, Vec::new()),
+                    self.runtime.push_shared_frame(frame);
+                    continue;
+                }
+                let frame = Arc::unwrap_or_clone(frame);
+                let (frame, clip_faults) = match clip_chain {
+                    Some(Ok(Some(chain))) => self
+                        .apply_resolved_effect_chain_to_frame_with_cancellation(
+                            &chain,
+                            frame,
+                            None,
+                            cancellation,
+                        )
+                        .map_err(VideoPreviewError::Runtime)?,
+                    Some(Ok(None)) | None => (frame, Vec::new()),
+                    Some(Err(fault)) => (frame, vec![*fault]),
                 };
                 for fault in clip_faults {
                     if !effect_faults.contains(&fault) {
                         effect_faults.push(fault);
                     }
                 }
-                let (frame, layer_faults) = match resolve_effective_layer_chain(snapshot, layer) {
+                let (frame, layer_faults) = match layer_chain {
                     Ok(Some(chain)) => self
                         .apply_resolved_effect_chain_to_frame_with_cancellation(
                             &chain,

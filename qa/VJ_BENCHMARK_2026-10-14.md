@@ -224,6 +224,40 @@ material cost, so the change was reverted.
 3. **GPU composition for the live output.** It takes the remaining ≈ 1.25
    ms per 1080p layer, and far more at 4K, off the CPU.
 
+## Follow-up 2026-10-15 (2): shared frames on the live path
+
+**What changed.** Design step 1 above is done without changing `VideoFrame`.
+- **Decoder.** It gains shared variants (`decode_input_frame_shared`,
+  `decode_input_frames_shared`). The libav cache holds `Arc<VideoFrame>`,
+  so a cache hit or reused frame is handed out without a copy.
+- **Provider.** `frames_for_layer_shared` is added.
+- **Renderer.** On the live (uncancellable) path, a layer without clip or
+  layer effects queues the decoder's own frame. A layer with effects still
+  copies it once to apply them.
+
+**What does not change.** The owned API, recording and every other caller
+behave as before.
+
+| Scenario (1080p) | Before (p50 / p95) | Now (p50 / p95) | Now over 16.7 ms |
+| --- | ---: | ---: | ---: |
+| H.264, 1 layer | 5.6 / 15.8 | 4.5 / 14.7 | 2 |
+| H.264 × 2 | 7.4 / 18.5 | 5.9 / 16.3 | 3 |
+| H.264 × 4 | 14.4 / 28.3 | 8.8 / 23.9 | 120 |
+| H.264 × 8 | 26.3 / 46.5 | 15.1 / 35.7 | 120 |
+| HAP × 2 | 7.6 / 14.3 | 4.8 / 11.9 | 0 |
+| HAP × 4 | 16.2 / 23.1 | 9.0 / 18.2 | 56 |
+| HAP × 8 | 25.9 / 39.8 | 15.5 / 29.3 | 120 |
+| H.264 2160p, 1 layer, 4K out | 24.0 / 54.3 | 17.3 / 48.3 | 121 |
+| 4 × H.264 into 4K out | 45.4 / 83.5 | 24.7 / 64.4 | 240 |
+
+**What these numbers mean:**
+- **Frames that only re-show a frame** now fit 60 fps up to 8 layers of
+  1080p (8 × H.264 p50 15.1 ms).
+- **Two layers of H.264 or HAP** hold 60 fps.
+- **The frames that still miss** are the ones where several clips advance
+  at once: the 120 of 240 frames that decode. That is design step 2
+  (asynchronous decode one frame ahead).
+
 ## SynapseRack comparison: what is and is not known
 
 - No SynapseRack frame times were measured yet.

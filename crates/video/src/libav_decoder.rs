@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use protocol::{VideoLayerId, VideoSourceKind};
 
@@ -123,14 +123,15 @@ struct LibavFrameCacheEntry {
     height: u32,
     position_ms: u64,
     signature: StillImageSignature,
-    frame: VideoFrame,
+    /// Shared with the renderer, so reusing a frame never copies it.
+    frame: Arc<VideoFrame>,
 }
 
 /// What `prepare_decode` leaves for the frame decode.
 #[cfg(feature = "libav")]
 enum LibavPrepared {
     /// Answered without decoding: from the cache, by reuse, or an error.
-    Done(Result<Option<VideoFrame>, VideoDecodeError>),
+    Done(Result<Option<Arc<VideoFrame>>, VideoDecodeError>),
     /// The input's session must decode the requested frame.
     Decode(LibavDecodeJob),
 }
@@ -181,7 +182,7 @@ fn continuation_frame<'a>(
                 entry.layer_id,
             )
         })
-        .map(|entry| &entry.frame)
+        .map(|entry| &*entry.frame)
 }
 
 #[cfg(feature = "libav")]
@@ -320,7 +321,7 @@ impl LibavFrameDecoder {
         request: &VideoFrameRequest,
         path: &std::path::Path,
         signature: &StillImageSignature,
-    ) -> Option<VideoFrame> {
+    ) -> Option<Arc<VideoFrame>> {
         self.entries
             .iter()
             .find(|entry| {
@@ -332,7 +333,7 @@ impl LibavFrameDecoder {
                     && entry.position_ms == request.position_ms
                     && entry.signature == *signature
             })
-            .map(|entry| entry.frame.clone())
+            .map(|entry| Arc::clone(&entry.frame))
     }
 
     #[cfg(any(feature = "libav", test))]
@@ -408,7 +409,7 @@ impl LibavFrameDecoder {
     fn decode_enabled(
         &mut self,
         input: &VideoRenderInput,
-    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+    ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
         let job = match self.prepare_decode(input) {
             LibavPrepared::Done(result) => return result,
             LibavPrepared::Decode(job) => job,
@@ -444,7 +445,7 @@ impl LibavFrameDecoder {
         &mut self,
         inputs: &[VideoRenderInput],
         pool: &rayon::ThreadPool,
-    ) -> Vec<Result<Option<VideoFrame>, VideoDecodeError>> {
+    ) -> Vec<Result<Option<Arc<VideoFrame>>, VideoDecodeError>> {
         use rayon::prelude::*;
 
         let prepared = inputs
@@ -629,7 +630,7 @@ impl LibavFrameDecoder {
         input: &VideoRenderInput,
         job: LibavDecodeJob,
         primary_decode: Result<VideoFrame, VideoDecodeError>,
-    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+    ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
         let key = input.key;
         let request = &input.request;
         let LibavDecodeJob {
@@ -692,6 +693,7 @@ impl LibavFrameDecoder {
                 return Err(error);
             }
         };
+        let frame = Arc::new(frame);
         self.replace_layer_cache_entry(LibavFrameCacheEntry {
             key,
             layer_id: request.layer_id,
@@ -700,7 +702,7 @@ impl LibavFrameDecoder {
             height: request.height,
             position_ms: request.position_ms,
             signature,
-            frame: frame.clone(),
+            frame: Arc::clone(&frame),
         });
         Ok(Some(frame))
     }
@@ -770,6 +772,14 @@ impl VideoFrameDecoder for LibavFrameDecoder {
         &mut self,
         input: &VideoRenderInput,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        self.decode_input_frame_shared(input)
+            .map(|frame| frame.map(Arc::unwrap_or_clone))
+    }
+
+    fn decode_input_frame_shared(
+        &mut self,
+        input: &VideoRenderInput,
+    ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
         if input.request.source.kind != VideoSourceKind::File {
             self.release_input_key(input.key, input.layer_id());
             return Ok(None);
@@ -784,13 +794,23 @@ impl VideoFrameDecoder for LibavFrameDecoder {
         }
     }
 
-    /// Distinct file inputs decode their frames in parallel when the batch
-    /// cannot evict anything from the working set; anything else decodes one
-    /// by one.
     fn decode_input_frames(
         &mut self,
         inputs: &[VideoRenderInput],
     ) -> Vec<Result<Option<VideoFrame>, VideoDecodeError>> {
+        self.decode_input_frames_shared(inputs)
+            .into_iter()
+            .map(|decoded| decoded.map(|frame| frame.map(Arc::unwrap_or_clone)))
+            .collect()
+    }
+
+    /// Distinct file inputs decode their frames in parallel when the batch
+    /// cannot evict anything from the working set; anything else decodes one
+    /// by one.
+    fn decode_input_frames_shared(
+        &mut self,
+        inputs: &[VideoRenderInput],
+    ) -> Vec<Result<Option<Arc<VideoFrame>>, VideoDecodeError>> {
         #[cfg(feature = "libav")]
         {
             let distinct = inputs.iter().enumerate().all(|(index, input)| {
@@ -828,7 +848,7 @@ impl VideoFrameDecoder for LibavFrameDecoder {
         }
         inputs
             .iter()
-            .map(|input| self.decode_input_frame(input))
+            .map(|input| self.decode_input_frame_shared(input))
             .collect()
     }
 }
@@ -1412,7 +1432,7 @@ mod tests {
             height: request.height,
             position_ms: request.position_ms,
             signature,
-            frame: VideoFrame {
+            frame: Arc::new(VideoFrame {
                 layer_id: request.layer_id,
                 width: request.width,
                 height: request.height,
@@ -1420,7 +1440,7 @@ mod tests {
                 duration_ms: 33,
                 format: crate::VideoPixelFormat::Rgba8,
                 data: vec![token],
-            },
+            }),
         }
     }
 
