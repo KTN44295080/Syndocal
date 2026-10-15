@@ -2,8 +2,11 @@
 
 Owner request (2026-10-14): measure Syndocal's VJ output performance against
 SynapseRack. This records Tier A (Syndocal alone, headless, the native output's
-render seam) and what it changed. No same-machine SynapseRack numbers exist
-yet; Tier C below is what that comparison needs. The operator-task comparison
+render seam) and what it changed. The
+[Tier C results](SYNAPSERACK_TIER_C_2026-10-15.md) now include eight Syndocal
+native Display captures. SynapseRack performance measurements are cancelled
+by owner decision on 2026-10-15; the Part D functional comparison replaces them.
+The operator-task comparison
 remains `qa/SYNDOCAL_SYNAPSERACK_VIDEO_OPERATOR_BENCHMARK.md`.
 
 ## Tiers
@@ -11,8 +14,8 @@ remains `qa/SYNDOCAL_SYNAPSERACK_VIDEO_OPERATOR_BENCHMARK.md`.
 | Tier | What | State |
 | --- | --- | --- |
 | A | Decode + CPU composite + effects through the native output's seam, headless, per-frame timing | Done (this file) |
-| B | The same scenes in the running app with real output windows: presentation, the output's 600-frame deadline window, NDI/Spout | Not run |
-| C | SynapseRack and Syndocal on one machine, the same media and layer counts, frame times captured externally (PresentMon) | Not run: needs the owner to approve installing a pinned SynapseRack build and PresentMon |
+| B | The same scenes in the running app with real output windows: presentation, the output's 600-frame deadline window, NDI/Spout | Partial: native Display observations accompany the Tier C rows; NDI/Spout not run. |
+| C | SynapseRack and Syndocal on one machine, the same media and layer counts, frame times captured externally (PresentMon) | 8 Syndocal scenes captured; SynapseRack measurements cancelled by owner decision. See [Tier C note](SYNAPSERACK_TIER_C_2026-10-15.md). |
 
 ## Rig and media
 
@@ -457,27 +460,26 @@ decided: 4K and many-layer outputs.
 
 ## SynapseRack comparison: what is and is not known
 
-- No SynapseRack frame times were measured yet.
-  - **Approval:** the owner approved installing it (2026-10-15). The official
-    free Demo (limited to 4 layers and 2 group layers) is enough for the
-    1/2/4-layer comparison.
-  - **Downloaded:** `SynapseRack-Windows-Online-v3.3.0-build122-Installer.exe`
-    from `dl.synapserack.com`, 1 544 597 166 bytes, SHA-256
-    `a21a9767dc9ae7fa8fd4882f17047892932336f54634b4ae00d82e924778558a`.
-  - **Pending:** the installer is not code-signed, so the owner runs it.
-- To compare (Tier C), on one machine:
-  - pin and record the SynapseRack build and licence (the Demo is limited to
-    four layers);
-  - load this media pack;
-  - build 1, 2, 4 and 8 layers at 50 % Add/Screen/Multiply;
-  - capture presented frame times for both applications with PresentMon over
-    the same 60 s.
-- Until then, the honest statement is about Syndocal's own budget, after
-  the follow-ups above:
-  - **1080p with up to 4 layers:** every codec holds 60 fps on this machine.
-  - **6 layers:** within 1–3 frames of 60 fps.
-  - **8 layers:** does not hold 60 fps. The look-ahead decodes compete with
-    the frame being rendered.
-  - **4K Display output:** the headless benchmark in follow-up 4 measures
-    GPU composition without decoding. It suggests more budget for decoding
-    4K frames; real-window frame times including decoding remain unmeasured.
+- [Tier C native captures and historical checklist, 2026-10-15](SYNAPSERACK_TIER_C_2026-10-15.md):
+  **8 Syndocal scenes measured; all 6 SynapseRack scenes will remain unmeasured
+  by owner decision (2026-10-15)**. SynapseRack performance comparison is dropped.
+  [Part D functional comparison](SYNAPSERACK_FEATURE_COMPARISON_2026-10-15.md)
+  replaces it; performance is excluded.
+- Syndocal native 1080p Display p95, **1 / 2 / 4 / 8 layers**:
+  - H.264 1080p30: **17.912 / 18.406 / 19.559 / 23.357 ms**.
+  - HAP 1080p30: **17.900 / 18.325 / 30.088 / 18.312 ms**.
+  - The linked table includes p50/p99, sample counts and both threshold counts
+    and percentages. Raw 60-second PresentMon CSVs are under `target/qa/tier-c/`.
+- SynapseRack **3.3.0 build 122, Demo** is installed and was observed running.
+  Its folder-picker/custom-UI setup could not be driven reliably. The linked
+  cancelled checklist is historical setup evidence only.
+- The first attempt was blocked by setup elevation and PresentMon permissions; the owner cleared both.
+- These are native present intervals, including vsync/presentation scheduling.
+  Earlier Tier A results above time render work; their 60 fps budget statements
+  do not establish this native cadence. No cross-application performance claim
+  or 4K comparison is supported. No SynapseRack performance setup or capture
+  remains pending. All measured rows are Syndocal only.
+- **Finding for Part C:** HAP ×4 at 1080p used CPU composition and presented
+  at p50 **27.819 ms (about 36 fps)**; HAP ×8 used GPU composition at p50
+  **16.995 ms (about 60 fps)**. Widen eligible GPU composition to two or more
+  layers at any output size, per the owner decision.
