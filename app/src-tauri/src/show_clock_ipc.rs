@@ -32,7 +32,7 @@ use protocol::{
     show_clock_runtime::{
         ShowClockActionDispatch, ShowClockActionGeneration, ShowClockActionScheduler,
         ShowClockEstimatorState, ShowClockOutputContext, ShowClockOutputGate,
-        ShowClockPeerEstimator,
+        ShowClockPeerEstimator, SHOW_CLOCK_DEFAULT_STALE_AFTER_US,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -40,7 +40,8 @@ use sha2::{Digest, Sha256};
 
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(250);
 const RECEIVE_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const SAMPLE_EXPIRY_US: u64 = 250_000;
+// Match the estimator's three-sample holdover instead of expiring at each send.
+const SAMPLE_EXPIRY_US: u64 = SHOW_CLOCK_DEFAULT_STALE_AFTER_US;
 const MAX_USED_SESSIONS_PER_PROCESS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1561,6 +1562,40 @@ mod tests {
             bpm_milli: 120_000,
             initial_show_time_us: 1_000_000,
         }
+    }
+
+    #[test]
+    fn primary_sample_lifetime_tolerates_jitter_but_stale_still_latches() {
+        use protocol::show_clock_runtime::{ShowClockEstimator, ShowClockEstimatorConfig};
+
+        assert_eq!(SAMPLE_EXPIRY_US, SAMPLE_INTERVAL.as_micros() as u64 * 3);
+        let mut estimator =
+            ShowClockEstimator::new(ShowClockEstimatorConfig::default(), 1, 1).unwrap();
+        for sequence in 1..=3 {
+            let sample = signed_peer_sample("jitter-regression", sequence, &[0x42; 32]);
+            estimator
+                .observe(&sample.body, sample.body.sender_monotonic_us)
+                .unwrap();
+        }
+        let last_received_us = 1_500_000;
+        assert_eq!(
+            estimator.advance(last_received_us + 400_000).state,
+            ShowClockEstimatorState::Locked
+        );
+        assert_eq!(
+            estimator.advance(last_received_us + 750_000).state,
+            ShowClockEstimatorState::Locked
+        );
+        assert_eq!(
+            estimator.advance(last_received_us + 750_001).state,
+            ShowClockEstimatorState::Stale
+        );
+        let later = signed_peer_sample("jitter-regression", 5, &[0x42; 32]);
+        estimator.observe(&later.body, 2_500_000).unwrap();
+        assert_eq!(
+            estimator.advance(2_500_000).state,
+            ShowClockEstimatorState::Stale
+        );
     }
 
     #[test]
