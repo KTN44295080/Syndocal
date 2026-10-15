@@ -258,6 +258,59 @@ behave as before.
   at once: the 120 of 240 frames that decode. That is design step 2
   (asynchronous decode one frame ahead).
 
+## Follow-up 2026-10-15 (3): decoding the next frame ahead
+
+Design step 2 is done for libav (H.264, HEVC, ProRes).
+
+**How decoding ahead works.**
+- On the live path, after a layer is served frame F, its session decodes
+  the next frame on the decode pool, between frames.
+- The next request that lands on that frame takes it without decoding.
+  F's time is less than the request's time, and the request's time is at
+  most the next frame's time.
+- Paused layers, steps back, seeks and loops fall through to the on-demand
+  decision exactly as before. The session's `last_request_ms` is restored
+  after the look-ahead.
+- If the clip ended or the look-ahead failed, the session is dropped and
+  reopened on demand.
+- Recording and other owned callers never decode ahead.
+- A 150-tick playback script returns the same frames as on-demand decoding
+  (`libav_parallel_decode_tests.rs`).
+
+**Measurement change.** The benchmark now starts frames on a 60 Hz cadence,
+as the output's frame clock does, so work between frames overlaps idle time
+as it would in the app. Only each frame's render is timed;
+`SYNDOCAL_VJ_BENCH_UNPACED=1` restores back-to-back rendering. Both columns
+below are paced.
+
+| Scenario (paced 60 Hz) | Without look-ahead (p50 / p95, over) | With look-ahead (p50 / p95, over) |
+| --- | ---: | ---: |
+| H.264 1080p, 1 layer | 5.3 / 14.6, 1 | 3.7 / 4.3, 0 |
+| H.264 × 2 | 4.9 / 16.2, 6 | 4.1 / 5.0, 0 |
+| H.264 × 4 | 7.9 / 22.6, 120 | 7.7 / 9.3, 0 |
+| H.264 × 6 | 11.2 / 29.5, 120 | 12.6 / 14.8, 1 |
+| H.264 × 8 | 14.4 / 35.5, 120 | 17.5 / 20.7, 126 |
+| HAP × 4 | 7.9 / 17.2, 24 | 7.9 / 10.4, 0 |
+| HAP × 6 | 14.0 / 22.8, 120 | 12.5 / 15.9, 3 |
+| HAP × 8 | 16.6 / 28.7, 120 | 14.8 / 21.8, 120 |
+| H.264 2160p, 1 layer, 4K out | 16.4 / 48.4, 120 | 17.5 / 32.1, 122 |
+| 4 × H.264 into 4K out | 24.7 / 64.3, 240 | 29.8 / 32.9, 240 |
+
+Look-aheads were used on about 99 % of requests, and none was discarded in
+these scenes.
+
+**What holds 60 fps now.** Every 1080p codec with up to 4 layers holds 60 fps
+on this machine (0 of 240 frames over), and 6 layers come within 1–3
+frames.
+
+**Where it falls short:**
+- At 8 layers the look-ahead decodes compete with the frame being rendered,
+  so p50 rises while p95 falls.
+- 4K output is bound by CPU composition, which is design step 3.
+
+**Not covered.** HAP inputs do not decode ahead (the HAP decoder is separate).
+They benefit from the shared frames instead.
+
 ## SynapseRack comparison: what is and is not known
 
 - No SynapseRack frame times were measured yet.

@@ -208,6 +208,7 @@ fn live_video_monitor_benchmark_raw_vs_jpeg_two_real_outputs() {
     let mut sequence = 0;
     let mut last_frames: Vec<video::VideoFrame> = Vec::new();
     let mut paused_hardware_frames = 0;
+    let mut paused_lookahead_decodes = 0;
     for (phase, positions) in [
         (
             "sequential",
@@ -258,9 +259,16 @@ fn live_video_monitor_benchmark_raw_vs_jpeg_two_real_outputs() {
         }
         if phase == "sequential" {
             paused_hardware_frames = stats.libav_hardware_frame_count;
+            paused_lookahead_decodes = stats.libav_lookahead_decode_count;
         }
         if phase == "paused" {
-            assert_eq!(stats.libav_hardware_frame_count, paused_hardware_frames);
+            // Pausing starts no decode; at most the look-ahead each session
+            // had in flight when playback stopped completes.
+            assert_eq!(stats.libav_lookahead_decode_count, paused_lookahead_decodes);
+            assert!(
+                stats.libav_hardware_frame_count
+                    <= paused_hardware_frames + stats.libav_session_count as u64
+            );
         }
         #[cfg(target_os = "windows")]
         {

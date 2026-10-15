@@ -257,3 +257,180 @@ fn reused_and_repeated_frames_are_shared_not_copied() {
         *first
     );
 }
+
+/// 60 Hz ticks over 30 fps clips: play, pause, a small step back, double
+/// speed, a jump, a loop and a run past the end of both clips.
+fn playback_ticks() -> Vec<[u64; 2]> {
+    let (mut a, mut b) = (0_u64, 0_u64);
+    let mut ticks = Vec::new();
+    for tick in 0..150 {
+        match tick {
+            0..=29 => {
+                a += 17;
+                b += 17;
+            }
+            30..=39 => {}
+            40 => a -= 10,
+            41..=59 => {
+                a += 33;
+                b += 17;
+            }
+            60 => a = 1_500,
+            61..=79 => {
+                a += 17;
+                b += 50;
+            }
+            80 => b = 0,
+            _ => {
+                a += 17;
+                b += 17;
+            }
+        }
+        ticks.push([a, b]);
+    }
+    ticks
+}
+
+#[test]
+fn decoding_ahead_returns_exactly_the_frames_decoding_on_demand_does() {
+    let first = fixture("ahead-a", 2);
+    let second = fixture("ahead-b", 1);
+    let mut on_demand = LibavFrameDecoder::software_for_tests();
+    let mut ahead = LibavFrameDecoder::software_for_tests();
+    for (tick, [a, b]) in playback_ticks().into_iter().enumerate() {
+        let inputs = vec![input(1, &first, a), input(2, &second, b)];
+        let expected = inputs
+            .iter()
+            .map(|input| on_demand.decode_input_frame(input))
+            .collect::<Vec<_>>();
+        // Both live entry points, the batch and one input at a time.
+        let actual = if tick % 3 == 0 {
+            ahead.decode_input_frames_shared(&inputs)
+        } else {
+            inputs
+                .iter()
+                .map(|input| ahead.decode_input_frame_shared(input))
+                .collect()
+        };
+        let actual = actual
+            .into_iter()
+            .map(|decoded| decoded.map(|frame| frame.map(Arc::unwrap_or_clone)))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "tick {tick} at {a} / {b}");
+    }
+    let counters = ahead.session_diagnostics();
+    assert!(counters.lookahead_hits > 20, "{counters:?}");
+    assert!(counters.lookahead_decodes >= counters.lookahead_hits);
+    // On-demand decoding never decodes ahead.
+    assert_eq!(on_demand.session_diagnostics().lookahead_decodes, 0);
+}
+
+#[test]
+fn retaining_or_releasing_joins_the_frames_being_decoded_ahead() {
+    let path = fixture("ahead-release", 1);
+    let mut decoder = LibavFrameDecoder::software_for_tests();
+    decoder
+        .decode_input_frame_shared(&input(1, &path, 0))
+        .unwrap();
+    decoder
+        .decode_input_frame_shared(&input(2, &path, 0))
+        .unwrap();
+    assert_eq!(decoder.session_diagnostics().active_sessions, 2);
+    decoder.retain_inputs(&[input(2, &path, 0)]);
+    assert_eq!(decoder.session_diagnostics().active_sessions, 1);
+    assert!(decoder.lookaheads.is_empty());
+    decoder.release_layer(2);
+    assert_eq!(decoder.session_diagnostics().active_sessions, 0);
+}
+
+fn assert_same_frames(
+    on_demand: &mut LibavFrameDecoder,
+    ahead: &mut LibavFrameDecoder,
+    inputs: &[VideoRenderInput],
+    label: &str,
+) {
+    let expected = inputs
+        .iter()
+        .map(|input| on_demand.decode_input_frame(input))
+        .collect::<Vec<_>>();
+    let actual = ahead
+        .decode_input_frames_shared(inputs)
+        .into_iter()
+        .map(|decoded| decoded.map(|frame| frame.map(Arc::unwrap_or_clone)))
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected, "{label}");
+}
+
+#[test]
+fn a_transition_on_one_legacy_owner_never_decodes_ahead_from_the_other_clip() {
+    // As the app's decoder hands a clip transition over: the outgoing and the
+    // incoming clip on the same legacy owner, far apart in time.
+    let outgoing = fixture("transition-out", 3);
+    let incoming = fixture("transition-in", 3);
+    let mut on_demand = LibavFrameDecoder::software_for_tests();
+    let mut ahead = LibavFrameDecoder::software_for_tests();
+    for tick in 0..40_u64 {
+        let inputs = vec![
+            input(1, &outgoing, 2_000 + tick * 17),
+            input(1, &incoming, tick * 17),
+        ];
+        assert_same_frames(&mut on_demand, &mut ahead, &inputs, &format!("tick {tick}"));
+    }
+    assert_eq!(ahead.session_diagnostics().lookahead_decodes, 0);
+    // After the transition the incoming clip plays on and decodes ahead.
+    for tick in 40..60_u64 {
+        let inputs = vec![input(1, &incoming, tick * 17)];
+        assert_same_frames(&mut on_demand, &mut ahead, &inputs, &format!("tick {tick}"));
+    }
+    assert!(ahead.session_diagnostics().lookahead_hits > 0);
+}
+
+#[test]
+fn an_owner_requested_twice_in_a_tick_does_not_decode_ahead() {
+    let path = fixture("twice", 2);
+    let mut on_demand = LibavFrameDecoder::software_for_tests();
+    let mut ahead = LibavFrameDecoder::software_for_tests();
+    assert_same_frames(
+        &mut on_demand,
+        &mut ahead,
+        &[input(1, &path, 1_000), input(1, &path, 500)],
+        "backward pair",
+    );
+    for position in [517, 533, 550] {
+        assert_same_frames(
+            &mut on_demand,
+            &mut ahead,
+            &[input(1, &path, position)],
+            &format!("at {position}"),
+        );
+    }
+}
+
+#[test]
+fn the_end_of_a_clip_reopens_no_more_often_than_on_demand() {
+    // FFV1 is intra-only, so the last frame comes out before the end of the
+    // stream is reached.
+    let path = fixture("end", 1);
+    let mut on_demand = LibavFrameDecoder::software_for_tests();
+    let mut ahead = LibavFrameDecoder::software_for_tests();
+    for tick in 0..90_u64 {
+        // Play to the end, hold past it, then loop back to the start.
+        let position = if tick < 75 {
+            tick * 17
+        } else {
+            (tick - 75) * 17
+        };
+        assert_same_frames(
+            &mut on_demand,
+            &mut ahead,
+            &[input(1, &path, position)],
+            &format!("tick {tick} at {position}"),
+        );
+    }
+    let ahead_counters = ahead.session_diagnostics();
+    let on_demand_counters = on_demand.session_diagnostics();
+    assert!(
+        ahead_counters.opens <= on_demand_counters.opens,
+        "{ahead_counters:?} vs {on_demand_counters:?}"
+    );
+}

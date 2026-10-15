@@ -42,6 +42,9 @@ pub struct VideoDecoderDiagnostics {
     pub libav_hardware_session_count: usize,
     pub libav_hardware_frame_count: u64,
     pub libav_hardware_error_count: u64,
+    pub libav_lookahead_decode_count: u64,
+    pub libav_lookahead_hit_count: u64,
+    pub libav_lookahead_discard_count: u64,
     pub cli_cache_len: usize,
 }
 
@@ -149,6 +152,9 @@ impl PreferredVideoFrameDecoder {
             libav_hardware_session_count: libav_sessions.hardware_sessions,
             libav_hardware_frame_count: libav_sessions.hardware_frames,
             libav_hardware_error_count: libav_sessions.hardware_errors,
+            libav_lookahead_decode_count: libav_sessions.lookahead_decodes,
+            libav_lookahead_hit_count: libav_sessions.lookahead_hits,
+            libav_lookahead_discard_count: libav_sessions.lookahead_discards,
             cli_cache_len: self.fallback.cache_len(),
             ..self.diagnostics
         }
@@ -189,11 +195,14 @@ impl PreferredVideoFrameDecoder {
         }
     }
 
+    /// `shared` is the live path, on which libav decodes ahead; any other
+    /// caller decodes on demand only.
     fn decode_general_input(
         &mut self,
         input: &VideoRenderInput,
         primary_error: Option<VideoDecodeError>,
         cancellation: Option<&dyn VideoRenderCancellation>,
+        shared: bool,
     ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
         if cancellation.is_some_and(VideoRenderCancellation::is_cancelled) {
             return Err(VideoDecodeError::Cancelled);
@@ -213,7 +222,11 @@ impl PreferredVideoFrameDecoder {
                 .libav
                 .decode_input_frame_with_cancellation(input, cancellation)
                 .map(|frame| frame.map(Arc::new)),
-            None => self.libav.decode_input_frame_shared(input),
+            None if shared => self.libav.decode_input_frame_shared(input),
+            None => self
+                .libav
+                .decode_input_frame(input)
+                .map(|frame| frame.map(Arc::new)),
         };
         self.finish_general_input(input, decoded, primary_error, cancellation)
     }
@@ -254,6 +267,7 @@ impl PreferredVideoFrameDecoder {
         &mut self,
         input: &VideoRenderInput,
         cancellation: Option<&dyn VideoRenderCancellation>,
+        shared: bool,
     ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
         if cancellation.is_some_and(VideoRenderCancellation::is_cancelled) {
             return Err(VideoDecodeError::Cancelled);
@@ -293,11 +307,11 @@ impl PreferredVideoFrameDecoder {
                 }
                 Err(error) => {
                     self.diagnostics.hap_failures = self.diagnostics.hap_failures.saturating_add(1);
-                    self.decode_general_input(input, Some(error), cancellation)
+                    self.decode_general_input(input, Some(error), cancellation, shared)
                 }
             };
         }
-        self.decode_general_input(input, None, cancellation)
+        self.decode_general_input(input, None, cancellation, shared)
     }
 }
 
@@ -333,7 +347,7 @@ impl VideoFrameDecoder for PreferredVideoFrameDecoder {
         &mut self,
         input: &VideoRenderInput,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
-        self.decode_input_frame_with_cancellation_impl(input, None)
+        self.decode_input_frame_with_cancellation_impl(input, None, false)
             .map(|frame| frame.map(Arc::unwrap_or_clone))
     }
 
@@ -341,7 +355,7 @@ impl VideoFrameDecoder for PreferredVideoFrameDecoder {
         &mut self,
         input: &VideoRenderInput,
     ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
-        self.decode_input_frame_with_cancellation_impl(input, None)
+        self.decode_input_frame_with_cancellation_impl(input, None, true)
     }
 
     fn decode_input_frame_with_cancellation(
@@ -349,7 +363,7 @@ impl VideoFrameDecoder for PreferredVideoFrameDecoder {
         input: &VideoRenderInput,
         cancellation: &dyn VideoRenderCancellation,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
-        self.decode_input_frame_with_cancellation_impl(input, Some(cancellation))
+        self.decode_input_frame_with_cancellation_impl(input, Some(cancellation), false)
             .map(|frame| frame.map(Arc::unwrap_or_clone))
     }
 
@@ -357,18 +371,28 @@ impl VideoFrameDecoder for PreferredVideoFrameDecoder {
         &mut self,
         inputs: &[VideoRenderInput],
     ) -> Vec<Result<Option<VideoFrame>, VideoDecodeError>> {
-        self.decode_input_frames_shared(inputs)
+        self.decode_tick(inputs, false)
             .into_iter()
             .map(|decoded| decoded.map(|frame| frame.map(Arc::unwrap_or_clone)))
             .collect()
     }
 
-    /// Plain file inputs that go straight to libav are decoded together;
-    /// any HAP, still or path-less input keeps the one-by-one order and its
-    /// fallbacks. The counters end as they would one by one.
     fn decode_input_frames_shared(
         &mut self,
         inputs: &[VideoRenderInput],
+    ) -> Vec<Result<Option<Arc<VideoFrame>>, VideoDecodeError>> {
+        self.decode_tick(inputs, true)
+    }
+}
+
+impl PreferredVideoFrameDecoder {
+    /// Plain file inputs that go straight to libav are decoded together;
+    /// any HAP, still or path-less input keeps the one-by-one order and its
+    /// fallbacks. The counters end as they would one by one.
+    fn decode_tick(
+        &mut self,
+        inputs: &[VideoRenderInput],
+        shared: bool,
     ) -> Vec<Result<Option<Arc<VideoFrame>>, VideoDecodeError>> {
         let together = inputs.len() > 1
             && inputs.iter().all(|input| {
@@ -384,14 +408,22 @@ impl VideoFrameDecoder for PreferredVideoFrameDecoder {
         if !together {
             return inputs
                 .iter()
-                .map(|input| self.decode_input_frame_shared(input))
+                .map(|input| self.decode_input_frame_with_cancellation_impl(input, None, shared))
                 .collect();
         }
         for _ in inputs {
             self.diagnostics.total_requests = self.diagnostics.total_requests.saturating_add(1);
             self.diagnostics.libav_requests = self.diagnostics.libav_requests.saturating_add(1);
         }
-        let decoded = self.libav.decode_input_frames_shared(inputs);
+        let decoded = if shared {
+            self.libav.decode_input_frames_shared(inputs)
+        } else {
+            self.libav
+                .decode_input_frames(inputs)
+                .into_iter()
+                .map(|decoded| decoded.map(|frame| frame.map(Arc::new)))
+                .collect()
+        };
         inputs
             .iter()
             .zip(decoded)

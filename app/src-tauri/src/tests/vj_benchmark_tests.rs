@@ -6,6 +6,11 @@
 //! `SYNDOCAL_VJ_BENCH_MEDIA=<dir> cargo test --release -p syndocal --bin syndocal vj_benchmark -- --ignored --nocapture`
 //! `SYNDOCAL_VJ_BENCH_ONLY=codec,x2` keeps only the scenarios whose name
 //! contains one of the comma-separated parts.
+//!
+//! Frames start on a 60 Hz cadence, as the output's frame clock starts them,
+//! so work the decoder does between frames (decoding the next frame ahead)
+//! overlaps the idle time it would in the app. Only each frame's render is
+//! timed. `SYNDOCAL_VJ_BENCH_UNPACED=1` renders back to back instead.
 //! Results go to stderr and to `target/qa/vj-bench/<unix ms>.json`.
 //!
 //! Each frame goes through the same seam as the native output window
@@ -135,7 +140,16 @@ fn run(scenario: &str, snapshot: &mut VideoSnapshot, width: u32, height: u32) ->
     let clip_runtime = VideoClipRuntimeSnapshot::default();
     let transitions = VideoLayerTransitionRuntimeSnapshot::default();
     let mut samples = Vec::with_capacity(MEASURED_FRAMES);
+    let paced = std::env::var_os("SYNDOCAL_VJ_BENCH_UNPACED").is_none();
+    let mut next_frame_at = Instant::now();
     for frame in 0..WARMUP_FRAMES + MEASURED_FRAMES {
+        if paced {
+            let now = Instant::now();
+            if next_frame_at > now {
+                std::thread::sleep(next_frame_at - now);
+            }
+            next_frame_at = next_frame_at.max(now) + FRAME_BUDGET;
+        }
         let position_ms = (frame as u64 * 1_000) / 60 % 11_000;
         for layer in &mut snapshot.layers {
             layer.state.position_ms = position_ms;
@@ -164,6 +178,14 @@ fn run(scenario: &str, snapshot: &mut VideoSnapshot, width: u32, height: u32) ->
         }
     }
     let stats = renderer.frame_provider().decoder().diagnostics();
+    if stats.libav_lookahead_decode_count > 0 {
+        eprintln!(
+            "{scenario}: decoded ahead {}, used {}, discarded {}",
+            stats.libav_lookahead_decode_count,
+            stats.libav_lookahead_hit_count,
+            stats.libav_lookahead_discard_count
+        );
+    }
     samples.sort_unstable();
     Result {
         scenario: scenario.to_string(),

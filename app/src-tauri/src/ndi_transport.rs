@@ -278,14 +278,22 @@ impl video::VideoFrameDecoder for NdiAwareVideoFrameDecoder {
         video::VideoFrameDecoder::decode_frame(&mut self.files, request)
     }
 
+    /// The owned batch decodes on demand, as `decode_frame` one by one does.
     fn decode_input_frames(
         &mut self,
         inputs: &[video::VideoRenderInput],
     ) -> Vec<Result<Option<video::VideoFrame>, video::VideoDecodeError>> {
-        self.decode_input_frames_shared(inputs)
-            .into_iter()
-            .map(|decoded| decoded.map(|frame| frame.map(Arc::unwrap_or_clone)))
-            .collect()
+        if !inputs.iter().all(|input| self.is_plain_file(&input.request)) {
+            return inputs
+                .iter()
+                .map(|input| self.decode_frame(&input.request))
+                .collect();
+        }
+        let legacy = inputs
+            .iter()
+            .map(|input| video::VideoRenderInput::legacy(input.request.clone()))
+            .collect::<Vec<_>>();
+        video::VideoFrameDecoder::decode_input_frames(&mut self.files, &legacy)
     }
 
     fn decode_input_frame_shared(
