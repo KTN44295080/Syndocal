@@ -311,6 +311,150 @@ frames.
 **Not covered.** HAP inputs do not decode ahead (the HAP decoder is separate).
 They benefit from the shared frames instead.
 
+## Follow-up 2026-10-15 (4): GPU composition for large Display outputs
+
+Design step 3 is done for the native Display output only, as the owner
+decided: 4K and many-layer outputs.
+
+**When the GPU composites.**
+- **Size:** the output is 4K UHD or larger with two or more layers, or it
+  has six or more layers. Below that the CPU is fast enough.
+- **Content:** the composition is plain:
+  - no effect chain executes (or fails to resolve) in any scope;
+  - no transition bus or clip transition is active;
+  - no layer is rotated or has a colour adjustment or effect;
+  - frames are RGBA, BGRA or HAP DXT1/DXT5.
+- **Everything else renders on the CPU as before.** That includes every
+  blackout, every failure, HAP Q and HAP R, and the first frame before the
+  window's GPU is known.
+- **Other outputs are unchanged.** Recording, NDI, Spout and previews still
+  composite on the CPU.
+
+**What the presenter does.**
+- **Upload.** It uploads each layer's frame into a storage buffer, followed
+  by that layer's sampling lookup. A frame the slot already holds is not
+  uploaded again.
+- **HAP.** DXT1/DXT5 frames upload as they are, compressed. The shader
+  decodes them with the CPU decoder's integer arithmetic. No BC texture
+  support is needed.
+- **Present.** It composites, maps and presents on the GPU.
+- **Releasing frames.** When the output next renders on the CPU, the
+  presenter drops the composition slots, releasing their storage buffers
+  and the frames they held (including when a blackout takes over).
+
+**Safety.** The guarantees of the artistic seam hold on the new path.
+- **Admission is the same.** The GPU composition carries the same evidence
+  and passes the same fail-closed admission before the surface is touched.
+  The frame must be fresh and error-free, for this project epoch and this
+  output. The mapping identity is derived again and must match.
+- **Admission is stricter.** It also refuses any layer the GPU would not
+  composite as the CPU does.
+- **Blackouts are unchanged.** A blackout never becomes a GPU composition.
+  It stays the payload-less exact-black clear.
+- **Display control is unchanged.** The authority fence before every
+  present and the Follow settlement are as before.
+- **Device limits.**
+  - A layer larger than the device can bind (frame plus lookup) keeps the
+    output on the CPU.
+  - If the device cannot allocate a layer, the presenter composites that
+    frame on the CPU exactly as the artistic path would and presents it.
+    That window then stays on the CPU.
+- **Prepared frames are reused.** Stage faults and failed frame checks
+  (HAP Q, HAP R, oversized layers) reuse the prepared frames on the CPU
+  without decoding again. A decoder error makes `prepare_frames` return
+  `Err`, so the CPU path prepares frames again.
+
+**The GPU output matches the CPU output.**
+- **The first version did not.** The tests and the independent review
+  found two defects in it:
+  - **Sample positions.** They were recomputed in GPU floating point. Where
+    a sample fell on a pixel boundary, it took the neighbouring source
+    pixel: 1.7 % of pixels for a 90° rotation, and whole rows for some
+    scales and crops.
+  - **HAP decoding.** It used the GPU's hardware BC decoder. That decoder
+    interpolates differently from the CPU's integer decoder, and the
+    difference varies between vendors.
+- **What changed.**
+  - **Sample positions.** For each output column and row, the presenter
+    reads which source pixel to sample. The CPU compositor computes those
+    indices with the same code it uses itself (`AxisAlignedSampling`).
+  - **HAP decoding.** The shader decodes DXT blocks with the CPU decoder's
+    integer formulas.
+- **The result.**
+  - **Sampling.** The GPU samples exactly the CPU's pixels.
+  - **Decoding.** Every opaque decoded HAP pixel is identical.
+  - **Rounding.** Output differs only where the GPU rounds a blend the
+    other way: at most one level per blend. The tests saw one level, in
+    well under 0.1 % of channels.
+  - **Tests.**
+    - `gpu_surface_composition_tests.rs`: read back without a window.
+    - `gpu_display_composition_tests.rs`: eligibility, fallback and
+      admission.
+    - The app test `native_display_composites_a_large_plain_output_on_the_gpu_until_blackout`.
+- **Rotated layers stay on the CPU.**
+
+**Measured.**
+- **Setup:** release build on this machine, synthetic opaque frames, no
+  decode. Clips advance every other tick (30 fps media on a 60 Hz output).
+- **CPU path:** composite, keep the last-valid copy, upload and map.
+- **GPU path:** upload the changed layers, then composite and map.
+- Both are timed until the GPU finishes.
+- Command:
+  `cargo test --release -p video --features libav --lib gpu_composition_benchmark -- --ignored --nocapture`
+
+| Scene | CPU path (p50 / p95 ms) | GPU path (p50 / p95 ms) |
+| --- | ---: | ---: |
+| 4K out, 2 × 4K RGBA | 14.6 / 15.9 | 5.4 / 6.3 |
+| 4K out, 4 × 4K RGBA | 24.1 / 26.6 | 9.5 / 11.2 |
+| 4K out, 8 × 4K RGBA | 43.3 / 46.9 | 18.6 / 21.5 |
+| 4K out, 4 × 1080p HAP (DXT1) | 43.7 / 45.9 | 2.5 / 3.0 |
+| 1080p out, 6 × 1080p RGBA | 11.0 / 12.0 | 3.0 / 4.1 |
+| 1080p out, 8 × 1080p HAP (DXT1) | 53.5 / 59.8 | 1.4 / 1.8 |
+
+**What this means.**
+- **Composition is no longer what limits 4K output.** At 4K, composition
+  and presentation of four layers now fit a 60 Hz frame with room for
+  decoding.
+- **The VJ benchmark above is unchanged.** It times the renderer without a
+  window, so it still composites on the CPU and does not show this change.
+- **The largest GPU gain is HAP.** Its compressed frames upload as they are,
+  without being expanded on the CPU.
+
+**Not yet checked.**
+- A 4K Display output on real hardware, with a window, has not been run.
+  The headless tests run the same encoding code the presenter submits.
+- The CPU fallback after an allocation failure needs a window, so no test
+  runs it.
+
+**Review fixes and validation (2026-10-15).**
+- Checkout: `main`, base `fe4a7d01f3596576907c356821989a7cf2e2a7a6`.
+  The change was independently reviewed by Claude before commit.
+- Output-buffer and composition-slot allocation now catch both out-of-memory
+  and validation errors, including bind groups made from invalid buffers.
+  Failed output buffers are discarded before returning an error; failed
+  composition slots are dropped before the CPU fallback disables GPU composition.
+- The upload-cache regression now corrupts a forgotten upload and verifies
+  pixel-correct re-upload without reallocating the slot.
+- MSVC-wrapper tests: `test -p video --features libav` **229 passed, 0 failed,
+  10 ignored**; `test -p video` **205 passed, 0 failed, 5 ignored**.
+- `test -p syndocal --bin syndocal`: **2104 passed, 2 failed, 22 ignored**.
+  The failures were
+  `project_backup_listing_missing_directory_pagination_exact_bytes_and_no_allocation`
+  and `receiver_disconnect_returns_child_to_quarantine_then_retry_reaps_it`
+  (reaper timeout). Each passed alone (**1 passed, 0 failed** each).
+  Neither test's implementation was changed.
+- `build-nobundle.cmd`: exit **0**. `native-gate.ps1` against this checkout's
+  release executable: exit **0**, two visible titled windows (`Syndocal`,
+  `jp.seraf.ktn.syndocal-siw`), the main window maximized, `Responding=True`,
+  clean application exit **0**, no processes left running.
+- Compiler warnings: **0** in both video configurations, the app tests and
+  the native release build. A pre-fix compiler baseline was not remeasured.
+  The unchanged frontend emitted one Vite chunk-size warning: App **517.29 kB**
+  exceeds **500 kB**. No warning suppression or limit change was added.
+- Focused rustfmt and `git diff --check` passed. The optional benchmark was
+  not rerun; the table above is unchanged. Actual allocation-failure fallback
+  and 4K real-window performance remain unverified.
+
 ## SynapseRack comparison: what is and is not known
 
 - No SynapseRack frame times were measured yet.
@@ -328,9 +472,12 @@ They benefit from the shared frames instead.
   - build 1, 2, 4 and 8 layers at 50 % Add/Screen/Multiply;
   - capture presented frame times for both applications with PresentMon over
     the same 60 s.
-- Until then, the honest statement is about Syndocal's own budget:
-  - **1 layer:** HAP holds 60 fps. H.264, HEVC and ProRes meet it except on
-    some frames that decode.
-  - **2 or more blended 1080p layers:** do not hold 60 fps on this machine
-    even after this change.
-  - **Biggest remaining cost:** synchronous decode, then per-tick frame copies.
+- Until then, the honest statement is about Syndocal's own budget, after
+  the follow-ups above:
+  - **1080p with up to 4 layers:** every codec holds 60 fps on this machine.
+  - **6 layers:** within 1–3 frames of 60 fps.
+  - **8 layers:** does not hold 60 fps. The look-ahead decodes compete with
+    the frame being rendered.
+  - **4K Display output:** the headless benchmark in follow-up 4 measures
+    GPU composition without decoding. It suggests more budget for decoding
+    4K frames; real-window frame times including decoding remain unmeasured.

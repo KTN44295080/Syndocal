@@ -82544,9 +82544,32 @@ enum NativeVideoOutputFrame {
     SettlementOnly(TimelineFollowSettlementAck),
 }
 
+/// What reaches the surface: the canonical artistic result, or, for a large
+/// plain composition, its layers composited by the presenter on the GPU.
+/// Both are admitted against the same contract before anything is presented.
+#[derive(Debug, Clone)]
+enum NativeDisplayPayload {
+    Artistic(video::VideoOutputArtisticRenderResult),
+    GpuComposition(video::VideoOutputGpuComposition),
+}
+
+fn present_native_display_payload(
+    presenter: &mut video::GpuSurfacePresenter,
+    frame: &NativePresentableVideoOutputFrame,
+) -> Result<(), video::GpuSurfaceError> {
+    match &frame.payload {
+        NativeDisplayPayload::Artistic(result) => {
+            presenter.present_output_artistic_result(result, &frame.contract)
+        }
+        NativeDisplayPayload::GpuComposition(composition) => {
+            presenter.present_output_gpu_composition(composition, &frame.contract)
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct NativePresentableVideoOutputFrame {
-    result: video::VideoOutputArtisticRenderResult,
+    payload: NativeDisplayPayload,
     contract: video::VideoOutputPresentationContract,
     authority: NativeDisplayPresentationAuthority,
     validation_identity: NativeVideoOutputValidationIdentity,
@@ -82957,11 +82980,9 @@ fn native_display_presentation_contract(
 }
 
 /// Renders one canonical post-artistic-chain output from the paired
-/// presentation sample and admits it against the captured authority. There
-/// is deliberately no legacy prepared-frame seam and no last-good fallback
-/// left in this path: the only way pixels reach the surface is through an
-/// admitted [`video::VideoOutputArtisticRenderResult`] presented via
-/// [`video::GpuSurfacePresenter::present_output_artistic_result`].
+/// presentation sample and admits it against the captured authority, on the
+/// CPU only (no presenter capabilities).
+#[cfg(test)]
 fn prepare_native_display_artistic_output(
     renderer: &mut AppVideoPreviewRenderer,
     snapshot: &EngineSnapshot,
@@ -82970,9 +82991,33 @@ fn prepare_native_display_artistic_output(
     width: u32,
     height: u32,
 ) -> Result<NativeVideoOutputFrame, String> {
+    prepare_native_display_output(
+        renderer, snapshot, authority, output_id, width, height, None,
+    )
+}
+
+/// Renders one output from the paired presentation sample and admits it
+/// against the captured authority. There is deliberately no legacy
+/// prepared-frame seam and no last-good fallback in this path: pixels reach
+/// the surface only as an admitted
+/// [`video::VideoOutputArtisticRenderResult`] (presented via
+/// [`video::GpuSurfacePresenter::present_output_artistic_result`]) or, for a
+/// large plain composition when the presenter's capabilities are known, an
+/// admitted [`video::VideoOutputGpuComposition`] (via
+/// [`video::GpuSurfacePresenter::present_output_gpu_composition`]), with the
+/// same evidence, generation, output and mapping rules.
+fn prepare_native_display_output(
+    renderer: &mut AppVideoPreviewRenderer,
+    snapshot: &EngineSnapshot,
+    authority: &NativeDisplayPresentationAuthority,
+    output_id: VideoOutputId,
+    width: u32,
+    height: u32,
+    gpu: Option<video::VideoOutputGpuSupport>,
+) -> Result<NativeVideoOutputFrame, String> {
     let (width, height) = (width.max(1), height.max(1));
-    let result = renderer
-        .prepare_output_artistic_render_result_preview_with_effects_and_transitions(
+    let render = renderer
+        .prepare_output_display_render_preview_with_effects_and_transitions(
             &snapshot.video,
             video::VideoEffectRenderContext {
                 clip_runtime: &snapshot.video_clip_runtime,
@@ -82982,6 +83027,7 @@ fn prepare_native_display_artistic_output(
             output_id,
             width,
             height,
+            gpu,
         )
         .map_err(|error| {
             format!("Native Display output {output_id} artistic render failed: {error:?}")
@@ -82992,14 +83038,27 @@ fn prepare_native_display_artistic_output(
         width,
         height,
     );
-    contract.admit(&result).map_err(|error| {
-        format!("Native Display output {output_id} presentation rejected: {error:?}")
-    })?;
+    let payload = match render {
+        video::VideoOutputDisplayRender::Artistic(result) => {
+            contract.admit(&result).map_err(|error| {
+                format!("Native Display output {output_id} presentation rejected: {error:?}")
+            })?;
+            NativeDisplayPayload::Artistic(result)
+        }
+        video::VideoOutputDisplayRender::GpuComposition(composition) => {
+            contract
+                .admit_gpu_composition(&composition)
+                .map_err(|error| {
+                    format!("Native Display output {output_id} presentation rejected: {error:?}")
+                })?;
+            NativeDisplayPayload::GpuComposition(composition)
+        }
+    };
     let validation_identity =
         native_video_output_validation_identity(authority, snapshot, None, width, height);
     Ok(NativeVideoOutputFrame::Presentable(Box::new(
         NativePresentableVideoOutputFrame {
-            result,
+            payload,
             contract,
             authority: authority.clone(),
             validation_identity,
@@ -83345,7 +83404,7 @@ fn prepare_native_timeline_follow_video_output(
     );
     Ok(NativeVideoOutputFrame::Presentable(Box::new(
         NativePresentableVideoOutputFrame {
-            result: artistic,
+            payload: NativeDisplayPayload::Artistic(artistic),
             contract,
             authority: authority.clone(),
             validation_identity,
@@ -83368,6 +83427,7 @@ fn prepare_native_video_output(
     follow_last_valid: &mut Option<NativeTimelineFollowLastValidFrame>,
     window_label: &str,
     unpublished_snapshot: Option<&EngineSnapshot>,
+    gpu: Option<video::VideoOutputGpuSupport>,
 ) -> Result<NativeVideoOutputFrame, String> {
     if let Some(snapshot) = unpublished_snapshot {
         follow_last_valid.take();
@@ -83382,13 +83442,14 @@ fn prepare_native_video_output(
             output_id,
             window_label,
         )?;
-        return prepare_native_display_artistic_output(
+        return prepare_native_display_output(
             renderer,
             snapshot,
             &authority,
             output_id,
             width.max(1),
             height.max(1),
+            gpu,
         );
     }
     if let Some((context, follow)) = capture_native_timeline_follow_video_render_snapshot(engine) {
@@ -83426,13 +83487,14 @@ fn prepare_native_video_output(
         output_id,
         window_label,
     )?;
-    prepare_native_display_artistic_output(
+    prepare_native_display_output(
         renderer,
         &sample.snapshot,
         &authority,
         output_id,
         width.max(1),
         height.max(1),
+        gpu,
     )
 }
 
@@ -83568,6 +83630,9 @@ fn start_native_video_live_output(
         &mut initial_follow_last_valid,
         &label,
         unpublished_snapshot.as_ref(),
+        presenter
+            .as_ref()
+            .and_then(video::GpuSurfacePresenter::gpu_composition_support),
     )
     .and_then(|first_output| {
         first_validation_identity = match &first_output {
@@ -83631,14 +83696,9 @@ fn start_native_video_live_output(
                     &first_frame.authority,
                     first_frame.follow_identity,
                     || {
-                        presenter
-                            .present_output_artistic_result(
-                                &first_frame.result,
-                                &first_frame.contract,
-                            )
-                            .map_err(|error| {
-                                format!("Native Display output first frame failed: {error:?}")
-                            })
+                        present_native_display_payload(presenter, &first_frame).map_err(|error| {
+                            format!("Native Display output first frame failed: {error:?}")
+                        })
                     },
                 )
                 .map_err(|error| match error {
@@ -83749,6 +83809,7 @@ fn start_native_video_live_output(
                 if let Some((width, height)) = native_video_output_render_extent(width, height) {
                     let mut frame_validation_identity = None;
                     let mut frame_validation_boundary = None;
+                    let gpu_support = presenter.gpu_composition_support();
                     let result = native_video_output_live_frame_with_permit(
                         &mut presenter,
                         || engine.acquire_video_output(),
@@ -83767,6 +83828,7 @@ fn start_native_video_live_output(
                                 &mut follow_last_valid,
                                 &label,
                                 None,
+                                gpu_support,
                             )
                         },
                         |presenter, output| {
@@ -83798,11 +83860,7 @@ fn start_native_video_live_output(
                                     &frame.authority,
                                     frame.follow_identity,
                                     || {
-                                        presenter
-                                            .present_output_artistic_result(
-                                                &frame.result,
-                                                &frame.contract,
-                                            )
+                                        present_native_display_payload(presenter, &frame)
                                             .map_err(|error| {
                                                 format!(
                                                     "Native Display output present failed: {error:?}"
@@ -100131,6 +100189,110 @@ pub(crate) mod tests {
         present_native_display_frame_if_authorized(&engine, &fresh.authority, None, fresh_present)
             .expect("fresh capture+prepare must admit exactly one present");
         assert_eq!(fresh_presents.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn native_display_composites_a_large_plain_output_on_the_gpu_until_blackout() {
+        let output_id = 87_407;
+        let engine = native_display_test_engine();
+        install_injected_display_output_extent(&engine, output_id, 8, 4);
+        let still_image = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("icons")
+            .join("32x32.png");
+        for index in 0..6 {
+            let layer_id = engine.allocate_video_layer_id();
+            engine
+                .send(EngineCommand::AddVideoLayer {
+                    layer_id,
+                    label: format!("GPU composition layer {index}"),
+                    source: VideoSourceSummary {
+                        kind: VideoSourceKind::StillImage,
+                        path: Some(still_image.to_string_lossy().into_owned()),
+                        name: None,
+                        codec: None,
+                        metadata: None,
+                    },
+                })
+                .expect("video layer command must be accepted");
+        }
+        wait_until_native_display_test_condition(
+            || engine.snapshot().video.layers.len() >= 6,
+            "six video layers did not publish",
+        );
+        let mut renderer = test_app_video_renderer();
+        let gpu = Some(video::VideoOutputGpuSupport {
+            max_layer_bytes: u64::MAX,
+        });
+        let mut prepare = |gpu| {
+            let sample = engine.video_presentation_sample();
+            let authority = capture_native_display_presentation_authority(
+                &sample,
+                engine.output_ownership_status(),
+                engine.safety_blackout_authority(),
+                output_id,
+                &video_output_window_label(output_id, false),
+            )
+            .expect("stable engine must capture authority");
+            match prepare_native_display_output(
+                &mut renderer,
+                &sample.snapshot,
+                &authority,
+                output_id,
+                8,
+                4,
+                gpu,
+            )
+            .expect("preparation succeeds on a stable engine")
+            {
+                NativeVideoOutputFrame::Presentable(frame) => frame.payload,
+                NativeVideoOutputFrame::SettlementOnly(_) => {
+                    panic!("a plain Display output is presentable")
+                }
+            }
+        };
+
+        // Six plain layers go to the GPU once the presenter is known.
+        match prepare(gpu) {
+            NativeDisplayPayload::GpuComposition(composition) => {
+                assert_eq!(composition.layers.len(), 6);
+            }
+            NativeDisplayPayload::Artistic(result) => {
+                panic!("six plain layers must composite on the GPU, got {result:?}")
+            }
+        }
+        // Without a presenter they render on the CPU.
+        assert!(matches!(prepare(None), NativeDisplayPayload::Artistic(_)));
+
+        // A blackout is never a GPU composition: it is the payload-less
+        // exact-black clear.
+        engine
+            .send(EngineCommand::SetVideoOutputBlackout {
+                output_id,
+                blackout: true,
+            })
+            .expect("blackout command must be accepted");
+        wait_until_native_display_test_condition(
+            || {
+                engine
+                    .snapshot()
+                    .video
+                    .outputs
+                    .iter()
+                    .any(|output| output.id == output_id && output.blackout)
+            },
+            "output blackout did not publish",
+        );
+        match prepare(gpu) {
+            NativeDisplayPayload::Artistic(result) => {
+                assert_eq!(
+                    result.payload,
+                    video::VideoOutputArtisticPayload::HardBlackout
+                );
+            }
+            NativeDisplayPayload::GpuComposition(_) => {
+                panic!("a blackout must never be a GPU composition")
+            }
+        }
     }
 
     #[test]

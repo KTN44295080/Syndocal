@@ -4,7 +4,10 @@ use protocol::VideoOutputMapping;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use wgpu::util::DeviceExt;
 
-use crate::{convert_frame_to_rgba8, CpuCompositeError, VideoFrame};
+use crate::{
+    axis_aligned_source_lookup, composite_frames_rgba8, convert_frame_to_rgba8,
+    gpu_composition_layer_bytes, CompositionPlan, CpuCompositeError, VideoFrame, VideoPixelFormat,
+};
 use crate::{
     gpu_compositor::{
         blend_mode_index, compositor_params, create_frame_texture, create_gpu_composite_pipelines,
@@ -13,7 +16,8 @@ use crate::{
         CompositorParams, GpuCompositePipelines, GpuFrameTextureSpec,
     },
     PreparedVideoOutput, VideoOutputArtisticAdmission, VideoOutputArtisticPayload,
-    VideoOutputArtisticRejection, VideoOutputArtisticRenderResult, VideoOutputPresentationContract,
+    VideoOutputArtisticRejection, VideoOutputArtisticRenderResult, VideoOutputGpuComposition,
+    VideoOutputGpuSupport, VideoOutputPresentationContract,
 };
 
 const HARD_BLACKOUT_CLEAR_COLOR: wgpu::Color = wgpu::Color {
@@ -51,6 +55,7 @@ pub struct GpuSurfaceBufferStats {
 struct GpuSubmissionValidationState {
     legacy_prepared_output_validated: bool,
     artistic_output_validated: bool,
+    gpu_composition_validated: bool,
 }
 
 struct NativeGpuLayerBuffers {
@@ -129,6 +134,156 @@ impl NativeGpuLayerBuffers {
     }
 }
 
+/// The presenter's GPU composition pipeline (`gpu_display_composition.wgsl`):
+/// a layer's frame and lookup, the composition buffer and the layer params.
+struct GpuCompositionPipeline {
+    bind_group_layout: wgpu::BindGroupLayout,
+    composite: wgpu::ComputePipeline,
+}
+
+fn create_gpu_composition_pipeline(device: &wgpu::Device) -> GpuCompositionPipeline {
+    let storage = |binding, read_only| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    };
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("Syndocal native GPU composition bind group layout"),
+        entries: &[
+            storage(0, true),
+            storage(1, false),
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Syndocal native GPU composition pipeline layout"),
+        bind_group_layouts: &[&bind_group_layout],
+        push_constant_ranges: &[],
+    });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Syndocal native GPU composition shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("gpu_display_composition.wgsl").into()),
+    });
+    let composite = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Syndocal native GPU composition pipeline"),
+        layout: Some(&layout),
+        module: &shader,
+        entry_point: Some("composite_layer"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    GpuCompositionPipeline {
+        bind_group_layout,
+        composite,
+    }
+}
+
+/// The largest storage buffer one GPU composition layer may bind.
+fn gpu_composition_max_layer_bytes(device: &wgpu::Device) -> u64 {
+    let limits = device.limits();
+    u64::from(limits.max_storage_buffer_binding_size).min(limits.max_buffer_size)
+}
+
+/// `gpu_display_composition.wgsl`'s `source_format`.
+fn gpu_composition_source_format(format: VideoPixelFormat) -> u32 {
+    match format {
+        VideoPixelFormat::Bgra8 => 1,
+        VideoPixelFormat::Dxt1 => 2,
+        VideoPixelFormat::Dxt5 => 3,
+        _ => 0,
+    }
+}
+
+/// One GPU composition layer: a storage buffer holding the layer's frame
+/// bytes followed by its sampling lookup, and the layer's params.
+struct NativeGpuCompositionSlot {
+    source: wgpu::Buffer,
+    capacity: u64,
+    params: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    /// The `NativeGpuFrameBuffers::output_reallocations` the bind group was
+    /// made for: a new composition buffer needs a new bind group.
+    bound_output: u64,
+    /// The shared frame at the start of `source`, so the same frame is not
+    /// uploaded twice. Holding it also keeps its allocation from being
+    /// reused by another frame.
+    uploaded: Option<Arc<VideoFrame>>,
+}
+
+impl NativeGpuCompositionSlot {
+    fn new(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        composition: &wgpu::Buffer,
+        bound_output: u64,
+        capacity: u64,
+    ) -> Self {
+        let source = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Syndocal native GPU composition layer source"),
+            size: capacity,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let params = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Syndocal native GPU composition layer params"),
+            size: 32,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind_group =
+            create_composition_slot_bind_group(device, layout, &source, composition, &params);
+        Self {
+            source,
+            capacity,
+            params,
+            bind_group,
+            bound_output,
+            uploaded: None,
+        }
+    }
+}
+
+fn create_composition_slot_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    source: &wgpu::Buffer,
+    composition: &wgpu::Buffer,
+    params: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Syndocal native GPU composition layer bind group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: source.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: composition.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: params.as_entire_binding(),
+            },
+        ],
+    })
+}
+
 struct NativeGpuFrameBuffers {
     composition: wgpu::Buffer,
     mapped: wgpu::Buffer,
@@ -139,6 +294,7 @@ struct NativeGpuFrameBuffers {
     output_bind_group: wgpu::BindGroup,
     mapping_dummy_texture: wgpu::Texture,
     layers: Vec<NativeGpuLayerBuffers>,
+    composition_slots: Vec<NativeGpuCompositionSlot>,
     output_reallocations: u64,
     layer_reallocations: u64,
     frames_presented: u64,
@@ -198,6 +354,7 @@ impl NativeGpuFrameBuffers {
             output_bind_group,
             mapping_dummy_texture,
             layers: Vec::new(),
+            composition_slots: Vec::new(),
             output_reallocations: 1,
             layer_reallocations: 0,
             frames_presented: 0,
@@ -276,10 +433,171 @@ impl NativeGpuFrameBuffers {
         write_frame_texture(queue, &self.layers[index].texture, frame, spec);
     }
 
+    /// Gives every GPU composition layer a slot whose buffer holds its frame
+    /// and lookup, dropping slots no layer uses. Allocation only, so the
+    /// caller can catch out-of-memory and consequent validation errors before
+    /// anything uploads to or submits them.
+    fn prepare_composition_slots(
+        &mut self,
+        device: &wgpu::Device,
+        pipeline: &GpuCompositionPipeline,
+        composition: &VideoOutputGpuComposition,
+        (width, height): (u32, u32),
+    ) -> Result<(), GpuSurfaceError> {
+        let limit = gpu_composition_max_layer_bytes(device);
+        self.composition_slots.truncate(composition.layers.len());
+        for (index, layer) in composition.layers.iter().enumerate() {
+            let required = gpu_composition_layer_bytes(&layer.frame, (width, height))
+                .filter(|bytes| *bytes <= limit)
+                .ok_or(GpuSurfaceError::InvalidSize)?;
+            let fits = self
+                .composition_slots
+                .get(index)
+                .is_some_and(|slot| slot.capacity >= required);
+            if !fits {
+                let capacity = grown_buffer_capacity(
+                    self.composition_slots
+                        .get(index)
+                        .map_or(0, |slot| slot.capacity),
+                    required,
+                )
+                .min(limit)
+                .max(required);
+                let slot = NativeGpuCompositionSlot::new(
+                    device,
+                    &pipeline.bind_group_layout,
+                    &self.composition,
+                    self.output_reallocations,
+                    capacity,
+                );
+                if index < self.composition_slots.len() {
+                    self.composition_slots[index] = slot;
+                } else {
+                    self.composition_slots.push(slot);
+                }
+                self.layer_reallocations = self.layer_reallocations.saturating_add(1);
+            }
+            let slot = &mut self.composition_slots[index];
+            if slot.bound_output != self.output_reallocations {
+                slot.bind_group = create_composition_slot_bind_group(
+                    device,
+                    &pipeline.bind_group_layout,
+                    &slot.source,
+                    &self.composition,
+                    &slot.params,
+                );
+                slot.bound_output = self.output_reallocations;
+            }
+        }
+        Ok(())
+    }
+
+    /// Uploads each GPU composition layer's frame (unless its slot already
+    /// holds that shared frame) and lookup, and records the layer passes and
+    /// the one output mapping pass into `mapped`. Returns the encoder and how
+    /// many compressed frames were uploaded. The slots and the output
+    /// capacity must already be prepared.
+    fn encode_gpu_composition(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        (pipeline, mapping_pipeline): (&GpuCompositionPipeline, &wgpu::ComputePipeline),
+        composition: &VideoOutputGpuComposition,
+        (width, height): (u32, u32),
+    ) -> (wgpu::CommandEncoder, u64) {
+        let buffer_size = u64::from(width) * u64::from(height) * 4;
+        let mut compressed_uploads = 0_u64;
+        for (layer, slot) in composition.layers.iter().zip(&mut self.composition_slots) {
+            let frame = &layer.frame;
+            let current = slot
+                .uploaded
+                .as_ref()
+                .is_some_and(|uploaded| Arc::ptr_eq(uploaded, frame));
+            if !current {
+                queue.write_buffer(&slot.source, 0, &frame.data);
+                slot.uploaded = Some(Arc::clone(frame));
+                if matches!(
+                    frame.format,
+                    VideoPixelFormat::Dxt1 | VideoPixelFormat::Dxt5
+                ) {
+                    compressed_uploads += 1;
+                }
+            }
+            let lookup = axis_aligned_source_lookup(
+                &layer.plan.transform,
+                (width, height),
+                (frame.width, frame.height),
+            )
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>();
+            queue.write_buffer(&slot.source, frame.data.len() as u64, &lookup);
+            let mut params = [0_u8; 32];
+            for (index, value) in [
+                width,
+                height,
+                frame.width,
+                frame.height,
+                layer.plan.opacity.clamp(0.0, 1.0).to_bits(),
+                blend_mode_index(&layer.plan.blend_mode),
+                gpu_composition_source_format(frame.format),
+                (frame.data.len() / 4) as u32,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                params[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            queue.write_buffer(&slot.params, 0, &params);
+        }
+        let mapping = &composition.output_mapping;
+        write_mapping_mask_texture(queue, &self.mapping_dummy_texture, mapping);
+        queue.write_buffer(
+            &self.mapping_params,
+            0,
+            &output_mapping_params(width, height, mapping),
+        );
+        queue.write_buffer(&self.dimensions, 0, &dimensions_uniform(width, height));
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Syndocal native GPU composition encoder"),
+        });
+        encoder.clear_buffer(&self.composition, 0, Some(buffer_size));
+        encoder.clear_buffer(&self.mapped, 0, Some(buffer_size));
+        let (workgroups_x, workgroups_y) = dispatch_dimensions(width, height);
+        for slot in &self.composition_slots[..composition.layers.len()] {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Syndocal native GPU composition layer pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline.composite);
+            pass.set_bind_group(0, &slot.bind_group, &[]);
+            pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+        }
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Syndocal native GPU composition mapping pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(mapping_pipeline);
+            pass.set_bind_group(0, &self.mapping_bind_group, &[]);
+            pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+        }
+        (encoder, compressed_uploads)
+    }
+
+    /// Lets go of the frames the composition slots hold after a failed
+    /// submission: nothing says they arrived. The buffers remain reusable;
+    /// switching to the CPU path instead drops the slots entirely.
+    fn forget_composition_uploads(&mut self) {
+        for slot in &mut self.composition_slots {
+            slot.uploaded = None;
+        }
+    }
+
     fn stats(&self) -> GpuSurfaceBufferStats {
         GpuSurfaceBufferStats {
             output_capacity_bytes: self.output_capacity,
-            layer_slots: self.layers.len(),
+            layer_slots: self.layers.len() + self.composition_slots.len(),
             output_reallocations: self.output_reallocations,
             layer_reallocations: self.layer_reallocations,
             frames_presented: self.frames_presented,
@@ -293,7 +611,10 @@ fn create_output_buffer(device: &wgpu::Device, label: &'static str, size: u64) -
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
         size,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        // COPY_SRC lets the surface-less tests read the result back.
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     })
 }
@@ -401,6 +722,34 @@ fn create_output_bind_group(
     })
 }
 
+fn create_buffer_output_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("Syndocal native GPU buffer output bind group layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+    })
+}
+
 fn grown_buffer_capacity(current: u64, required: u64) -> u64 {
     const ALIGNMENT: u64 = 256;
     let grown = if current == 0 {
@@ -432,6 +781,10 @@ pub struct GpuSurfacePresenter {
     submission_validation: GpuSubmissionValidationState,
     hard_blackout_frames_presented: u64,
     gpu_buffers: Option<NativeGpuFrameBuffers>,
+    composition_pipeline: GpuCompositionPipeline,
+    /// Set when this device failed to allocate a GPU composition; the
+    /// output then renders on the CPU for the presenter's lifetime.
+    gpu_composition_unavailable: bool,
 }
 
 impl GpuSurfacePresenter {
@@ -528,32 +881,8 @@ impl GpuSurfacePresenter {
             ..Default::default()
         });
         let composite_pipelines = create_gpu_composite_pipelines(&device);
-        let buffer_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Syndocal native GPU buffer output bind group layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
-            });
+        let composition_pipeline = create_gpu_composition_pipeline(&device);
+        let buffer_bind_group_layout = create_buffer_output_bind_group_layout(&device);
         let buffer_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Syndocal native GPU buffer output pipeline layout"),
@@ -604,6 +933,8 @@ impl GpuSurfacePresenter {
             submission_validation: GpuSubmissionValidationState::default(),
             hard_blackout_frames_presented: 0,
             gpu_buffers: None,
+            composition_pipeline,
+            gpu_composition_unavailable: false,
         })
     }
 
@@ -889,6 +1220,187 @@ impl GpuSurfacePresenter {
         Ok(())
     }
 
+    /// What this device can composite for
+    /// `VideoPreviewRenderer::prepare_output_display_render_preview_with_effects_and_transitions`,
+    /// or `None` once it failed to allocate a GPU composition.
+    pub fn gpu_composition_support(&self) -> Option<VideoOutputGpuSupport> {
+        (!self.gpu_composition_unavailable).then(|| VideoOutputGpuSupport {
+            max_layer_bytes: gpu_composition_max_layer_bytes(&self.device),
+        })
+    }
+
+    /// Composites a [`VideoOutputGpuComposition`] on this device, then maps
+    /// and presents it as an artistic frame is presented: one output mapping
+    /// pass over the composed buffer. Admission is the same fail-closed
+    /// contract ([`VideoOutputPresentationContract::admit_gpu_composition`]),
+    /// and nothing touches the surface before it and the layer sizes pass.
+    /// A layer whose slot already holds the same shared frame is not
+    /// uploaded again.
+    ///
+    /// If the device cannot allocate the layers, this frame is composited on
+    /// the CPU exactly as the artistic path would composite it and presented
+    /// that way, and [`Self::gpu_composition_support`] reports nothing from
+    /// then on.
+    pub fn present_output_gpu_composition(
+        &mut self,
+        composition: &VideoOutputGpuComposition,
+        contract: &VideoOutputPresentationContract,
+    ) -> Result<(), GpuSurfaceError> {
+        contract
+            .admit_gpu_composition(composition)
+            .map_err(GpuSurfaceError::Rejected)?;
+        let (width, height) = (contract.width, contract.height);
+        let limit = gpu_composition_max_layer_bytes(&self.device);
+        if !composition.layers.iter().all(|layer| {
+            gpu_composition_layer_bytes(&layer.frame, (width, height))
+                .is_some_and(|bytes| bytes <= limit)
+        }) {
+            return Err(GpuSurfaceError::InvalidSize);
+        }
+        let buffer_size = u64::from(
+            width
+                .checked_mul(height)
+                .ok_or(GpuSurfaceError::InvalidSize)?,
+        ) * 4;
+        self.resize(width, height)?;
+        // The output buffers are the artistic path's too: failing them fails
+        // either path. Invalid buffers can also fail bind-group validation.
+        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        match self.gpu_buffers.as_mut() {
+            Some(gpu_buffers) => gpu_buffers.ensure_output_capacity(
+                &self.device,
+                &self.composite_pipelines.bind_group_layout,
+                &self.buffer_bind_group_layout,
+                buffer_size,
+            ),
+            None => {
+                self.gpu_buffers = Some(NativeGpuFrameBuffers::new(
+                    &self.device,
+                    &self.composite_pipelines.bind_group_layout,
+                    &self.buffer_bind_group_layout,
+                    buffer_size,
+                ));
+            }
+        }
+        let allocation_error = pollster::block_on(self.device.pop_error_scope());
+        let validation_error = pollster::block_on(self.device.pop_error_scope());
+        if let Some(error) = allocation_error.or(validation_error) {
+            self.gpu_buffers = None;
+            return Err(GpuSurfaceError::Present(format!(
+                "GPU output buffers could not be allocated: {error}"
+            )));
+        }
+        {
+            let gpu_buffers = self.gpu_buffers.as_mut().expect("GPU buffers initialized");
+            self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+            self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+            let prepared = gpu_buffers.prepare_composition_slots(
+                &self.device,
+                &self.composition_pipeline,
+                composition,
+                (width, height),
+            );
+            let allocation_error = pollster::block_on(self.device.pop_error_scope());
+            let validation_error = pollster::block_on(self.device.pop_error_scope());
+            if allocation_error.or(validation_error).is_some() {
+                gpu_buffers.composition_slots.clear();
+                self.gpu_composition_unavailable = true;
+                return self.present_gpu_composition_on_cpu(composition, contract);
+            }
+            prepared?;
+        }
+        let surface_texture = self.acquire_surface_texture()?;
+        let gpu_buffers = self.gpu_buffers.as_mut().expect("GPU buffers initialized");
+        let validate_submission = !self.submission_validation.gpu_composition_validated;
+        if validate_submission {
+            self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        }
+        let (mut encoder, compressed_uploads) = gpu_buffers.encode_gpu_composition(
+            &self.device,
+            &self.queue,
+            (
+                &self.composition_pipeline,
+                &self.composite_pipelines.output_mapping,
+            ),
+            composition,
+            (width, height),
+        );
+        let output_view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Syndocal native GPU composition output pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &output_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.buffer_pipeline);
+            pass.set_bind_group(0, &gpu_buffers.output_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        self.queue.submit(Some(encoder.finish()));
+        if validate_submission {
+            if let Some(error) = pollster::block_on(self.device.pop_error_scope()) {
+                gpu_buffers.forget_composition_uploads();
+                return Err(GpuSurfaceError::Present(format!(
+                    "GPU composition presentation validation failed: {error}"
+                )));
+            }
+            self.submission_validation.gpu_composition_validated = true;
+        }
+        surface_texture.present();
+        gpu_buffers.frames_presented = gpu_buffers.frames_presented.saturating_add(1);
+        gpu_buffers.compressed_layer_uploads = gpu_buffers
+            .compressed_layer_uploads
+            .saturating_add(compressed_uploads);
+        Ok(())
+    }
+
+    /// The artistic path's result for an admitted GPU composition: the same
+    /// CPU composite (`composite_frames_rgba8`, as the artistic renderer
+    /// composites a composition without effects or transitions), mapped
+    /// once and presented.
+    fn present_gpu_composition_on_cpu(
+        &mut self,
+        composition: &VideoOutputGpuComposition,
+        contract: &VideoOutputPresentationContract,
+    ) -> Result<(), GpuSurfaceError> {
+        let plan = CompositionPlan {
+            composition_id: 0,
+            label: String::new(),
+            output_ids: Vec::new(),
+            master_opacity: 1.0,
+            blackout: false,
+            layers: composition
+                .layers
+                .iter()
+                .map(|layer| layer.plan.clone())
+                .collect(),
+        };
+        let frames = composition
+            .layers
+            .iter()
+            .map(|layer| Arc::clone(&layer.frame))
+            .collect::<Vec<_>>();
+        let frame = composite_frames_rgba8(&plan, &frames, contract.width, contract.height)?;
+        self.present_mapped_artistic_buffer(
+            &frame,
+            &composition.output_mapping,
+            contract.width,
+            contract.height,
+        )
+    }
+
     fn acquire_surface_texture(&self) -> Result<wgpu::SurfaceTexture, GpuSurfaceError> {
         match self.surface.get_current_texture() {
             Ok(texture) => Ok(texture),
@@ -919,12 +1431,17 @@ impl GpuSurfacePresenter {
     /// growth: the artistic frame bytes are written into the existing
     /// composition storage buffer and mapping uniform. The frame data remains
     /// borrowed; ownership stays with the caller.
+    /// GPU composition slots are dropped, releasing their storage buffers and
+    /// held frames when this CPU-rendered path (including blackout) takes over.
     pub fn present_output_artistic_result(
         &mut self,
         result: &VideoOutputArtisticRenderResult,
         contract: &VideoOutputPresentationContract,
     ) -> Result<(), GpuSurfaceError> {
         let presentation = resolve_output_artistic_presentation(result, contract)?;
+        if let Some(gpu_buffers) = self.gpu_buffers.as_mut() {
+            gpu_buffers.composition_slots.clear();
+        }
         self.resize(contract.width, contract.height)?;
         match presentation {
             GpuArtisticPresentation::ExactBlackClear => self.present_hard_blackout_surface(),
@@ -1118,3 +1635,7 @@ fn dimensions_uniform(width: u32, height: u32) -> [u8; 16] {
 #[cfg(test)]
 #[path = "gpu_surface_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "gpu_surface_composition_tests.rs"]
+mod composition_tests;

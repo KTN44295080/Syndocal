@@ -28,6 +28,9 @@ mod builtin_isf;
 mod decode_ahead_tests;
 mod ffmpeg_cancellable_process;
 mod gpu_compositor;
+#[cfg(test)]
+#[path = "gpu_display_composition_tests.rs"]
+mod gpu_display_composition_tests;
 mod gpu_surface;
 mod hap_decoder;
 mod isf_runtime;
@@ -393,6 +396,233 @@ pub struct VideoOutputArtisticRenderResult {
     pub evidence: VideoOutputRenderEvidence,
 }
 
+/// What the native Display seam renders: the canonical artistic result, or,
+/// for a large plain composition, the layers for the presenter to composite on
+/// the GPU (see [`VideoPreviewRenderer::prepare_output_display_render_preview_with_effects_and_transitions`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum VideoOutputDisplayRender {
+    Artistic(VideoOutputArtisticRenderResult),
+    GpuComposition(VideoOutputGpuComposition),
+}
+
+/// A fresh output whose plain layers the presenter composites on the GPU. It
+/// carries the same evidence and mapping identity as an artistic result and
+/// is admitted by [`VideoOutputPresentationContract::admit_gpu_composition`].
+/// It only exists for compositions of unrotated, unadjusted layers (see
+/// `gpu_composition_layer_plan`) with no executing effect chain in any
+/// scope and no transition, over RGBA, BGRA or DXT1/DXT5 frames. The
+/// presenter samples exactly the source pixels the CPU composite does
+/// (`AxisAlignedSampling`) and decodes DXT with the CPU's integer
+/// arithmetic, so the two differ only where the GPU rounds a blend the
+/// other way: by one level in a channel per blend at most.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoOutputGpuComposition {
+    /// In composition order, bottom first.
+    pub layers: Vec<VideoOutputGpuLayer>,
+    pub output_mapping: VideoOutputMapping,
+    pub output_mapping_identity: VideoOutputMappingIdentity,
+    pub evidence: VideoOutputRenderEvidence,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoOutputGpuLayer {
+    pub plan: CompositionLayerPlan,
+    pub frame: Arc<VideoFrame>,
+}
+
+/// What the presenter's device can composite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoOutputGpuSupport {
+    /// The largest buffer one layer may bind: its frame bytes and its
+    /// sampling lookup (`gpu_composition_layer_bytes`). A larger layer keeps
+    /// the output on the CPU.
+    pub max_layer_bytes: u64,
+}
+
+/// GPU composition is used from this output size (4K UHD) with two or more
+/// layers, or from [`GPU_COMPOSITION_MIN_LAYERS`] layers at any size: below
+/// that the CPU composites faster than the layers upload.
+const GPU_COMPOSITION_MIN_PIXELS: u64 = 3_840 * 2_160;
+const GPU_COMPOSITION_MIN_LAYERS: usize = 6;
+
+/// The byte length of a frame the GPU composition reads as the CPU does, or
+/// `None` for a format it does not: HAP Q (YCoCg) and HAP R (BC7) stay on
+/// the CPU. DXT1 and DXT5 are decoded in the shader with the CPU decoder's
+/// integer arithmetic.
+pub(crate) fn gpu_composition_frame_len(frame: &VideoFrame) -> Option<usize> {
+    match frame.format {
+        VideoPixelFormat::Rgba8 | VideoPixelFormat::Bgra8 => {
+            rgba_frame_len(frame.width, frame.height)
+        }
+        VideoPixelFormat::Dxt1 => dxt_block_count(frame.width, frame.height)?.checked_mul(8),
+        VideoPixelFormat::Dxt5 => dxt_block_count(frame.width, frame.height)?.checked_mul(16),
+        VideoPixelFormat::YcoCgDxt5 | VideoPixelFormat::Bc7 => None,
+    }
+}
+
+/// What one GPU composition layer binds at a `width` x `height` output:
+/// the frame's bytes, then its sampling lookup (a word per output column
+/// and row).
+pub(crate) fn gpu_composition_layer_bytes(
+    frame: &VideoFrame,
+    (width, height): (u32, u32),
+) -> Option<u64> {
+    let frame_len = u64::try_from(gpu_composition_frame_len(frame)?).ok()?;
+    let lookup_len = (u64::from(width) + u64::from(height)) * 4;
+    frame_len.checked_add(lookup_len)
+}
+
+/// A frame the GPU composition reads as it is: a supported format with
+/// exactly the bytes its size implies.
+fn gpu_composition_frame(frame: &VideoFrame) -> bool {
+    frame.width > 0
+        && frame.height > 0
+        && gpu_composition_frame_len(frame) == Some(frame.data.len())
+}
+
+/// What the native Display seam's GPU attempt left for the CPU path.
+enum GpuCompositionAttempt {
+    /// Not attempted: the CPU path renders from the start.
+    NotEligible,
+    /// The frames are prepared, with these faults, but the GPU cannot
+    /// composite them: the CPU path composites them without preparing again.
+    Prepared(Vec<VideoEffectStageFault>),
+    Composition(VideoOutputGpuComposition),
+}
+
+/// A layer the GPU composites as the CPU does: one the CPU composites
+/// through [`AxisAlignedSampling`] (unrotated, finite geometry, no colour
+/// adjustment or effect), whose sampling the presenter then reads from a
+/// lookup table rather than recomputing it in GPU floating point, where a
+/// sample on a pixel boundary could take the neighbouring source pixel.
+fn gpu_composition_layer_plan(plan: &CompositionLayerPlan) -> bool {
+    plan.opacity.is_finite()
+        && plan.color == VideoColorAdjust::default()
+        && plan.fx == VideoFxAdjust::default()
+        && AxisAlignedSampling::applies(&plan.transform)
+}
+
+/// How an unrotated layer maps output pixels to source pixels: pixel
+/// centres, crop and nearest neighbour. The CPU compositor samples such a
+/// layer through it, and the presenter's GPU composition reads the same
+/// indices from a lookup table ([`axis_aligned_source_lookup`]).
+#[derive(Debug, Clone, Copy)]
+struct AxisAlignedSampling {
+    x: f32,
+    y: f32,
+    scale_x: f32,
+    scale_y: f32,
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+}
+
+impl AxisAlignedSampling {
+    fn applies(transform: &Transform2D) -> bool {
+        transform.rotation_deg == 0.0
+            && [
+                transform.x,
+                transform.y,
+                transform.scale_x,
+                transform.scale_y,
+                transform.crop_left,
+                transform.crop_top,
+                transform.crop_right,
+                transform.crop_bottom,
+            ]
+            .iter()
+            .all(|value| value.is_finite())
+    }
+
+    /// `None` when the crop leaves nothing of the layer.
+    fn new(transform: &Transform2D) -> Option<Self> {
+        let left = transform.crop_left.clamp(0.0, 1.0);
+        let top = transform.crop_top.clamp(0.0, 1.0);
+        let right = (1.0 - transform.crop_right.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+        let bottom = (1.0 - transform.crop_bottom.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+        if right <= left || bottom <= top {
+            return None;
+        }
+        Some(Self {
+            x: transform.x,
+            y: transform.y,
+            scale_x: transform.scale_x.max(0.001),
+            scale_y: transform.scale_y.max(0.001),
+            left,
+            top,
+            right,
+            bottom,
+        })
+    }
+
+    /// The source column output column `x` of `width` samples, or `None`
+    /// where the layer does not cover it.
+    fn column(&self, x: u32, width: u32, source_width: u32) -> Option<u32> {
+        axis_source_index(
+            x,
+            width,
+            self.x,
+            self.scale_x,
+            (self.left, self.right),
+            source_width,
+        )
+    }
+
+    /// The source row output row `y` of `height` samples, or `None` where
+    /// the layer does not cover it.
+    fn row(&self, y: u32, height: u32, source_height: u32) -> Option<u32> {
+        axis_source_index(
+            y,
+            height,
+            self.y,
+            self.scale_y,
+            (self.top, self.bottom),
+            source_height,
+        )
+    }
+}
+
+fn axis_source_index(
+    position: u32,
+    length: u32,
+    offset: f32,
+    scale: f32,
+    (crop_start, crop_end): (f32, f32),
+    source_length: u32,
+) -> Option<u32> {
+    let centered = (position as f32 + 0.5) / length as f32 - 0.5 - offset;
+    let local = centered / scale + 0.5;
+    (0.0..1.0).contains(&local).then(|| {
+        ((crop_start + local * (crop_end - crop_start)) * source_length as f32)
+            .floor()
+            .clamp(0.0, (source_length - 1) as f32) as u32
+    })
+}
+
+/// No source pixel: the output column or row lies outside the layer.
+pub(crate) const AXIS_ALIGNED_NOT_COVERED: u32 = u32::MAX;
+
+/// The source column of every output column, then the source row of every
+/// output row, for a [`gpu_composition_layer_plan`] layer of a
+/// `source_width` x `source_height` frame composited at `width` x `height`;
+/// [`AXIS_ALIGNED_NOT_COVERED`] outside the layer.
+pub(crate) fn axis_aligned_source_lookup(
+    transform: &Transform2D,
+    (width, height): (u32, u32),
+    (source_width, source_height): (u32, u32),
+) -> Vec<u32> {
+    let sampling = AxisAlignedSampling::new(transform);
+    let columns =
+        (0..width).map(|x| sampling.and_then(|sampling| sampling.column(x, width, source_width)));
+    let rows =
+        (0..height).map(|y| sampling.and_then(|sampling| sampling.row(y, height, source_height)));
+    columns
+        .chain(rows)
+        .map(|index| index.unwrap_or(AXIS_ALIGNED_NOT_COVERED))
+        .collect()
+}
+
 /// Mutually exclusive artistic payload states. `HardBlackout` deliberately
 /// carries no pixel buffer, so neither the renderer nor the presenter can fill
 /// or scan a full black frame before issuing the exact-black clear.
@@ -630,50 +860,11 @@ impl VideoOutputPresentationContract {
         &self,
         result: &VideoOutputArtisticRenderResult,
     ) -> Result<VideoOutputArtisticAdmission, VideoOutputArtisticRejection> {
-        if self.width == 0 || self.height == 0 {
-            return Err(VideoOutputArtisticRejection::ZeroAreaContract {
-                width: self.width,
-                height: self.height,
-            });
-        }
-        if result.evidence.freshness != VideoOutputRenderFreshness::Fresh {
-            return Err(VideoOutputArtisticRejection::NotFresh {
-                freshness: result.evidence.freshness,
-            });
-        }
-        if result.evidence.error.is_some() {
-            return Err(VideoOutputArtisticRejection::ReportedRenderError);
-        }
-        if result.evidence.project_render_epoch != self.project_render_epoch {
-            return Err(VideoOutputArtisticRejection::ProjectEpochMismatch {
-                expected: self.project_render_epoch,
-                actual: result.evidence.project_render_epoch,
-            });
-        }
-        if result.evidence.output_id != self.output_id {
-            return Err(VideoOutputArtisticRejection::OutputMismatch {
-                expected: self.output_id,
-                actual: result.evidence.output_id,
-            });
-        }
-        let actual_mapping_identity =
-            VideoOutputMappingIdentity::from_mapping(&result.output_mapping);
-        if result.output_mapping_identity != actual_mapping_identity {
-            return Err(
-                VideoOutputArtisticRejection::ResultMappingIdentityMismatch {
-                    declared: Box::new(result.output_mapping_identity),
-                    actual: Box::new(actual_mapping_identity),
-                },
-            );
-        }
-        if self.output_mapping_identity != actual_mapping_identity {
-            return Err(
-                VideoOutputArtisticRejection::ContractMappingIdentityMismatch {
-                    expected: Box::new(self.output_mapping_identity),
-                    actual: Box::new(actual_mapping_identity),
-                },
-            );
-        }
+        self.admit_evidence_and_mapping(
+            &result.evidence,
+            &result.output_mapping,
+            &result.output_mapping_identity,
+        )?;
         let Some(expected_len) = (self.width as usize)
             .checked_mul(self.height as usize)
             .and_then(|pixels| pixels.checked_mul(4))
@@ -710,6 +901,101 @@ impl VideoOutputPresentationContract {
                 Ok(VideoOutputArtisticAdmission::MapOnceAndPresent)
             }
         }
+    }
+
+    /// Decides whether a GPU composition may be presented, with the same
+    /// evidence, generation, output and mapping rules as [`Self::admit`],
+    /// and only layers the GPU composites as the CPU does, each frame of a
+    /// consistent size. The presenter composites them and maps exactly once.
+    pub fn admit_gpu_composition(
+        &self,
+        composition: &VideoOutputGpuComposition,
+    ) -> Result<(), VideoOutputArtisticRejection> {
+        self.admit_evidence_and_mapping(
+            &composition.evidence,
+            &composition.output_mapping,
+            &composition.output_mapping_identity,
+        )?;
+        if (self.width as usize)
+            .checked_mul(self.height as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .is_none()
+        {
+            return Err(VideoOutputArtisticRejection::FrameByteLengthOverflow {
+                width: self.width,
+                height: self.height,
+            });
+        }
+        for layer in &composition.layers {
+            let frame = &layer.frame;
+            if matches!(
+                frame.format,
+                VideoPixelFormat::YcoCgDxt5 | VideoPixelFormat::Bc7
+            ) {
+                return Err(VideoOutputArtisticRejection::UnsupportedFrameFormat {
+                    format: frame.format,
+                });
+            }
+            if frame.layer_id != layer.plan.layer_id
+                || !gpu_composition_layer_plan(&layer.plan)
+                || !gpu_composition_frame(frame)
+            {
+                return Err(VideoOutputArtisticRejection::AdmissionPayloadMismatch);
+            }
+        }
+        Ok(())
+    }
+
+    fn admit_evidence_and_mapping(
+        &self,
+        evidence: &VideoOutputRenderEvidence,
+        output_mapping: &VideoOutputMapping,
+        output_mapping_identity: &VideoOutputMappingIdentity,
+    ) -> Result<(), VideoOutputArtisticRejection> {
+        if self.width == 0 || self.height == 0 {
+            return Err(VideoOutputArtisticRejection::ZeroAreaContract {
+                width: self.width,
+                height: self.height,
+            });
+        }
+        if evidence.freshness != VideoOutputRenderFreshness::Fresh {
+            return Err(VideoOutputArtisticRejection::NotFresh {
+                freshness: evidence.freshness,
+            });
+        }
+        if evidence.error.is_some() {
+            return Err(VideoOutputArtisticRejection::ReportedRenderError);
+        }
+        if evidence.project_render_epoch != self.project_render_epoch {
+            return Err(VideoOutputArtisticRejection::ProjectEpochMismatch {
+                expected: self.project_render_epoch,
+                actual: evidence.project_render_epoch,
+            });
+        }
+        if evidence.output_id != self.output_id {
+            return Err(VideoOutputArtisticRejection::OutputMismatch {
+                expected: self.output_id,
+                actual: evidence.output_id,
+            });
+        }
+        let actual_mapping_identity = VideoOutputMappingIdentity::from_mapping(output_mapping);
+        if *output_mapping_identity != actual_mapping_identity {
+            return Err(
+                VideoOutputArtisticRejection::ResultMappingIdentityMismatch {
+                    declared: Box::new(*output_mapping_identity),
+                    actual: Box::new(actual_mapping_identity),
+                },
+            );
+        }
+        if self.output_mapping_identity != actual_mapping_identity {
+            return Err(
+                VideoOutputArtisticRejection::ContractMappingIdentityMismatch {
+                    expected: Box::new(self.output_mapping_identity),
+                    actual: Box::new(actual_mapping_identity),
+                },
+            );
+        }
+        Ok(())
     }
 }
 
@@ -2162,6 +2448,91 @@ pub fn resolve_video_effect_chain(
 
 fn resolved_chain_executes(chain: &ResolvedVideoEffectChain) -> bool {
     !chain.bypassed && chain.stages.iter().any(|stage| stage.enabled)
+}
+
+/// Whether the GPU composites this output as the CPU artistic path does
+/// (see [`VideoOutputGpuComposition`]): no executing effect chain in the
+/// output, composition, group, layer or active-clip scope (a resolution
+/// fault counts as one, so the CPU path records it), no transition bus or
+/// clip transition, and every layer a [`gpu_composition_layer_plan`].
+fn gpu_composition_eligible(
+    snapshot: &VideoSnapshot,
+    clip_runtime: &VideoClipRuntimeSnapshot,
+    transition_runtime: &VideoLayerTransitionRuntimeSnapshot,
+    plan: &VideoOutputRenderPlan,
+) -> bool {
+    let idle = |resolved: Result<Option<ResolvedVideoEffectChain>, Box<VideoEffectStageFault>>| {
+        match resolved {
+            Ok(None) => true,
+            Ok(Some(chain)) => !resolved_chain_executes(&chain),
+            Err(_) => false,
+        }
+    };
+    let composition_id = plan.composition.composition_id;
+    let bus_active = transition_runtime.buses.iter().any(|active| {
+        snapshot
+            .transition_buses
+            .iter()
+            .any(|bus| bus.id == active.bus_id && bus.composition_id == composition_id)
+    });
+    if bus_active
+        || !idle(resolve_video_effect_chain(
+            snapshot,
+            &VideoEffectScope::Output {
+                output_id: plan.output_id,
+            },
+        ))
+        || !idle(resolve_video_effect_chain(
+            snapshot,
+            &VideoEffectScope::Composition { composition_id },
+        ))
+    {
+        return false;
+    }
+    if snapshot
+        .layer_groups
+        .iter()
+        .filter(|group| group.composition_id == composition_id)
+        .any(|group| {
+            !idle(resolve_video_effect_chain(
+                snapshot,
+                &VideoEffectScope::Group { group_id: group.id },
+            ))
+        })
+    {
+        return false;
+    }
+    plan.composition.layers.iter().all(|layer_plan| {
+        if !gpu_composition_layer_plan(layer_plan) {
+            return false;
+        }
+        let Some(layer) = snapshot
+            .layers
+            .iter()
+            .find(|layer| layer.id == layer_plan.layer_id)
+        else {
+            return false;
+        };
+        let runtime_layer = clip_runtime
+            .layers
+            .iter()
+            .find(|runtime| runtime.layer_id == layer.id);
+        if runtime_layer.is_some_and(|runtime| runtime.transition.is_some())
+            || !idle(resolve_effective_layer_chain(snapshot, layer))
+        {
+            return false;
+        }
+        match runtime_layer.and_then(|runtime| runtime.active_slot_id) {
+            Some(slot_id) => idle(resolve_video_effect_chain(
+                snapshot,
+                &VideoEffectScope::Clip {
+                    layer_id: layer.id,
+                    slot_id,
+                },
+            )),
+            None => true,
+        }
+    })
 }
 
 #[derive(Default)]
@@ -4277,6 +4648,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             width,
             height,
             Some(cancellation),
+            None,
         )?;
         Self::consume_fresh_artistic_frame(result, width, height, true)
     }
@@ -4504,9 +4876,12 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             width,
             height,
             None,
+            None,
         )
     }
 
+    /// `prepared` carries the faults of frames the native Display seam
+    /// already prepared for this plan, which are then not prepared again.
     fn prepare_output_artistic_render_result_impl_with_cancellation(
         &mut self,
         snapshot: &VideoSnapshot,
@@ -4516,6 +4891,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
         cancellation: Option<&dyn VideoRenderCancellation>,
+        prepared: Option<Vec<VideoEffectStageFault>>,
     ) -> Result<VideoOutputArtisticRenderResult, VideoPreviewError> {
         check_render_cancellation(cancellation)?;
         if width == 0 || height == 0 {
@@ -4559,6 +4935,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             width,
             height,
             cancellation,
+            prepared,
         ) {
             Ok(frame) => {
                 if !self.last_effect_stage_faults.is_empty() {
@@ -4763,6 +5140,146 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         )
     }
 
+    /// The native Display seam. A large plain composition (4K UHD output
+    /// with two or more layers, or six or more layers) whose frames the
+    /// presenter's device can composite comes back as a
+    /// [`VideoOutputGpuComposition`] for the presenter to composite on the
+    /// GPU; everything else, including every blackout and every failure,
+    /// comes back exactly as
+    /// [`Self::prepare_output_artistic_render_result_preview_with_effects_and_transitions`]
+    /// renders it. `gpu` is `None` when there is no presenter yet.
+    pub fn prepare_output_display_render_preview_with_effects_and_transitions(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        transition_runtime: &VideoLayerTransitionRuntimeSnapshot,
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+        gpu: Option<VideoOutputGpuSupport>,
+    ) -> Result<VideoOutputDisplayRender, VideoPreviewError> {
+        if width == 0 || height == 0 {
+            return Err(VideoPreviewError::InvalidSize);
+        }
+        let mut plan = build_video_output_render_plan(snapshot, output_id)
+            .map_err(VideoPreviewError::Output)?;
+        apply_video_layer_transition_weights(snapshot, transition_runtime, &mut plan.composition)?;
+        let attempt = match gpu {
+            Some(gpu) => self.try_prepare_gpu_composition(
+                snapshot,
+                context,
+                transition_runtime,
+                &plan,
+                width,
+                height,
+                gpu,
+            ),
+            None => GpuCompositionAttempt::NotEligible,
+        };
+        let prepared = match attempt {
+            GpuCompositionAttempt::Composition(composition) => {
+                return Ok(VideoOutputDisplayRender::GpuComposition(composition));
+            }
+            GpuCompositionAttempt::Prepared(faults) => Some(faults),
+            GpuCompositionAttempt::NotEligible => None,
+        };
+        self.prepare_output_artistic_render_result_impl_with_cancellation(
+            snapshot,
+            context,
+            Some(transition_runtime),
+            &plan,
+            width,
+            height,
+            None,
+            prepared,
+        )
+        .map(VideoOutputDisplayRender::Artistic)
+    }
+
+    /// The GPU composition for `plan`, or what the CPU path needs to render
+    /// it instead. Anything unusual (a decode failure, a stage fault, a
+    /// missing, unsupported or oversized frame) is left to the CPU path,
+    /// which records it.
+    fn try_prepare_gpu_composition(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        transition_runtime: &VideoLayerTransitionRuntimeSnapshot,
+        plan: &VideoOutputRenderPlan,
+        width: u32,
+        height: u32,
+        gpu: VideoOutputGpuSupport,
+    ) -> GpuCompositionAttempt {
+        if plan.output_blackout || plan.output_opacity <= f32::EPSILON || plan.composition.blackout
+        {
+            return GpuCompositionAttempt::NotEligible;
+        }
+        let layers = &plan.composition.layers;
+        let large = (u64::from(width) * u64::from(height) >= GPU_COMPOSITION_MIN_PIXELS
+            && layers.len() >= 2)
+            || layers.len() >= GPU_COMPOSITION_MIN_LAYERS;
+        if !large
+            || !gpu_composition_eligible(snapshot, context.clip_runtime, transition_runtime, plan)
+        {
+            return GpuCompositionAttempt::NotEligible;
+        }
+        self.clear_full_output_effect_diagnostics(snapshot);
+        let layer_ids = layers
+            .iter()
+            .map(|layer| layer.layer_id)
+            .collect::<Vec<_>>();
+        // A preparation error is left for the CPU path to meet and record.
+        let Ok(faults) = self.prepare_frames_with_effects_with_cancellation(
+            snapshot,
+            context.clip_runtime,
+            context.project_render_epoch,
+            &layer_ids,
+            width,
+            height,
+            None,
+        ) else {
+            return GpuCompositionAttempt::NotEligible;
+        };
+        if !faults.is_empty() {
+            return GpuCompositionAttempt::Prepared(faults);
+        }
+        let frames = self.runtime.select_frames_for_plan(&plan.composition);
+        if frames.len() != layers.len()
+            || layers.iter().zip(&frames).any(|(layer, frame)| {
+                frame.layer_id != layer.layer_id
+                    || !gpu_composition_frame(frame)
+                    || !gpu_composition_layer_bytes(frame, (width, height))
+                        .is_some_and(|bytes| bytes <= gpu.max_layer_bytes)
+            })
+        {
+            return GpuCompositionAttempt::Prepared(faults);
+        }
+        // What the CPU path records for a fresh render with no effects.
+        self.record_effect_faults(Vec::new(), snapshot);
+        self.last_output_render_error = None;
+        // There is no CPU frame to keep as this output's last valid one.
+        let epoch = context.project_render_epoch;
+        self.output_last_valid_frames.retain(|entry| {
+            entry.key.project_render_epoch == epoch && entry.key.output_id != plan.output_id
+        });
+        GpuCompositionAttempt::Composition(VideoOutputGpuComposition {
+            layers: layers
+                .iter()
+                .cloned()
+                .zip(frames)
+                .map(|(plan, frame)| VideoOutputGpuLayer { plan, frame })
+                .collect(),
+            output_mapping: plan.mapping,
+            output_mapping_identity: VideoOutputMappingIdentity::from_mapping(&plan.mapping),
+            evidence: VideoOutputRenderEvidence {
+                project_render_epoch: epoch,
+                output_id: plan.output_id,
+                freshness: VideoOutputRenderFreshness::Fresh,
+                error: None,
+            },
+        })
+    }
+
     fn prepare_output_artistic_frame_with_effects_impl_with_cancellation(
         &mut self,
         snapshot: &VideoSnapshot,
@@ -4772,6 +5289,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
         cancellation: Option<&dyn VideoRenderCancellation>,
+        prepared: Option<Vec<VideoEffectStageFault>>,
     ) -> Result<VideoFrame, VideoPreviewError> {
         check_render_cancellation(cancellation)?;
         if width == 0 || height == 0 {
@@ -4782,24 +5300,31 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             self.fence_output_artistic_blackout(snapshot, plan.output_id);
             return Ok(video_output_black_frame(width, height));
         }
-        // Every valid invocation replaces diagnostics, including a fatal
-        // decode/composite error.
-        self.clear_full_output_effect_diagnostics(snapshot);
-        let layer_ids = plan
-            .composition
-            .layers
-            .iter()
-            .map(|layer| layer.layer_id)
-            .collect::<Vec<_>>();
-        let mut faults = self.prepare_frames_with_effects_with_cancellation(
-            snapshot,
-            context.clip_runtime,
-            context.project_render_epoch,
-            &layer_ids,
-            width,
-            height,
-            cancellation,
-        )?;
+        let mut faults = match prepared {
+            // The native Display seam cleared the diagnostics and prepared
+            // these frames for this plan.
+            Some(faults) => faults,
+            None => {
+                // Every valid invocation replaces diagnostics, including a
+                // fatal decode/composite error.
+                self.clear_full_output_effect_diagnostics(snapshot);
+                let layer_ids = plan
+                    .composition
+                    .layers
+                    .iter()
+                    .map(|layer| layer.layer_id)
+                    .collect::<Vec<_>>();
+                self.prepare_frames_with_effects_with_cancellation(
+                    snapshot,
+                    context.clip_runtime,
+                    context.project_render_epoch,
+                    &layer_ids,
+                    width,
+                    height,
+                    cancellation,
+                )?
+            }
+        };
         let (mut frame, composition_faults) = self
             .compose_scoped_plan_with_cancellation(
                 snapshot,
@@ -8643,15 +9168,7 @@ fn blend_transformed_rgba8(params: BlendTransformedRgba8Params<'_>) {
 fn blend_transformed_rgba8_in_bands(params: BlendTransformedRgba8Params<'_>, bands: Option<usize>) {
     if *params.color == VideoColorAdjust::default()
         && *params.fx == VideoFxAdjust::default()
-        && params.transform.rotation_deg == 0.0
-        && params.transform.x.is_finite()
-        && params.transform.y.is_finite()
-        && params.transform.scale_x.is_finite()
-        && params.transform.scale_y.is_finite()
-        && params.transform.crop_left.is_finite()
-        && params.transform.crop_right.is_finite()
-        && params.transform.crop_top.is_finite()
-        && params.transform.crop_bottom.is_finite()
+        && AxisAlignedSampling::applies(params.transform)
     {
         blend_axis_aligned_identity_adjustments(params, bands);
     } else {
@@ -8681,36 +9198,21 @@ fn blend_axis_aligned_identity_adjustments(
     if opacity <= 0.0 {
         return;
     }
-    let left = transform.crop_left.clamp(0.0, 1.0);
-    let top = transform.crop_top.clamp(0.0, 1.0);
-    let right = (1.0 - transform.crop_right.clamp(0.0, 1.0)).clamp(0.0, 1.0);
-    let bottom = (1.0 - transform.crop_bottom.clamp(0.0, 1.0)).clamp(0.0, 1.0);
-    if right <= left || bottom <= top {
+    let Some(sampling) = AxisAlignedSampling::new(transform) else {
         return;
-    }
-    let scale_x = transform.scale_x.max(0.001);
-    let scale_y = transform.scale_y.max(0.001);
+    };
     let source_columns = (0..width)
         .map(|x| {
-            let centered = (x as f32 + 0.5) / width as f32 - 0.5 - transform.x;
-            let local = centered / scale_x + 0.5;
-            (0.0..1.0).contains(&local).then(|| {
-                ((left + local * (right - left)) * frame.width as f32)
-                    .floor()
-                    .clamp(0.0, (frame.width - 1) as f32) as usize
-                    * 4
-            })
+            sampling
+                .column(x, width, frame.width)
+                .map(|column| column as usize * 4)
         })
         .collect::<Vec<_>>();
     let covered_columns = source_columns
         .iter()
         .filter(|column| column.is_some())
         .count();
-    let row_local = |y: u32| {
-        let centered = (y as f32 + 0.5) / height as f32 - 0.5 - transform.y;
-        centered / scale_y + 0.5
-    };
-    let row_covered = |y: u32| (0.0..1.0).contains(&row_local(y));
+    let row_covered = |y: u32| sampling.row(y, height, frame.height).is_some();
     let Some(first_covered_row) = (0..height).find(|&y| row_covered(y)) else {
         return;
     };
@@ -8734,14 +9236,10 @@ fn blend_axis_aligned_identity_adjustments(
     let rows = first_covered_row..last_covered_row + 1;
     for_each_row_band(destination, width, rows, bands, |band, first_row| {
         for y in band_rows(band.len(), width, height, first_row) {
-            let local = row_local(y);
-            if !(0.0..1.0).contains(&local) {
+            let Some(source_y) = sampling.row(y, height, frame.height) else {
                 continue;
-            }
-            let source_y = ((top + local * (bottom - top)) * frame.height as f32)
-                .floor()
-                .clamp(0.0, (frame.height - 1) as f32) as usize;
-            let source_row = source_y * frame.width as usize * 4;
+            };
+            let source_row = source_y as usize * frame.width as usize * 4;
             let destination_row = (y - first_row) as usize * width as usize * 4;
             for (x, source_x) in source_columns.iter().enumerate() {
                 let Some(source_x) = source_x else {
