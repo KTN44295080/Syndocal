@@ -83002,8 +83002,8 @@ fn prepare_native_display_artistic_output(
 /// the surface only as an admitted
 /// [`video::VideoOutputArtisticRenderResult`] (presented via
 /// [`video::GpuSurfacePresenter::present_output_artistic_result`]) or, for a
-/// large plain composition when the presenter's capabilities are known, an
-/// admitted [`video::VideoOutputGpuComposition`] (via
+/// plain composition of two or more layers with known presenter capabilities,
+/// an admitted [`video::VideoOutputGpuComposition`] (via
 /// [`video::GpuSurfacePresenter::present_output_gpu_composition`]), with the
 /// same evidence, generation, output and mapping rules.
 fn prepare_native_display_output(
@@ -100192,14 +100192,14 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn native_display_composites_a_large_plain_output_on_the_gpu_until_blackout() {
+    fn native_display_composites_two_plain_layers_on_the_gpu_until_blackout() {
         let output_id = 87_407;
         let engine = native_display_test_engine();
         install_injected_display_output_extent(&engine, output_id, 8, 4);
         let still_image = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("icons")
             .join("32x32.png");
-        for index in 0..6 {
+        for index in 0..2 {
             let layer_id = engine.allocate_video_layer_id();
             engine
                 .send(EngineCommand::AddVideoLayer {
@@ -100216,8 +100216,8 @@ pub(crate) mod tests {
                 .expect("video layer command must be accepted");
         }
         wait_until_native_display_test_condition(
-            || engine.snapshot().video.layers.len() >= 6,
-            "six video layers did not publish",
+            || engine.snapshot().video.layers.len() >= 2,
+            "two video layers did not publish",
         );
         let mut renderer = test_app_video_renderer();
         let gpu = Some(video::VideoOutputGpuSupport {
@@ -100251,13 +100251,13 @@ pub(crate) mod tests {
             }
         };
 
-        // Six plain layers go to the GPU once the presenter is known.
+        // Two plain layers go to the GPU once the presenter is known.
         match prepare(gpu) {
             NativeDisplayPayload::GpuComposition(composition) => {
-                assert_eq!(composition.layers.len(), 6);
+                assert_eq!(composition.layers.len(), 2);
             }
             NativeDisplayPayload::Artistic(result) => {
-                panic!("six plain layers must composite on the GPU, got {result:?}")
+                panic!("two plain layers must composite on the GPU, got {result:?}")
             }
         }
         // Without a presenter they render on the CPU.

@@ -314,14 +314,15 @@ frames.
 **Not covered.** HAP inputs do not decode ahead (the HAP decoder is separate).
 They benefit from the shared frames instead.
 
-## Follow-up 2026-10-15 (4): GPU composition for large Display outputs
+## Follow-up 2026-10-15 (4): GPU composition for multi-layer Display outputs
 
-Design step 3 is done for the native Display output only, as the owner
-decided: 4K and many-layer outputs.
+Design step 3 is done for the native Display output only. The owner widened
+the rule on 2026-10-15 to any output size with two or more eligible layers.
 
 **When the GPU composites.**
-- **Size:** the output is 4K UHD or larger with two or more layers, or it
-  has six or more layers. Below that the CPU is fast enough.
+- **Layers:** two or more, at any output size. A single layer stays on the
+  CPU, whose identity fast path is a plain copy. The previous 4K/two-layer
+  or six-layer threshold is retired by owner decision.
 - **Content:** the composition is plain:
   - no effect chain executes (or fails to resolve) in any scope;
   - no transition bus or clip transition is active;
@@ -393,7 +394,7 @@ decided: 4K and many-layer outputs.
     - `gpu_surface_composition_tests.rs`: read back without a window.
     - `gpu_display_composition_tests.rs`: eligibility, fallback and
       admission.
-    - The app test `native_display_composites_a_large_plain_output_on_the_gpu_until_blackout`.
+    - The app test `native_display_composites_two_plain_layers_on_the_gpu_until_blackout`.
 - **Rotated layers stay on the CPU.**
 
 **Measured.**
@@ -413,6 +414,20 @@ decided: 4K and many-layer outputs.
 | 4K out, 4 × 1080p HAP (DXT1) | 43.7 / 45.9 | 2.5 / 3.0 |
 | 1080p out, 6 × 1080p RGBA | 11.0 / 12.0 | 3.0 / 4.1 |
 | 1080p out, 8 × 1080p HAP (DXT1) | 53.5 / 59.8 | 1.4 / 1.8 |
+
+**Threshold-widening benchmark (Part C, same machine, 2026-10-15).**
+- Added the three 1080p scenarios below; same 8 warm-up / 120 measured ticks,
+  changing media every other tick. Times include GPU completion, without a
+  surface or decode. Command is the same release/libav benchmark above.
+- All three improve both p50 and p95; no slowdown stop condition triggered.
+- All nine scenarios ran: **1 passed, 0 failed**, exit 0. Full rerun and
+  render-thread submit times: `target/qa/task4/gpu-benchmark.log`.
+
+| Added 1080p-output scene | CPU done p50 / p95 ms | GPU done p50 / p95 ms |
+| --- | ---: | ---: |
+| 2 x 1080p RGBA | 4.0 / 4.3 | 0.9 / 1.2 |
+| 4 x 1080p RGBA | 6.8 / 7.4 | 2.1 / 2.4 |
+| 4 x 1080p HAP (DXT1) | 26.7 / 28.0 | 0.8 / 1.0 |
 
 **What this means.**
 - **Composition is no longer what limits 4K output.** At 4K, composition
@@ -457,6 +472,67 @@ decided: 4K and many-layer outputs.
 - Focused rustfmt and `git diff --check` passed. The optional benchmark was
   not rerun; the table above is unchanged. Actual allocation-failure fallback
   and 4K real-window performance remain unverified.
+
+### Part C threshold change: validation and native captures
+
+- Checkout: shared `main`, base `e6c76d95`; Part B/C changes remain uncommitted.
+- Independent source review approved the stable threshold/test diff. The only
+  runtime predicate change is two or more layers; eligibility, admission,
+  blackout, fallbacks and blend arithmetic are unchanged.
+- MSVC-wrapper `test -p video --features libav`: **229 passed, 0 failed,
+  10 ignored**; `test -p video`: **205 passed, 0 failed, 5 ignored**.
+- Full app: **2106 passed, 1 failed, 22 ignored**; only the known backup
+  pagination test failed, then passed alone (1/1). No assertion weakened.
+- Compiler warnings: prior recorded video baseline 0 / current 0 / delta 0;
+  app pre-change Part B build 0 / current 0 / delta 0. No allow/expect added.
+- Focused rustfmt on owned hunks and `git diff --check` pass. Unrelated
+  formatter differences in large source files are left untouched.
+- Raw requested runs: `target/qa/task4/part-c-results.json`, named test logs,
+  `gpu-benchmark.log`.
+- Required release `build-nobundle.cmd` (Tauri `build --no-bundle`): exit 0,
+  3m47s; exact checkout target verified/stopped before build. MSVC
+  14.44.35207 linker absolute pin and PATH-first checks passed.
+- Specified `native-gate.ps1`: exit 0, one responsive maximized `Syndocal`
+  main window (`showCmd=3`), plus the tiny SIW helper; clean app exit 0,
+  zero Syndocal processes afterward. Log: `target/qa/task4/native-gate.log`.
+- Rebuilt EXE: 72367104 bytes, SHA-256
+  `7bc1dfee01e94bb9b8df40a87fdc7c9dc73c6168dbbb42c30044a49dd261a91b`.
+- Release Rust warnings 0; unchanged Vite App chunk warning 517.29 kB / 500 kB,
+  matching the previous recorded build. No warning suppression/limit change.
+- Native captures use the same media hashes, saved scenes, physical 1920x1080
+  client geometry, 180 Hz monitor and AutoVsync; 10 s warm-up + 60 s capture.
+  Baseline CSVs remain untouched in `target/qa/tier-c/`; reruns and start/end
+  observations are in `target/qa/tier-c/task4-after/`. Existing scripts were
+  reused with separate evidence destinations. Native captures are presentation
+  cadence, not decode-frame cadence, pixel equivalence or physical latency.
+
+| Native 1080p scene | Before CPU p50 / p95 / p99 ms | After GPU p50 / p95 / p99 ms | After N | After >16.7 ms | After >33.4 ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| HAP x4 | 27.819 / 30.088 / 31.722 | 16.960 / 17.844 / 18.269 | 3535 | 2420 (68.46%) | 0 (0.00%) |
+| H.264 x4 | 16.931 / 19.559 / 20.530 | 16.865 / 19.847 / 20.461 | 3461 | 1908 (55.13%) | 6 (0.17%) |
+
+- Both reruns have one PID/DXGI swap chain, SyncInterval 1, about 59.96 s of
+  positive present intervals. Quantiles and threshold rules match Tier C.
+- Both report **4 GPU layer slots**, zero decoder failures, zero lifetime
+  presentation errors; HAP reports 17592 compressed uploads. The presenter's
+  final 600-frame work-time average is HAP 1.990 ms / H.264 3.241 ms.
+- HAP x4 changes from about 36 fps to about 60 fps native cadence. H.264 x4
+  was already near 60 Hz; p50 improves 0.066 ms while p95 rises 0.288 ms.
+  This single before/after does not establish a H.264 cadence gain or the
+  significance of that small p95 increase. The synthetic RGBA/HAP benchmarks
+  all improve; native decode and vsync scheduling remain a separate boundary.
+- Observed H.264 pattern after measurement:
+  `target/qa/tier-c/task4-after/h264-output-2.png`.
+- Setup-only attempts (no CSV accepted): missing current-owner receipt before
+  the empty project's normal Enable; stale accessibility index on the output
+  confirmation. Refreshed screenshot-backed confirmation succeeded. Neither
+  failure weakened ownership checks or contributed a measured row.
+- After captures: normal New restored an empty project, stopped playback,
+  closed all Display windows and persisted Standby; video/lighting disarmed.
+  Cleanup evidence: `target/qa/tier-c/task4-after/cleanup.json`; final ownership
+  rechecked in `target/qa/task4/final-ownership.json`.
+- 4K real-window, allocation-failure injection, network video, physical output
+  latency and release acceptance remain unverified. No product version bump.
 
 ## SynapseRack comparison: what is and is not known
 

@@ -397,7 +397,7 @@ pub struct VideoOutputArtisticRenderResult {
 }
 
 /// What the native Display seam renders: the canonical artistic result, or,
-/// for a large plain composition, the layers for the presenter to composite on
+/// for a plain composition of two or more layers, the layers to composite on
 /// the GPU (see [`VideoPreviewRenderer::prepare_output_display_render_preview_with_effects_and_transitions`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum VideoOutputDisplayRender {
@@ -438,12 +438,6 @@ pub struct VideoOutputGpuSupport {
     /// the output on the CPU.
     pub max_layer_bytes: u64,
 }
-
-/// GPU composition is used from this output size (4K UHD) with two or more
-/// layers, or from [`GPU_COMPOSITION_MIN_LAYERS`] layers at any size: below
-/// that the CPU composites faster than the layers upload.
-const GPU_COMPOSITION_MIN_PIXELS: u64 = 3_840 * 2_160;
-const GPU_COMPOSITION_MIN_LAYERS: usize = 6;
 
 /// The byte length of a frame the GPU composition reads as the CPU does, or
 /// `None` for a format it does not: HAP Q (YCoCg) and HAP R (BC7) stay on
@@ -5140,9 +5134,9 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         )
     }
 
-    /// The native Display seam. A large plain composition (4K UHD output
-    /// with two or more layers, or six or more layers) whose frames the
-    /// presenter's device can composite comes back as a
+    /// The native Display seam. A plain composition of two or more layers
+    /// at any output size, whose frames the presenter's device can composite,
+    /// comes back as a
     /// [`VideoOutputGpuComposition`] for the presenter to composite on the
     /// GPU; everything else, including every blackout and every failure,
     /// comes back exactly as
@@ -5215,10 +5209,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             return GpuCompositionAttempt::NotEligible;
         }
         let layers = &plan.composition.layers;
-        let large = (u64::from(width) * u64::from(height) >= GPU_COMPOSITION_MIN_PIXELS
-            && layers.len() >= 2)
-            || layers.len() >= GPU_COMPOSITION_MIN_LAYERS;
-        if !large
+        if layers.len() < 2
             || !gpu_composition_eligible(snapshot, context.clip_runtime, transition_runtime, plan)
         {
             return GpuCompositionAttempt::NotEligible;

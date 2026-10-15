@@ -576,7 +576,7 @@ fn benchmark_frame(
     }
 }
 
-/// The Display's two paths at the sizes the GPU path is for, without a
+/// The Display's two paths for eligible multi-layer compositions, without a
 /// surface. CPU path: composite on the CPU, keep the last-valid copy, upload
 /// the composite and map it (`present_output_artistic_result`). GPU path:
 /// upload the layers that changed with their lookups, composite and map on
@@ -592,6 +592,27 @@ fn gpu_composition_benchmark() {
     let uhd = (3_840, 2_160);
     let hd = (1_920, 1_080);
     let scenarios = [
+        (
+            "1080p out, 2 x 1080p RGBA",
+            hd,
+            2,
+            VideoPixelFormat::Rgba8,
+            hd,
+        ),
+        (
+            "1080p out, 4 x 1080p RGBA",
+            hd,
+            4,
+            VideoPixelFormat::Rgba8,
+            hd,
+        ),
+        (
+            "1080p out, 4 x 1080p DXT1",
+            hd,
+            4,
+            VideoPixelFormat::Dxt1,
+            hd,
+        ),
         ("4K out, 2 x 4K RGBA", uhd, 2, VideoPixelFormat::Rgba8, uhd),
         ("4K out, 4 x 4K RGBA", uhd, 4, VideoPixelFormat::Rgba8, uhd),
         ("4K out, 8 x 4K RGBA", uhd, 8, VideoPixelFormat::Rgba8, uhd),

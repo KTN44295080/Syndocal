@@ -1,5 +1,5 @@
-//! The native Display seam hands large plain outputs to the presenter for GPU
-//! composition: only from 4K with two layers or from six layers, only when
+//! The native Display seam hands plain outputs with two or more layers to the
+//! presenter for GPU composition at any output size, only when
 //! the presenter's capabilities are known, never with an executing effect,
 //! a transition, a rotated layer or a colour adjustment, a frame format it
 //! cannot read as the CPU does or a layer larger than the device binds,
@@ -215,11 +215,18 @@ fn contract(
 }
 
 #[test]
-fn only_large_outputs_with_known_capabilities_go_to_the_gpu() {
+fn two_or_more_layers_at_any_size_with_known_capabilities_go_to_the_gpu() {
     let mut renderer = renderer();
-    // Small and few layers: the CPU is faster.
-    artistic(render(&mut renderer, &snapshot(2), SMALL, GPU));
-    artistic(render(&mut renderer, &snapshot(5), SMALL, GPU));
+    // A single layer keeps the CPU identity-copy path at any size.
+    artistic(render(&mut renderer, &snapshot(1), SMALL, GPU));
+    artistic(render(&mut renderer, &snapshot(1), (3_840, 2_160), GPU));
+    // Two plain layers qualify even on a small output.
+    let two = gpu_composition(render(&mut renderer, &snapshot(2), SMALL, GPU));
+    assert_eq!(two.layers.len(), 2);
+    assert_eq!(
+        contract(&snapshot(2), SMALL).admit_gpu_composition(&two),
+        Ok(())
+    );
     // No presenter yet.
     artistic(render(&mut renderer, &snapshot(6), SMALL, None));
 
@@ -248,7 +255,7 @@ fn only_large_outputs_with_known_capabilities_go_to_the_gpu() {
         Ok(())
     );
 
-    // 4K UHD from two layers.
+    // Two layers also qualify at 4K UHD.
     let uhd = (3_840, 2_160);
     let composition = gpu_composition(render(&mut renderer, &snapshot(2), uhd, GPU));
     assert_eq!(composition.layers.len(), 2);
