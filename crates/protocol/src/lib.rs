@@ -706,6 +706,12 @@ pub enum VideoBlendMode {
     Add,
     Multiply,
     Screen,
+    Overlay,
+    Subtract,
+    Difference,
+    Lighten,
+    Darken,
+    SoftLight,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -14921,6 +14927,48 @@ mod tests {
             isf_effect: None,
             clip_slots: Vec::new(),
             default_clip_slot_id: None,
+        }
+    }
+
+    #[test]
+    fn video_blend_modes_preserve_wire_names_and_roundtrip_in_snapshots() {
+        for (mode, wire_name) in [
+            (super::VideoBlendMode::Normal, "Normal"),
+            (super::VideoBlendMode::Add, "Add"),
+            (super::VideoBlendMode::Multiply, "Multiply"),
+            (super::VideoBlendMode::Screen, "Screen"),
+            (super::VideoBlendMode::Overlay, "Overlay"),
+            (super::VideoBlendMode::Subtract, "Subtract"),
+            (super::VideoBlendMode::Difference, "Difference"),
+            (super::VideoBlendMode::Lighten, "Lighten"),
+            (super::VideoBlendMode::Darken, "Darken"),
+            (super::VideoBlendMode::SoftLight, "SoftLight"),
+        ] {
+            let mut snapshot = super::VideoSnapshot::default();
+            let mut layer = media_asset_test_layer(4, "Blend", "C:/show/legacy.mp4");
+            layer.blend_mode = mode.clone();
+            snapshot.layers.push(layer);
+
+            let value = serde_json::to_value(&snapshot).unwrap();
+            assert_eq!(value["layers"][0]["blend_mode"], wire_name);
+            let parsed: super::VideoSnapshot = serde_json::from_value(value).unwrap();
+            assert_eq!(parsed.layers[0].blend_mode, mode);
+            assert_eq!(parsed, snapshot);
+        }
+    }
+
+    #[test]
+    fn video_blend_modes_reject_unknown_wire_values_without_fallback() {
+        for unknown in ["UnknownBlend", "normal", "soft_light", "Soft Light", ""] {
+            let mut value = serde_json::to_value(super::VideoSnapshot {
+                layers: vec![media_asset_test_layer(4, "Blend", "C:/show/legacy.mp4")],
+                ..super::VideoSnapshot::default()
+            })
+            .unwrap();
+            value["layers"][0]["blend_mode"] = serde_json::json!(unknown);
+
+            let error = serde_json::from_value::<super::VideoSnapshot>(value).unwrap_err();
+            assert!(error.to_string().contains("unknown variant"), "{error}");
         }
     }
 

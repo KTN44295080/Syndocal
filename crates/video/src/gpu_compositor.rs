@@ -719,6 +719,12 @@ pub(crate) fn blend_mode_index(mode: &VideoBlendMode) -> u32 {
         VideoBlendMode::Add => 1,
         VideoBlendMode::Multiply => 2,
         VideoBlendMode::Screen => 3,
+        VideoBlendMode::Overlay => 4,
+        VideoBlendMode::Subtract => 5,
+        VideoBlendMode::Difference => 6,
+        VideoBlendMode::Lighten => 7,
+        VideoBlendMode::Darken => 8,
+        VideoBlendMode::SoftLight => 9,
     }
 }
 
@@ -1181,6 +1187,12 @@ mod tests {
             VideoBlendMode::Add,
             VideoBlendMode::Multiply,
             VideoBlendMode::Screen,
+            VideoBlendMode::Overlay,
+            VideoBlendMode::Subtract,
+            VideoBlendMode::Difference,
+            VideoBlendMode::Lighten,
+            VideoBlendMode::Darken,
+            VideoBlendMode::SoftLight,
         ] {
             assert_gpu_matches_cpu(
                 &compositor,
@@ -1192,6 +1204,62 @@ mod tests {
                 1,
                 1,
             );
+        }
+    }
+
+    #[test]
+    fn gpu_compositor_matches_every_channel_pair_for_all_blend_modes() {
+        let Some(compositor) = compositor() else {
+            return;
+        };
+        let base = frame(
+            1,
+            256,
+            256,
+            VideoPixelFormat::Rgba8,
+            (0..=255_u8)
+                .flat_map(|d| (0..=255_u8).flat_map(move |_| [d, 255 - d, d, 255]))
+                .collect(),
+        );
+        let top = frame(
+            2,
+            256,
+            256,
+            VideoPixelFormat::Rgba8,
+            (0..=255_u8)
+                .flat_map(|d| {
+                    (0..=255_u8)
+                        .flat_map(move |s| [s, s, 255 - s, d.wrapping_mul(37).wrapping_add(s)])
+                })
+                .collect(),
+        );
+        for mode in [
+            VideoBlendMode::Normal,
+            VideoBlendMode::Add,
+            VideoBlendMode::Multiply,
+            VideoBlendMode::Screen,
+            VideoBlendMode::Overlay,
+            VideoBlendMode::Subtract,
+            VideoBlendMode::Difference,
+            VideoBlendMode::Lighten,
+            VideoBlendMode::Darken,
+            VideoBlendMode::SoftLight,
+        ] {
+            for opacity in [0.0, 0.37, 1.0] {
+                // The opaque Normal backdrop is exact, so the single artistic
+                // blend must be within one level, rather than two layers.
+                assert_gpu_matches_cpu_with_channel_tolerance(
+                    &compositor,
+                    &plan(vec![
+                        layer_plan(1, VideoBlendMode::Normal, 1.0),
+                        layer_plan(2, mode.clone(), opacity),
+                    ]),
+                    &[base.clone(), top.clone()],
+                    256,
+                    256,
+                    1,
+                );
+            }
         }
     }
 

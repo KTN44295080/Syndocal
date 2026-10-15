@@ -211,9 +211,10 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
                 Refresh Metadata
               </button>
             </div>
-            <label>
+            <label class="videoLayerBlendControl">
               Blend
               <select
+                data-video-layer-blend={layer.id}
                 value={layer.blend_mode}
                 onInput={(event) => void props.onSetBlendMode(layer.id, event.currentTarget.value as VideoBlendMode)}
               >
@@ -221,6 +222,12 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
                 <option value="Add">Add</option>
                 <option value="Multiply">Multiply</option>
                 <option value="Screen">Screen</option>
+                <option value="Overlay">Overlay</option>
+                <option value="Subtract">Subtract</option>
+                <option value="Difference">Difference</option>
+                <option value="Lighten">Lighten</option>
+                <option value="Darken">Darken</option>
+                <option value="SoftLight">Soft Light</option>
               </select>
             </label>
             <label class="checkbox">

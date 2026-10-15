@@ -88,6 +88,12 @@ fn snapshot(layer_count: u64) -> VideoSnapshot {
         VideoBlendMode::Screen,
         VideoBlendMode::Add,
         VideoBlendMode::Multiply,
+        VideoBlendMode::Overlay,
+        VideoBlendMode::Subtract,
+        VideoBlendMode::Difference,
+        VideoBlendMode::Lighten,
+        VideoBlendMode::Darken,
+        VideoBlendMode::SoftLight,
     ];
     VideoSnapshot {
         layers: (1..=layer_count)
@@ -267,7 +273,7 @@ fn two_or_more_layers_at_any_size_with_known_capabilities_go_to_the_gpu() {
 
 #[test]
 fn the_gpu_composition_carries_what_the_cpu_composites() {
-    let snapshot = snapshot(7);
+    let snapshot = snapshot(10);
     let mut gpu_renderer = renderer();
     let mut cpu_renderer = renderer();
     let composition = gpu_composition(render(&mut gpu_renderer, &snapshot, SMALL, GPU));

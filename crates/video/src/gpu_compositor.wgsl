@@ -265,6 +265,31 @@ fn composite_layer(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
         case 3u: {
             blended = vec3<f32>(255.0) - ((vec3<f32>(255.0) - destination_rgb) * (vec3<f32>(255.0) - source_rgb) / 255.0);
         }
+        case 4u: {
+            let low = 2.0 * destination_rgb * source_rgb / 255.0;
+            let high = vec3<f32>(255.0) - 2.0 * (vec3<f32>(255.0) - destination_rgb) * (vec3<f32>(255.0) - source_rgb) / 255.0;
+            blended = select(high, low, destination_rgb <= vec3<f32>(127.5));
+        }
+        case 5u: {
+            blended = max(destination_rgb - source_rgb, vec3<f32>(0.0));
+        }
+        case 6u: {
+            blended = abs(destination_rgb - source_rgb);
+        }
+        case 7u: {
+            blended = max(destination_rgb, source_rgb);
+        }
+        case 8u: {
+            blended = min(destination_rgb, source_rgb);
+        }
+        case 9u: {
+            let d = destination_rgb / 255.0;
+            let s = source_rgb / 255.0;
+            let curve = select(sqrt(d), ((16.0 * d - 12.0) * d + 4.0) * d, d <= vec3<f32>(0.25));
+            let low = d - (1.0 - 2.0 * s) * d * (1.0 - d);
+            let high = d + (2.0 * s - 1.0) * (curve - d);
+            blended = select(high, low, s <= vec3<f32>(0.5)) * 255.0;
+        }
         default: {}
     }
 

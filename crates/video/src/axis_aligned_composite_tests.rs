@@ -21,11 +21,24 @@ fn frame(width: u32, height: u32, opaque: bool) -> VideoFrame {
     }
 }
 
-const BLEND_MODES: [VideoBlendMode; 4] = [
+const LEGACY_BLEND_MODES: [VideoBlendMode; 4] = [
     VideoBlendMode::Normal,
     VideoBlendMode::Add,
     VideoBlendMode::Multiply,
     VideoBlendMode::Screen,
+];
+
+const BLEND_MODES: [VideoBlendMode; 10] = [
+    VideoBlendMode::Normal,
+    VideoBlendMode::Add,
+    VideoBlendMode::Multiply,
+    VideoBlendMode::Screen,
+    VideoBlendMode::Overlay,
+    VideoBlendMode::Subtract,
+    VideoBlendMode::Difference,
+    VideoBlendMode::Lighten,
+    VideoBlendMode::Darken,
+    VideoBlendMode::SoftLight,
 ];
 
 fn run(
@@ -370,6 +383,7 @@ fn previous_blend_pixel(dst: &mut [u8], src: &[u8], opacity: f32, blend_mode: &V
             VideoBlendMode::Add => (dst_value + src_value).min(255.0),
             VideoBlendMode::Multiply => dst_value * src_value / 255.0,
             VideoBlendMode::Screen => 255.0 - ((255.0 - dst_value) * (255.0 - src_value) / 255.0),
+            _ => panic!("the historical reference covers only legacy modes"),
         };
         dst[channel] = (dst_value + (blended - dst_value) * src_alpha)
             .round()
@@ -383,7 +397,7 @@ fn previous_blend_pixel(dst: &mut [u8], src: &[u8], opacity: f32, blend_mode: &V
 
 #[test]
 fn blend_pixel_matches_the_previous_implementation() {
-    for blend_mode in &BLEND_MODES {
+    for blend_mode in &LEGACY_BLEND_MODES {
         for opacity in [1.0, 0.5, 0.37, 0.0, f32::NAN] {
             for source_alpha in [0_u8, 1, 127, 128, 254, 255] {
                 for destination in 0..=255_u8 {
@@ -404,6 +418,79 @@ fn blend_pixel_matches_the_previous_implementation() {
                             actual, expected,
                             "{blend_mode:?} at {opacity}, alpha {source_alpha}, {destination} <- {source}"
                         );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Independent normalized, double-precision reference: this deliberately
+/// leaves the byte-domain implementation and its optimized lookup table out.
+fn artistic_reference(dst: u8, src: u8, mode: &VideoBlendMode) -> f64 {
+    let d = f64::from(dst) / 255.0;
+    let s = f64::from(src) / 255.0;
+    let result = match mode {
+        VideoBlendMode::Overlay if d <= 0.5 => 2.0 * d * s,
+        VideoBlendMode::Overlay => 1.0 - 2.0 * (1.0 - d) * (1.0 - s),
+        VideoBlendMode::Subtract => (d - s).max(0.0),
+        VideoBlendMode::Difference => (d - s).abs(),
+        VideoBlendMode::Lighten => d.max(s),
+        VideoBlendMode::Darken => d.min(s),
+        VideoBlendMode::SoftLight if s <= 0.5 => d - (1.0 - 2.0 * s) * d * (1.0 - d),
+        VideoBlendMode::SoftLight => {
+            let curve = if d <= 0.25 {
+                16.0 * d.powi(3) - 12.0 * d.powi(2) + 4.0 * d
+            } else {
+                d.sqrt()
+            };
+            d + (2.0 * s - 1.0) * (curve - d)
+        }
+        _ => panic!("the artistic reference covers only new modes"),
+    };
+    result * 255.0
+}
+
+#[test]
+fn new_blend_channels_match_normalized_reference_for_every_byte_pair() {
+    for mode in &BLEND_MODES[4..] {
+        for dst in 0..=255_u8 {
+            for src in 0..=255_u8 {
+                let expected = artistic_reference(dst, src, mode).round() as u8;
+                let actual = blend_channel(dst, src, 1.0, mode);
+                assert!(
+                    actual.abs_diff(expected) <= 1,
+                    "{mode:?}, {dst} <- {src}: {actual} vs {expected}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn new_blend_pixels_keep_source_alpha_and_opacity_policy() {
+    for mode in &BLEND_MODES[4..] {
+        // Both sides of the Overlay/SoftLight branches, endpoints and equal
+        // channels; alpha/opacity affect coverage after the blend function.
+        for dst in [0_u8, 1, 63, 64, 65, 127, 128, 129, 254, 255] {
+            for src in [0_u8, 1, 63, 64, 65, 127, 128, 129, 254, 255] {
+                for source_alpha in [0_u8, 1, 127, 128, 254, 255] {
+                    for opacity in [0.0_f32, 0.003, 0.37, 0.5, 1.0] {
+                        let mut actual = [dst, dst, dst, 93];
+                        blend_pixel(&mut actual, &[src, src, src, source_alpha], opacity, mode);
+                        let coverage = f64::from(source_alpha) / 255.0 * f64::from(opacity);
+                        let expected = (f64::from(dst)
+                            + (artistic_reference(dst, src, mode) - f64::from(dst)) * coverage)
+                            .round() as u8;
+                        assert!(actual[..3]
+                            .iter()
+                            .all(|value| value.abs_diff(expected) <= 1));
+                        let expected_alpha =
+                            ((coverage + 93.0 / 255.0 * (1.0 - coverage)) * 255.0).round() as u8;
+                        assert_eq!(actual[3], expected_alpha);
+                        if source_alpha == 0 || opacity == 0.0 {
+                            assert_eq!(actual, [dst, dst, dst, 93]);
+                        }
                     }
                 }
             }
@@ -493,12 +580,7 @@ fn axis_aligned_composite_release_cost() {
 #[test]
 fn axis_aligned_composite_ineligible_adjustments_retain_generic() {
     let source = frame(17, 9, false);
-    for mode in [
-        VideoBlendMode::Normal,
-        VideoBlendMode::Add,
-        VideoBlendMode::Multiply,
-        VideoBlendMode::Screen,
-    ] {
+    for mode in BLEND_MODES {
         for opacity in [0.0, 0.37, 1.0] {
             for (color, fx, transform) in [
                 (

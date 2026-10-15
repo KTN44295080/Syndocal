@@ -21072,6 +21072,14 @@ input[type="color"] {
   display: none;
 }
 
+.videoControlPanelMixer .videoLayerItem > .videoLayerBlendControl {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
 .videoControlPanelMixer .videoLayerItem > div:first-child label {
   display: none;
 }
@@ -21113,6 +21121,7 @@ input[type="color"] {
 
 .videoControlPanelMixer .videoLayerList.compact {
   align-content: start;
+  grid-auto-rows: max-content;
   gap: 4px;
   min-width: 0;
 }

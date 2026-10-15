@@ -96403,6 +96403,61 @@ mod tests {
     }
 
     #[test]
+    fn video_layer_blend_mode_command_publishes_every_new_mode() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let layer_id = engine.allocate_video_layer_id();
+        engine
+            .send(EngineCommand::AddVideoLayer {
+                layer_id,
+                label: "Blend control".to_string(),
+                source: VideoSourceSummary {
+                    kind: protocol::VideoSourceKind::File,
+                    path: Some("memory://clip.mp4".to_string()),
+                    name: None,
+                    codec: Some("H264".to_string()),
+                    metadata: None,
+                },
+            })
+            .unwrap();
+
+        for mode in [
+            VideoBlendMode::Overlay,
+            VideoBlendMode::Subtract,
+            VideoBlendMode::Difference,
+            VideoBlendMode::Lighten,
+            VideoBlendMode::Darken,
+            VideoBlendMode::SoftLight,
+        ] {
+            engine
+                .send(EngineCommand::SetVideoLayerBlendMode {
+                    layer_id,
+                    blend_mode: mode.clone(),
+                })
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let snapshot = engine.snapshot();
+                if snapshot
+                    .video
+                    .layers
+                    .iter()
+                    .any(|layer| layer.id == layer_id && layer.blend_mode == mode)
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "blend mode {mode:?} was not published"
+                );
+                std::thread::sleep(DMX_TICK_INTERVAL);
+            }
+        }
+    }
+
+    #[test]
     fn all_blackout_sets_lighting_and_video_blackout_together() {
         let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,

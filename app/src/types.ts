@@ -1728,7 +1728,9 @@ export interface VideoMediaMetadata {
   has_audio?: boolean;
 }
 
-export type VideoBlendMode = "Normal" | "Add" | "Multiply" | "Screen";
+export type VideoBlendMode =
+  | "Normal" | "Add" | "Multiply" | "Screen"
+  | "Overlay" | "Subtract" | "Difference" | "Lighten" | "Darken" | "SoftLight";
 export type VideoPixelFormat = "Rgba8" | "Bgra8" | "Dxt1" | "Dxt5";
 
 export interface VideoFrame {

@@ -312,6 +312,19 @@ fn mapping() -> VideoOutputMapping {
     }
 }
 
+const BLEND_MODES: [VideoBlendMode; 10] = [
+    VideoBlendMode::Normal,
+    VideoBlendMode::Add,
+    VideoBlendMode::Multiply,
+    VideoBlendMode::Screen,
+    VideoBlendMode::Overlay,
+    VideoBlendMode::Subtract,
+    VideoBlendMode::Difference,
+    VideoBlendMode::Lighten,
+    VideoBlendMode::Darken,
+    VideoBlendMode::SoftLight,
+];
+
 #[test]
 fn presenter_composition_matches_the_cpu_render_mapped_once() {
     let Some(gpu) = headless() else {
@@ -369,6 +382,41 @@ fn presenter_composition_matches_the_cpu_render_mapped_once() {
     let mut buffers = new_buffers(&gpu, (width, height));
     let (mapped, _) = render(&gpu, &mut buffers, &scene, width, height);
     assert_within_levels(&mapped, &cpu_reference(&scene, width, height), 5);
+
+    for mode in BLEND_MODES {
+        for format in [VideoPixelFormat::Rgba8, VideoPixelFormat::Bgra8] {
+            for opacity in [0.37, 1.0] {
+                let scene = composition(
+                    vec![
+                        (
+                            layer_plan(1, VideoBlendMode::Normal, 1.0, Transform2D::default()),
+                            gradient(1, width, height, VideoPixelFormat::Rgba8, 3),
+                        ),
+                        (
+                            layer_plan(
+                                2,
+                                mode.clone(),
+                                opacity,
+                                Transform2D {
+                                    x: 0.07,
+                                    y: -0.035,
+                                    scale_x: 0.83,
+                                    scale_y: 0.6,
+                                    crop_left: 0.13,
+                                    crop_bottom: 0.25,
+                                    ..Transform2D::default()
+                                },
+                            ),
+                            gradient(2, 71, 45, format, 41),
+                        ),
+                    ],
+                    mapping(),
+                );
+                let (mapped, _) = render(&gpu, &mut buffers, &scene, width, height);
+                assert_within_levels(&mapped, &cpu_reference(&scene, width, height), 2);
+            }
+        }
+    }
 }
 
 #[test]
@@ -397,6 +445,33 @@ fn dxt_frames_decode_exactly_as_on_the_cpu() {
                 }
             }
             assert_within_levels(&mapped, &cpu, 1);
+
+            let mut backdrop = gradient(1, output.0, output.1, VideoPixelFormat::Rgba8, 31);
+            for pixel in Arc::make_mut(&mut backdrop).data.chunks_exact_mut(4) {
+                pixel[3] = 255;
+            }
+            let top = dxt_frame(2, source, format, 7);
+            for mode in BLEND_MODES {
+                for opacity in [0.37, 1.0] {
+                    let scene = composition(
+                        vec![
+                            (
+                                layer_plan(1, VideoBlendMode::Normal, 1.0, Transform2D::default()),
+                                Arc::clone(&backdrop),
+                            ),
+                            (
+                                layer_plan(2, mode.clone(), opacity, Transform2D::default()),
+                                Arc::clone(&top),
+                            ),
+                        ],
+                        VideoOutputMapping::default(),
+                    );
+                    let (mapped, _) = render(&gpu, &mut buffers, &scene, output.0, output.1);
+                    // The opaque backdrop is exact; only the DXT layer's blend
+                    // can differ by a rounding level, even with source alpha.
+                    assert_within_levels(&mapped, &cpu_reference(&scene, output.0, output.1), 1);
+                }
+            }
         }
     }
 }

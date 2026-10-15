@@ -860,6 +860,17 @@ for (const [sourceText, expectedJapaneseDisplay] of [
   assert.equal(localization.translateUiText(sourceText, "ja"), expectedJapaneseDisplay);
 }
 assert.equal(localization.translateUiText("Save", "en"), "Save");
+for (const [english, japanese] of [
+  ["Overlay", "オーバーレイ"],
+  ["Subtract", "減算"],
+  ["Difference", "差の絶対値"],
+  ["Lighten", "比較（明）"],
+  ["Darken", "比較（暗）"],
+  ["Soft Light", "ソフトライト"],
+]) {
+  assert.equal(localization.translateUiText(english, "en"), english);
+  assert.equal(localization.translateUiText(english, "ja"), japanese);
+}
 
 const accessibleSceneBlock = {
   id: 12,

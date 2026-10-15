@@ -9558,6 +9558,34 @@ fn blend_channel(dst: u8, src: u8, src_alpha: f32, blend_mode: &VideoBlendMode) 
         VideoBlendMode::Add => (dst_value + src_value).min(255.0),
         VideoBlendMode::Multiply => dst_value * src_value / 255.0,
         VideoBlendMode::Screen => 255.0 - ((255.0 - dst_value) * (255.0 - src_value) / 255.0),
+        VideoBlendMode::Overlay => {
+            if dst_value <= 127.5 {
+                2.0 * dst_value * src_value / 255.0
+            } else {
+                255.0 - 2.0 * (255.0 - dst_value) * (255.0 - src_value) / 255.0
+            }
+        }
+        VideoBlendMode::Subtract => (dst_value - src_value).max(0.0),
+        VideoBlendMode::Difference => (dst_value - src_value).abs(),
+        VideoBlendMode::Lighten => dst_value.max(src_value),
+        VideoBlendMode::Darken => dst_value.min(src_value),
+        VideoBlendMode::SoftLight => {
+            // W3C soft light, with the destination as the backdrop and the
+            // specified cubic curve for low backdrop values.
+            let d = dst_value / 255.0;
+            let s = src_value / 255.0;
+            let value = if s <= 0.5 {
+                d - (1.0 - 2.0 * s) * d * (1.0 - d)
+            } else {
+                let curve = if d <= 0.25 {
+                    ((16.0 * d - 12.0) * d + 4.0) * d
+                } else {
+                    d.sqrt()
+                };
+                d + (2.0 * s - 1.0) * (curve - d)
+            };
+            value * 255.0
+        }
     };
     round_clamp_u8(dst_value + (blended - dst_value) * src_alpha)
 }
