@@ -196,6 +196,34 @@ Results on the same machine and media, through the production decoder
 - the decode itself on decode frames;
 - 4K compositing on the CPU.
 
+### Where the time goes now (8 × H.264 1080p, temporary probe, removed)
+
+| Phase, per frame | Frames with no new media frame | Frames where every layer decodes |
+| --- | ---: | ---: |
+| Decode ahead (all layers, parallel) | ≈ 8.5 ms | ≈ 28 ms |
+| Frame-queue push | ≈ 2.5 ms | ≈ 2.5 ms |
+| Composite | ≈ 10 ms | ≈ 10 ms |
+
+**Where the time goes when no new media frame arrives.** The decoders still
+return each layer's frame as a fresh 8 MB copy, which the queue then
+replaces. That allocate, page-fault, copy and free cycle (about 1.3 ms per
+layer) is the cost.
+
+**What was tried and reverted.** A per-frame cache of the DXT-to-RGBA
+conversion for HAP made no measurable difference. The conversion is not a
+material cost, so the change was reverted.
+
+**The next gains are design changes, not tuning:**
+1. **Shared pixel buffers.** `VideoFrame.data` would become reference
+   counted, so a reused frame is not copied and its buffer is not freed and
+   reallocated every tick. This removes most of the ≈ 11 ms on frames with
+   no new media frame (8 layers).
+2. **Asynchronous decode one frame ahead.** Each layer decodes its next
+   media frame between ticks, so a decode no longer lands on the frame that
+   needs it. This flattens p95 toward p50.
+3. **GPU composition for the live output.** It takes the remaining ≈ 1.25
+   ms per 1080p layer, and far more at 4K, off the CPU.
+
 ## SynapseRack comparison: what is and is not known
 
 - No SynapseRack frame times were measured yet.
