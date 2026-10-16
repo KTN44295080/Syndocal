@@ -1,0 +1,61 @@
+/* Perform alone owns this bounded workspace. Other desks keep their rules. */
+.layout.layoutSharedWorkspace.layoutControl.controlModePerform {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) !important;
+}
+.layoutControl.controlModePerform .videoPerformLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 48px 176px minmax(120px, 1fr) 144px 44px;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  padding: 6px;
+  overflow: hidden;
+  color: #e8edef;
+  background: #15191b;
+  font-size: 14px;
+}
+.videoPerformDeskHeader { display:flex; align-items:center; justify-content:space-between; gap:16px; min-width:0; }
+.videoPerformDeskHeader h2 { font-size:18px; margin:0; }
+.videoPerformTempo { display:flex; gap:10px; align-items:center; min-width:0; }
+.videoPerformLayout label { margin:0; min-width:0; }
+.videoPerformLayout button, .videoPerformLayout input, .videoPerformLayout select { min-height:44px; min-width:44px; font-size:14px; }
+.videoPerformTempo label { display:flex; align-items:center; gap:8px; }
+.videoPerformTempo input { width:86px; }
+.videoPerformSync { display:grid; grid-template-rows:20px 20px; min-width:100px; }
+.videoPerformBeats { display:flex; gap:6px; }
+.videoPerformBeats i { width:12px; height:12px; background:#384349; border:1px solid #849297; border-radius:50%; }
+.videoPerformBeats i.lit { background:#b5e9f9; box-shadow:0 0 0 3px #3b6979; }
+.videoPerformMonitors { display:grid; grid-template-columns:minmax(0,1fr) 270px 230px; gap:8px; min-width:0; min-height:0; }
+.videoPerformLayout .liveVideoMonitorPanel { display:block; padding:0; border:0; min-width:0; min-height:0; overflow:hidden; }
+.videoPerformLayout .liveVideoMonitorBuses { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); height:100%; gap:8px; }
+.videoPerformLayout .liveVideoMonitor { display:grid; grid-template-rows:24px minmax(0,1fr) 24px; min-width:0; min-height:0; padding:4px; }
+.videoPerformLayout .liveVideoMonitorViewport { aspect-ratio:auto; min-height:0; }
+.videoPerformLayout .liveVideoMonitor header, .videoPerformLayout .liveVideoMonitor footer { font-size:14px; line-height:20px; overflow:hidden; white-space:nowrap; }
+/* Monitor errors converge in the health rail; transport editing remains in Video. */
+.videoPerformLayout .vjPreviewTransport, .videoPerformLayout .liveVideoMonitorError, .videoPerformLayout .liveVideoMonitorRetry { display:none; }
+.videoPerformTransition { display:grid; grid-template-rows:58px 58px 44px; gap:4px; min-width:0; }
+.videoPerformTransition > label { display:grid; grid-template-columns:78px minmax(0,1fr); gap:4px; align-items:center; }
+.videoPerformTransition > .videoPerformDuration { grid-template-columns:44px minmax(0,1fr) 108px; }
+.videoPerformTakeRow { display:grid; grid-template-columns:60px minmax(0,1fr); gap:8px; }
+.videoPerformLayout .videoPerformTakeRow .videoClipPreview { position:static; width:60px; height:44px; padding:4px; font-size:14px; }
+.videoPerformMaster { display:grid; grid-template-rows:76px 52px 24px; gap:8px; align-content:center; padding:0 8px; border-left:1px solid var(--ui-border); min-width:0; }
+.videoPerformMaster label { display:grid; grid-template-columns:1fr auto; align-items:center; }
+.videoPerformMaster label input { grid-column:1 / -1; width:100%; }
+.videoPerformMaster button { width:100%; }
+.videoPerformMaster > span { text-align:center; color:#f7d2ce; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.videoPerformHealth { display:flex; gap:12px; align-items:center; padding:0 8px; border-top:1px solid var(--ui-border); min-width:0; }
+.videoPerformHealth > strong, .videoPerformHealth button { flex-shrink:0; }
+.videoPerformHealth > span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.videoPerformLegend { max-width:min(760px,90vw); max-height:85vh; overflow:auto; padding:24px; color:#edf4f6; background:#1b252b; border:2px solid #a9dbea; font-size:16px; }
+.videoPerformLegend::backdrop { background:#000a; }
+.videoPerformLegend dl { display:grid; grid-template-columns:auto 1fr; gap:16px 24px; }
+.videoPerformLegend dt { font-weight:700; }
+.videoPerformLegend dd { margin:0; }
+.videoPerformLegend button { min-height:44px; }
+@media (min-width:1700px) and (min-height:900px) {
+  .layoutControl.controlModePerform .videoPerformLayout { grid-template-rows:48px 208px minmax(120px,1fr) 144px 44px; }
+  .videoPerformTransition { align-content:center; }
+}

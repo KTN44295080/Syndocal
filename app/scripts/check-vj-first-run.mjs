@@ -170,8 +170,9 @@ for (const command of [
   assert.ok(!mutationCommands.includes(`"${command}"`), `${command} must not create project history`);
 }
 assert.ok(app.includes("vjPreviewPollInFlight"), "Preview polling must remain single-flight");
-assert.ok(clipGrid.includes("onStagePreview(layer.id)"), "P buttons must stage the runtime Preview");
-assert.ok(clipGrid.includes("!props.previewBackendAvailable"), "browser P buttons must stay disabled");
+assert.ok(clipGrid.includes("props.onStagePreview(props.layer.id)"), "shared P button must stage its exact layer through runtime Preview");
+assert.ok(clipGrid.includes("<VideoStagePreviewButton layer={layer}") && clipGrid.includes("onStagePreview={props.onStagePreview}"), "ordinary clip grid retains the shared P control and canonical callback");
+assert.ok(clipGrid.includes("!props.backendAvailable || !supported() || props.busy"), "shared P button retains backend, supported-source and busy gates");
 assert.ok(liveMonitors.includes("PREVIEW TRANSPORT"));
 assert.ok(liveMonitors.includes("props.onSetPreviewPlaying"));
 assert.ok(liveMonitors.includes("props.onSeekPreview"));

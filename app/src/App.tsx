@@ -10007,6 +10007,7 @@ export default function App() {
   // they give the whole workspace height to their own surface.
   const persistentBandVisible = createMemo(
     () => sharedWorkspaceVisible()
+      && !(workspaceTab() === "control" && controlMode() === "perform")
       && !(workspaceTab() === "setup" && (setupSubTab() === "io" || setupSubTab() === "authority")),
   );
   const liveMappingStageVisible = createMemo(
@@ -21152,7 +21153,7 @@ export default function App() {
       }
       return;
     }
-    const editVideoVisible = workspaceTab() === "control" && controlMode() === "mixer";
+    const editVideoVisible = workspaceTab() === "control" && (controlMode() === "mixer" || controlMode() === "perform");
     const controlVideoVisible = workspaceTab() === "touch";
     if (!editVideoVisible && !controlVideoVisible) return;
     void refreshVideoClipSlotRuntime(true);
@@ -21256,7 +21257,7 @@ export default function App() {
     });
   };
   createEffect(() => {
-    const active = workspaceTab() === "control" && (controlMode() === "mixer" || controlMode() === "both");
+    const active = workspaceTab() === "control" && (controlMode() === "mixer" || controlMode() === "both" || controlMode() === "perform");
     if (!isTauriRuntime()) {
       applyVjPreviewTransport(emptyVjPreviewTransport());
       return;
@@ -21269,7 +21270,7 @@ export default function App() {
   const liveVideoMonitors = createLiveVideoMonitorController({
     invoke,
     backendAvailable: () => isTauriRuntime(),
-    active: () => workspaceTab() === "control" && (controlMode() === "mixer" || controlMode() === "both"),
+    active: () => workspaceTab() === "control" && (controlMode() === "mixer" || controlMode() === "both" || controlMode() === "perform"),
     layerCount: () => snapshot().video.layers.length,
     previewLayerId: videoPreviewLayerId,
     programOutputId: selectedVideoOutputId,
@@ -25477,7 +25478,7 @@ export default function App() {
       setMessage("Lighting editing is locked for this operator.");
       return false;
     }
-    if (mode === "mixer") authorizeVideoThumbnailAccess();
+    if (mode === "mixer" || mode === "perform") authorizeVideoThumbnailAccess();
     setControlMode(mode);
     if (mode === "edit") {
       setEditDeskSurface("attributes");
@@ -25540,7 +25541,7 @@ export default function App() {
       setMessage("Unlock operator mode before opening Setup.");
       return false;
     }
-    if (tab === "control" && controlMode() === "mixer") authorizeVideoThumbnailAccess();
+    if (tab === "control" && (controlMode() === "mixer" || controlMode() === "perform")) authorizeVideoThumbnailAccess();
     setWorkspaceTab(tab);
     requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-workspace-option="${tab}"]`)?.focus());
     return true;
@@ -26017,6 +26018,21 @@ export default function App() {
     </Show>
   );
 
+  const setOperatorBpm = async (bpm: number) => {
+    await invoke("set_bpm", { bpm });
+    setMessage(`BPM set to ${bpm.toFixed(1)}`);
+    await refreshSnapshot();
+  };
+
+  // Perform confirms only the UI request; the existing blackout owner remains authoritative.
+  const requestPerformVideoBlackout = (enabled: boolean) => {
+    if (workspaceTab() === "control" && controlMode() === "perform" &&
+      !window.confirm(translateUiText(enabled
+        ? "Engage video blackout? Confirm to black out Program."
+        : "Recover video from blackout? Confirm to restore Program.", uiLocale()))) return Promise.resolve();
+    return setVideoBlackout(enabled);
+  };
+
   const { handleControlKeyDown } = createAppKeyboardController({
     workspaceTab,
     selectWorkspaceTab,
@@ -26067,7 +26083,7 @@ export default function App() {
     setTimelineLoopB: setTimelineLoopBAtPlayhead,
     setAllBlackout,
     setBlackout,
-    setVideoBlackout,
+    setVideoBlackout: requestPerformVideoBlackout,
     tapBpm,
   });
 
@@ -26135,6 +26151,14 @@ export default function App() {
       event.preventDefault();
       return;
     }
+    // In Perform, native button activation owns Enter / Space. The global GO
+    // shortcut must not consume a focused clip, pager or blackout action.
+    if (
+      workspaceTab() === "control" && controlMode() === "perform" &&
+      !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey &&
+      (event.key === "Enter" || event.code === "Space") &&
+      event.target instanceof HTMLElement && event.target.closest("button, summary")
+    ) return;
     handleControlKeyDown(event);
   };
 
@@ -26850,18 +26874,14 @@ export default function App() {
         onToggleFade={() => void setCueFadePaused(!snapshot().active_fade?.paused)}
         onToggleTimeline={() => void (snapshot().timeline.playing ? pauseTimeline() : playTimeline())}
         onSetBlackout={(enabled) => void setBlackout(enabled)}
-        onSetVideoBlackout={(enabled) => void setVideoBlackout(enabled)}
+        onSetVideoBlackout={(enabled) => void requestPerformVideoBlackout(enabled)}
         onSetAllBlackout={(enabled) => void setAllBlackout(enabled)}
         onClearFixtureFlags={() => void clearFixtureFlags("all")}
         onControlLearnMode={setControlLearnMode}
         onLightingMaster={setLightingMaster}
         onVideoMaster={setVideoMasterOpacity}
         onTapBpm={tapBpm}
-        onSetBpm={async (bpm) => {
-          await invoke("set_bpm", { bpm });
-          setMessage(`BPM set to ${bpm.toFixed(1)}`);
-          await refreshSnapshot();
-        }}
+        onSetBpm={setOperatorBpm}
         onOpenLiveAudioInputSettings={openLiveAudioInputSettings}
         onNewProject={newProject}
         onSaveUserTemplate={() => void saveUserTemplate()}
@@ -27080,6 +27100,9 @@ export default function App() {
         </Show>
         <Show when={workspaceTab() === "control" && controlMode() !== "both"}>
           <section id="edit-domain-panel-both" role="tabpanel" aria-labelledby="edit-domain-tab-both" hidden />
+        </Show>
+        <Show when={workspaceTab() === "control" && controlMode() !== "perform"}>
+          <section id="edit-domain-panel-perform" role="tabpanel" aria-labelledby="edit-domain-tab-perform" hidden />
         </Show>
         <Show when={workspaceTab() === "control" && controlMode() === "edit"}>
           <section
@@ -28122,9 +28145,18 @@ export default function App() {
         />
         </Show>
 
-        <Show when={workspaceTab() === "control" && controlMode() === "mixer"}>
+        <Show when={workspaceTab() === "control" && (controlMode() === "mixer" || controlMode() === "perform")}>
         <VideoControlPanel
-          mixer={controlMode() === "mixer"}
+          mixer={true}
+          performance={controlMode() === "perform"}
+          performContext={{
+            get runtimes() { return videoClipRuntime().layers; },
+            get clock() { return snapshot().clock; },
+            get keyboardEnabled() { return !controlLearnMode() && operatorLockMode() === null; },
+            onTap: tapBpm,
+            onSetBpm: setOperatorBpm,
+            onOpenEditor: () => selectControlMode("mixer"),
+          }}
           invokeCommand={invoke}
           selectedMediaAssetId={selectedMediaLibraryAssetId()}
           onSelectMediaAsset={setSelectedMediaLibraryAssetId}
@@ -28174,7 +28206,7 @@ export default function App() {
             get masterOpacity() { return snapshot().video.master_opacity; },
             get blackout() { return snapshot().video.blackout; },
             onSetMasterOpacity: setVideoMasterOpacity,
-            onSetBlackout: setVideoBlackout,
+            onSetBlackout: requestPerformVideoBlackout,
           }}
           outputControls={{
             get outputs() { return snapshot().video.outputs; },
@@ -28287,7 +28319,7 @@ export default function App() {
             onRequestThumbnails: authorizeVideoThumbnailAccess,
           })}
           clipSlotBank={{
-            mode: "edit",
+            get mode() { return controlMode() === "perform" ? "control" as const : "edit" as const; },
             get layers() { return snapshot().video.layers; },
             get layer() { return selectedVideoClipSlotLayer(); },
             get runtime() { return selectedVideoClipSlotRuntime(); },

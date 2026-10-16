@@ -1,0 +1,130 @@
+import { For, Show, onCleanup, onMount } from "solid-js";
+import type { EngineSnapshot, VideoClipLayerRuntimeSummary } from "../types";
+import type { VideoControlPanelProps } from "./VideoControlPanel";
+import { LiveVideoMonitorPanel } from "./LiveVideoMonitorPanel";
+import { VideoStagePreviewButton } from "./VideoClipGridPanel";
+import { VideoPerformMatrix } from "./VideoPerformMatrix";
+import { VideoPerformQuickFx } from "./VideoPerformQuickFx";
+import { clockSourceLabel, clockSyncStatusLabel } from "../clockDisplay";
+import { controlMappingTargetData } from "../controlMappingLearn";
+
+export interface VideoPerformContext {
+  runtimes: VideoClipLayerRuntimeSummary[];
+  clock: EngineSnapshot["clock"];
+  keyboardEnabled: boolean;
+  onTap: () => void | Promise<unknown>;
+  onSetBpm: (value: number) => void | Promise<unknown>;
+  onOpenEditor: () => void;
+}
+
+/** A presentation adapter over the existing publication, transport and FX owners. */
+export function VideoPerformDesk(props: VideoControlPanelProps) {
+  let legend!: HTMLDialogElement;
+  let blackout!: HTMLButtonElement;
+  const keyboardEnabled = () => props.performContext?.keyboardEnabled !== false;
+  const shortcut = (event: KeyboardEvent) => {
+    if (!keyboardEnabled() || event.repeat || event.isComposing || event.defaultPrevented ||
+      document.querySelector("dialog[open]") || (event.target instanceof Element &&
+        event.target.closest("input,select,textarea,[contenteditable=true]"))) return;
+    if (event.ctrlKey && event.shiftKey && event.code === "KeyB" && !event.altKey && !event.metaKey) {
+      event.preventDefault(); event.stopImmediatePropagation(); blackout.click();
+    } else if (event.key === "?" && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      event.preventDefault(); event.stopImmediatePropagation(); legend.showModal();
+    }
+  };
+  onMount(() => window.addEventListener("keydown", shortcut, true));
+  onCleanup(() => window.removeEventListener("keydown", shortcut, true));
+  const unhealthy = () => props.mediaLibrary.assets.filter(asset => {
+    const kind = props.mediaLibrary.availabilityById[asset.id]?.kind;
+    return kind === "missing" || kind === "hash_mismatch" || kind === "unreadable";
+  });
+  const unchecked = () => props.mediaLibrary.assets.filter(asset =>
+    !props.mediaLibrary.availabilityById[asset.id] ||
+    props.mediaLibrary.availabilityById[asset.id]?.kind === "available_unverified").length;
+  const errors = () => [props.liveMonitors.preview.error, props.liveMonitors.program.error,
+    props.liveMonitors.previewTransportError,
+    ...(props.layerList.isfRuntimeErrors ?? []).map(error => error.message),
+    ...unhealthy().map(asset => `${asset.label}: ${props.mediaLibrary.availabilityById[asset.id]?.kind}`),
+    ...props.mediaLibrary.lastImportReport?.entries.filter(entry => entry.status === "failed").map(entry => entry.message) ?? [],
+  ].filter(Boolean).join(" · ");
+  return <section id="edit-domain-panel-perform" role="tabpanel" aria-labelledby="edit-domain-tab-perform"
+    class="panel videoControlPanel videoPerformLayout" data-video-perform-layout aria-label="VJ performance desk">
+    <header class="videoPerformDeskHeader">
+      <h2>Perform</h2>
+      <div class="videoPerformTempo" data-video-perform-region="tempo" aria-label="Performance tempo">
+        <label>BPM<input type="number" min="20" max="300" step="0.1" aria-label="Performance BPM"
+          value={props.performContext?.clock.bpm ?? 120}
+          onChange={event => { const value = Number(event.currentTarget.value); if (Number.isFinite(value) && value >= 20 && value <= 300) void props.performContext?.onSetBpm(value); }}
+          {...controlMappingTargetData({ action: "SetBpm", label: "BPM" })} /></label>
+        <button data-video-perform-tap onClick={() => void props.performContext?.onTap()}
+          {...controlMappingTargetData({ action: "TapBpm", label: "Tap BPM" })}>Tap</button>
+        <span class="videoPerformSync"><span>{props.performContext ? clockSourceLabel(props.performContext.clock.source) : "—"}</span>
+          <span>{props.performContext ? clockSyncStatusLabel(props.performContext.clock) : "Not checked"}</span></span>
+        <span class="videoPerformBeats" aria-label="Beat indicator" data-video-perform-beat={props.performContext?.clock.beat_counter ?? 0}>
+          <For each={[0,1,2,3]}>{beat => <i class={(props.performContext?.clock.beat_counter ?? 0) % 4 === beat ? "lit" : ""} />}</For>
+        </span>
+      </div>
+      <button data-video-perform-legend-toggle onClick={() => legend.showModal()}>Keyboard shortcuts</button>
+    </header>
+    <section class="videoPerformMonitors" aria-label="Preview and Program">
+      <LiveVideoMonitorPanel {...props.liveMonitors} />
+      <section class="videoPerformTransition" data-video-perform-region="transition" aria-label="Performance transition">
+        <label>Transition<select data-video-perform-transition-kind value={props.clipSlotBank.transitionKind}
+          disabled={Boolean(props.clipSlotBank.runtime?.transition)} onInput={event => props.clipSlotBank.onSetTransitionKind(event.currentTarget.value as typeof props.clipSlotBank.transitionKind)}>
+          <For each={["Cut", "Crossfade", "Dip", "Wipe", "Luma", "Displacement", "Blur", "Glitch", "Custom"]}>{kind => <option value={kind}>{kind}</option>}</For>
+        </select></label>
+        <label class="videoPerformDuration">Time<input type="number" data-video-perform-transition-duration min="0.001" max="600" step="0.001"
+          value={props.clipSlotBank.transitionDurationMilliunits / 1000}
+          disabled={Boolean(props.clipSlotBank.runtime?.transition)}
+          onChange={event => { const value = Number(event.currentTarget.value); if (Number.isFinite(value) && value > 0) props.clipSlotBank.onSetTransitionDurationMilliunits(value * 1000); }} />
+          <select aria-label="Transition time unit" value={props.clipSlotBank.transitionDurationUnit}
+            disabled={Boolean(props.clipSlotBank.runtime?.transition)} onInput={event => props.clipSlotBank.onSetTransitionDurationUnit(event.currentTarget.value as typeof props.clipSlotBank.transitionDurationUnit)}>
+            <option value="Milliseconds">Seconds</option><option value="Beats">Beats</option><option value="Bars">Bars</option>
+          </select>
+        </label>
+        <div class="videoPerformTakeRow">
+          <VideoStagePreviewButton layer={props.clipSlotBank.layer} previewLayerId={props.clipGrid.previewLayerId}
+            backendAvailable={props.clipGrid.previewBackendAvailable} busy={props.clipGrid.previewBusy} onStagePreview={props.clipGrid.onStagePreview} />
+          <button class="primary" data-video-perform-take data-video-clip-slot-take disabled={!props.clipSlotTake.enabled}
+            onClick={() => void props.clipSlotTake.onTake()}>{props.clipSlotTake.label}</button>
+        </div>
+      </section>
+      <section class="videoPerformMaster" aria-label="Performance master">
+        <label>Master <strong>{Math.round(props.masterControls.masterOpacity * 100)}%</strong>
+          <input data-video-perform-master type="range" min="0" max="1" step="0.01" value={props.masterControls.masterOpacity}
+            onInput={event => void props.masterControls.onSetMasterOpacity(Number(event.currentTarget.value))}
+            {...controlMappingTargetData({ action: "VideoMaster", label: "Video Master" })} /></label>
+        <button ref={blackout} class={`killButton${props.masterControls.blackout ? " engaged" : ""}`} data-video-perform-blackout
+          aria-pressed={props.masterControls.blackout} onClick={() => void props.masterControls.onSetBlackout(!props.masterControls.blackout)}
+          {...controlMappingTargetData({ action: "VideoBlackout", label: "Video Blackout" })}>
+          {props.masterControls.blackout ? "Recover video…" : "Blackout…"}
+        </button>
+        <span>{props.masterControls.blackout ? "BLACKOUT ENGAGED" : "Confirmation required"}</span>
+      </section>
+    </section>
+    <VideoPerformMatrix bank={props.clipSlotBank} layerList={props.layerList}
+      runtimes={props.performContext?.runtimes ?? (props.clipSlotBank.runtime ? [props.clipSlotBank.runtime] : [])}
+      availabilityById={props.mediaLibrary.availabilityById} previewLayerId={props.clipGrid.previewLayerId}
+      thumbnailsAuthorized={props.clipGrid.thumbnailsAuthorized} keyboardEnabled={keyboardEnabled()}
+      onStop={layerId => props.clipGrid.onStop(layerId, props.clipGrid.fadeMs)} onTake={() => { if (props.clipSlotTake.enabled) return props.clipSlotTake.onTake(); }} />
+    <VideoPerformQuickFx layer={props.clipSlotBank.layer} layerList={props.layerList} onOpenEditor={() => props.performContext?.onOpenEditor()} />
+    <section class="videoPerformHealth" data-video-perform-region="health" aria-label="Media and monitor health">
+      <strong>Media health</strong><span data-no-localize title={errors() || undefined}>{errors() || `${props.mediaLibrary.assets.length} assets · ${unchecked()} not verified`}</span>
+      <Show when={!props.clipGrid.thumbnailsAuthorized}><button onClick={props.clipGrid.onRequestThumbnails}>Load Thumbnails</button></Show>
+      <Show when={props.liveMonitors.preview.status === "error" || props.liveMonitors.program.status === "error"}>
+        <button onClick={props.liveMonitors.onRetry}>Retry monitors</button>
+      </Show>
+    </section>
+    <dialog ref={legend} class="videoPerformLegend" data-video-perform-legend>
+      <h2>Keyboard shortcuts</h2>
+      <dl><dt>1–9, 0, Q–P, A–L, Z–C</dt><dd>Queue a clip in the selected layer</dd>
+        <dt>← → ↑ ↓ · Home / End</dt><dd>Move clip and layer selection</dd>
+        <dt>Space / Enter</dt><dd>Take the queued clip</dd>
+        <dt data-no-localize>Ctrl + Shift + B</dt><dd>Blackout or recover, with confirmation</dd>
+        <dt>?</dt><dd>Show keyboard shortcuts</dd></dl>
+      <p>Preview on a pad auditions its thumbnail. P stages the current layer in the Preview monitor.</p>
+      <p>Shortcuts pause while editing a value, a dialog is open, or MIDI Learn is active.</p>
+      <button onClick={() => legend.close()}>Close</button>
+    </dialog>
+  </section>;
+}

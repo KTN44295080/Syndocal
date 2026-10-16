@@ -50,6 +50,11 @@ assert.equal(cells.length, 32, "bank projects every fixed pad including empties"
 assert.equal(cells[0].active, true, "active state comes from runtime slot identity");
 assert.equal(cells[1].queued && cells[1].pending, true, "queued/pending truth comes from runtime, not layer state");
 assert.equal(cells[2].slot, null, "empty authored slots remain visible pads");
+for (const sparseRuntime of [undefined, null, {}, { active_slot_id: 401 }]) {
+  const sparseCells = model.videoClipSlotBankCells(authored, sparseRuntime);
+  assert.ok(sparseCells.slice(2).every((cell) => !cell.active && !cell.queued && !cell.pending),
+    "empty slots never inherit active/queued/pending badges from absent runtime IDs");
+}
 assert.deepEqual(model.videoClipSlotBankActionLabels("edit"), ["Select", "Preview", "More"], "Edit primary actions stay capped at three");
 assert.deepEqual(model.videoClipSlotBankActionLabels("control"), ["Queue", "Preview", "More"], "Control primary actions stay capped at three");
 assert.deepEqual(
@@ -90,8 +95,8 @@ for (const field of ["in_point_ms", "out_point_ms", "loop_mode", "speed", "launc
 assert.match(inspector, /globalThis\.confirm[\s\S]*props\.onRemove/, "remove is explicitly confirmed before the authored command");
 
 assert.ok(
-  app.includes('mode: "edit"') && app.includes('mode: "control"'),
-  "one App state mounts the same bank in Edit and Control",
+  app.includes('controlMode() === "perform" ? "control" as const : "edit" as const') && app.includes('mode: "control"'),
+  "one App state mounts the same bank in Edit, Control and Perform with the intended action mode",
 );
 assert.equal((app.match(/createSignal<VideoClipRuntimeSnapshot>/g) ?? []).length, 1, "Edit and Control share exactly one runtime signal");
 assert.equal((app.match(/createSignal<VideoClipSlotId \| null>/g) ?? []).length, 1, "Edit and Control share exactly one selected slot signal");
@@ -128,8 +133,8 @@ assert.match(touch, /VideoClipSlotBankPanel/, "Control mounts the shared bank co
 assert.match(edit, /VideoClipSlotBankPanel/, "Edit Video mounts the shared bank component");
 assert.match(
   modes,
-  /editDomainModes = \[\s*controlModes\.find\(\(mode\) => mode\.id === "edit"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "mixer"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "both"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "live"\)!,\s*\]/,
-  "Edit domain exposes Lighting, Video, Both, and Timeline in stable order",
+  /editDomainModes = \[\s*controlModes\.find\(\(mode\) => mode\.id === "edit"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "mixer"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "both"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "live"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "perform"\)!,\s*\]/,
+  "Edit preserves Lighting, Video, Both and Timeline order, then appends Perform",
 );
 
 assert.match(styles, /\.videoClipSlotBankPanel \{[\s\S]*overflow: auto;/, "bank scroll remains internal");

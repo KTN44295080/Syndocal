@@ -1,0 +1,132 @@
+.videoPerformQuickFx {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 6px;
+  border: 1px solid var(--ui-border);
+  background: #14191f;
+}
+
+.videoPerformQuickFxHeader {
+  display: flex;
+  flex: 0 0 180px;
+  flex-direction: column;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 4px;
+}
+
+.videoPerformQuickFxHeader > div {
+  display: grid;
+  gap: 2px;
+}
+
+.videoPerformQuickFxHeader span,
+.videoPerformQuickFxStageHeader > strong,
+.videoPerformQuickFxParameter > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.videoPerformQuickFxHeader span {
+  color: #b6c6d5;
+}
+
+.videoPerformQuickFxChain {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+}
+
+.videoPerformQuickFxStage {
+  display: grid;
+  flex: 0 0 340px;
+  grid-template-rows: 44px minmax(0, 1fr);
+  min-width: 0;
+  gap: 3px;
+  padding: 0 6px 3px;
+  border-left: 3px solid #68829a;
+  background: #1a232d;
+}
+
+.videoPerformQuickFxStage[data-fx-enabled="false"] {
+  border-left-color: #87919a;
+  background: #20232a;
+}
+
+.videoPerformQuickFxStageHeader {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.videoPerformQuickFxNumber {
+  color: #b6c6d5;
+  font-variant-numeric: tabular-nums;
+}
+
+.videoPerformQuickFxParameters {
+  display: flex;
+  align-items: start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.videoPerformQuickFxParameter {
+  display: grid;
+  flex: 1 1 0;
+  grid-template-rows: 18px 44px;
+  gap: 0;
+  min-width: 0;
+  color: #d5e1ec;
+}
+
+.videoPerformQuickFx button,
+.videoPerformQuickFx select,
+.videoPerformQuickFx input {
+  min-height: 44px;
+  min-width: 44px;
+  margin: 0;
+  font: inherit;
+}
+
+.videoPerformQuickFxParameter > input,
+.videoPerformQuickFxParameter > select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.videoPerformQuickFxPoint {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+.videoPerformQuickFxPoint input {
+  width: 50%;
+  min-width: 44px;
+  padding-inline: 2px;
+  box-sizing: border-box;
+}
+
+.videoPerformQuickFx :focus-visible {
+  outline: 2px solid #a8d9ff;
+  outline-offset: -2px;
+}
+
+.videoPerformQuickFx .emptyState,
+.videoPerformQuickFx .emptyHint {
+  align-self: center;
+  margin: 0;
+  color: #bbc6d0;
+}

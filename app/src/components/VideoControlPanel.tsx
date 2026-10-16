@@ -1,3 +1,4 @@
+import "./VideoPerformLayout.css";
 import { videoSourceKindLabel } from "../videoHelpers";
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, type ComponentProps } from "solid-js";
 import type {
@@ -24,7 +25,7 @@ import {
 } from "./VideoRuntimeStatusPanels";
 import { VideoSourceCreatePanel } from "./VideoSourceCreatePanel";
 import { VideoTimelineAutomationPanel } from "./VideoTimelineAutomationPanel";
-import { VideoClipGridPanel } from "./VideoClipGridPanel";
+import { VideoClipGridPanel, VideoStagePreviewButton } from "./VideoClipGridPanel";
 import { VideoRecordingStatusBar } from "./VideoRecordingStatusBar";
 import { VideoClipSlotBankPanel } from "./VideoClipSlotBankPanel";
 import { LiveVideoMonitorPanel } from "./LiveVideoMonitorPanel";
@@ -36,9 +37,12 @@ import { VideoEffectScopePanel } from "./VideoEffectScopePanel";
 import { VideoEffectCatalogSetupPanel } from "./VideoEffectCatalogSetupPanel";
 import { VideoTransitionBusPanel } from "./VideoTransitionBusPanel";
 import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
+import { VideoPerformDesk, type VideoPerformContext } from "./VideoPerformDesk";
 
-interface VideoControlPanelProps {
+export interface VideoControlPanelProps {
   mixer: boolean;
+  performance?: boolean;
+  performContext?: VideoPerformContext;
   libraryOnly?: boolean;
   invokeCommand?: FrontendTauriInvoke;
   selectedMediaAssetId?: MediaAssetId | null;
@@ -235,12 +239,13 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
     const activeId = previewAssetId();
     if (activeId === null) return;
     const activeAsset = props.mediaLibrary.assets.find((asset) => asset.id === activeId);
-    if (!props.clipGrid.thumbnailsAuthorized || !activeAsset || mediaPreviewIdentity(activeAsset) !== previewAssetIdentity()) {
+    if (props.performance || !props.clipGrid.thumbnailsAuthorized || !activeAsset || mediaPreviewIdentity(activeAsset) !== previewAssetIdentity()) {
       stopMediaLibraryPreviewNow();
     }
   });
   onCleanup(stopMediaLibraryPreviewNow);
   return (
+    <Show when={props.performance} fallback={
     <section
       id={props.mixer || props.libraryOnly ? "edit-domain-panel-mixer" : undefined}
       role={props.mixer || props.libraryOnly ? "tabpanel" : undefined}
@@ -625,5 +630,8 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
       </div>
       </Show>
     </section>
+    }>
+      <VideoPerformDesk {...props} />
+    </Show>
   );
 }

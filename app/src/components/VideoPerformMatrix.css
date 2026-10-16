@@ -1,0 +1,312 @@
+.videoPerformMatrix {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--ui-border, #43484b);
+  background: #101315;
+  color: #e9eeef;
+  font-size: 14px;
+}
+
+.videoPerformMatrixScroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.videoPerformMatrixHead,
+.videoPerformMatrixRow {
+  display: grid;
+  grid-template-columns: 300px repeat(32, 104px);
+  width: max-content;
+  min-width: 100%;
+}
+
+.videoPerformMatrixHead {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  height: 36px;
+  background: #242a2e;
+}
+
+.videoPerformMatrixCorner,
+.videoPerformMatrixColumn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 10px;
+  border-right: 1px solid #454c50;
+  border-bottom: 1px solid #454c50;
+}
+
+.videoPerformMatrixCorner {
+  position: sticky;
+  left: 0;
+  z-index: 6;
+  background: #293135;
+}
+
+.videoPerformMatrix kbd {
+  color: #d4dfe4;
+  border: 1px solid #66757c;
+  border-radius: 3px;
+  padding: 1px 4px;
+  background: #192126;
+  font: inherit;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.videoPerformMatrixRow {
+  min-height: 164px;
+  border-bottom: 2px solid #46535a;
+}
+
+.videoPerformLayerStrip {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  display: grid;
+  grid-template-rows: 44px 62px 44px;
+  gap: 2px;
+  padding: 4px 8px;
+  border-right: 2px solid #66777e;
+  background: #22292e;
+  box-shadow: 4px 0 8px #0006;
+}
+
+.videoPerformMatrixRow.selected .videoPerformLayerStrip {
+  background: #233c48;
+  border-left: 4px solid #8dd4f2;
+  padding-left: 4px;
+}
+
+.videoPerformLayerHeading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 76px;
+  align-items: center;
+  gap: 4px;
+}
+
+.videoPerformMatrix button,
+.videoPerformMatrix select,
+.videoPerformMatrix input[type="range"] {
+  min-height: 44px;
+  min-width: 44px;
+  max-height: none;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.videoPerformMatrix button {
+  margin: 0;
+  border: 1px solid #59656b;
+  border-radius: 3px;
+  background: #303a40;
+  color: #f3f6f7;
+  line-height: 1.25;
+}
+
+.videoPerformMatrix button:hover:not(:disabled) {
+  background: #455961;
+}
+
+.videoPerformMatrix button:focus-visible,
+.videoPerformMatrix select:focus-visible,
+.videoPerformMatrix input:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: -3px;
+}
+
+.videoPerformMatrix .videoPerformLayerName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font-weight: 700;
+  padding: 6px 8px;
+}
+
+.videoPerformLayerLive {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2px;
+  color: #c8d1d5;
+  line-height: 18px;
+}
+
+.videoPerformLayerLive.live {
+  color: #b9f9d2;
+  font-weight: 700;
+}
+
+.videoPerformLayerMix {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.videoPerformMatrix .videoPerformLayerMix label {
+  display: grid;
+  grid-template-rows: 18px 44px;
+  gap: 0;
+  margin: 0;
+  min-width: 0;
+  color: #e2e9ec;
+  font-size: 14px;
+  line-height: 18px;
+}
+
+.videoPerformLayerOpacity > span {
+  display: flex;
+  justify-content: space-between;
+}
+
+.videoPerformLayerMix input,
+.videoPerformLayerMix select {
+  width: 100%;
+  margin: 0;
+  padding: 0 3px;
+}
+
+.videoPerformLayerButtons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.videoPerformMatrix .videoPerformLayerButtons button.active {
+  border: 2px solid #f9d080;
+  background: #695127;
+  font-weight: 700;
+}
+
+.videoPerformMatrixCell {
+  min-width: 0;
+  padding: 4px 3px;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 44px;
+  gap: 2px;
+  border-right: 1px solid #353e43;
+  background: #14191c;
+}
+
+.videoPerformMatrix .videoPerformClipTrigger {
+  display: grid;
+  grid-template-rows: minmax(36px, 1fr) 20px 20px;
+  min-height: 108px;
+  padding: 0;
+  overflow: hidden;
+  background: #222a2e;
+  border: 1px solid #5a676e;
+  text-align: left;
+}
+
+.videoPerformMatrixCell.selected .videoPerformClipTrigger {
+  outline: 2px solid #a1dcff;
+  outline-offset: -2px;
+}
+
+.videoPerformMatrixCell.live .videoPerformClipTrigger {
+  border: 2px solid #9deab5;
+}
+
+.videoPerformMatrixCell.queued .videoPerformClipTrigger {
+  border: 2px dashed #ffe39b;
+}
+
+.videoPerformMatrixCell.error .videoPerformClipTrigger {
+  border: 2px solid #ff9b98;
+}
+
+.videoPerformClipImage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: #0c1012;
+}
+
+.videoPerformClipImage img {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  object-fit: cover;
+}
+
+.videoPerformClipPlaceholder {
+  color: #9eafb7;
+  font-size: 24px;
+}
+
+.videoPerformClipImage kbd {
+  position: absolute;
+  left: 3px;
+  top: 3px;
+}
+
+.videoPerformClipNumber {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  padding: 0 3px;
+  background: #000c;
+}
+
+.videoPerformClipTitle,
+.videoPerformClipState {
+  display: block;
+  padding: 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 20px;
+}
+
+.videoPerformClipState {
+  color: #dce5ea;
+}
+
+.live .videoPerformClipState {
+  background: #23523c;
+  color: #d7ffe3;
+  font-weight: 700;
+}
+
+.queued .videoPerformClipState {
+  background: #5c4e27;
+  color: #fff0bf;
+  font-weight: 700;
+}
+
+.error .videoPerformClipState {
+  background: #642e31;
+  color: #ffe2df;
+  font-weight: 700;
+}
+
+.videoPerformClipActions {
+  display: grid;
+  grid-template-columns: minmax(44px, 1.4fr) minmax(44px, 1fr);
+  gap: 2px;
+}
+
+.videoPerformMatrix .videoPerformClipActions button {
+  padding: 2px;
+}
+
+.videoPerformMatrixEmpty {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 16px;
+}

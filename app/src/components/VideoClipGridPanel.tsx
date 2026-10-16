@@ -58,6 +58,29 @@ export interface VideoClipGridPanelProps extends LiveAudioInputRailProps {
   onRequestThumbnails: () => void;
 }
 
+/** Shared layer audition control; clip-slot thumbnails do not stage Preview. */
+export function VideoStagePreviewButton(props: {
+  layer: VideoLayerSummary | null;
+  previewLayerId: number | null;
+  backendAvailable: boolean;
+  busy: boolean;
+  onStagePreview: (layerId: number) => void | Promise<unknown>;
+}) {
+  const supported = () => props.layer?.source.kind === "File" || props.layer?.source.kind === "StillImage"
+    || (props.layer !== null && typeof props.layer.source.kind === "object");
+  return <button
+    class="videoClipPreview"
+    data-video-stage-preview
+    aria-label={props.layer ? `Preview ${props.layer.label}` : "Select a layer"}
+    aria-pressed={props.layer !== null && props.previewLayerId === props.layer.id}
+    disabled={!props.layer || !props.backendAvailable || !supported() || props.busy}
+    title={!props.backendAvailable ? "Desktop required"
+      : supported() && props.layer ? `Stage ${props.layer.label} in Preview without changing Program`
+      : "Independent Preview supports local video, still image and generator layers"}
+    onClick={() => { if (props.layer) void props.onStagePreview(props.layer.id); }}
+  >P</button>;
+}
+
 const CLIPS_PER_BANK = 12;
 
 const sourceLabel = (layer: VideoLayerSummary) => {
@@ -295,8 +318,6 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
             {(layer, index) => {
               const live = () => layer.state.enabled && layer.state.playing && layer.state.opacity > 0;
               const previewed = () => props.previewLayerId === layer.id;
-              const previewSupported = () => layer.source.kind === "File" || layer.source.kind === "StillImage"
-                || typeof layer.source.kind === "object";
               const audioMonitoring = () => props.audioMonitorLayerIds.includes(layer.id);
               const audioUnavailable = () => layer.source.kind !== "File" || layer.source.metadata?.has_audio === false;
               const clipNumber = () => bank() * CLIPS_PER_BANK + index() + 1;
@@ -322,20 +343,9 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
                     <span data-no-localize title={sourceLabel(layer)}>{sourceLabel(layer)}</span>
                     <em>{live() ? `LIVE ${Math.round(layer.state.opacity * 100)}%` : "READY"}</em>
                   </button>
-                  <button
-                    class="videoClipPreview"
-                    aria-label={`Preview ${layer.label}`}
-                    aria-pressed={previewed()}
-                    disabled={!props.previewBackendAvailable || !previewSupported() || props.previewBusy}
-                    title={!props.previewBackendAvailable
-                      ? "Desktop required"
-                      : previewSupported()
-                      ? `Stage ${layer.label} in Preview without changing Program`
-                      : "Independent Preview supports local video, still image and generator layers"}
-                    onClick={() => void props.onStagePreview(layer.id)}
-                  >
-                    P
-                  </button>
+                  <VideoStagePreviewButton layer={layer} previewLayerId={props.previewLayerId}
+                    backendAvailable={props.previewBackendAvailable} busy={props.previewBusy}
+                    onStagePreview={props.onStagePreview} />
                   <button
                     class="videoClipStop"
                     aria-label={`Stop ${layer.label}`}

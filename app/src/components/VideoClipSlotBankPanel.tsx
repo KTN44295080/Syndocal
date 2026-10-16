@@ -1,4 +1,5 @@
-import { For, Show, createMemo, type JSX } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, type JSX } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import type {
   MediaAssetSummary,
   VideoClipLaunchQuantization,
@@ -16,6 +17,7 @@ import {
 
 export interface VideoClipSlotBankPanelProps {
   mode: VideoClipSlotBankMode;
+  performance?: boolean;
   layers: VideoLayerSummary[];
   layer: VideoLayerSummary | null;
   runtime: VideoClipLayerRuntimeSummary | null;
@@ -42,7 +44,29 @@ const slotLabel = (index: number, slotId: VideoClipSlotId | undefined) =>
   slotId === undefined ? `Slot ${index + 1} empty` : `Slot ${index + 1}, ID ${slotId}`;
 
 export function VideoClipSlotBankPanel(props: VideoClipSlotBankPanelProps) {
-  const cells = createMemo(() => videoClipSlotBankCells(props.layer?.clip_slots, props.runtime));
+  // Runtime playheads refresh during keyboard navigation. Keep each pad's
+  // identity so polling updates badges without replacing the focused button.
+  const [cellRows, setCellRows] = createStore(videoClipSlotBankCells(props.layer?.clip_slots, props.runtime));
+  createEffect(() => setCellRows(reconcile(videoClipSlotBankCells(props.layer?.clip_slots, props.runtime), { key: "index" })));
+  const cells = () => cellRows;
+  const [page, setPage] = createSignal(0);
+  const pageSize = () => props.performance ? 4 : cells().length;
+  const pageCount = () => Math.max(1, Math.ceil(cells().length / pageSize()));
+  const visibleCells = () => cells().slice(page() * pageSize(), (page() + 1) * pageSize());
+  // Compare stable identities before navigating: runtime snapshots replace the
+  // layer summary frequently and must not reset the operator's visible page.
+  const layerId = createMemo(() => props.layer?.id ?? null);
+  const selectedSlotIndex = createMemo(() =>
+    props.layer?.clip_slots?.findIndex((slot) => slot.id === props.selectedSlotId) ?? -1);
+  createEffect(() => {
+    layerId();
+    setPage(0);
+  });
+  createEffect(() => {
+    layerId();
+    const selectedIndex = selectedSlotIndex();
+    if (selectedIndex >= 0) setPage(Math.floor(selectedIndex / pageSize()));
+  });
   const actions = createMemo(() => videoClipSlotBankActionLabels(props.mode));
   const selectedSlot = createMemo(() => props.layer?.clip_slots?.find((slot) => slot.id === props.selectedSlotId) ?? null);
   let bankRoot: HTMLElement | undefined;
@@ -50,7 +74,12 @@ export function VideoClipSlotBankPanel(props: VideoClipSlotBankPanelProps) {
 
   const moveFocus = (index: number, delta: number) => {
     const next = (index + delta + cells().length) % cells().length;
-    bankRoot?.querySelector<HTMLButtonElement>(`[data-video-clip-slot-pad-index="${next}"]`)?.focus();
+    setPage(Math.floor(next / pageSize()));
+    queueMicrotask(() => {
+      if (bankRoot?.isConnected) {
+        bankRoot.querySelector<HTMLButtonElement>(`[data-video-clip-slot-pad-index="${next}"]`)?.focus();
+      }
+    });
   };
 
   const keyDown = (event: KeyboardEvent, index: number) => {
@@ -122,8 +151,10 @@ export function VideoClipSlotBankPanel(props: VideoClipSlotBankPanelProps) {
           </select>
         </label>
         </Show>
+        <Show when={!props.performance}>
         <button type="button" onClick={() => void props.onImport()}>Import</button>
-        <Show when={props.mode === "control" && props.layer != null}>
+        </Show>
+        <Show when={!props.performance && props.mode === "control" && props.layer != null}>
           <label>
             Launch quantization
             <select
@@ -192,13 +223,20 @@ export function VideoClipSlotBankPanel(props: VideoClipSlotBankPanelProps) {
           </button>
         </Show>
       </div>
+      <Show when={props.performance && props.layer != null}>
+        <nav class="deckPager videoPerformSlotPager" aria-label="Clip slot pages">
+          <span>{page() * pageSize() + 1}–{Math.min((page() + 1) * pageSize(), cells().length)} / {cells().length}</span>
+          <button type="button" aria-label="Previous clip slots" disabled={page() === 0} onClick={() => setPage(page() - 1)}>Prev</button>
+          <button type="button" aria-label="Next clip slots" disabled={page() >= pageCount() - 1} onClick={() => setPage(page() + 1)}>Next</button>
+        </nav>
+      </Show>
       <Show when={props.mode === "edit" || props.layer != null} fallback={
         <p class="videoClipSlotEmptyState">
           {props.layers.length > 0 ? "Choose a video layer to prepare clips." : "No video layer yet. Import media to prepare clips."}
         </p>
       }>
       <div ref={bankGrid} class="videoClipSlotBankGrid" role="grid" aria-label="32 video clip slots">
-        <For each={cells()}>{(cell) => {
+        <For each={visibleCells()}>{(cell) => {
           const slotId = () => cell.slot?.id ?? null;
           const selected = () => slotId() !== null && slotId() === props.selectedSlotId;
           const classes = () => [
@@ -224,7 +262,7 @@ export function VideoClipSlotBankPanel(props: VideoClipSlotBankPanelProps) {
                 data-video-clip-slot-pad-index={cell.index}
                 aria-label={`${actions()[0]} ${slotLabel(cell.index, slotId() ?? undefined)}`}
                 aria-pressed={selected()}
-                tabIndex={selected() || (props.selectedSlotId === null && cell.index === 0) ? 0 : -1}
+                tabIndex={selected() || (!visibleCells().some((candidate) => candidate.slot?.id === props.selectedSlotId) && cell.index === page() * pageSize()) ? 0 : -1}
                 onKeyDown={(event) => keyDown(event, cell.index)}
                 onClick={() => primary(slotId())}
               >

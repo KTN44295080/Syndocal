@@ -12,6 +12,7 @@ import { VideoIsfEffectPanel } from "./VideoIsfEffectPanel";
 interface VideoLayerListPanelProps {
   layers: VideoLayerSummary[];
   compact?: boolean;
+  performance?: boolean;
   onSetLayerLabel: (layerId: number, label: string) => void | Promise<void>;
   onMoveLayer: (layerId: number, delta: -1 | 1) => void | Promise<void>;
   onDuplicateLayer: (layer: VideoLayerSummary) => void | Promise<void>;
@@ -58,7 +59,7 @@ interface VideoLayerListPanelProps {
 }
 
 export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
-  const pageSize = () => (props.compact ? 6 : Math.max(1, props.layers.length));
+  const pageSize = () => (props.performance ? 2 : props.compact ? 6 : Math.max(1, props.layers.length));
   const [page, setPage] = createSignal(0);
   const pageCount = createMemo(() => Math.max(1, Math.ceil(props.layers.length / pageSize())));
   const visibleLayerRows = () => {
@@ -92,7 +93,7 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
   });
 
   return (
-    <div class={`videoLayerList ${props.compact ? "compact" : ""}`}>
+    <div class={`videoLayerList ${props.compact ? "compact" : ""}${props.performance ? " videoLayerListPerform" : ""}`}>
       <details class="videoGeneratorCreate" data-video-generator-create>
         <summary>Add generator</summary>
         <div class="buttonRow">
@@ -144,6 +145,8 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
                 Opacity
                 <input
                   type="range"
+                  data-video-layer-opacity={layer.id}
+                  aria-label="Opacity"
                   min="0"
                   max="1"
                   step="0.01"

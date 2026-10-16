@@ -29,9 +29,9 @@ export const videoClipSlotBankCells = (
   return {
     index,
     slot,
-    active: slot?.id === runtime?.active_slot_id,
-    queued: slot?.id === runtime?.queued_slot_id,
-    pending: slot?.id === runtime?.pending_launch?.slot_id,
+    active: slot !== null && slot.id === runtime?.active_slot_id,
+    queued: slot !== null && slot.id === runtime?.queued_slot_id,
+    pending: slot !== null && slot.id === runtime?.pending_launch?.slot_id,
   };
 });
 
