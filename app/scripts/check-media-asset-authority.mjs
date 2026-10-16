@@ -1054,7 +1054,7 @@ assert.ok(
 );
 assert.match(
   firstRun,
-  /stageVjPreviewLayer\(firstLayerId, staged\.terminalAuthority\)/,
+  /stageVjPreviewLayer\(firstLayerId, staged\.terminalAuthority[,)]/,
   "Bootstrap sends exact terminal authority into the Preview staging side effect",
 );
 const previewTransport = app.slice(
