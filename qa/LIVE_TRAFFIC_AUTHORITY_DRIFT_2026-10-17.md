@@ -35,11 +35,18 @@ That was untrue for MIDI Clock (tempo) and for every Cue transport command (reca
 - The MIDI estimate changes on every pulse (24 PPQN) and the Follow ramp changes it from the tick with
   no command, so no command classification can keep it out of the hash.
 
-Change: `BpmClock` keeps a separate `project_bpm`. Project load, `SetBpm` and Tap write it (both
-re-conform authored Timeline blocks at that tempo). A clock-owning Timeline Follow writes it once at
-settlement, together with the destination Timeline that is persisted at the same moment.
+Change: `BpmClock` keeps a separate `project_bpm`. Project load, `SetBpm` and Tap write it; `SetBpm`
+and Tap also re-conform authored Timeline blocks at that tempo. A clock-owning Timeline Follow writes
+it once at settlement, together with the destination Timeline that is persisted at the same moment.
 MIDI Clock, `SyncExternalClock` and the Follow ramp change only the live tempo.
 `build_persistence_snapshot` now reports `ClockSnapshot { bpm: project_bpm, ..default }`.
+
+Every authored conform also uses `project_bpm`: Effect and Cue edits that re-conform referenced
+blocks, Effect removal, explicit `ReconformTimelineToBpm`, Scene Block add/set/snap and blind-hold
+release. Load conforms at the saved tempo, so conforming an edit at a live Link/MIDI tempo would store
+blocks that a reopen, replacement or Redo re-conforms differently, moving the hash after the fact
+(found in review). Runtime-only uses stay live: child-Timeline transport rate, Follow source tempo,
+DJ Link bar jumps, loop scaling, beat seek and the click scheduler.
 
 ### The recalled Cue look stays in the hash and fails closed
 
@@ -62,17 +69,20 @@ MIDI Clock, `SyncExternalClock` and the Follow ramp change only the live tempo.
 
 Change: classification unchanged. The doc comment now states the real contract. The false set never
 touches coordinator-owned state. It changes only engine state that is either removed from the saved
-image or is the deliberately saved playback look, and checkpoint-hash reconciliation detects that look
-and fails closed.
+image or is deliberately saved playback state, and checkpoint-hash reconciliation detects that state
+and fails closed. That playback state includes the active Timeline that
+`AcknowledgeTimelineFollowSettlement` or `DjLinkStartTimeline` installs (found in review).
 
 ## Changes
 
 - `crates/engine/src/lib.rs`: `BpmClock.project_bpm` and `settle_project_bpm_preserving_beat_position`;
-  the Follow settlement uses the latter; `build_persistence_snapshot` normalizes the clock to the
-  project tempo; `mutates_persistence_snapshot` doc rewritten.
+  the Follow settlement uses the latter; authored conform sites use `project_bpm`;
+  `build_persistence_snapshot` normalizes the clock to the project tempo; `mutates_persistence_snapshot`
+  doc rewritten.
 - `app/src-tauri/src/project_snapshot_persistence.rs`: comment only; the writer keeps its local clock
   normalization.
-- Tests: engine `external_clock_traffic_never_rewrites_the_persisted_project_tempo` (new);
+- Tests: engine `external_clock_traffic_never_rewrites_the_persisted_project_tempo` and
+  `authored_timing_conforms_to_the_project_tempo_under_external_clock` (new);
   `timeline_follow_captures_next_id_runs_dual_video_slews_bpm_and_completes_once` now asserts the
   persisted tempo stays at the project tempo mid-ramp and becomes the destination tempo at settlement;
   app `live_traffic_authority_tests.rs` (new, three tests on the real headless harness: authored commit
@@ -88,18 +98,24 @@ and fails closed.
   - `cue_trigger_rewrites_the_saved_look_and_fails_closed` passed. That behaviour is intended.
 - After: all three pass. `bpm_history_tests` (2) and `project_snapshot_for_save_drops_volatile_runtime_state`
   pass.
-- Engine lib suite, run in parallel while the app built: 1135 passed, 1 failed, 14 ignored. The failure
-  was `max_loop_pre_wait_and_follow_dispatch_128000_occurrences_without_loss` at 84 ms against its
-  75 ms debug budget; alone it passes at 67 ms.
-- App subset (history, authority, checkpoint, persistence, clock, DJ Link, Follow, Cue, tempo; parallel):
-  396 passed, 1 failed. The failure was `timeline_cue_source_admission_precedes_callback_progress`,
-  which uses a process-global activation hook (CI runs single-threaded); alone it passes.
-- Full app suite single-threaded as CI runs it (`cargo test -p syndocal --bin syndocal -- --test-threads=1`):
-  1731 passed, 0 failed, 13 ignored.
+- `authored_timing_conforms_to_the_project_tempo_under_external_clock` fails with the explicit-reconform
+  site reverted to the live tempo (block at 1000 ms, two beats at Link's 120 BPM) and passes with it
+  (2000 ms, two beats at the 60 BPM project tempo).
+- Final head, single-threaded as CI runs it:
+  - `cargo test -p engine --lib -- --test-threads=1`: 1137 passed, 0 failed, 14 ignored.
+  - `cargo test -p syndocal --bin syndocal -- --test-threads=1`: 1731 passed, 0 failed, 13 ignored.
+- Parallel runs were noisier: up to five engine failures, each passing alone, plus a process-global
+  audio hook test in the app. `max_loop_pre_wait_and_follow_dispatch_128000_occurrences_without_loss` has
+  a 75 ms debug budget. Six isolated runs measured 72-78 ms on `59fbfa7b` (two over budget) and 55-61 ms
+  on this head. `timeline_audio_runtime_snapshot_publishes_transport_authority_separately` races the
+  engine's first snapshot publication and does not touch the clock.
 - Warnings (Linux debug, `cargo test -p engine --lib`, `cargo test -p syndocal --bin syndocal`):
   baseline 1, current 1, delta 0. The one warning is the existing unused `safety_write_gate` in
   `crates/io/src/serial_dmx.rs`.
-- `rustfmt --check`: no diffs in any touched Rust file. `git diff --check` clean.
+- `rustfmt`: the touched app files check clean. `crates/engine/src/lib.rs` has 49 pre-existing rustfmt
+  hunks on `59fbfa7b` and the same 49 after this change, none in changed lines. `rustfmt --check` on
+  that file aborts while printing its diff (out of memory), so this was counted by formatting a copy.
+  `git diff --check` clean.
 
 ## Compatibility
 
@@ -111,9 +127,11 @@ and fails closed.
 - Rejection kept: `SetBpm` outside a transaction still retires tokens and Undo (new test; PR #2's
   `SetBpm` refusal test uses the same path). Cue recall still fails closed (new test).
 - Persisted-image readers now get the project tempo. Timeline item edits (nudge/ripple/quantize/
-  duplicate/paste) shift `time_beats` with `before.clock.bpm`, which is now the tempo the blocks were
-  conformed at rather than an external estimate. DJ Link bar math reads the published live snapshot and
-  is unchanged.
+  duplicate/paste) shift `time_beats` with `before.clock.bpm`, which is now the tempo every authored
+  block is conformed at rather than an external estimate. DJ Link bar math reads the published live
+  snapshot and is unchanged.
+- An explicit `ReconformTimelineToBpm` while following an external tempo now conforms to the project
+  tempo. To conform a show to a DJ's tempo, set it as the project tempo (`SetBpm`), which is Undoable.
 
 ## Boundaries and next action
 
@@ -123,5 +141,12 @@ and fails closed.
   tokens and Undo by design. Keeping authoring tokens alive across playback needs the recalled look
   separated from authored base values (engine model) and a product decision on reopening at the last
   Cue. Not done here.
-- `SyncExternalClock` stays classified as persisting (conservative). It now changes only live clock
-  state and could move to the false set; not changed here.
+- `SyncExternalClock` stays classified as persisting (conservative). It no longer writes the saved
+  tempo, but it also aborts an abortable Follow and rotates transport authority; moving it to the false
+  set needs those reviewed. Not changed here.
+- Undo/Redo is now reachable while an external clock runs. It loads the historic image, so the live
+  clock restarts at the project tempo, Manual source and beat 0 until the next MIDI pulse or Link sync.
+  This is the existing load behaviour, which manual-tempo Undo already had.
+- The app test's VJ Preview check mirrors the `stage_vj_preview_layer` body (reconcile, then
+  `with_exact_vj_preview_project_authority`) because the command takes Tauri `State`. PR #2 extracts
+  `stage_vj_preview_layer_for_authority`; once both land, the test should call that instead.
