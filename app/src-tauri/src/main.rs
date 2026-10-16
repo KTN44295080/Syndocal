@@ -38278,6 +38278,20 @@ fn media_asset_transaction_candidate_snapshot(
     if let Some(authored_video) = snapshot.authored_video.as_mut() {
         apply_media_asset_transaction_to_candidate_video(authored_video, transaction)?;
     }
+    // The engine derives the Timeline duration from video source metadata, so
+    // a committed File layer can lengthen it. Without this mirror the stored
+    // checkpoint hash misses the published image and the next reconcile
+    // retires the commit's own authority token.
+    normalize_timeline_duration_for_engine(&mut snapshot.timeline, &snapshot.video);
+    let active_timeline_id = snapshot.timeline.id;
+    let duration_ms = snapshot.timeline.duration_ms;
+    if let Some(active) = snapshot
+        .timeline_bank
+        .iter_mut()
+        .find(|timeline| timeline.id == active_timeline_id)
+    {
+        active.duration_ms = duration_ms;
+    }
     Ok(snapshot)
 }
 
@@ -79994,22 +80008,30 @@ fn stage_vj_preview_layer(
         expected_revision,
         expected_checkpoint_hash,
     )?;
+    stage_vj_preview_layer_for_authority(&state, layer_id, expected_authority)
+}
+
+fn stage_vj_preview_layer_for_authority(
+    state: &AppState,
+    layer_id: VideoLayerId,
+    expected_authority: Option<VjPreviewProjectAuthorityExpectation>,
+) -> Result<VjPreviewTransportSummary, String> {
     if let Some(expected_authority) = expected_authority {
         // Project replacement takes the same admission -> coordinator order.
         // Keep both guards through snapshot selection and staging so C cannot
         // publish between the exact B check and this runtime-only side effect.
-        let _external_admission = lock_project_external_command_admission(&state)?;
-        let mut coordinator = lock_project_coordinator(&state)?;
+        let _external_admission = lock_project_external_command_admission(state)?;
+        let mut coordinator = lock_project_coordinator(state)?;
         ensure_no_pending_project_transaction(&coordinator)?;
-        reconcile_project_checkpoint_for_coordinator(&state, &mut coordinator)?;
+        reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
         return with_exact_vj_preview_project_authority(&coordinator, &expected_authority, || {
             let snapshot = state.engine.video_snapshot();
-            stage_vj_preview_layer_from_snapshot(&state, &snapshot, layer_id)
+            stage_vj_preview_layer_from_snapshot(state, &snapshot, layer_id)
         });
     }
 
     let snapshot = state.engine.video_snapshot();
-    stage_vj_preview_layer_from_snapshot(&state, &snapshot, layer_id)
+    stage_vj_preview_layer_from_snapshot(state, &snapshot, layer_id)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80051,13 +80073,18 @@ fn with_exact_vj_preview_project_authority<T>(
         || coordinator.revision != expected.revision
         || coordinator.checkpoint_hash != expected.checkpoint_hash
     {
-        return Err("Project changed before VJ Preview staging; nothing was staged".to_string());
+        // Name the moved identity: a revision step within one epoch is a live
+        // or concurrent edit, an epoch step is a project replacement.
+        return Err(format!(
+            "Project changed before VJ Preview staging (expected epoch {} revision {}, current epoch {} revision {}); nothing was staged",
+            expected.epoch, expected.revision, coordinator.epoch, coordinator.revision,
+        ));
     }
     stage()
 }
 
 fn stage_vj_preview_layer_from_snapshot(
-    state: &State<'_, AppState>,
+    state: &AppState,
     snapshot: &protocol::VideoSnapshot,
     layer_id: VideoLayerId,
 ) -> Result<VjPreviewTransportSummary, String> {
@@ -102051,6 +102078,124 @@ pub(crate) mod tests {
             harness.state.engine.allocate_video_output_id(),
             output_id.saturating_add(1),
             "Bootstrap retries retain the original output ID"
+        );
+    }
+
+    #[test]
+    fn media_asset_authoritative_bootstrap_terminal_authority_stages_first_preview() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let identity = harness.stage_import(71_016, VideoSourceKind::File, &["first-preview"]);
+        let (
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        ) = identity.arguments();
+        let result = commit_prepared_bootstrap_vj_show_authoritative_command_impl(
+            &harness.state,
+            VideoSourceKind::File,
+            media_asset_authoritative_request!(
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id
+            ),
+        )
+        .expect("Bootstrap publishes once");
+        let layer_id = result.setup.layer_ids[0];
+        let terminal = VjPreviewProjectAuthorityExpectation {
+            epoch: result.mutation.authority.project_epoch,
+            revision: result.mutation.authority.project_revision,
+            checkpoint_hash: result.mutation.authority.checkpoint_hash.clone(),
+        };
+
+        // First-run staging carries the exact returned token through the
+        // production reconcile. An idle show must still be at that identity.
+        let summary =
+            stage_vj_preview_layer_for_authority(&harness.state, layer_id, Some(terminal.clone()))
+                .expect("the Bootstrap terminal authority stages its first layer");
+        assert_eq!(summary.layer_id, Some(layer_id));
+        assert!(!summary.playing, "staging cues Preview without playing it");
+
+        // A live BPM change rewrites the persisted clock outside a transaction,
+        // so reconcile advances the revision and the old token is refused with
+        // the moved identity named.
+        let bpm = harness.state.engine.snapshot().clock.bpm;
+        harness
+            .state
+            .engine
+            .send(EngineCommand::SetBpm(bpm + 6.0))
+            .expect("send live BPM change");
+        let error =
+            stage_vj_preview_layer_for_authority(&harness.state, layer_id, Some(terminal.clone()))
+                .expect_err("a reconciled live edit retires the Bootstrap token");
+        assert!(
+            error.contains(&format!(
+                "expected epoch {} revision {}, current epoch {} revision {}",
+                terminal.epoch,
+                terminal.revision,
+                terminal.epoch,
+                terminal.revision + 1,
+            )),
+            "{error}"
+        );
+        assert!(error.contains("nothing was staged"), "{error}");
+    }
+
+    #[test]
+    fn media_asset_authoritative_video_layer_commit_keeps_its_authority_and_undo_after_reconcile() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let identity = harness.stage_import(71_017, VideoSourceKind::File, &["timed-layer"]);
+        let (
+            prepared_token,
+            request_id,
+            operation_generation,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            owner_id,
+        ) = identity.arguments();
+        let result = commit_prepared_video_file_layer_authoritative_command_impl(
+            &harness.state,
+            "Timed layer".to_string(),
+            media_asset_authoritative_request!(
+                prepared_token,
+                request_id,
+                operation_generation,
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+                owner_id
+            ),
+        )
+        .expect("layer commit publishes once");
+        assert!(
+            harness.state.engine.snapshot().timeline.duration_ms > 0,
+            "the fixture's source metadata lengthens the derived Timeline"
+        );
+
+        let mut coordinator = lock_project_coordinator(&harness.state).unwrap();
+        let undo_depth = coordinator.history.undo.len();
+        assert!(undo_depth > 0);
+        reconcile_project_checkpoint_for_coordinator(&harness.state, &mut coordinator).unwrap();
+        assert_eq!(
+            (coordinator.revision, coordinator.checkpoint_hash.as_str()),
+            (
+                result.mutation.authority.project_revision,
+                result.mutation.authority.checkpoint_hash.as_str(),
+            ),
+            "the stored hash already matches the published image"
+        );
+        assert_eq!(
+            coordinator.history.undo.len(),
+            undo_depth,
+            "a reconcile after the commit keeps the commit's Undo entry"
         );
     }
 
