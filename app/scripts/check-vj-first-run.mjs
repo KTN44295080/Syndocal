@@ -113,9 +113,30 @@ for (const forbidden of [
 }
 assert.ok(workflow.includes("setSelectedVideoOutputId(result.output_id)"));
 assert.ok(
-  workflow.includes("await stageVjPreviewLayer(firstLayerId, staged.terminalAuthority)"),
+  workflow.includes("await stageVjPreviewLayer(firstLayerId, staged.terminalAuthority, (reason) => {"),
   "automatic Preview staging must carry the exact committed project authority",
 );
+assert.match(
+  workflow,
+  /if \(!previewStaged\) \{[\s\S]*?previewFailure[\s\S]*?setMessage\(detail, vjFirstRunPreviewStatusKey\);/,
+  "a failed automatic Preview names its backend reason and keys the retry instruction",
+);
+{
+  const stageStart = app.indexOf("const stageVjPreviewLayer = async (");
+  const stageEnd = app.indexOf("const selectedVideoClipSlotLayer", stageStart);
+  assert.ok(stageStart >= 0 && stageEnd > stageStart, "Preview stage helper is missing");
+  const stage = app.slice(stageStart, stageEnd);
+  assert.match(
+    stage,
+    /if \(summary\.layer_id !== layerId\) \{[\s\S]*?return false;\s*\}\s*clearVjFirstRunPreviewFailure\(layerId\);\s*return true;/,
+    "only a confirmed staging of the requested layer clears the first-run retry instruction",
+  );
+  assert.match(
+    app,
+    /const clearVjFirstRunPreviewFailure = \(layerId: number\) => \{\s*if \(appStatus\(\)\.key !== vjFirstRunPreviewStatusKey\) return;\s*setVjFirstRunError\(null\);/,
+    "a later success clears only the keyed first-run Preview failure",
+  );
+}
 assert.ok(!workflow.includes("setVideoPreviewLayerId("), "first-run Preview must be staged by the runtime backend");
 assert.ok(backend.includes("enabled: false"));
 assert.ok(backend.includes("blackout: true"));
