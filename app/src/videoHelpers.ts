@@ -42,6 +42,11 @@ export const videoSourceInputPlaceholder = (kind: VideoSourceKind) => {
 export const videoSourceCanBrowseFile = (kind: VideoSourceKind) => kind === "File" || kind === "StillImage";
 
 export const videoSourceKindLabel = (kind: VideoSourceKind) => {
+  if (typeof kind === "object") {
+    if ("Solid" in kind.Generator) return "Solid colour";
+    if ("LinearGradient" in kind.Generator) return "Linear gradient";
+    return "Animated noise";
+  }
   switch (kind) {
     case "File":
       return "File";

@@ -315,6 +315,219 @@ fn the_gpu_composition_carries_what_the_cpu_composites() {
         .all(|entry| entry.key.output_id != 6));
 }
 
+#[test]
+fn generator_rgba_frames_follow_clip_blend_transform_effect_and_gpu_paths() {
+    let mut snapshot = snapshot(10);
+    for (index, layer) in snapshot.layers.iter_mut().enumerate().skip(1) {
+        let generator = match index % 3 {
+            0 => protocol::VideoGenerator::Solid {
+                color: [20, 100, 230, 180],
+            },
+            1 => protocol::VideoGenerator::LinearGradient {
+                color_a: [10, 40, 200, 255],
+                color_b: [240, 80, 20, 120],
+                angle_degrees: 47,
+            },
+            _ => protocol::VideoGenerator::Noise {
+                seed: index as u32,
+                scale: 8,
+                speed: 100,
+                color_a: [0, 20, 60, 100],
+                color_b: [240, 200, 120, 255],
+            },
+        };
+        layer.source = VideoSourceSummary::from_generator(generator).unwrap();
+    }
+    let mut gpu_renderer = renderer();
+    let composition = gpu_composition(render(&mut gpu_renderer, &snapshot, SMALL, GPU));
+    assert_eq!(gpu_renderer.frame_provider().decoder().decodes, 1);
+    for layer in composition.layers.iter().skip(1) {
+        assert_eq!((layer.frame.width, layer.frame.height), SMALL);
+        assert_eq!(layer.frame.format, VideoPixelFormat::Rgba8);
+    }
+    assert_eq!(
+        contract(&snapshot, SMALL).admit_gpu_composition(&composition),
+        Ok(())
+    );
+    let cpu = artistic(render(&mut renderer(), &snapshot, SMALL, None));
+    let plan = CompositionPlan {
+        composition_id: 5,
+        label: "Generator mix".into(),
+        output_ids: Vec::new(),
+        master_opacity: 1.0,
+        blackout: false,
+        layers: composition
+            .layers
+            .iter()
+            .map(|layer| layer.plan.clone())
+            .collect(),
+    };
+    let frames = composition
+        .layers
+        .iter()
+        .map(|layer| Arc::clone(&layer.frame))
+        .collect::<Vec<_>>();
+    let composed = composite_frames_rgba8(&plan, &frames, SMALL.0, SMALL.1).unwrap();
+    assert_eq!(Some(&composed.data), cpu.frame().map(|frame| &frame.data));
+    // A cached generator still goes through normal artistic adjustments.
+    snapshot.layers[1].state.color.brightness = 0.35;
+    snapshot.layers[1].state.fx.pixelate = 3.0;
+    let adjusted = artistic(render(&mut gpu_renderer, &snapshot, SMALL, GPU));
+    assert_ne!(adjusted.frame().unwrap().data, cpu.frame().unwrap().data);
+}
+
+#[test]
+fn generator_source_edits_replace_animated_queue_frames_at_a_nonzero_playhead() {
+    let mut snapshot = snapshot(2);
+    snapshot.layers[1].state.position_ms = 1234;
+    let mut reused = renderer();
+    let mut previous = None;
+    for generator in [
+        protocol::VideoGenerator::Noise {
+            seed: 11,
+            scale: 8,
+            speed: 100,
+            color_a: [0, 20, 60, 255],
+            color_b: [240, 200, 120, 255],
+        },
+        protocol::VideoGenerator::Noise {
+            seed: 11,
+            scale: 8,
+            speed: 0,
+            color_a: [0, 20, 60, 255],
+            color_b: [240, 200, 120, 255],
+        },
+        protocol::VideoGenerator::Noise {
+            seed: 11,
+            scale: 8,
+            speed: 0,
+            color_a: [0, 180, 20, 255],
+            color_b: [40, 10, 255, 255],
+        },
+        protocol::VideoGenerator::Solid {
+            color: [230, 25, 90, 255],
+        },
+        protocol::VideoGenerator::LinearGradient {
+            color_a: [10, 240, 150, 255],
+            color_b: [240, 10, 80, 255],
+            angle_degrees: 37,
+        },
+    ] {
+        snapshot.layers[1].source = VideoSourceSummary::from_generator(generator).unwrap();
+        let actual = artistic(render(&mut reused, &snapshot, SMALL, None));
+        let expected = artistic(render(&mut renderer(), &snapshot, SMALL, None));
+        let bytes = actual.frame().unwrap().data.clone();
+        assert_eq!(Some(&bytes), expected.frame().map(|frame| &frame.data));
+        if let Some(previous) = previous {
+            assert_ne!(bytes, previous);
+        }
+        previous = Some(bytes);
+    }
+    // Leaving a generator also retires its static frame from the same queue.
+    snapshot.layers[1].source = snapshot.layers[0].source.clone();
+    let actual = artistic(render(&mut reused, &snapshot, SMALL, None));
+    let expected = artistic(render(&mut renderer(), &snapshot, SMALL, None));
+    assert_eq!(
+        actual.frame().map(|frame| &frame.data),
+        expected.frame().map(|frame| &frame.data)
+    );
+}
+
+#[test]
+fn generator_outgoing_clip_edits_retire_the_blended_layer_queue() {
+    let mut snapshot = snapshot(1);
+    let incoming = VideoSourceSummary::from_generator(protocol::VideoGenerator::Solid {
+        color: [30, 220, 80, 255],
+    })
+    .unwrap();
+    snapshot.layers[0].source = incoming.clone();
+    snapshot.layers[0].media_asset_id = Some(21);
+    snapshot.layers[0].default_clip_slot_id = Some(VideoClipSlotId(21));
+    snapshot.layers[0].state.position_ms = 1234;
+    snapshot.layers[0].clip_slots = (20..=21)
+        .map(|id| protocol::VideoClipSlotSummary {
+            id: VideoClipSlotId(id),
+            media_asset_id: id,
+            in_point_ms: 0,
+            out_point_ms: None,
+            loop_mode: protocol::VideoClipLoopMode::Once,
+            speed: 1.0,
+            cue_points: Vec::new(),
+            launch_quantization: protocol::VideoClipLaunchQuantization::Immediate,
+            effect_overrides: Vec::new(),
+        })
+        .collect();
+    snapshot.media_assets = (20..=21)
+        .map(|id| protocol::MediaAssetSummary {
+            id,
+            label: format!("Clip {id}"),
+            source: incoming.clone(),
+            content_hash: None,
+            byte_size: None,
+        })
+        .collect();
+    let runtime = VideoClipRuntimeSnapshot {
+        layers: vec![protocol::VideoClipLayerRuntimeSummary {
+            layer_id: 1,
+            active_slot_id: Some(VideoClipSlotId(20)),
+            queued_slot_id: Some(VideoClipSlotId(21)),
+            playhead_ms: 1234,
+            transition: Some(protocol::VideoClipTakeTransitionSummary {
+                origin_slot_id: VideoClipSlotId(20),
+                outgoing_slot_id: VideoClipSlotId(20),
+                incoming_slot_id: VideoClipSlotId(21),
+                kind: protocol::VideoClipTakeKind::Crossfade,
+                elapsed_ms: 250,
+                duration_ms: 1000,
+                duration: protocol::VideoClipTakeDuration::milliseconds(1000),
+                progress_millis: 250,
+                incoming_playhead_ms: 0,
+                incoming_playing: true,
+            }),
+            ..protocol::VideoClipLayerRuntimeSummary::default()
+        }],
+        ..VideoClipRuntimeSnapshot::default()
+    };
+    let render = |renderer: &mut TestRenderer, snapshot: &VideoSnapshot| {
+        renderer
+            .prepare_output_display_render_preview_with_effects_and_transitions(
+                snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &runtime,
+                    project_render_epoch: 1,
+                },
+                &VideoLayerTransitionRuntimeSnapshot::default(),
+                6,
+                SMALL.0,
+                SMALL.1,
+                None,
+            )
+            .unwrap()
+    };
+    let mut reused = renderer();
+    let mut previous = None;
+    for speed in [100, 0] {
+        snapshot.media_assets[0].source =
+            VideoSourceSummary::from_generator(protocol::VideoGenerator::Noise {
+                seed: 11,
+                scale: 8,
+                speed,
+                color_a: [0, 20, 60, 255],
+                color_b: [240, 200, 120, 255],
+            })
+            .unwrap();
+        protocol::validate_video_clip_runtime_against_authored_slots(&runtime, &snapshot).unwrap();
+        let actual = artistic(render(&mut reused, &snapshot));
+        let expected = artistic(render(&mut renderer(), &snapshot));
+        let bytes = actual.frame().unwrap().data.clone();
+        assert_eq!(Some(&bytes), expected.frame().map(|frame| &frame.data));
+        if let Some(previous) = previous {
+            assert_ne!(bytes, previous);
+        }
+        previous = Some(bytes);
+    }
+}
+
 fn isf_effect() -> VideoIsfEffectSummary {
     VideoIsfEffectSummary {
         enabled: true,

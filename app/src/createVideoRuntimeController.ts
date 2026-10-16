@@ -61,6 +61,7 @@ import type {
   VideoClipTakeDuration,
   VideoClipTakeKind,
   VideoSourceKind,
+  VideoGenerator,
 } from "./types";
 
 type Invoke = FrontendTauriInvoke;
@@ -1660,6 +1661,19 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       await options.refreshSnapshot();
     } catch (error) { options.setMessage(String(error)); }
   };
+  const addVideoGeneratorLayer = async (generator: VideoGenerator) => {
+    try {
+      await options.invoke("add_video_generator_layer", { generator, label: options.videoLabel() });
+      options.setVideoLabel(`Layer ${options.snapshot().video.layers.length + 2}`);
+      await options.refreshSnapshot();
+    } catch (error) { options.setMessage(String(error)); }
+  };
+  const setVideoLayerGenerator = async (layerId: number, generator: VideoGenerator) => {
+    try {
+      await options.invoke("set_video_layer_generator", { layerId, generator });
+      await options.refreshSnapshot();
+    } catch (error) { options.setMessage(String(error)); }
+  };
   const setVideoLayerBlendMode = async (layerId: number, blendMode: VideoBlendMode) => {
     try {
       await options.invoke("set_video_layer_blend_mode", { layerId, blendMode });
@@ -1691,6 +1705,6 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     refreshVideoRuntimeStatus, refreshExternalVideoTransportStatus, refreshExternalVideoIoPlans, syncExternalVideoTransports,
     renderDebugVideoOutputPreview, setVideoLayerState, setVideoLayerTransform, setVideoLayerColor,
     setVideoLayerFx, addVideoCuePoint, removeVideoCuePoint, jumpVideoCuePoint,
-    setVideoLayerBlendMode, setVideoMasterOpacity, setVideoBlackout,
+    addVideoGeneratorLayer, setVideoLayerGenerator, setVideoLayerBlendMode, setVideoMasterOpacity, setVideoBlackout,
   };
 }

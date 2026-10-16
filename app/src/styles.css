@@ -40697,3 +40697,39 @@ button.timelineExternalSourceCard:active,
 /* A native disabled fieldset keeps controls readable and keyboard-safe. */
 fieldset.attributeDeskSurface { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
 
+
+/* Generator controls disclose into the existing layer scrollport. */
+.videoGeneratorCreate,
+.videoGeneratorEditor {
+  min-width: 0;
+  grid-column: 1 / -1;
+}
+.videoGeneratorCreate > summary,
+.videoGeneratorEditor > summary {
+  cursor: pointer;
+  min-height: 28px;
+  padding: 5px 0;
+}
+.videoGeneratorFields {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-inline-size: 0;
+}
+.videoGeneratorFields > .split,
+.videoGeneratorFields > .videoGeneratorNumbers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(110px, 100%), 1fr));
+  gap: 8px;
+}
+.videoGeneratorEditor label,
+.videoGeneratorEditor input {
+  min-width: 0;
+  width: 100%;
+}
+.videoGeneratorEditor input {
+  min-height: 28px;
+}
+.videoGeneratorCreate > .buttonRow {
+  flex-wrap: wrap;
+}

@@ -2,8 +2,11 @@ import { createEffect, createMemo, createSignal, For, Show, untrack } from "soli
 import { type Accessor } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import type { VideoBlendMode, VideoColorAdjust, VideoFxAdjust, VideoIsfEffectSummary, VideoIsfStageError, VideoLayerState, VideoLayerSummary } from "../types";
-import { videoSourceMetadataLabel } from "../videoHelpers";
+import { videoSourceKindLabel, videoSourceMetadataLabel } from "../videoHelpers";
 import { defaultColorAdjust, defaultFxAdjust } from "../videoLayerDefaults";
+import { VideoGeneratorEditor } from "./VideoGeneratorEditor";
+import { defaultVideoGenerators } from "../videoGeneratorHelpers";
+import type { VideoGenerator } from "../types";
 import { VideoIsfEffectPanel } from "./VideoIsfEffectPanel";
 
 interface VideoLayerListPanelProps {
@@ -13,6 +16,8 @@ interface VideoLayerListPanelProps {
   onMoveLayer: (layerId: number, delta: -1 | 1) => void | Promise<void>;
   onDuplicateLayer: (layer: VideoLayerSummary) => void | Promise<void>;
   onRefreshMetadata: (layerId: number) => void | Promise<void>;
+  onAddGenerator: (generator: VideoGenerator) => void | Promise<void>;
+  onSetGenerator: (layerId: number, generator: VideoGenerator) => void | Promise<void>;
   onSetBlendMode: (layerId: number, blendMode: VideoBlendMode) => void | Promise<void>;
   onSetLayerState: (layerId: number, state: VideoLayerState) => void | Promise<void>;
   onSetLayerTransform: (
@@ -88,6 +93,14 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
 
   return (
     <div class={`videoLayerList ${props.compact ? "compact" : ""}`}>
+      <details class="videoGeneratorCreate" data-video-generator-create>
+        <summary>Add generator</summary>
+        <div class="buttonRow">
+          <button data-video-generator-add="Solid" onClick={() => void props.onAddGenerator(defaultVideoGenerators.Solid())}>Solid colour</button>
+          <button data-video-generator-add="LinearGradient" onClick={() => void props.onAddGenerator(defaultVideoGenerators.LinearGradient())}>Linear gradient</button>
+          <button data-video-generator-add="Noise" onClick={() => void props.onAddGenerator(defaultVideoGenerators.Noise())}>Animated noise</button>
+        </div>
+      </details>
       <Show when={props.compact && props.layers.length > 0}>
         <div class="deckPager">
           <strong>Layers</strong>
@@ -111,6 +124,10 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
           {(entry) => {
             const layer = entry.layer;
             const index = () => entry.index;
+            const generator = () => {
+              const kind = props.layers.find((candidate) => candidate.id === layer.id)?.source.kind;
+              return typeof kind === "object" ? kind.Generator : undefined;
+            };
             return (
             <div class="videoLayerItem">
             <div>
@@ -119,7 +136,7 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
                 Video Layer name
                 <input value={layer.label} onChange={(event) => void props.onSetLayerLabel(layer.id, event.currentTarget.value)} />
               </label>
-              <span>{layer.source.path ?? layer.source.name ?? layer.source.kind}</span>
+              <span>{layer.source.path ?? layer.source.name ?? videoSourceKindLabel(layer.source.kind)}</span>
               <Show when={videoSourceMetadataLabel(layer.source)}>{(metadata) => <small>{metadata()}</small>}</Show>
             </div>
             <div class="videoMixerLayerDeck">
@@ -211,6 +228,9 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
                 Refresh Metadata
               </button>
             </div>
+            <Show when={generator()}>
+              {(value) => <VideoGeneratorEditor layerId={layer.id} generator={value()} onChange={(next) => props.onSetGenerator(layer.id, next)} />}
+            </Show>
             <label class="videoLayerBlendControl">
               Blend
               <select

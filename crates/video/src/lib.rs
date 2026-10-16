@@ -27,6 +27,7 @@ mod builtin_isf;
 #[path = "decode_ahead_tests.rs"]
 mod decode_ahead_tests;
 mod ffmpeg_cancellable_process;
+mod generator;
 mod gpu_compositor;
 #[cfg(test)]
 #[path = "gpu_display_composition_tests.rs"]
@@ -2044,6 +2045,18 @@ pub trait VideoFrameProvider {
         self.frames_for_layer(layer, width, height)
             .map(|frames| frames.into_iter().map(Arc::new).collect())
     }
+    /// The cancellable live path can retain a provider's cached frame storage.
+    /// Providers without a shared implementation keep their existing checks.
+    fn frames_for_layer_shared_with_cancellation(
+        &mut self,
+        layer: &VideoLayerSummary,
+        width: u32,
+        height: u32,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Vec<Arc<VideoFrame>>, VideoFrameProviderError> {
+        self.frames_for_layer_with_cancellation(layer, width, height, cancellation)
+            .map(|frames| frames.into_iter().map(Arc::new).collect())
+    }
 }
 
 pub trait VideoFrameDecoder {
@@ -2124,6 +2137,7 @@ pub trait VideoFrameDecoder {
 pub struct NullVideoDecoder;
 
 pub struct PreviewFrameProvider {
+    generators: generator::GeneratorFrameCache,
     still_images: StillImageFrameCache,
 }
 
@@ -2134,6 +2148,7 @@ pub struct FfmpegCliFrameDecoder {
 }
 
 pub struct DecoderBackedFrameProvider<D = NullVideoDecoder> {
+    generators: generator::GeneratorFrameCache,
     still_images: StillImageFrameCache,
     decoder: D,
     placeholder_when_missing: bool,
@@ -2151,6 +2166,7 @@ pub struct DecoderBackedFrameProvider<D = NullVideoDecoder> {
 pub struct VideoPreviewRenderer<P = PreviewFrameProvider> {
     runtime: VideoRuntime,
     frame_provider: P,
+    generator_queue_sources: generator::GeneratorQueueSources,
     isf_shader_cache: HashMap<Arc<str>, CachedIsfShader>,
     isf_shader_cache_clock: u64,
     isf_runtime: Option<Result<IsfGpuRuntime, IsfRuntimeError>>,
@@ -2903,6 +2919,7 @@ impl PreviewFrameProvider {
     pub fn new() -> Self {
         Self {
             still_images: StillImageFrameCache::new(),
+            generators: generator::GeneratorFrameCache::default(),
         }
     }
 
@@ -2914,10 +2931,12 @@ impl PreviewFrameProvider {
 impl VideoFrameProvider for PreviewFrameProvider {
     fn retain_layers(&mut self, layer_ids: &[VideoLayerId]) {
         self.still_images.retain_layers(layer_ids);
+        self.generators.retain_layers(layer_ids);
     }
 
     fn retain_inputs(&mut self, inputs: &[VideoRenderInput]) {
         self.still_images.retain_inputs(inputs);
+        self.generators.retain_inputs(inputs);
     }
 
     fn frame_for_layer(
@@ -2928,6 +2947,14 @@ impl VideoFrameProvider for PreviewFrameProvider {
     ) -> Result<VideoFrame, VideoFrameProviderError> {
         let state = sanitize_layer_state(layer.state.clone());
         match layer.source.kind {
+            VideoSourceKind::Generator(generator) => self
+                .generators
+                .frame(
+                    &legacy_layer_input(layer, width, height, None),
+                    generator,
+                    None,
+                )
+                .map(Arc::unwrap_or_clone),
             VideoSourceKind::StillImage => {
                 let path = layer
                     .source
@@ -2955,12 +2982,57 @@ impl VideoFrameProvider for PreviewFrameProvider {
         }
     }
 
+    fn frames_for_layer_shared(
+        &mut self,
+        layer: &VideoLayerSummary,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<Arc<VideoFrame>>, VideoFrameProviderError> {
+        if let VideoSourceKind::Generator(generator) = layer.source.kind {
+            return self
+                .generators
+                .frame(
+                    &legacy_layer_input(layer, width, height, None),
+                    generator,
+                    None,
+                )
+                .map(|frame| vec![frame]);
+        }
+        self.frames_for_layer(layer, width, height)
+            .map(|frames| frames.into_iter().map(Arc::new).collect())
+    }
+
+    fn frames_for_layer_shared_with_cancellation(
+        &mut self,
+        layer: &VideoLayerSummary,
+        width: u32,
+        height: u32,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Vec<Arc<VideoFrame>>, VideoFrameProviderError> {
+        if let VideoSourceKind::Generator(generator) = layer.source.kind {
+            return self
+                .generators
+                .frame(
+                    &legacy_layer_input(layer, width, height, None),
+                    generator,
+                    Some(cancellation),
+                )
+                .map(|frame| vec![frame]);
+        }
+        self.frames_for_layer_with_cancellation(layer, width, height, cancellation)
+            .map(|frames| frames.into_iter().map(Arc::new).collect())
+    }
+
     fn frame_for_input(
         &mut self,
         input: &VideoRenderInput,
     ) -> Result<VideoFrame, VideoFrameProviderError> {
         let request = &input.request;
         match request.source.kind {
+            VideoSourceKind::Generator(generator) => self
+                .generators
+                .frame(input, generator, None)
+                .map(Arc::unwrap_or_clone),
             VideoSourceKind::StillImage => {
                 let path = request
                     .source
@@ -3621,6 +3693,7 @@ impl<D> DecoderBackedFrameProvider<D> {
     pub fn new(decoder: D) -> Self {
         Self {
             still_images: StillImageFrameCache::new(),
+            generators: generator::GeneratorFrameCache::default(),
             decoder,
             placeholder_when_missing: true,
             prefetch_count: 0,
@@ -3679,12 +3752,14 @@ impl<D: VideoFrameDecoder> VideoFrameProvider for DecoderBackedFrameProvider<D> 
     fn retain_layers(&mut self, layer_ids: &[VideoLayerId]) {
         self.decoded_ahead.clear();
         self.still_images.retain_layers(layer_ids);
+        self.generators.retain_layers(layer_ids);
         self.decoder.retain_layers(layer_ids);
     }
 
     fn retain_inputs(&mut self, inputs: &[VideoRenderInput]) {
         self.decoded_ahead.clear();
         self.still_images.retain_inputs(inputs);
+        self.generators.retain_inputs(inputs);
         self.decoder.retain_inputs(inputs);
     }
 
@@ -3710,8 +3785,10 @@ impl<D: VideoFrameDecoder> VideoFrameProvider for DecoderBackedFrameProvider<D> 
         // Still images take their own cache, never the decoder.
         let mut ahead: Vec<VideoRenderInput> = Vec::with_capacity(inputs.len());
         for input in inputs {
-            if !matches!(input.request.source.kind, VideoSourceKind::StillImage)
-                && !ahead.contains(input)
+            if !matches!(
+                input.request.source.kind,
+                VideoSourceKind::StillImage | VideoSourceKind::Generator(_)
+            ) && !ahead.contains(input)
             {
                 ahead.push(input.clone());
             }
@@ -3741,6 +3818,25 @@ impl<D: VideoFrameDecoder> VideoFrameProvider for DecoderBackedFrameProvider<D> 
             frames.push(self.decode_or_placeholder_for_input_shared(&input)?);
         }
         Ok(frames)
+    }
+
+    fn frames_for_layer_shared_with_cancellation(
+        &mut self,
+        layer: &VideoLayerSummary,
+        width: u32,
+        height: u32,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Vec<Arc<VideoFrame>>, VideoFrameProviderError> {
+        if let VideoSourceKind::Generator(generator) = layer.source.kind {
+            let input = legacy_layer_input(layer, width, height, None);
+            self.decoder.release_input(&input);
+            return self
+                .generators
+                .frame(&input, generator, Some(cancellation))
+                .map(|frame| vec![frame]);
+        }
+        self.frames_for_layer_with_cancellation(layer, width, height, cancellation)
+            .map(|frames| frames.into_iter().map(Arc::new).collect())
     }
 
     fn frame_for_layer(
@@ -3899,6 +3995,10 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
         input: &VideoRenderInput,
     ) -> Result<Arc<VideoFrame>, VideoFrameProviderError> {
         let request = &input.request;
+        if let VideoSourceKind::Generator(generator) = request.source.kind {
+            self.decoder.release_input(input);
+            return self.generators.frame(input, generator, None);
+        }
         if matches!(request.source.kind, VideoSourceKind::StillImage) {
             self.decoder.release_input(input);
             let path = request
@@ -3966,6 +4066,13 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
             return Err(VideoFrameProviderError::Cancelled);
         }
         let request = &input.request;
+        if let VideoSourceKind::Generator(generator) = request.source.kind {
+            self.decoder.release_input(input);
+            return self
+                .generators
+                .frame(input, generator, Some(cancellation))
+                .map(Arc::unwrap_or_clone);
+        }
         if matches!(request.source.kind, VideoSourceKind::StillImage) {
             self.decoder.release_input(input);
             let path = request
@@ -4195,6 +4302,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         Self {
             runtime: VideoRuntime::new(config),
             frame_provider,
+            generator_queue_sources: generator::GeneratorQueueSources::default(),
             isf_shader_cache: HashMap::new(),
             isf_shader_cache_clock: 0,
             isf_runtime: None,
@@ -4248,6 +4356,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .map_err(VideoRuntimeError::from)
             .map_err(VideoPreviewError::Runtime)?;
         self.frame_provider.retain_inputs(inputs);
+        self.generator_queue_sources
+            .sync_inputs(&mut self.runtime, inputs);
         self.runtime.sync_inputs(inputs);
         self.reset_isf_stack_metrics();
         let mut keyed_isf_errors = Vec::new();
@@ -4324,6 +4434,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .map_err(VideoRuntimeError::from)
             .map_err(VideoPreviewError::Runtime)?;
         self.frame_provider.retain_inputs(inputs);
+        self.generator_queue_sources
+            .sync_inputs(&mut self.runtime, inputs);
         self.runtime.sync_inputs(inputs);
         self.reset_isf_stack_metrics();
         let mut faults = Vec::new();
@@ -5897,6 +6009,26 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             }
         }
         self.frame_provider.retain_inputs(&retained_inputs);
+        self.generator_queue_sources.sync(
+            &mut self.runtime,
+            true,
+            snapshot
+                .layers
+                .iter()
+                .map(|layer| {
+                    let generator = match layer.source.kind {
+                        VideoSourceKind::Generator(generator) => Some(generator),
+                        _ => None,
+                    };
+                    (protocol::VideoRenderInputKey::LEGACY, layer.id, generator)
+                })
+                .chain(
+                    retained_inputs
+                        .iter()
+                        .filter(|input| input.key != protocol::VideoRenderInputKey::LEGACY)
+                        .map(generator::input_identity),
+                ),
+        );
         self.runtime.sync_layers(&layer_ids);
         self.reset_isf_stack_metrics();
         if cancellation.is_none() {
@@ -6041,8 +6173,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             let frames: Vec<Arc<VideoFrame>> = match cancellation {
                 Some(cancellation) => self
                     .frame_provider
-                    .frames_for_layer_with_cancellation(layer, width, height, cancellation)
-                    .map(|frames| frames.into_iter().map(Arc::new).collect()),
+                    .frames_for_layer_shared_with_cancellation(layer, width, height, cancellation),
                 None => self
                     .frame_provider
                     .frames_for_layer_shared(layer, width, height),
@@ -7628,7 +7759,11 @@ pub fn preview_prefetch_positions_ms(
     bpm: Option<f32>,
 ) -> Vec<u64> {
     let state = sanitize_layer_state(layer.state.clone());
-    if matches!(layer.source.kind, VideoSourceKind::StillImage) || prefetch_count == 0 {
+    if matches!(
+        layer.source.kind,
+        VideoSourceKind::StillImage | VideoSourceKind::Generator(_)
+    ) || prefetch_count == 0
+    {
         return vec![state.position_ms];
     }
 
@@ -7658,7 +7793,13 @@ pub fn preview_decode_requests_for_layer(
     prefetch_interval_ms: u64,
     bpm: Option<f32>,
 ) -> Vec<VideoFrameRequest> {
-    if width == 0 || height == 0 || matches!(layer.source.kind, VideoSourceKind::StillImage) {
+    if width == 0
+        || height == 0
+        || matches!(
+            layer.source.kind,
+            VideoSourceKind::StillImage | VideoSourceKind::Generator(_)
+        )
+    {
         return Vec::new();
     }
     preview_prefetch_positions_ms(layer, prefetch_count, prefetch_interval_ms, bpm)
@@ -8397,7 +8538,7 @@ pub fn external_video_source_backend_id(kind: &VideoSourceKind) -> Option<&'stat
         VideoSourceKind::Ndi => Some("ndi"),
         VideoSourceKind::Spout => Some("spout"),
         VideoSourceKind::Syphon => Some("syphon"),
-        VideoSourceKind::File | VideoSourceKind::StillImage => None,
+        VideoSourceKind::File | VideoSourceKind::StillImage | VideoSourceKind::Generator(_) => None,
     }
 }
 

@@ -33,11 +33,15 @@ mod snapshot_read;
 mod telemetry_percentiles;
 mod timeline_audio_live_fence;
 mod timeline_follow_hold;
+mod video_generator;
 mod video_render_sample;
-pub use video_render_sample::{VideoRenderSample, VideoRenderSampleFence, VideoRenderSampleValidation, VideoSamplingMode};
 pub use snapshot_read::{
     ControlPlaneRuntimeSnapshot, EngineTelemetrySnapshot, VideoOutputEffectRuntimeSnapshot,
     VisualizerSnapshot,
+};
+use video_generator::hash_video_generator_revision;
+pub use video_render_sample::{
+    VideoRenderSample, VideoRenderSampleFence, VideoRenderSampleValidation, VideoSamplingMode,
 };
 
 pub use control_plane::{control_plane_engine_command_descriptors, engine_command_variant_count};
@@ -3733,6 +3737,11 @@ pub enum MediaAssetTransaction {
         output: Box<VideoOutputSummary>,
     },
     Update(MediaAssetSummary),
+    /// Parameter-only generator edit, resolved against the current active source.
+    UpdateGenerator {
+        layer_id: VideoLayerId,
+        generator: protocol::VideoGenerator,
+    },
 }
 
 /// One direct-drop assignment. The MediaAsset rows and slot rows intentionally
@@ -12310,6 +12319,9 @@ impl EngineHandle {
                     }
                     MediaAssetTransaction::Update(asset) => {
                         maxima.observe_u64(AllocatorDomain::MediaAssets, asset.id);
+                    }
+                    MediaAssetTransaction::UpdateGenerator { layer_id, .. } => {
+                        maxima.observe_u64(AllocatorDomain::VideoLayers, *layer_id);
                     }
                 }
             }
@@ -49149,6 +49161,7 @@ impl EngineRuntime {
         label: String,
         source: VideoSourceSummary,
     ) -> Result<(), String> {
+        source.validate_generator_source()?;
         if layer_id == 0 {
             return Err("Video layer IDs must be non-zero".to_string());
         }
@@ -49493,6 +49506,13 @@ impl EngineRuntime {
                 self.video_outputs = vec![RuntimeVideoOutput { summary: output }];
                 self.video_output_fades.clear();
                 return Ok(());
+            }
+            MediaAssetTransaction::UpdateGenerator {
+                layer_id,
+                generator,
+            } => {
+                let asset = self.updated_video_generator_asset(layer_id, generator)?;
+                return self.apply_media_asset_transaction(MediaAssetTransaction::Update(asset));
             }
             MediaAssetTransaction::Update(asset) => {
                 let Some(asset_index) = next_assets
@@ -53750,7 +53770,7 @@ fn auto_vj_show_revision(config: &AutoVjConfig, layers: &[RuntimeVideoLayer]) ->
             continue;
         };
         hash = hash_bytes(hash, layer.label.as_bytes());
-        let source_tag = match layer.source.kind {
+        let source_tag = match &layer.source.kind {
             VideoSourceKind::File => 0,
             VideoSourceKind::Camera => 1,
             VideoSourceKind::ScreenCapture => 2,
@@ -53758,6 +53778,10 @@ fn auto_vj_show_revision(config: &AutoVjConfig, layers: &[RuntimeVideoLayer]) ->
             VideoSourceKind::Spout => 4,
             VideoSourceKind::Syphon => 5,
             VideoSourceKind::StillImage => 6,
+            VideoSourceKind::Generator(generator) => {
+                hash = hash_video_generator_revision(hash, generator, hash_bytes);
+                7
+            }
         };
         hash = hash_bytes(hash, &[source_tag]);
         if let Some(path) = &layer.source.path {

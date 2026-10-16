@@ -1199,3 +1199,8 @@ console.log(
 assert.equal(coverage, 1, `static Japanese UI coverage regressed to ${(coverage * 100).toFixed(1)}%`);
 
 console.log("ui localization helpers ok");
+
+for (const [english, japanese] of [["Add generator", "ジェネレーターを追加"], ["Solid colour", "単色"], ["Linear gradient", "線形グラデーション"], ["Animated noise", "アニメーションノイズ"], ["Generator parameters", "ジェネレーター設定"], ["Generator colour", "ジェネレーターの色"], ["Generator alpha", "ジェネレーターの不透明度"], ["Generator colour A", "ジェネレーターの色 A"], ["Generator colour B", "ジェネレーターの色 B"], ["Generator alpha A", "ジェネレーターの不透明度 A"], ["Generator alpha B", "ジェネレーターの不透明度 B"], ["Gradient angle", "グラデーション角度"], ["Noise seed", "ノイズのシード"], ["Noise scale", "ノイズのスケール"], ["Noise speed", "ノイズの速度"]]) {
+  assert.equal(localization.translateUiText(english, "en"), english);
+  assert.equal(localization.translateUiText(english, "ja"), japanese);
+}

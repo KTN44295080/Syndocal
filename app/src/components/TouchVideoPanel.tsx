@@ -1,3 +1,4 @@
+import { videoSourceKindLabel } from "../videoHelpers";
 import { For, Show, type ComponentProps } from "solid-js";
 import { clampRange } from "../numericHelpers";
 import type { VideoLayerState, VideoLayerSummary, VideoOutputSummary } from "../types";
@@ -113,7 +114,7 @@ export function TouchVideoPanel(props: TouchVideoPanelProps) {
                   <div class="touchVideoHeader">
                     <div>
                       <strong data-no-localize>{layer.label}</strong>
-                      <span>{layer.source.path ?? layer.source.name ?? layer.source.kind}</span>
+                      <span>{layer.source.path ?? layer.source.name ?? videoSourceKindLabel(layer.source.kind)}</span>
                     </div>
                     <small>{formatVideoTime(layer.state.position_ms, durationMs())}</small>
                   </div>

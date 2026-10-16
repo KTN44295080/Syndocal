@@ -82,6 +82,7 @@ use video_output_mapping_contract::{
     normalize_video_output_mapping_field, normalize_video_output_mapping_preset_label,
     validate_video_output_mapping,
 };
+mod video_generator_commands;
 mod video_monitor_snapshot;
 use video_monitor_snapshot::capture_video_monitor_snapshot;
 mod live_video_monitor_packet;
@@ -8477,6 +8478,7 @@ fn media_asset_video_source_kind_name(kind: &VideoSourceKind) -> &'static str {
         VideoSourceKind::Spout => "spout",
         VideoSourceKind::Syphon => "syphon",
         VideoSourceKind::StillImage => "still_image",
+        VideoSourceKind::Generator(_) => "generator",
     }
 }
 
@@ -14104,12 +14106,15 @@ impl VjPreviewTransportRuntime {
 }
 
 fn validate_vj_preview_layer(layer: &protocol::VideoLayerSummary) -> Result<(), String> {
+    if matches!(layer.source.kind, VideoSourceKind::Generator(_)) {
+        return layer.source.validate_generator_source();
+    }
     if !matches!(
         layer.source.kind,
         VideoSourceKind::File | VideoSourceKind::StillImage
     ) {
         return Err(format!(
-            "VJ Preview supports local File and Still Image layers; layer {} uses {:?}",
+            "VJ Preview supports File, Still Image and Generator layers; layer {} uses {:?}",
             layer.id, layer.source.kind
         ));
     }
@@ -38231,6 +38236,16 @@ fn apply_media_asset_transaction_to_candidate_video(
                 }
             }
         }
+        MediaAssetTransaction::UpdateGenerator {
+            layer_id,
+            generator,
+        } => {
+            let asset = video_generator_commands::candidate_asset(video, *layer_id, *generator)?;
+            return apply_media_asset_transaction_to_candidate_video(
+                video,
+                &MediaAssetTransaction::Update(asset),
+            );
+        }
     }
     synchronize_derived_video_compositions(video);
     validate_engine_ready_video_clip_slots(video)?;
@@ -38238,7 +38253,7 @@ fn apply_media_asset_transaction_to_candidate_video(
 }
 
 /// Derive the exact authored persistence image of an engine Media Asset
-/// transaction before it is published. This mirrors the engine's three
+/// transaction before it is published. This mirrors the engine's media
 /// transaction variants and validates the same engine-ready catalog invariant,
 /// allowing every hash/history/generation failure to happen before the ACK.
 ///
@@ -38247,10 +38262,18 @@ fn apply_media_asset_transaction_to_candidate_video(
 /// both candidate surfaces here as well; otherwise the preflighted history hash
 /// can retain stale derived Main layer/output references despite a successful
 /// engine ACK.
+/// Generator edits first resolve the current rendered asset and then use the
+/// canonical authored-only persistence projection, avoiding a second resolution
+/// against a potentially different default source.
 fn media_asset_transaction_candidate_snapshot(
     mut snapshot: EngineSnapshot,
     transaction: &MediaAssetTransaction,
 ) -> Result<EngineSnapshot, String> {
+    let resolved_generator_transaction =
+        video_generator_commands::resolve_candidate_transaction(&mut snapshot, transaction)?;
+    let transaction = resolved_generator_transaction
+        .as_ref()
+        .unwrap_or(transaction);
     apply_media_asset_transaction_to_candidate_video(&mut snapshot.video, transaction)?;
     if let Some(authored_video) = snapshot.authored_video.as_mut() {
         apply_media_asset_transaction_to_candidate_video(authored_video, transaction)?;
@@ -42075,6 +42098,7 @@ fn legacy_media_asset_refresh_message(source: &VideoSourceSummary) -> Result<Str
             "Refreshed video codec; ffprobe returned no stream metadata".to_string()
         }),
         VideoSourceKind::StillImage => Ok("Refreshed still image metadata".to_string()),
+        VideoSourceKind::Generator(_) => Err("Generators have no local file metadata".to_string()),
         VideoSourceKind::Camera
         | VideoSourceKind::ScreenCapture
         | VideoSourceKind::Ndi
@@ -42423,6 +42447,58 @@ async fn refresh_video_layer_metadata(
         cancel_legacy_media_asset_compatibility_operation(&state, &operation);
     }
     result
+}
+
+#[tauri::command]
+fn add_video_generator_layer(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    args: FlatInvokeArgs<Value>,
+) -> Result<VideoLayerId, String> {
+    read_flat_invoke_args!(args;
+        label: String => "label",
+        generator: protocol::VideoGenerator => "generator",
+        project_transaction_id: u64 => "projectTransactionId",
+        expected_epoch: u64 => "expectedEpoch",
+        owner_id: String => "ownerId",
+    );
+    video_generator_commands::create(
+        &state,
+        window.label(),
+        video_generator_commands::GeneratorEditTicket {
+            project_transaction_id,
+            expected_epoch,
+            owner_id,
+        },
+        label,
+        generator,
+    )
+}
+
+#[tauri::command]
+fn set_video_layer_generator(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    args: FlatInvokeArgs<Value>,
+) -> Result<(), String> {
+    read_flat_invoke_args!(args;
+        layer_id: VideoLayerId => "layerId",
+        generator: protocol::VideoGenerator => "generator",
+        project_transaction_id: u64 => "projectTransactionId",
+        expected_epoch: u64 => "expectedEpoch",
+        owner_id: String => "ownerId",
+    );
+    video_generator_commands::update(
+        &state,
+        window.label(),
+        video_generator_commands::GeneratorEditTicket {
+            project_transaction_id,
+            expected_epoch,
+            owner_id,
+        },
+        layer_id,
+        generator,
+    )
 }
 
 #[tauri::command]
@@ -69957,7 +70033,8 @@ fn validate_project_video_source(source: &VideoSourceSummary, label: &str) -> Re
         validate_project_video_source_metadata(&metadata, label)?;
     }
 
-    match source.kind {
+    match &source.kind {
+        VideoSourceKind::Generator(_) => source.validate_generator_source()?,
         VideoSourceKind::File => {
             if source.path.as_deref().unwrap_or_default().trim().is_empty() {
                 return Err(format!("Project {label} file source requires a file path"));
@@ -80578,7 +80655,7 @@ mod vj_preview_transport_tests {
         external.source.name = Some("Camera feed".to_string());
         assert!(validate_vj_preview_layer(&external)
             .unwrap_err()
-            .contains("File and Still Image"));
+            .contains("File, Still Image and Generator"));
 
         let mut pathless = file_layer(5, 0, Some(1_000));
         pathless.source.path = Some("  ".to_string());
@@ -87472,7 +87549,7 @@ fn video_input_backend(kind: &VideoSourceKind) -> Option<(&'static str, &'static
         VideoSourceKind::Ndi => Some(("ndi", "NDI input")),
         VideoSourceKind::Spout => Some(("spout", "Spout input")),
         VideoSourceKind::Syphon => Some(("syphon", "Syphon input")),
-        VideoSourceKind::File | VideoSourceKind::StillImage => None,
+        VideoSourceKind::File | VideoSourceKind::StillImage | VideoSourceKind::Generator(_) => None,
     }
 }
 
@@ -87574,7 +87651,8 @@ fn video_source_file_dialog_filter(
     match kind {
         VideoSourceKind::File => Ok(("Video and Audio Files", VIDEO_FILE_EXTENSIONS)),
         VideoSourceKind::StillImage => Ok(("Still Images", STILL_IMAGE_EXTENSIONS)),
-        VideoSourceKind::Camera
+        VideoSourceKind::Generator(_)
+        | VideoSourceKind::Camera
         | VideoSourceKind::ScreenCapture
         | VideoSourceKind::Ndi
         | VideoSourceKind::Spout
@@ -97464,10 +97542,32 @@ pub(crate) mod tests {
         }
         // The extension setter owns its lifecycle authority inside the handler.
         assert_eq!(runtime_routes.len(), 177);
+        // Generator routes own renderer-ticketed publication admission. The
+        // runtime-only dispatch policy must not classify those project edits.
+        const GENERATOR_PROJECT_ROUTES: [&str; 2] =
+            ["add_video_generator_layer", "set_video_layer_generator"];
+        for command in GENERATOR_PROJECT_ROUTES {
+            assert_eq!(
+                control_plane::tauri_route_admission_class(command),
+                Some(control_plane::TauriRouteAdmissionClass::RendererTicketedProjectMutation)
+            );
+            assert_eq!(runtime_route_dispatch_policy(command), None);
+        }
         assert_eq!(
             OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
                 + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),
             runtime_routes.len()
+        );
+        assert_eq!(
+            OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES
+                .iter()
+                .chain(PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.iter())
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            runtime_routes
+                .iter()
+                .map(|command| command.as_str())
+                .collect::<BTreeSet<_>>()
         );
         for command in runtime_routes {
             assert!(
@@ -134121,6 +134221,8 @@ fn main() {
             bootstrap_vj_show,
             refresh_video_layer_metadata,
             add_video_input_layer,
+            add_video_generator_layer,
+            set_video_layer_generator,
             duplicate_video_layer,
             remove_video_layer,
             set_video_layer_order,

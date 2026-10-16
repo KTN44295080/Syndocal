@@ -1536,7 +1536,12 @@ export interface CueFixtureTarget {
   values: AttributeValueSummary[];
 }
 
-export type VideoSourceKind = "File" | "Camera" | "ScreenCapture" | "Ndi" | "Spout" | "Syphon" | "StillImage";
+export type VideoGeneratorColor = [number, number, number, number];
+export type VideoGenerator =
+  | { Solid: { color: VideoGeneratorColor } }
+  | { LinearGradient: { color_a: VideoGeneratorColor; color_b: VideoGeneratorColor; angle_degrees: number } }
+  | { Noise: { seed: number; scale: number; speed: number; color_a: VideoGeneratorColor; color_b: VideoGeneratorColor } };
+export type VideoSourceKind = { Generator: VideoGenerator } | "File" | "Camera" | "ScreenCapture" | "Ndi" | "Spout" | "Syphon" | "StillImage";
 
 export interface VideoSourceSummary {
   kind: VideoSourceKind;

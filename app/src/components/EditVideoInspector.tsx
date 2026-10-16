@@ -1,3 +1,4 @@
+import { videoSourceKindLabel } from "../videoHelpers";
 import { createMemo, createSignal, For, Show, type ComponentProps } from "solid-js";
 import type { MediaAssetAvailability, MediaAssetSummary } from "../types";
 import { VideoIsfEffectPanel } from "./VideoIsfEffectPanel";
@@ -31,7 +32,7 @@ export function EditVideoInspector(props: EditVideoInspectorProps) {
           {(asset) => <>
             <strong data-no-localize>{asset().label}</strong>
             <dl>
-              <div><dt>Source</dt><dd data-no-localize>{asset().source.kind}</dd></div>
+              <div><dt>Source</dt><dd data-no-localize>{videoSourceKindLabel(asset().source.kind)}</dd></div>
               <div><dt>Availability</dt><dd data-no-localize>{props.availabilityById[asset().id]?.kind ?? "Not checked"}</dd></div>
             </dl>
           </>}

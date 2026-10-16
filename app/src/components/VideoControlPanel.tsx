@@ -1,3 +1,4 @@
+import { videoSourceKindLabel } from "../videoHelpers";
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, type ComponentProps } from "solid-js";
 import type {
   MediaAssetActiveOperation,
@@ -121,10 +122,10 @@ const mediaAvailabilityDetail = (availability: MediaAssetAvailability | undefine
 };
 
 const mediaSourceLabel = (asset: MediaAssetSummary) =>
-  asset.source.path ?? asset.source.name ?? asset.source.kind;
+  asset.source.path ?? asset.source.name ?? videoSourceKindLabel(asset.source.kind);
 
 const mediaPreviewIdentity = (asset: MediaAssetSummary) =>
-  `${asset.id}\u0000${asset.source.kind}\u0000${asset.source.path ?? ""}\u0000${asset.source.name ?? ""}\u0000${asset.content_hash?.algorithm ?? ""}\u0000${asset.content_hash?.hex ?? ""}\u0000${asset.byte_size ?? ""}`;
+  `${asset.id}\u0000${videoSourceKindLabel(asset.source.kind)}\u0000${asset.source.path ?? ""}\u0000${asset.source.name ?? ""}\u0000${asset.content_hash?.algorithm ?? ""}\u0000${asset.content_hash?.hex ?? ""}\u0000${asset.byte_size ?? ""}`;
 
 export function VideoControlPanel(props: VideoControlPanelProps) {
   // T6: Audio/AutoVJ/Reactive settings live behind collapsed drawers so the clip
@@ -427,7 +428,7 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
                         </div>
                         <div class="videoMediaLibraryCardHeading">
                           <span id={`media-library-source-${asset.id}`} class="srOnly" data-no-localize>{mediaSourceLabel(asset)}</span>
-                          <small>{referenceCount()} layer and Clip Slot reference(s) · {asset.source.kind}</small>
+                          <small>{referenceCount()} layer and Clip Slot reference(s) · {videoSourceKindLabel(asset.source.kind)}</small>
                         </div>
                         <div class="videoMediaLibraryCardActions">
                           <span

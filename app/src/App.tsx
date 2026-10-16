@@ -1203,6 +1203,8 @@ const projectMutationCommands = new Set([
   "set_timeline_video_automation",
   "set_timeline_automation_enabled",
   "remove_timeline_automation",
+  "add_video_generator_layer",
+  "set_video_layer_generator",
   "add_video_input_layer",
   "duplicate_video_layer",
   "remove_video_layer",
@@ -20802,6 +20804,8 @@ export default function App() {
     addVideoCuePoint,
     removeVideoCuePoint,
     jumpVideoCuePoint,
+    addVideoGeneratorLayer,
+    setVideoLayerGenerator,
     setVideoLayerBlendMode,
     setVideoMasterOpacity,
     setVideoBlackout,
@@ -26568,6 +26572,8 @@ export default function App() {
     onMoveLayer: moveVideoLayer,
     onDuplicateLayer: duplicateVideoLayer,
     onRefreshMetadata: refreshVideoLayerMetadata,
+    onAddGenerator: addVideoGeneratorLayer,
+    onSetGenerator: setVideoLayerGenerator,
     onSetBlendMode: setVideoLayerBlendMode,
     onSetLayerState: setVideoLayerState,
     onSetLayerTransform: setVideoLayerTransform,
@@ -28444,7 +28450,7 @@ export default function App() {
                       <img src={mediaAssetThumbnails()[asset().id]} alt="" />
                     </Show>
                     <strong data-no-localize>{asset().label}</strong>
-                    <span data-no-localize>{asset().source.path ?? asset().source.name ?? asset().source.kind}</span>
+                    <span data-no-localize>{asset().source.path ?? asset().source.name ?? videoSourceKindLabel(asset().source.kind)}</span>
                   </div>}
                 </Show>
               </section>

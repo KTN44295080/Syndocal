@@ -25,6 +25,22 @@ export const djLinkMachineBlockReasonText = (reason: string): string => ({
 }[reason] ?? "DJ Link is blocked until its machine authority can be verified.");
 
 const japaneseText: Record<string, string> = {
+  "Add generator": "ジェネレーターを追加",
+  "Solid colour": "単色",
+  "Linear gradient": "線形グラデーション",
+  "Animated noise": "アニメーションノイズ",
+  "Generator parameters": "ジェネレーター設定",
+  "Generator colour": "ジェネレーターの色",
+  "Generator alpha": "ジェネレーターの不透明度",
+  "Generator colour A": "ジェネレーターの色 A",
+  "Generator colour B": "ジェネレーターの色 B",
+  "Generator alpha A": "ジェネレーターの不透明度 A",
+  "Generator alpha B": "ジェネレーターの不透明度 B",
+  "Gradient angle": "グラデーション角度",
+  "Noise seed": "ノイズのシード",
+  "Noise scale": "ノイズのスケール",
+  "Noise speed": "ノイズの速度",
+
   "Select a scene to edit, or switch to Live.": "編集するシーンを選択するか、Liveに切り替えてください。",
   "Clear Selection": "選択を解除",
   "Ctrl / Cmd: toggle · Shift: range · Drag: move": "Ctrl／Cmd: 個別選択 · Shift: 範囲選択 · ドラッグ: 移動",
@@ -1120,7 +1136,7 @@ const japaneseText: Record<string, string> = {
   "Preview position": "プレビュー位置",
   "Preview speed": "プレビューSpeed",
   "Decrease preview speed": "プレビューSpeedを下げる",
-  "Independent Preview supports local video and still image layers": "独立Previewはローカル動画と静止画レイヤーに対応します",
+  "Independent Preview supports local video, still image and generator layers": "独立Previewはローカル動画・静止画・ジェネレーターのレイヤーに対応します",
   "Increase preview speed": "プレビューSpeedを上げる",
   "TO PROGRAM": "プログラムへ",
   "Transfer staged preview to Program": "待機中のプレビューをプログラムへ送る",

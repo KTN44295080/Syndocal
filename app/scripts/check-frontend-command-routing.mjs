@@ -574,7 +574,7 @@ assert.deepEqual(
 // The network route, the five USB-DMX cable routes, the takeover recording
 // configuration (DEC-RECORD-OWN-001) and the three MTC output routes (local
 // runtime mutations and a read-only status) and the four LTC input routes bring the manifest to 500
-// routes, with the exact 135/31 mutation
+// routes; generator creation/parameter edits add two renderer-ticketed routes (502 total), with the exact 137/31 mutation
 // classifications checked against both App and control_plane.rs below.
 assert(manifest.includes("set_network_dmx_routes_v1"), "network universes must use the canonical output-control route");
 assert(manifest.includes("configure_takeover_recording_v1"), "the takeover recording folder route must stay inventoried");
@@ -589,8 +589,8 @@ for (const command of [
 ]) {
   assert(manifest.includes(command), `${command} must stay inventoried`);
 }
-assert.equal(manifest.length, 500, "frontend Tauri manifest count drifted");
-assert.equal(backendRendererMutations.length, 135, "backend renderer-ticketed classification count drifted");
+assert.equal(manifest.length, 502, "frontend Tauri manifest count drifted");
+assert.equal(backendRendererMutations.length, 137, "backend renderer-ticketed classification count drifted");
 assert.equal(backendServerMutations.length, 31, "backend authoritative classification count drifted");
 assert.deepEqual(
   [...rendererMutations].sort(),

@@ -6,6 +6,8 @@ use std::{
 use serde::{de, Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
+mod video_generator;
+pub use video_generator::VideoGenerator;
 pub mod network_dmx_routes;
 pub mod control_plane;
 pub mod control_plane_command;
@@ -556,6 +558,7 @@ pub enum VideoSourceKind {
     Spout,
     Syphon,
     StillImage,
+    Generator(VideoGenerator),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3577,6 +3580,11 @@ fn media_asset_source_is_local(source: &VideoSourceSummary) -> bool {
 }
 
 fn validate_media_asset_source(source: &VideoSourceSummary, owner: &str) -> Result<(), String> {
+    if let VideoSourceKind::Generator(generator) = &source.kind {
+        return generator
+            .validate_source(source)
+            .map_err(|error| format!("{owner}: {error}"));
+    }
     if source
         .codec
         .as_deref()

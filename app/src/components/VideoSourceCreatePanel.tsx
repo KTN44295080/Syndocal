@@ -50,7 +50,7 @@ export function VideoSourceCreatePanel(props: VideoSourceCreatePanelProps) {
     <>
       <label>
         Source
-        <select value={props.sourceKind} onInput={(event) => selectSourceKind(event.currentTarget.value as VideoSourceKind)}>
+        <select value={typeof props.sourceKind === "string" ? props.sourceKind : "File"} onInput={(event) => selectSourceKind(event.currentTarget.value as VideoSourceKind)}>
           <option value="File">Video file</option>
           <option value="StillImage">Still image</option>
           <option value="Camera">Camera input</option>

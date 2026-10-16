@@ -1,3 +1,4 @@
+import { videoSourceKindLabel } from "../videoHelpers";
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import type {
   VideoAudioMonitorStatus,
@@ -60,7 +61,7 @@ export interface VideoClipGridPanelProps extends LiveAudioInputRailProps {
 const CLIPS_PER_BANK = 12;
 
 const sourceLabel = (layer: VideoLayerSummary) => {
-  const source = layer.source.path ?? layer.source.name ?? layer.source.kind;
+  const source = layer.source.path ?? layer.source.name ?? videoSourceKindLabel(layer.source.kind);
   const normalized = source.replaceAll("\\", "/");
   return normalized.slice(normalized.lastIndexOf("/") + 1);
 };
@@ -294,7 +295,8 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
             {(layer, index) => {
               const live = () => layer.state.enabled && layer.state.playing && layer.state.opacity > 0;
               const previewed = () => props.previewLayerId === layer.id;
-              const previewSupported = () => layer.source.kind === "File" || layer.source.kind === "StillImage";
+              const previewSupported = () => layer.source.kind === "File" || layer.source.kind === "StillImage"
+                || typeof layer.source.kind === "object";
               const audioMonitoring = () => props.audioMonitorLayerIds.includes(layer.id);
               const audioUnavailable = () => layer.source.kind !== "File" || layer.source.metadata?.has_audio === false;
               const clipNumber = () => bank() * CLIPS_PER_BANK + index() + 1;
@@ -315,7 +317,7 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
                         draggable={false}
                       />
                     </Show>
-                    <small>{clipNumber().toString().padStart(2, "0")} / {layer.source.kind}</small>
+                    <small>{clipNumber().toString().padStart(2, "0")} / {videoSourceKindLabel(layer.source.kind)}</small>
                     <strong data-no-localize>{layer.label}</strong>
                     <span data-no-localize title={sourceLabel(layer)}>{sourceLabel(layer)}</span>
                     <em>{live() ? `LIVE ${Math.round(layer.state.opacity * 100)}%` : "READY"}</em>
@@ -329,7 +331,7 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
                       ? "Desktop required"
                       : previewSupported()
                       ? `Stage ${layer.label} in Preview without changing Program`
-                      : "Independent Preview supports local video and still image layers"}
+                      : "Independent Preview supports local video, still image and generator layers"}
                     onClick={() => void props.onStagePreview(layer.id)}
                   >
                     P
