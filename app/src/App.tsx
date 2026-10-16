@@ -21046,14 +21046,21 @@ export default function App() {
     options?: {
       resultIsCurrent?: () => boolean;
       showError?: boolean;
+      // Receives the refusal even when showError is false, so a caller that
+      // reports through its own status can still name the backend reason.
+      onError?: (reason: string) => void;
     },
   ) => {
     if (options?.resultIsCurrent && !options.resultIsCurrent()) return null;
     if (!isTauriRuntime()) {
       if (options?.showError !== false) setVjPreviewTransportError(tauriBackendUnavailableMessage);
+      options?.onError?.(tauriBackendUnavailableMessage);
       return null;
     }
-    if (vjPreviewTransportBusy()) return null;
+    if (vjPreviewTransportBusy()) {
+      options?.onError?.("Another Preview transport request is still running");
+      return null;
+    }
     setVjPreviewTransportBusy(true);
     setVjPreviewTransportError(null);
     ++vjPreviewRequestGeneration;
@@ -21071,10 +21078,10 @@ export default function App() {
     } catch (error) {
       if (
         requestGeneration === vjPreviewRequestGeneration &&
-        options?.showError !== false &&
         (!options?.resultIsCurrent || options.resultIsCurrent())
       ) {
-        setVjPreviewTransportError(String(error));
+        if (options?.showError !== false) setVjPreviewTransportError(String(error));
+        options?.onError?.(String(error));
       }
       return null;
     } finally {
@@ -21100,9 +21107,19 @@ export default function App() {
       setMessage(`Timeline Video Clip update failed: ${String(error)}`);
     }
   };
+  const vjFirstRunPreviewStatusKey = "vj-first-run-preview";
+  // The first-run Preview failure tells the operator to retry with P. Once any
+  // Preview staging succeeds, that instruction is obsolete and must not stay.
+  const clearVjFirstRunPreviewFailure = (layerId: number) => {
+    if (appStatus().key !== vjFirstRunPreviewStatusKey) return;
+    setVjFirstRunError(null);
+    const label = snapshot().video.layers.find((layer) => layer.id === layerId)?.label ?? `Layer ${layerId}`;
+    setMessage(uiLocale() === "ja" ? `${label}をPREVIEWへ送りました。` : `Preview staged: ${label}.`);
+  };
   const stageVjPreviewLayer = async (
     layerId: number,
     expectedAuthority?: ProjectAuthorityToken,
+    onFailure?: (reason: string) => void,
   ) => {
     const resultIsCurrent = expectedAuthority
       ? () => isProjectAuthorityIdentityCurrent(expectedAuthority)
@@ -21123,14 +21140,18 @@ export default function App() {
         // Automatic Bootstrap staging reports through the first-run status;
         // never let a stale B request write a transient Preview error into C.
         showError: expectedAuthority === undefined,
+        onError: onFailure,
       },
     );
     if (!summary) return false;
     if (resultIsCurrent && !resultIsCurrent()) return false;
     if (summary.layer_id !== layerId) {
-      setVjPreviewTransportError(`Preview staged layer ${summary.layer_id ?? "none"}, expected ${layerId}.`);
+      const mismatch = `Preview staged layer ${summary.layer_id ?? "none"}, expected ${layerId}.`;
+      setVjPreviewTransportError(mismatch);
+      onFailure?.(mismatch);
       return false;
     }
+    clearVjFirstRunPreviewFailure(layerId);
     return true;
   };
   const selectedVideoClipSlotLayer = createMemo(() => {
@@ -21378,9 +21399,13 @@ export default function App() {
         setVjFirstRunAwaitingSyncForLease(firstRunLease, false);
         return;
       }
+      // Assigned from the callback, so keep TypeScript from narrowing it to null.
+      let previewFailure = null as string | null;
       const previewStaged = firstLayerId === null
         ? false
-        : await stageVjPreviewLayer(firstLayerId, staged.terminalAuthority);
+        : await stageVjPreviewLayer(firstLayerId, staged.terminalAuthority, (reason) => {
+          previewFailure = reason;
+        });
       if (!terminalIsCurrent()) {
         setVjFirstRunAwaitingSyncForLease(firstRunLease, false);
         return;
@@ -21397,11 +21422,12 @@ export default function App() {
       }
       setVjFirstRunAwaitingSyncForLease(firstRunLease, false);
       if (!previewStaged) {
+        const reason = previewFailure ? ` (${previewFailure})` : "";
         const detail = uiLocale() === "ja"
-          ? "VJショーは安全に作成されましたが、最初のクリップをPREVIEWへ送れませんでした。Pボタンで再試行できます。"
-          : "The VJ show was created safely, but the first clip could not be staged. Use its P button to retry.";
+          ? `VJショーは安全に作成されましたが、最初のクリップをPREVIEWへ送れませんでした${reason}。Pボタンで再試行できます。`
+          : `The VJ show was created safely, but the first clip could not be staged${reason}. Use its P button to retry.`;
         setVjFirstRunError(detail);
-        setMessage(detail);
+        setMessage(detail, vjFirstRunPreviewStatusKey);
         return;
       }
       const failures = staged.report.failed + staged.report.skipped;
