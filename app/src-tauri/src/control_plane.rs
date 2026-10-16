@@ -175,8 +175,6 @@ fn classify_registered_tauri_route(command: &str) -> Option<TauriRouteAdmissionC
             | "set_video_blackout"
             | "set_video_output_blackout"
             | "take_over_standby"
-            | "set_output_ownership_role"
-            | "arm_output_ownership_role"
             | "load_effect_preset"
             | "load_effect_preset_for_target"
             | "load_sample_effect_preset"
@@ -213,7 +211,12 @@ fn classify_registered_tauri_route(command: &str) -> Option<TauriRouteAdmissionC
         "clear_project_history" | "undo_project_transaction" | "redo_project_transaction"
     ) {
         Class::ProjectHistory
-    } else if matches!(command, "safety_blackout_engage_v1") {
+    } else if matches!(
+        command,
+        // The role handlers apply Standby only: they disarm output and can
+        // never arm it, which needs the authenticated OutputControl path.
+        "safety_blackout_engage_v1" | "set_output_ownership_role" | "arm_output_ownership_role"
+    ) {
         Class::SafetyMutation
     } else if matches!(
         command,
@@ -2598,9 +2601,18 @@ mod tests {
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 8);
         assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 177);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 29);
-        assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
+        assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 28);
-        assert_eq!(counts[&TauriRouteAdmissionClass::Retired], 29);
+        assert_eq!(counts[&TauriRouteAdmissionClass::Retired], 27);
+        // The machine-role selector's Standby (disarm) must stay reachable;
+        // both handlers refuse any role but Standby before a transition.
+        for command in ["set_output_ownership_role", "arm_output_ownership_role"] {
+            assert_eq!(
+                tauri_route_admission_class(command),
+                Some(TauriRouteAdmissionClass::SafetyMutation),
+                "{command}"
+            );
+        }
         assert_eq!(
             counts[&TauriRouteAdmissionClass::AgentTransportMaintenance],
             15

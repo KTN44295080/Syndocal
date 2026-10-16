@@ -55295,6 +55295,19 @@ fn get_project_checkpoint_bundle_core(
         {
             guard
         }
+        // A faulted recovery authority stays faulted until Syndocal restarts;
+        // it is not a contention a later capture can win.
+        Ok(_)
+            if state
+                .project_external_command_admission
+                .recovery_authority_faulted
+                .load(Ordering::Acquire) =>
+        {
+            return Err(
+                "Project recovery capture is unavailable: recovery authority is faulted; restart Syndocal"
+                    .to_string(),
+            )
+        }
         Ok(_) | Err(TryLockError::WouldBlock) => {
             return Err("Project recovery capture is busy; retry".to_string())
         }
@@ -78931,10 +78944,12 @@ fn arm_show_clock_output(
     state.arm_output(request)
 }
 
+// Both role commands only ever apply Standby. They run off the UI thread
+// because a Standby transition retires native video output windows and waits
+// for them to close.
 #[tauri::command]
-fn set_output_ownership_role(
+async fn set_output_ownership_role(
     app: tauri::AppHandle,
-    state: State<'_, AppState>,
     role: MachineOutputRole,
 ) -> Result<OutputOwnershipStatus, String> {
     if role != MachineOutputRole::Standby {
@@ -78943,22 +78958,31 @@ fn set_output_ownership_role(
                 .to_string(),
         );
     }
-    apply_output_ownership_role(&app, &state, role)
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        apply_output_ownership_role(&app, &state, role)
+    })
+    .await
+    .map_err(|error| format!("Output role worker failed: {error}"))?
 }
 
 #[tauri::command]
-fn arm_output_ownership_role(
+async fn arm_output_ownership_role(
     app: tauri::AppHandle,
-    state: State<'_, AppState>,
 ) -> Result<OutputOwnershipStatus, String> {
-    let preferred_role = state.engine.output_ownership_status().desired_role;
-    if preferred_role != MachineOutputRole::Standby {
-        return Err(
-            "Active output arming is fail-closed: use the authenticated local OutputControl R4 path"
-                .to_string(),
-        );
-    }
-    apply_output_ownership_role(&app, &state, preferred_role)
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let preferred_role = state.engine.output_ownership_status().desired_role;
+        if preferred_role != MachineOutputRole::Standby {
+            return Err(
+                "Active output arming is fail-closed: use the authenticated local OutputControl R4 path"
+                    .to_string(),
+            );
+        }
+        apply_output_ownership_role(&app, &state, preferred_role)
+    })
+    .await
+    .map_err(|error| format!("Output role worker failed: {error}"))?
 }
 
 #[tauri::command]

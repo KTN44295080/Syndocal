@@ -198,6 +198,9 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
   const [selectedLeaseId, setSelectedLeaseId] = createSignal<string>("");
   const [busy, setBusy] = createSignal(false);
   const [actionError, setActionError] = createSignal<string | null>(null);
+  // A refused Standby is shown next to the role selector, which keeps showing
+  // the role the backend still holds.
+  const [roleError, setRoleError] = createSignal<string | null>(null);
   const [forceConfirmed, setForceConfirmed] = createSignal(false);
   let takeoverDialog!: HTMLDialogElement;
   let disposed = false;
@@ -284,6 +287,8 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
       setStatus(syncResult.value);
       setOwnershipStatus(ownershipResult.value);
       setMachineRole(ownershipResult.value.desired_role);
+      // Standby reached by any path retires an earlier refusal message.
+      if (ownershipResult.value.desired_role === "Standby") setRoleError(null);
       setLeaseQuery(leaseResult.value);
       const authoritativeBothReady = props.backendAvailable
         && ownershipResult.value.state === "Ready"
@@ -404,21 +409,39 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
     }
   };
 
-  const changeMachineRole = async (nextRole: MachineOutputRole) => {
+  // Standby is the safer-direction disarm path and remains available without
+  // an output grant or dangerous transfer confirmation. A refusal leaves the
+  // backend role in force, so it is never shown as Standby.
+  const requestStandby = async (select?: HTMLSelectElement) => {
+    // A poll that started before this request must not land afterwards and
+    // restore the old role.
+    pollGeneration += 1;
+    try {
+      const outputStatus = await props.invokeCommand<OutputOwnershipStatus>(
+        "set_output_ownership_role",
+        { role: "Standby" },
+      );
+      setOwnershipStatus(outputStatus);
+      setMachineRole(outputStatus.effective_role);
+      setRoleError(null);
+    } catch (error) {
+      const heldRole = ownershipStatus().desired_role;
+      setMachineRole(heldRole);
+      if (select) select.value = heldRole;
+      setRoleError(`Standby was not applied; output stays ${ownershipStatus().effective_role}. ${String(error)}`);
+      void pollStatus();
+    }
+  };
+
+  const changeMachineRole = async (nextRole: MachineOutputRole, select?: HTMLSelectElement) => {
     setBusy(true);
     setActionError(null);
     try {
       if (nextRole === "Standby") {
-        // Standby is the safer-direction disarm path and remains available
-        // without an output grant or dangerous transfer confirmation.
-        const outputStatus = await props.invokeCommand<OutputOwnershipStatus>(
-          "set_output_ownership_role",
-          { role: nextRole },
-        );
-        setOwnershipStatus(outputStatus);
-        setMachineRole(outputStatus.effective_role);
+        await requestStandby(select);
         return;
       }
+      setRoleError(null);
       const role = nextRole === "Lighting" ? "lighting" : nextRole === "Video" ? "video" : "both";
       const lease = selectOutputLeaseAuthority(leaseQuery(), selectedLeaseId(), role === "lighting" ? ["lighting"] : role === "video" ? ["video"] : ["lighting", "video"]);
       await executeOutputControl(
@@ -443,11 +466,13 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
     try {
       const requestedRole = machineRole();
       if (requestedRole === "Standby") {
+        pollGeneration += 1;
         const outputStatus = await props.invokeCommand<OutputOwnershipStatus>(
           "arm_output_ownership_role",
         );
         setOwnershipStatus(outputStatus);
         setMachineRole(outputStatus.desired_role);
+        setRoleError(null);
         return;
       }
       const role: OutputControlTargetRole = requestedRole === "Lighting" ? "lighting" : requestedRole === "Video" ? "video" : "both";
@@ -643,13 +668,16 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
             aria-label="Machine output role"
             value={machineRole()}
             disabled={!props.backendAvailable || busy() || ownershipStatus().state === "Transitioning" || ownershipStatus().state === "Activating" || (status().running && status().role === "standby")}
-            onChange={(event) => void changeMachineRole(event.currentTarget.value as MachineOutputRole)}
+            onChange={(event) => void changeMachineRole(event.currentTarget.value as MachineOutputRole, event.currentTarget)}
           >
             <option value="Lighting">Lighting</option>
             <option value="Video">Video</option>
             <option value="Both">Both</option>
             <option value="Standby">Standby</option>
           </select>
+          <Show when={roleError()}>
+            <span class="fieldError textPretty" role="alert" data-io-control="machine-output-role-error">{roleError()}</span>
+          </Show>
         </label>
         <div class="standbyModeSummary" aria-live="polite">
           <small>Output ownership</small>

@@ -814,7 +814,7 @@ import {
   saveRecentProjectPaths,
   touchRecentProjectPath,
 } from "./projectRecentStorage";
-import { createProjectAutosaveCoordinator } from "./projectAutosaveCoordinator";
+import { createProjectAutosaveCoordinator, isSupersededRecoveryCapture } from "./projectAutosaveCoordinator";
 import {
   acknowledgeProjectPublicationIntent,
   createProjectPublicationControllerV1,
@@ -11619,7 +11619,24 @@ export default function App() {
   const redoProject = () => navigateProjectHistory(performRedoProject);
   const hasPendingHistoryMappings = projectHistoryMappingsDirty;
 
-  const saveProjectRecovery = async () => {
+  const projectRecoveryStatusKey = "project-recovery-checkpoint";
+  // A recovery error stays in the footer only until a later capture succeeds.
+  const clearProjectRecoveryStatus = () => {
+    if (appStatus().key === projectRecoveryStatusKey) setMessage("Recovery checkpoint saved.");
+  };
+  let supersededRecoveryRetry: number | null = null;
+  // A superseded timer capture is retried once, soon, rather than waiting a
+  // full timer period while the operator keeps editing. A superseded retry is
+  // not retried again, so live edits never drive captures faster than this.
+  const retrySupersededProjectRecovery = () => {
+    if (supersededRecoveryRetry !== null) return;
+    supersededRecoveryRetry = window.setTimeout(() => {
+      supersededRecoveryRetry = null;
+      void saveProjectRecovery(true);
+    }, 1_000);
+  };
+
+  const saveProjectRecovery = async (isRetry = false) => {
     if (!isTauriRuntime() || (!projectDirty() && !timelineEventEditorDirty())) {
       return;
     }
@@ -11715,6 +11732,7 @@ export default function App() {
         activeProjectRecoveryIntent = null;
         setProjectRecoveryCheckpoint(checkpoint);
         projectAutosaveCoordinator.recoverySucceeded();
+        clearProjectRecoveryStatus();
       }
       if (projectAutosaveCoordinator.beginDesktopBackup(signature !== lastDesktopBackupSignature)) {
         const backup = await startProjectPublication("backup", "autosave");
@@ -11723,10 +11741,24 @@ export default function App() {
         }
         lastDesktopBackupSignature = signature;
         projectAutosaveCoordinator.recoverySucceeded();
+        clearProjectRecoveryStatus();
       }
     } catch (error) {
+      if (isSupersededRecoveryCapture(error)) {
+        // The project moved on (a live edit) or another capture held the lock.
+        // Nothing failed; the next capture sees the newer revision. Only a run
+        // of superseded timer captures means the checkpoint is falling behind.
+        if (!isRetry) {
+          retrySupersededProjectRecovery();
+          if (projectAutosaveCoordinator.recoverySuperseded()) {
+            const lagging = "Recovery checkpoint needs edits to pause; checkpoint is out of date.";
+            if (projectAutosaveCoordinator.shouldReportError(lagging)) setMessage(lagging, projectRecoveryStatusKey);
+          }
+        }
+        return;
+      }
       const message = `Recovery checkpoint failed: ${String(error)}`;
-      if (projectAutosaveCoordinator.shouldReportError(message)) setMessage(message);
+      if (projectAutosaveCoordinator.shouldReportError(message)) setMessage(message, projectRecoveryStatusKey);
     } finally {
       projectAutosaveCoordinator.finishRecovery();
     }
@@ -12206,6 +12238,9 @@ export default function App() {
     }
     if (recoveryTimer !== null) {
       window.clearInterval(recoveryTimer);
+    }
+    if (supersededRecoveryRetry !== null) {
+      window.clearTimeout(supersededRecoveryRetry);
     }
   });
   onMount(() => {

@@ -387,6 +387,23 @@ assert.doesNotMatch(
 );
 assert.match(appBackend, /fn arm_output_ownership_role/);
 assert.match(panel, /arm_output_ownership_role/);
+// The panel's Standby (disarm) routes must pass Tauri admission. Retiring them
+// once left a selected Standby silently held in Both.
+{
+  const controlPlane = await read("../../app/src-tauri/src/control_plane.rs");
+  const retiredEnd = indexOfOrFail(controlPlane, "Class::Retired", "Tauri route admission");
+  const retiredBlock = controlPlane.slice(controlPlane.lastIndexOf("matches!(", retiredEnd), retiredEnd);
+  for (const route of ["set_output_ownership_role", "arm_output_ownership_role"]) {
+    assert.match(panel, new RegExp(route), `panel invokes ${route}`);
+    assert(!retiredBlock.includes(`"${route}"`), `${route} is invoked by the role panel but retired at Tauri admission`);
+  }
+}
+assert.match(panel, /requestStandby[\s\S]*?pollGeneration \+= 1;[\s\S]*?setRoleError\(`Standby was not applied/);
+assert.doesNotMatch(
+  panel.slice(panel.indexOf("const requestStandby"), panel.indexOf("const changeMachineRole")),
+  /clearOutputAuthority\(\)/,
+  "a refused Standby must keep showing the role the backend still holds",
+);
 const ownershipTransition = sliceBetween(
   appBackend,
   "fn apply_output_ownership_role_locked",

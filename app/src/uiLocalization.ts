@@ -1508,6 +1508,9 @@ const japaneseText: Record<string, string> = {
   "Template load canceled.": "テンプレート読込をキャンセルしました。",
   "No recovery checkpoint is available.": "利用できる復旧チェックポイントはありません。",
   "Recovery checkpoint discarded.": "復旧チェックポイントを破棄しました。",
+  "Recovery checkpoint saved.": "復旧チェックポイントを保存しました。",
+  "Recovery checkpoint needs edits to pause; checkpoint is out of date.":
+    "復旧チェックポイントを更新するには編集を一時停止してください。現在のチェックポイントは最新ではありません。",
   "Project backup restore canceled.": "バックアップ復元をキャンセルしました。",
   "Audio analysis canceled.": "音声解析をキャンセルしました。",
   "Cleared audio analysis.": "音声解析をクリアしました。",
