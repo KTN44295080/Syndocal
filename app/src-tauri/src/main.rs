@@ -130,9 +130,10 @@ use engine::{
     validate_value_effect_request as validate_engine_value_effect_request, EngineCommand,
     EngineHandle, EnginePersistenceMutationSubmission, FixtureFlagClearKind,
     FixturePatchPublicationFailure, MediaAssetImportCandidate, MediaAssetTransaction,
-    OutputOwnershipActivation, SnapshotPublicationFailure, StageFixtureTransform,
-    StageProjectMutation, StageProjectMutationOutcome, TrustedTimelineLoopRuntimeAction,
-    VideoClipSlotImportAndAssignCandidate, VideoClipSlotImportAssignment, VideoIsfStackMutation,
+    OutputOwnershipActivation, PlaybackLoadPolicy, SnapshotPublicationFailure,
+    StageFixtureTransform, StageProjectMutation, StageProjectMutationOutcome,
+    TrustedTimelineLoopRuntimeAction, VideoClipSlotImportAndAssignCandidate,
+    VideoClipSlotImportAssignment, VideoIsfStackMutation,
 };
 use io::midi::{
     MidiClockEvent, MidiClockInput, MidiControlEvent, MidiControlInput, MidiFeedbackOutput,
@@ -709,6 +710,10 @@ const STANDBY_SYNC_INTERVAL_MS: u64 = 2_000;
 const STANDBY_SYNC_POLL_MS: u64 = 500;
 const STANDBY_SYNC_STALE_MS: u64 = 5_000;
 const STANDBY_SYNC_RETENTION: usize = 5;
+/// Version of the Standby playback-layer sidecar (DEC-PLAYBACK-LAYER-001). The
+/// manifest names it in optional fields, so `STANDBY_SYNC_VERSION` stays 1 and
+/// an older Standby keeps syncing authored state without the live Cue state.
+const STANDBY_PLAYBACK_SIDECAR_VERSION: u32 = 1;
 const MIDI_FEEDBACK_REFRESH_INTERVAL: Duration =
     Duration::from_micros(1_000_000 / TELEMETRY_DMX_TARGET_FRAME_RATE_HZ as u64);
 const MEDIA_ASSET_HASH_CHUNK_BYTES: usize = 1024 * 1024;
@@ -23971,6 +23976,10 @@ struct PreparedProjectLoad {
     mappings: ProjectControlMappings,
     authority_disposition: ProjectAuthorityDisposition,
     recovery_request: Option<ProjectRecoveryPublicationRequest>,
+    /// What the load does with the live playback layer (DEC-PLAYBACK-LAYER-001):
+    /// Undo/Redo keeps it, a Standby applies the Primary's, anything else
+    /// opens with no Cue live.
+    playback: PlaybackLoadPolicy,
     result: ProjectLoadResult,
 }
 
@@ -24234,6 +24243,22 @@ struct StandbySyncManifest {
     project_file: String,
     project_bytes: u64,
     project_checksum: String,
+    /// The generation's playback-layer sidecar. Absent from Primaries that
+    /// predate DEC-PLAYBACK-LAYER-001; a Standby then applies no live Cue state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    playback_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    playback_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    playback_checksum: Option<String>,
+}
+
+/// Contents of a `.playback` sidecar.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct StandbyPlaybackSidecar {
+    version: u32,
+    layer: protocol::PlaybackLayerSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -24297,6 +24322,8 @@ struct StandbyCheckpoint {
     manifest: StandbySyncManifest,
     project: ProjectFile,
     mappings: ProjectControlMappings,
+    /// The Primary's live playback layer for this generation, if it sent one.
+    playback: Option<protocol::PlaybackLayerSnapshot>,
 }
 
 /// Immutable identity of the checkpoint bound to a takeover authorization fence.
@@ -25994,6 +26021,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::LoadProjectSnapshot(..)
         | EngineCommand::LoadProjectSnapshotPublished { .. }
         | EngineCommand::RequestPersistenceSnapshot { .. }
+        | EngineCommand::RequestPlaybackLayerSnapshot { .. }
         | EngineCommand::RequestSnapshotPublication { .. }
         | EngineCommand::SetTouchSurface { .. }
         | EngineCommand::SetStageMapConfig(..)
@@ -34099,7 +34127,9 @@ fn commit_authoritative_scene_create_with_publication(
             capture_scope,
             effect_targets,
         } => PreparedAuthoritativeSceneCreateKind::CaptureCurrent(prepare_captured_scene_create(
-            &before_snapshot,
+            // Capture records the live look; the history checkpoint and the
+            // candidate stay on the authored image (DEC-PLAYBACK-LAYER-001).
+            &state.engine.live_look_snapshot()?,
             label,
             fade_ms,
             authored_beats,
@@ -35140,7 +35170,9 @@ fn update_cue_from_current(
     if label.is_empty() {
         return Err("Cue label is required".to_string());
     }
-    let mut snapshot = state.engine.persistence_snapshot()?;
+    // Capture records what is on stage, the live playback layer included
+    // (DEC-PLAYBACK-LAYER-001).
+    let mut snapshot = state.engine.live_look_snapshot()?;
     use_authored_video_snapshot(&mut snapshot);
     apply_programmer_preview_to_snapshot(&mut snapshot);
     let existing_cue = snapshot
@@ -35232,7 +35264,9 @@ fn update_cue_from_current_batch(
             expected_epoch,
             &owner_id,
         )?;
-    let mut snapshot = state.engine.persistence_snapshot()?;
+    // Capture records what is on stage, the live playback layer included
+    // (DEC-PLAYBACK-LAYER-001).
+    let mut snapshot = state.engine.live_look_snapshot()?;
     use_authored_video_snapshot(&mut snapshot);
     apply_programmer_preview_to_snapshot(&mut snapshot);
     if let Some(values) = edit_values {
@@ -60478,6 +60512,9 @@ where
     };
     let mut prepared = prepared.expect("history top was prepared before it was popped");
     prepared.authority_disposition = ProjectAuthorityDisposition::HistoryNavigation;
+    // Undo/Redo replaces authored state only; the live look stays
+    // (DEC-PLAYBACK-LAYER-001). Output retirement is unchanged.
+    prepared.playback = PlaybackLoadPolicy::KeepCurrent;
     // `prepare_project_load` canonicalizes every embedded fixture profile to
     // the exact `snapshot://fixture/{id}` identity the Engine publishes. Keep
     // that canonical project as the moved history image; reusing the authored
@@ -63642,6 +63679,12 @@ fn standby_project_file_name(session_id: &str, generation: u64) -> String {
     format!("syndocal-standby-{session_id}-{generation}.sdc")
 }
 
+/// Not `.json`: the exact Take Over scanner treats every
+/// `syndocal-standby-*.json` as a manifest candidate.
+fn standby_playback_file_name(session_id: &str, generation: u64) -> String {
+    format!("syndocal-standby-{session_id}-{generation}.playback")
+}
+
 fn write_immutable_sync_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if path.exists() {
         return Err(format!(
@@ -63746,6 +63789,9 @@ fn cleanup_standby_generations(directory: &Path, session_id: &str) -> Result<(),
         .skip(STANDBY_SYNC_RETENTION)
     {
         let _ = fs::remove_file(directory.join(&manifest.project_file));
+        if let Some(playback_file) = &manifest.playback_file {
+            let _ = fs::remove_file(directory.join(playback_file));
+        }
         let _ = fs::remove_file(directory.join(standby_manifest_file_name(
             &manifest.session_id,
             manifest.generation,
@@ -63754,10 +63800,33 @@ fn cleanup_standby_generations(directory: &Path, session_id: &str) -> Result<(),
     Ok(())
 }
 
+#[cfg(test)]
 fn write_standby_checkpoint_in(
     directory: &Path,
     project: &ProjectFile,
     mappings: &ProjectControlMappings,
+    session_id: &str,
+    generation: u64,
+    written_at_unix_ms: u64,
+) -> Result<StandbySyncManifest, String> {
+    write_standby_checkpoint_with_playback_in(
+        directory,
+        project,
+        mappings,
+        None,
+        session_id,
+        generation,
+        written_at_unix_ms,
+    )
+}
+
+/// Writes one immutable generation: project, then the playback sidecar, then
+/// the manifest that commits both.
+fn write_standby_checkpoint_with_playback_in(
+    directory: &Path,
+    project: &ProjectFile,
+    mappings: &ProjectControlMappings,
+    playback: Option<&protocol::PlaybackLayerSnapshot>,
     session_id: &str,
     generation: u64,
     written_at_unix_ms: u64,
@@ -63773,6 +63842,18 @@ fn write_standby_checkpoint_in(
     .into_bytes();
     let project_file = standby_project_file_name(session_id, generation);
     write_immutable_sync_file(&directory.join(&project_file), &project_bytes)?;
+    let playback = playback
+        .map(|layer| -> Result<(String, Vec<u8>), String> {
+            let bytes = serde_json::to_vec(&StandbyPlaybackSidecar {
+                version: STANDBY_PLAYBACK_SIDECAR_VERSION,
+                layer: layer.clone(),
+            })
+            .map_err(|error| error.to_string())?;
+            let file = standby_playback_file_name(session_id, generation);
+            write_immutable_sync_file(&directory.join(&file), &bytes)?;
+            Ok((file, bytes))
+        })
+        .transpose()?;
 
     let manifest = StandbySyncManifest {
         version: STANDBY_SYNC_VERSION,
@@ -63783,6 +63864,9 @@ fn write_standby_checkpoint_in(
         project_file,
         project_bytes: project_bytes.len() as u64,
         project_checksum: standby_checksum(&project_bytes),
+        playback_bytes: playback.as_ref().map(|(_, bytes)| bytes.len() as u64),
+        playback_checksum: playback.as_ref().map(|(_, bytes)| standby_checksum(bytes)),
+        playback_file: playback.map(|(file, _)| file),
     };
     let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?;
     write_immutable_sync_file(
@@ -63814,11 +63898,82 @@ fn read_standby_checkpoint_manifest(
         .map_err(|error| format!("Invalid standby project {}: {error}", path.display()))?;
     validate_project_file(&project)
         .map_err(|error| format!("Invalid standby project {}: {error}", path.display()))?;
+    let playback = read_standby_playback_sidecar(directory, &manifest)?;
     Ok(StandbyCheckpoint {
         manifest,
         project,
         mappings,
+        playback,
     })
+}
+
+/// A sidecar the manifest names must be present, intact and of a known
+/// version, or the generation is rejected like a damaged project file.
+fn read_standby_playback_sidecar(
+    directory: &Path,
+    manifest: &StandbySyncManifest,
+) -> Result<Option<protocol::PlaybackLayerSnapshot>, String> {
+    let (file, bytes_expected, checksum) = match (
+        &manifest.playback_file,
+        manifest.playback_bytes,
+        &manifest.playback_checksum,
+    ) {
+        (None, None, None) => return Ok(None),
+        (Some(file), Some(bytes), Some(checksum)) => (file, bytes, checksum),
+        _ => return Err("Standby manifest names an incomplete playback sidecar".to_string()),
+    };
+    if *file != standby_playback_file_name(&manifest.session_id, manifest.generation) {
+        return Err(format!("Invalid standby playback sidecar reference {file}"));
+    }
+    let path = directory.join(file);
+    let bytes = fs::read(&path).map_err(|error| {
+        format!(
+            "Unable to read standby playback sidecar {}: {error}",
+            path.display()
+        )
+    })?;
+    if bytes.len() as u64 != bytes_expected || standby_checksum(&bytes) != *checksum {
+        return Err(format!(
+            "Standby playback sidecar integrity check failed: {}",
+            path.display()
+        ));
+    }
+    let sidecar: StandbyPlaybackSidecar = serde_json::from_slice(&bytes).map_err(|error| {
+        format!(
+            "Invalid standby playback sidecar {}: {error}",
+            path.display()
+        )
+    })?;
+    if sidecar.version != STANDBY_PLAYBACK_SIDECAR_VERSION {
+        return Err(format!(
+            "Unsupported standby playback sidecar version {} in {}",
+            sidecar.version,
+            path.display()
+        ));
+    }
+    Ok(Some(sidecar.layer))
+}
+
+/// The load policy for a Standby generation: the Primary's playback layer if
+/// it matches the generation, otherwise none, with a load warning. A sidecar
+/// that does not match never blocks syncing authored state or Take Over.
+fn standby_playback_policy(
+    playback: Option<&protocol::PlaybackLayerSnapshot>,
+    snapshot: &EngineSnapshot,
+    warnings: &mut Vec<String>,
+) -> PlaybackLoadPolicy {
+    let Some(layer) = playback else {
+        return PlaybackLoadPolicy::Discard;
+    };
+    match engine::validate_playback_layer(layer, snapshot) {
+        Ok(()) => PlaybackLoadPolicy::Apply(layer.clone()),
+        Err(error) => {
+            warnings.push(format!(
+                "The Primary's live Cue state was not applied: {error}"
+            ));
+            PlaybackLoadPolicy::Discard
+        }
+    }
 }
 
 #[cfg(test)]
@@ -63970,6 +64125,7 @@ fn standby_checkpoint_requires_identity_apply(
     state: &AppState,
     project: &ProjectFile,
     mappings: &ProjectControlMappings,
+    playback: Option<&protocol::PlaybackLayerSnapshot>,
 ) -> Result<bool, String> {
     let mut coordinator = lock_project_coordinator(state)?;
     let current = reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
@@ -63977,11 +64133,13 @@ fn standby_checkpoint_requires_identity_apply(
     // Generations are a heartbeat transport detail. A same-content primary
     // checkpoint must not repeatedly retire inputs/reset runtime or create
     // artificial project identity history on the Standby machine.
-    Ok(project_checkpoint_content_requires_identity_apply(
-        &current,
-        mappings,
-        &incoming_hash,
-    ))
+    if project_checkpoint_content_requires_identity_apply(&current, mappings, &incoming_hash) {
+        return Ok(true);
+    }
+    // Playback no longer moves the checkpoint hash (DEC-PLAYBACK-LAYER-001),
+    // so a Cue fired on the Primary is a change of the playback layer alone.
+    let incoming_playback = playback.cloned().unwrap_or_default();
+    Ok(state.engine.playback_layer_snapshot()? != incoming_playback)
 }
 
 /// Poll transport generations are heartbeats, not project identities. This
@@ -64206,19 +64364,24 @@ fn start_standby_sync(
                     (|| {
                         let _external_admission = lock_project_external_command_admission(&state)?;
                         let mut coordinator = lock_project_coordinator(&state)?;
-                        project_save_ticket_for_coordinator(&state, &mut coordinator)
+                        let ticket = project_save_ticket_for_coordinator(&state, &mut coordinator)?;
+                        // Read under the same boundary so the layer matches
+                        // the generation it travels with.
+                        let playback = state.engine.playback_layer_snapshot()?;
+                        Ok::<_, String>((ticket, playback))
                     })()
-                    .and_then(|ticket| {
+                    .and_then(|(ticket, playback)| {
                         while worker_directory
                             .join(standby_manifest_file_name(&session_id, generation))
                             .exists()
                         {
                             generation = generation.saturating_add(1);
                         }
-                        write_standby_checkpoint_in(
+                        write_standby_checkpoint_with_playback_in(
                             &worker_directory,
                             &ticket.checkpoint.project,
                             &ticket.checkpoint.mappings,
+                            Some(&playback),
                             &session_id,
                             generation,
                             written_at_unix_ms,
@@ -64315,6 +64478,7 @@ fn start_standby_sync(
                                 &state,
                                 &checkpoint.project,
                                 &checkpoint.mappings,
+                                checkpoint.playback.as_ref(),
                             ) {
                                 Ok(false) => {
                                     // A fresh heartbeat carrying the same
@@ -64335,6 +64499,7 @@ fn start_standby_sync(
                                                 ),
                                                 current_path: None,
                                                 scope: ProjectSnapshotReplacementScope::StandbyPollingWorker,
+                                                standby_playback: checkpoint.playback.clone(),
                                             },
                                             Some(stop.as_ref()),
                                         )
@@ -64637,6 +64802,7 @@ fn take_over_standby_core_with_optional_lease(
             path_label,
             current_path: None,
             scope: ProjectSnapshotReplacementScope::LifecycleAlreadyHeld,
+            standby_playback: checkpoint.playback,
         },
         ProjectTakeoverReplacementContext {
             scope: ProjectSnapshotReplacementScope::LifecycleAlreadyHeld,
@@ -66112,6 +66278,8 @@ struct ProjectLoadInput<'a> {
     path_label: String,
     current_path: Option<&'a Path>,
     scope: ProjectSnapshotReplacementScope,
+    /// A Standby generation's playback layer (DEC-PLAYBACK-LAYER-001).
+    standby_playback: Option<protocol::PlaybackLayerSnapshot>,
 }
 
 struct ProjectTakeoverReplacementContext<'a> {
@@ -66149,6 +66317,7 @@ fn load_project_from_file(
             path_label,
             current_path,
             scope: ProjectSnapshotReplacementScope::ExternalCaller,
+            standby_playback: None,
         },
         None,
     )
@@ -66170,6 +66339,7 @@ fn load_project_from_file_with_control_mappings_and_disposition(
             path_label,
             current_path,
             scope: ProjectSnapshotReplacementScope::ExternalCaller,
+            standby_playback: None,
         },
         disposition,
         None,
@@ -66212,6 +66382,11 @@ fn load_project_from_file_with_control_mappings_in_scope_and_expected_output_fen
         input.current_path,
     )?;
     prepared.authority_disposition = ProjectAuthorityDisposition::CleanAtPath;
+    prepared.playback = standby_playback_policy(
+        input.standby_playback.as_ref(),
+        &prepared.snapshot,
+        &mut prepared.result.warnings,
+    );
     replace_prepared_project_snapshot_with_expected_output_fence(
         state,
         ProjectTakeoverReplacementRequest {
@@ -66240,6 +66415,11 @@ fn load_project_from_file_with_control_mappings_in_scope_and_disposition(
         input.current_path,
     )?;
     prepared.authority_disposition = disposition;
+    prepared.playback = standby_playback_policy(
+        input.standby_playback.as_ref(),
+        &prepared.snapshot,
+        &mut prepared.result.warnings,
+    );
     replace_prepared_project_snapshot(state, prepared, input.scope, abort_before_publication)
 }
 
@@ -66320,6 +66500,11 @@ fn prepare_project_load(
     // state. A saved/runtime image must never resume playback on replacement.
     clear_project_timeline_runtime(&mut project.snapshot);
     clear_runtime_programmer_state(&mut project.snapshot);
+    // A file opens with no Cue live (DEC-PLAYBACK-LAYER-001). Current-schema
+    // references were validated above (FC-27), so a malformed file is still
+    // rejected; a valid one saved with a live Cue is told it was not restored.
+    let saved_live_cue_notice = saved_live_cue_notice(&project.snapshot);
+    protocol::clear_active_cue_references(&mut project.snapshot);
     reconcile_project_fixture_groups(&mut project)?;
     validate_dj_track_triggers_against_snapshot(&mappings.dj_track_triggers, &project.snapshot)?;
     validate_project_file(&project)?;
@@ -66337,6 +66522,7 @@ fn prepare_project_load(
                 .to_string(),
         );
     }
+    warnings.extend(saved_live_cue_notice);
     // Runtime fixture profiles are reconstructed from the fully embedded
     // fixture image. The Engine deliberately publishes their stable snapshot
     // identity instead of retaining a machine-local GDTF/cache path. Apply the
@@ -66366,6 +66552,7 @@ fn prepare_project_load(
         mappings: mappings.clone(),
         authority_disposition: ProjectAuthorityDisposition::CleanAtPath,
         recovery_request: None,
+        playback: PlaybackLoadPolicy::Discard,
         result: ProjectLoadResult {
             path: path_label,
             current_project_path: current_path.map(|path| path.to_string_lossy().to_string()),
@@ -67267,7 +67454,11 @@ where
     let replacement = (|| {
         platform.fence_and_retire_outputs(state)?;
         transition = Some(retirement.take().expect("retirement is consumed once").finish_retirement()?);
-        publish_project_snapshot_with_runtime_reset_admission(state, prepared.snapshot.clone())
+        publish_project_snapshot_with_runtime_reset_admission(
+            state,
+            prepared.snapshot.clone(),
+            prepared.playback.clone(),
+        )
     })();
 
     if let Err(error) = replacement {
@@ -67640,6 +67831,7 @@ fn undo_delete_fixture_group_in_project_data(
 fn publish_project_snapshot_with_runtime_reset_admission(
     state: &AppState,
     snapshot: EngineSnapshot,
+    playback: PlaybackLoadPolicy,
 ) -> Result<(), String> {
     {
         let mut program_handoff = state
@@ -67653,7 +67845,7 @@ fn publish_project_snapshot_with_runtime_reset_admission(
         program_handoff.suspended = true;
         program_handoff.pending_job = None;
     }
-    if let Err(error) = request_project_snapshot_publication(&state.engine, snapshot) {
+    if let Err(error) = request_project_snapshot_publication(&state.engine, snapshot, playback) {
         if let Err(resume_error) =
             resume_program_audio_handoff_after_failed_project_publication(state)
         {
@@ -67776,8 +67968,40 @@ fn reset_project_runtime_after_published_snapshot_infallible(state: &AppState) {
 fn request_project_snapshot_publication(
     engine: &EngineHandle,
     snapshot: EngineSnapshot,
+    playback: PlaybackLoadPolicy,
 ) -> Result<(), String> {
-    engine.load_project_snapshot_and_wait(snapshot)
+    engine.load_project_snapshot_and_wait_with_playback(snapshot, playback)
+}
+
+/// The load notice for a version-1 file saved while a Cue was live.
+fn saved_live_cue_notice(snapshot: &EngineSnapshot) -> Option<String> {
+    if !protocol::has_active_cue_references(snapshot) {
+        return None;
+    }
+    let mut cue_ids = snapshot
+        .cue_lists
+        .iter()
+        .filter_map(|cue_list| cue_list.active_cue_id)
+        .chain(snapshot.active_cue_id)
+        .chain(snapshot.active_group_cue_ids.values().copied())
+        .collect::<Vec<_>>();
+    cue_ids.sort_unstable();
+    cue_ids.dedup();
+    let labels = cue_ids
+        .iter()
+        .map(|cue_id| {
+            snapshot
+                .cues
+                .iter()
+                .find(|cue| cue.id == *cue_id)
+                .map(|cue| format!("\"{}\"", cue.label))
+                .unwrap_or_else(|| format!("Cue {cue_id}"))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "Saved live Cue {labels} was not restored; a show opens with no Cue live"
+    ))
 }
 
 fn normalize_project_save_path(mut path: PathBuf) -> Result<PathBuf, String> {
@@ -110190,6 +110414,9 @@ pub(crate) mod tests {
             project_file: standby_project_file_name("primary-a", generation),
             project_bytes: 0,
             project_checksum: String::new(),
+            playback_file: None,
+            playback_bytes: None,
+            playback_checksum: None,
         };
         let expected = StandbyCheckpointIdentity {
             session_id: "primary-a".to_string(),
@@ -114249,6 +114476,168 @@ pub(crate) mod tests {
         );
 
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn standby_generation_carries_and_verifies_the_playback_sidecar() {
+        let directory = unique_test_directory("standby-playback-sidecar");
+        fs::create_dir_all(&directory).unwrap();
+        let project = empty_project_file();
+        let mappings = ProjectControlMappings::default();
+        let layer = protocol::PlaybackLayerSnapshot {
+            releasable_cue_ids: vec![7],
+            ..protocol::PlaybackLayerSnapshot::default()
+        };
+
+        // A generation from a Primary that predates DEC-PLAYBACK-LAYER-001
+        // names no sidecar; the Standby then applies no live Cue state.
+        write_standby_checkpoint_in(&directory, &project, &mappings, "primary-a", 1, 1_001)
+            .unwrap();
+        assert_eq!(
+            read_standby_checkpoint_in(&directory)
+                .unwrap()
+                .unwrap()
+                .playback,
+            None
+        );
+
+        let manifest = write_standby_checkpoint_with_playback_in(
+            &directory,
+            &project,
+            &mappings,
+            Some(&layer),
+            "primary-a",
+            2,
+            1_002,
+        )
+        .unwrap();
+        assert_eq!(
+            manifest.playback_file.as_deref(),
+            Some("syndocal-standby-primary-a-2.playback")
+        );
+        let checkpoint = read_standby_checkpoint_in(&directory).unwrap().unwrap();
+        assert_eq!(checkpoint.manifest.generation, 2);
+        assert_eq!(checkpoint.playback, Some(layer.clone()));
+        // The sidecar is not a `.json` manifest candidate, so the exact Take
+        // Over scanner still resolves this generation.
+        strict_standby_manifest_path_for_exact_takeover(
+            &directory,
+            &standby_checkpoint_identity(&manifest),
+        )
+        .unwrap();
+
+        // A manifest from this version reads in a version-1 reader that
+        // knows nothing of the sidecar fields.
+        #[derive(serde::Deserialize)]
+        #[allow(dead_code)]
+        struct VersionOneManifest {
+            version: u32,
+            project_file: String,
+        }
+        let manifest_bytes =
+            fs::read(directory.join(standby_manifest_file_name("primary-a", 2))).unwrap();
+        let older: VersionOneManifest = serde_json::from_slice(&manifest_bytes).unwrap();
+        assert_eq!(older.version, STANDBY_SYNC_VERSION);
+
+        // A damaged sidecar rejects the generation like a damaged project.
+        let sidecar_path = directory.join(manifest.playback_file.as_ref().unwrap());
+        let mut damaged = fs::read(&sidecar_path).unwrap();
+        damaged[0] ^= 0x20;
+        fs::write(&sidecar_path, &damaged).unwrap();
+        assert!(
+            read_standby_checkpoint_manifest(&directory, manifest.clone())
+                .unwrap_err()
+                .contains("integrity")
+        );
+
+        // An unknown sidecar version is rejected even with a valid checksum.
+        let future = serde_json::to_vec(&serde_json::json!({
+            "version": STANDBY_PLAYBACK_SIDECAR_VERSION + 1,
+            "layer": layer,
+        }))
+        .unwrap();
+        fs::write(&sidecar_path, &future).unwrap();
+        let mut future_manifest = manifest.clone();
+        future_manifest.playback_bytes = Some(future.len() as u64);
+        future_manifest.playback_checksum = Some(standby_checksum(&future));
+        assert!(
+            read_standby_checkpoint_manifest(&directory, future_manifest)
+                .unwrap_err()
+                .contains("Unsupported standby playback sidecar version")
+        );
+
+        let mut incomplete = manifest;
+        incomplete.playback_checksum = None;
+        assert!(read_standby_checkpoint_manifest(&directory, incomplete)
+            .unwrap_err()
+            .contains("incomplete playback sidecar"));
+
+        // Retention prunes sidecars with their generations.
+        for generation in 3..=(STANDBY_SYNC_RETENTION as u64 + 4) {
+            write_standby_checkpoint_with_playback_in(
+                &directory,
+                &project,
+                &mappings,
+                Some(&layer),
+                "primary-a",
+                generation,
+                1_000 + generation,
+            )
+            .unwrap();
+        }
+        let sidecars = fs::read_dir(&directory)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".playback")
+            })
+            .count();
+        assert_eq!(sidecars, STANDBY_SYNC_RETENTION);
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn standby_applies_only_a_playback_layer_that_matches_its_generation() {
+        let mut snapshot = empty_project_file().snapshot;
+        snapshot.cues.push(protocol::CueSummary {
+            id: 5,
+            cue_list_id: 1,
+            label: "Live".to_string(),
+            ..protocol::CueSummary::default()
+        });
+        let matching = protocol::PlaybackLayerSnapshot {
+            releasable_cue_ids: vec![5],
+            ..protocol::PlaybackLayerSnapshot::default()
+        };
+        let mut warnings = Vec::new();
+        assert_eq!(
+            standby_playback_policy(Some(&matching), &snapshot, &mut warnings),
+            PlaybackLoadPolicy::Apply(matching)
+        );
+        assert_eq!(
+            standby_playback_policy(None, &snapshot, &mut warnings),
+            PlaybackLoadPolicy::Discard
+        );
+        assert!(warnings.is_empty());
+
+        let foreign = protocol::PlaybackLayerSnapshot {
+            releasable_cue_ids: vec![99],
+            ..protocol::PlaybackLayerSnapshot::default()
+        };
+        assert_eq!(
+            standby_playback_policy(Some(&foreign), &snapshot, &mut warnings),
+            PlaybackLoadPolicy::Discard
+        );
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("live Cue state was not applied"),
+            "{warnings:?}"
+        );
     }
 
     #[test]
@@ -120713,7 +121102,8 @@ f 1 2 3
         assert!(saved.direct_child_timeline_transports.is_empty());
         assert_eq!(saved.submasters[0].strobe_hz, 0.0);
         assert_eq!(saved.submasters[0].strobe_fixture_count, 0);
-        assert_eq!(saved.active_cue_id, Some(7));
+        // DEC-PLAYBACK-LAYER-001: the live Cue is never saved.
+        assert_eq!(saved.active_cue_id, None);
         assert_eq!(saved.active_fade, None);
         assert!(!saved.timeline.playing);
         assert_eq!(saved.timeline.position_ms, 0);

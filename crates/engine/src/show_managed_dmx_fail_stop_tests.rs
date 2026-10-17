@@ -1216,6 +1216,7 @@ fn managed_fail_stop_safety_queue_reaches_artnet_before_a_concurrently_enqueued_
     // engine run loop drains exactly these two queues in safety-first order.
     handle
         .send(EngineCommand::RequestPersistenceSnapshot {
+            projection: crate::PersistenceProjection::Authored,
             response: marker_sender,
         })
         .expect("normal marker must enqueue");

@@ -23,7 +23,7 @@ fn show_spout_restore_runtime(outputs: Vec<VideoOutputSummary>) -> EngineRuntime
     seed_show_spout_v2_compositions(&mut runtime);
     runtime.video_outputs = outputs
         .into_iter()
-        .map(|summary| RuntimeVideoOutput { summary })
+        .map(RuntimeVideoOutput::authored)
         .collect();
     let started_at = Instant::now();
     runtime.video_output_fades = vec![

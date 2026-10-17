@@ -1004,6 +1004,9 @@ mod tests {
     mod bpm_history_tests {
         include!("bpm_history_tests.rs");
     }
+    mod playback_layer_authority_tests {
+        include!("playback_layer_authority_tests.rs");
+    }
     use std::{
         sync::{
             atomic::{AtomicU64, Ordering},
@@ -1265,6 +1268,7 @@ mod tests {
         crate::publish_project_snapshot_with_runtime_reset_admission(
             state,
             prepared.snapshot.clone(),
+            prepared.playback.clone(),
         )?;
         crate::reset_project_runtime_after_published_snapshot_infallible(state);
         crate::commit_history_navigation_coordinator_after_ack(

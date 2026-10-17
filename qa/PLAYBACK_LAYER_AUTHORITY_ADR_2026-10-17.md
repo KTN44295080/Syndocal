@@ -2,7 +2,7 @@
 
 - Decision: `DEC-PLAYBACK-LAYER-001`, **Accepted 2026-10-17** by the product owner, who chose the
   recommended answer to all four questions in section 5. Recorded in `qa/SYNDOCAL_Q1_Q4_LEDGER.json`.
-  The proposal commit changed no runtime code. The implementation follows section 6.
+  The proposal commit changed no runtime code. Section 8 records the implementation as built.
 - Problem: Cue playback rewrites the persisted project image. Each Cue trigger and each Timeline
   Scene Block therefore advances the project revision, clears Undo/Redo and retires exact
   authority tokens.
@@ -318,3 +318,184 @@ tokens by design. A legacy Timeline video clip on a layer without a default slot
   (3 passed) and then removed. `crates/engine/src/lib.rs` is unchanged in this commit.
 - Ledger: `node app/scripts/check-q1-q4-ledger.mjs` and
   `node app/scripts/check-completion-ledger.mjs`; `git diff --check`.
+
+## 8. Implementation as built (2026-10-17)
+
+Branch `dev/charming-johnson-drv08x`, base `88c5861`. Linux cloud session: the Windows native gate
+was **not run** (section 8.5).
+
+### 8.1 Engine (`crates/engine`, `crates/protocol`)
+
+- **Fixture levels.** `values` is now `FixtureValueLayers` (`playback_layer.rs`).
+  - Reads see the live map through `Deref`, so render, snapshot and Cue code are unchanged.
+  - The type has no mutable access, so the compiler listed every writer, 23 in all. Each now
+    calls `set_authored` or `set_playback`.
+  - Authored writers:
+    - `SetAttribute`, `SetFixtureAttributeBatch`, `SetGroupAttribute`;
+    - `ApplyAttributeValues`, `ApplyPalette{programmer:false}`;
+    - a plain programmer commit;
+    - patch default seeding, fixture removal, load.
+  - Playback writers:
+    - Cue snap and fade tick, move-in-black, both release plans;
+    - Scene Block fade-out and End;
+    - Timeline, child and Follow automation;
+    - a programmer commit into a live scene. Its values release with that scene.
+  - The first playback write to a key keeps the authored level under it.
+  - An authored write takes the key back. The live result is last-writer-wins, as before.
+  - The fade-tick write no longer clones the key String on every tick.
+- **Flags.**
+  - Effect enables: an id-keyed underlay map.
+  - Node-graph enables: an underlay on `RuntimeNodeGraph`.
+  - Video-output `enabled/opacity/blackout`: a per-field underlay on `RuntimeVideoOutput`.
+  - Whole-vector rollbacks therefore restore underlays with their entries. The
+    `SetEffectEnabledPublished` rollback restores its effect's entry.
+  - Playback writers: Cue effect, node-graph and output targets, and the Cue fade's output part.
+  - Authored writers: the explicit enable/opacity/blackout commands, the authored opacity fade
+    and Show Spout pair replacement, plus any `update_video_output` that changes a field.
+  - A node-graph upsert or output config that resends the live flag unchanged keeps the Cue's
+    override.
+- **Images.**
+  - `build_persistence_snapshot` is the authored projection: authored levels and flags, no
+    active Cue references, no running fade.
+  - `build_live_look_persistence_snapshot` is the former image. Capture reads it, so "from
+    current" still records what is on stage.
+  - `RequestPersistenceSnapshot` carries the chosen `PersistenceProjection`.
+- **Playback layer.** `protocol::PlaybackLayerSnapshot` holds:
+  - active, Bank and group Cue ids;
+  - releasable Cues, so a Coexist Cue no Bank names still releases;
+  - live modifiers;
+  - owned levels with their Bank (executor and playback-master scaling);
+  - effect and node-graph flags;
+  - per-field output overrides.
+  - `RequestPlaybackLayerSnapshot` is a new internal read, inventoried as Engine source 285.
+- **Load policy.** `PlaybackLoadPolicy` has three values:
+  - `Discard`: Open, recent, template, backup, recovery, New and Standby entry.
+  - `KeepCurrent`: Undo/Redo. A live Cue the target image removes is released as Remove Cue
+    releases it. Overrides for removed items are dropped.
+  - `Apply(layer)`: Standby. It is strict: a reference the image cannot satisfy rejects the
+    load unchanged.
+  - Saved active references are still validated (FC-27) and then never installed.
+
+### 8.2 App (`app/src-tauri`)
+
+- **Open.** `prepare_project_load` validates current-schema references as before, then removes
+  the active references.
+  - A version-1 file saved with a live Cue opens with a load warning: `Saved live Cue "<label>"
+    was not restored; a show opens with no Cue live`.
+  - `project_snapshot_for_save` also drops the references.
+- **Undo/Redo.** `PreparedProjectLoad.playback` reaches the single publication seam.
+  `navigate_project_history_with_coordinator` sets `KeepCurrent`. Output retirement, the media
+  and Timeline stop, and the end of a recording take are unchanged.
+- **Capture.** Create Scene from Current, Update from Current and its batch variant read
+  `live_look_snapshot()`. Their history checkpoint and candidate stay on the authored image.
+- **Standby.**
+  - Every generation from this version writes a `syndocal-standby-{session}-{generation}.playback`
+    sidecar (`version: 1`) before the manifest that commits it.
+  - The manifest names the sidecar in optional `playback_file`, `playback_bytes` and
+    `playback_checksum` fields, so `STANDBY_SYNC_VERSION` stays 1.
+  - The sidecar is not `.json`, so the exact Take Over scanner ignores it. Retention prunes it
+    with its generation.
+  - The worker re-applies when the authored hash or the playback layer changes. Today it
+    already reloaded on every Cue trigger, because triggers moved the hash.
+  - Warm apply and Take Over use `Apply`. A sidecar that does not match its generation falls
+    back to `Discard` with a warning, so it never blocks authored sync or Take Over.
+  - A damaged, incomplete or unknown-version sidecar rejects the generation, like a damaged
+    project file.
+- **Not changed, by design.**
+  - The authored control-plane `set_effect_enabled` decides its no-op on authored state: an
+    authored command edits authored state.
+  - The frontend legacy `projectComparableSnapshot` reads the live snapshot and is used only
+    before an authority baseline exists.
+
+### 8.3 Compatibility (old behaviour, new behaviour, reason)
+
+| Boundary | Old | New | Reason |
+| --- | --- | --- | --- |
+| Saved image | Live look, active Cue ids, mid-fade levels, Cue-written flags | Authored state only | Playback is not project data (decision Q1) |
+| Opening a v1 file with active ids | Lighting levels and Cue marks restored | Levels open as authored state, no Cue live, load warning | One-way, observable migration; nothing the file holds is lost |
+| Malformed active ids (current schema) | Rejected (FC-27) | Still rejected before removal | No silent clear |
+| `PROJECT_FILE_VERSION` | 1 | 1 | Same shape; older builds open new files as "no Cue live" |
+| Future project version | Rejected | Rejected (unchanged) | Existing strict equality |
+| Standby manifest | v1 | v1 plus optional sidecar fields | Older readers ignore them and sync authored state |
+| Standby sidecar | none | v1; unknown version, damage or missing fields reject the generation | Fail closed |
+| Undo/Redo | Cleared by any playback; when reachable, reinstalled the historic look | Survives playback; keeps the live look | Decision Q2 |
+
+### 8.4 Evidence (Linux, debug)
+
+- **New engine tests** (`playback_layer_tests.rs`, 9):
+  - Cue, Timeline, release, toggle, group and automation playback never move the authored image.
+  - The live look is still driven.
+  - Authored edits over live playback reach the image.
+  - Opening a live-Cue file starts with no Cue live.
+  - Undo/Redo keeps the layer and continues exactly like a show that never undid anything.
+  - An Undo that removes a live Cue matches Remove Cue.
+  - Standby apply installs the layer, and rejects a mismatched one unchanged.
+  - A live-scene programmer commit stays playback; a plain commit is authored.
+  - **Mutation check:** with the fade-tick writer switched to `set_authored`, the invariant
+    test fails (`.fixtures[0].attribute_values[1].value: 25004 -> 0`).
+- **New app tests:**
+  - `cue_trigger_keeps_the_exact_token_and_undo`, on the real headless harness and production
+    reconcile. After a Cue the VJ Preview exact token still matches, the revision and hash are
+    unchanged and Undo has one entry. Exact-token Undo then reverts the edit, keeps the Cue
+    live at its level, and the reconciled hash matches.
+  - `opening_a_file_saved_with_a_live_cue_starts_with_no_cue_live_and_says_so`, including
+    FC-27 rejection.
+  - `project_file_saved_with_a_live_cue_reopens_as_its_authored_image`: old writer bytes
+    through production ingress, publication and re-save. The re-saved image equals the
+    prepared image.
+  - `standby_generation_carries_and_verifies_the_playback_sidecar`.
+  - `standby_applies_only_a_playback_layer_that_matches_its_generation`.
+- **Changed assertions, because the contract changed:**
+  - `project_snapshot_for_save_drops_volatile_runtime_state`: `active_cue_id` is now `None`.
+  - Engine `current_schema_load_rejects_invalid_bank_global_and_group_active_references`: the
+    valid saved reference is no longer installed, so the test fires it live to keep its
+    atomicity check.
+  - `project_load_does_not_carry_direct_child_transport_runtime`.
+  - Inventory pins: AI0 checker and `control_plane.rs` tests, Engine 284 to 285 and the derived
+    totals.
+- **Suites, single-threaded as CI runs them:** see 8.6.
+- `pnpm --dir app run check:release:static`: exit 0.
+  - It includes `check:q1-q4-ledger`, `check:ai0-source-coverage` (Engine 285),
+    `check:project-transaction`, `check:project-storage` and `check:output-ownership`.
+- Warnings: see 8.6.
+
+### 8.5 Boundaries and next action
+
+- **Not observed natively.** Next action, the Windows native gate:
+  1. Follow `qa/WINDOWS_NATIVE_BUILD.md`, then run `pnpm --dir app tauri build --no-bundle`, and
+     confirm one responsive window.
+  2. Make an authored edit, fire a Cue, and play a Timeline with Scene Blocks.
+  3. Stage VJ Preview and check the exact token is accepted.
+  4. Undo the edit and check the look is kept (output goes to Standby as before).
+  5. Save, reopen, and check no Cue is live.
+  6. Run a two-PC Standby drill: Cue on A, then Take Over on B shows A's Cue state behind
+     Re-arm.
+- **Unchanged.** Undo/Redo still retires output and stops media and the Timeline (decision
+  Q4). Chaser and effect activation phases and video layer playback restart on Undo, as on
+  any load.
+- **Hidden authored base.** Release still goes to fixture defaults live, so after a release the
+  stage can differ from the authored base until reopen or Undo shows it. Release-to-base would
+  be a separate product decision.
+- **Remaining drift outside this decision.** Follow settlement and DJ Link start still install
+  the active Timeline and retire tokens.
+- **PR KTN44295080/Syndocal#3.** Both change `crates/engine/src/lib.rs`, including
+  `build_persistence_snapshot` and the `mutates_persistence_snapshot` doc, so whichever merges
+  second resolves those. Its `cue_trigger_rewrites_the_saved_look_and_fails_closed` test then
+  flips to this contract; `cue_trigger_keeps_the_exact_token_and_undo` here is the
+  replacement.
+
+### 8.6 Suite runs and warnings (Linux debug, single-threaded as CI runs them)
+
+- `cargo test -p engine --lib -- --test-threads=1`: 1143 passed, 1 failed, 14 ignored.
+  - The failure was `control_plane::tests::exact_engine_command_inventory_is_generated_once_and_conservative`,
+    whose pin of 284 Engine commands predates `RequestPlaybackLayerSnapshot`. Raised to 285; it
+    passes on rerun with the inventory and playback tests (11 passed).
+  - An earlier full run made while a Tauri build competed for the 4 cores failed two
+    time-budget tests. Both passed 3/3 alone and in this idle run.
+- `cargo test -p syndocal --bin syndocal -- --test-threads=1`: 1735 passed, 0 failed, 13 ignored.
+- Warnings for the configurations run (engine lib and tests, syndocal bin and tests): baseline 1,
+  current 1, delta 0. The one warning is the existing unused `safety_write_gate` in
+  `crates/io/src/serial_dmx.rs`.
+- `rustfmt` (copies, counted per file against `88c5861`): `crates/engine/src/lib.rs` 66 hunks
+  before and after; `app/src-tauri/src/main.rs` 229 before and after; touched child files
+  unchanged. The new files format clean. `git diff --check` clean.

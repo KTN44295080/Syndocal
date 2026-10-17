@@ -112,7 +112,12 @@ mod project_backup_restoration_contract_tests {
                 .engine
                 .set_output_ownership_role(MachineOutputRole::Standby)
                 .unwrap();
-            request_project_snapshot_publication(&harness.state.engine, prepared.snapshot).unwrap();
+            request_project_snapshot_publication(
+                &harness.state.engine,
+                prepared.snapshot,
+                PlaybackLoadPolicy::Discard,
+            )
+            .unwrap();
             let actual = serde_json::to_value(project_snapshot_for_save(
                 harness.state.engine.persistence_snapshot().unwrap(),
             ))

@@ -20,6 +20,13 @@ pub use fixture_repatch::FixturePatchChange;
 pub use managed_network_dmx_retirement::ManagedDmxRetirementScope;
 pub mod media_derived;
 mod move_path;
+mod playback_layer;
+use playback_layer::{
+    reconcile_playback_layer, write_video_output_by_playback, FixtureValueLayers,
+    VideoOutputFieldMask, VideoOutputPlaybackFields,
+};
+pub use playback_layer::{validate_playback_layer, PlaybackLoadPolicy};
+use protocol::PlaybackLayerSnapshot;
 mod project_load_preparation;
 pub use project_load_preparation::prepare_project_snapshot_persistence;
 mod independent_usb_dmx;
@@ -4114,12 +4121,19 @@ define_engine_command! {
     LoadProjectSnapshot(EngineSnapshot),
     LoadProjectSnapshotPublished {
         snapshot: EngineSnapshot,
+        playback: PlaybackLoadPolicy,
         expires_at: Instant,
         admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
     RequestPersistenceSnapshot {
+        projection: PersistenceProjection,
         response: mpsc::SyncSender<EngineSnapshot>,
+    },
+    /// Read the live playback layer (DEC-PLAYBACK-LAYER-001) for a Standby
+    /// generation. It does not mutate authored or runtime state.
+    RequestPlaybackLayerSnapshot {
+        response: mpsc::SyncSender<PlaybackLayerSnapshot>,
     },
     /// Read barrier: acknowledge only after the current command drain has
     /// reached the shared snapshot. It does not mutate authored/runtime state.
@@ -5734,6 +5748,7 @@ macro_rules! engine_command_video_presentation_relevance {
             | EngineCommand::ApplyAttributeValues { .. } => false,
             // Persistence reads, telemetry, introspection, test probes.
             EngineCommand::RequestPersistenceSnapshot { .. }
+            | EngineCommand::RequestPlaybackLayerSnapshot { .. }
             | EngineCommand::RequestSnapshotPublication { .. }
             | EngineCommand::ResetTelemetry => {
                 false
@@ -5909,6 +5924,15 @@ macro_rules! engine_command_video_presentation_relevance {
     };
 }
 
+/// Which image a persistence read returns (DEC-PLAYBACK-LAYER-001).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistenceProjection {
+    /// Authored state only: save, backup, recovery, checkpoint hash, history.
+    Authored,
+    /// Authored state with the live playback layer: capture from current.
+    LiveLook,
+}
+
 impl EngineCommand {
     /// Whether enqueueing this command can change the canonical project image
     /// returned by [`EngineHandle::persistence_snapshot`].  External-input
@@ -5920,11 +5944,16 @@ impl EngineCommand {
     /// Keep the default conservative (`true`) so a newly added command cannot
     /// silently evade project-coordinator reconciliation. The explicit false
     /// set is limited to state that `build_persistence_snapshot` removes or
-    /// that never belongs to an EngineSnapshot.
+    /// that never belongs to an EngineSnapshot. Cue transport and Timeline
+    /// playback write only the playback layer, which the authored image
+    /// excludes (DEC-PLAYBACK-LAYER-001). Known exceptions, which checkpoint
+    /// reconciliation detects and fails closed on: the active Timeline that
+    /// Follow settlement or a DJ Link start installs, and the live clock tempo.
     pub fn mutates_persistence_snapshot(&self) -> bool {
         !matches!(
             self,
             EngineCommand::RequestPersistenceSnapshot { .. }
+                | EngineCommand::RequestPlaybackLayerSnapshot { .. }
                 | EngineCommand::RequestSnapshotPublication { .. }
                 | EngineCommand::QueueVideoClipSlotPublished { .. }
                 | EngineCommand::CancelQueuedVideoClipSlotPublished { .. }
@@ -8810,7 +8839,10 @@ impl EngineHandle {
         let (response, receiver) = mpsc::sync_channel(1);
         self.queue
             .push(QueuedEngineCommand {
-                command: EngineCommand::RequestPersistenceSnapshot { response },
+                command: EngineCommand::RequestPersistenceSnapshot {
+                    projection: PersistenceProjection::Authored,
+                    response,
+                },
                 queued_at: Instant::now(),
             })
             .map_err(|_| {
@@ -11290,8 +11322,20 @@ impl EngineHandle {
     /// only the admission window. Once the runtime admits this request, the
     /// caller waits for the definitive publish-or-fail acknowledgement.
     pub fn load_project_snapshot_and_wait(&self, snapshot: EngineSnapshot) -> Result<(), String> {
+        self.load_project_snapshot_and_wait_with_playback(snapshot, PlaybackLoadPolicy::Discard)
+    }
+
+    /// As `load_project_snapshot_and_wait`, choosing what happens to the
+    /// playback layer (DEC-PLAYBACK-LAYER-001): Undo/Redo keeps it, a Standby
+    /// applies the Primary's, everything else opens with no Cue live.
+    pub fn load_project_snapshot_and_wait_with_playback(
+        &self,
+        snapshot: EngineSnapshot,
+        playback: PlaybackLoadPolicy,
+    ) -> Result<(), String> {
         self.load_project_snapshot_and_wait_with_timeout(
             snapshot,
+            playback,
             PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT,
         )
     }
@@ -11315,6 +11359,7 @@ impl EngineHandle {
         let (ack, receiver) = mpsc::sync_channel(1);
         self.send(EngineCommand::LoadProjectSnapshotPublished {
             snapshot,
+            playback: PlaybackLoadPolicy::Discard,
             expires_at: deadline,
             admission: admission.clone(),
             ack,
@@ -11332,6 +11377,7 @@ impl EngineHandle {
     fn load_project_snapshot_and_wait_with_timeout(
         &self,
         snapshot: EngineSnapshot,
+        playback: PlaybackLoadPolicy,
         timeout: Duration,
     ) -> Result<(), String> {
         let deadline = Instant::now() + timeout;
@@ -11339,6 +11385,7 @@ impl EngineHandle {
         let (ack, receiver) = mpsc::sync_channel(1);
         self.send(EngineCommand::LoadProjectSnapshotPublished {
             snapshot,
+            playback,
             expires_at: deadline,
             admission: admission.clone(),
             ack,
@@ -11638,10 +11685,40 @@ impl EngineHandle {
 
     /// Returns an on-demand persistence view containing unmodulated authored video state.
     /// The normal 44 Hz published snapshot intentionally omits that duplicate payload.
+    /// The authored project image: what `.sdc`, backups, recovery and the
+    /// project checkpoint hash carry. Playback never changes it
+    /// (DEC-PLAYBACK-LAYER-001).
     pub fn persistence_snapshot(&self) -> Result<EngineSnapshot, String> {
+        self.persistence_snapshot_projection(PersistenceProjection::Authored)
+    }
+
+    /// The same image with the live look: playback-owned levels, enable flags
+    /// and active Cue references. Capture ("from current") records what is
+    /// on stage, so it reads this projection.
+    pub fn live_look_snapshot(&self) -> Result<EngineSnapshot, String> {
+        self.persistence_snapshot_projection(PersistenceProjection::LiveLook)
+    }
+
+    /// The live playback layer a Standby generation carries.
+    pub fn playback_layer_snapshot(&self) -> Result<PlaybackLayerSnapshot, String> {
         let (response, receiver) = mpsc::sync_channel(1);
-        self.send(EngineCommand::RequestPersistenceSnapshot { response })
+        self.send(EngineCommand::RequestPlaybackLayerSnapshot { response })
             .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Playback layer request failed: {error}"))
+    }
+
+    fn persistence_snapshot_projection(
+        &self,
+        projection: PersistenceProjection,
+    ) -> Result<EngineSnapshot, String> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::RequestPersistenceSnapshot {
+            projection,
+            response,
+        })
+        .map_err(|error| error.to_string())?;
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("Persistence snapshot request failed: {error}"))
@@ -12460,6 +12537,7 @@ impl EngineHandle {
             | EngineCommand::ClearFixtureFlags(_)
             | EngineCommand::ApplyAttributeValues { .. }
             | EngineCommand::RequestPersistenceSnapshot { .. }
+            | EngineCommand::RequestPlaybackLayerSnapshot { .. }
             | EngineCommand::RequestSnapshotPublication { .. }
             | EngineCommand::SetTouchSurface { .. }
             | EngineCommand::SetStageMapConfig(_)
@@ -13712,6 +13790,9 @@ struct RuntimeCueStepActivation {
 #[derive(Clone)]
 struct RuntimeNodeGraph {
     summary: NodeGraphSummary,
+    /// The authored enable flag while Cue playback overrides it
+    /// (DEC-PLAYBACK-LAYER-001).
+    enabled_under_playback: Option<bool>,
     created_at: Instant,
     audio_nodes: Vec<RuntimeAudioReactiveNode>,
     outputs: Vec<CompiledNodeGraphOutput>,
@@ -20357,7 +20438,7 @@ struct DjLinkTimelineStartRollbackImage {
     timeline_tempo_meter_map: Vec<TimelineTempoMeterPoint>,
     timeline_tempo_meter_map_version: u8,
     timeline_due_cues: Vec<TimelineCueOccurrence>,
-    values: HashMap<(FixtureId, String), u16>,
+    values: FixtureValueLayers,
     cue_value_origins: HashMap<(FixtureId, String), CueListId>,
     transport: Box<PendingCommandRollback>,
 }
@@ -20421,6 +20502,7 @@ enum PendingCommandRollback {
     RestoreEffectEnabled {
         effect_id: EffectId,
         enabled: bool,
+        under_playback: Option<bool>,
         last_error: Option<String>,
     },
     RestoreNodeGraphs {
@@ -20503,7 +20585,7 @@ enum PendingCommandRollback {
     },
     RestoreFixturePatchBatch {
         fixtures: Vec<RuntimeFixture>,
-        values: HashMap<(FixtureId, String), u16>,
+        values: FixtureValueLayers,
         highlighted_fixtures: HashSet<FixtureId>,
         soloed_fixtures: HashSet<FixtureId>,
         parked_fixture_values: HashMap<FixtureId, HashMap<String, u16>>,
@@ -20536,7 +20618,7 @@ enum PendingCommandRollback {
         cue_live_modifier_overrides: HashMap<CueId, CueLiveModifierSettings>,
         pending_manual_cue_direction: Option<(CueId, CueLiveDirection)>,
         cue_release_values: HashMap<CueId, HashMap<(FixtureId, String), u16>>,
-        values: HashMap<(FixtureId, String), u16>,
+        values: FixtureValueLayers,
         cue_value_origins: HashMap<(FixtureId, String), CueListId>,
         timeline_events: Vec<RuntimeTimelineEvent>,
         timeline_due_cues: Vec<TimelineCueOccurrence>,
@@ -20561,7 +20643,7 @@ enum PendingCommandRollback {
         cue_list_effect_activation_cues: HashMap<CueListId, CueId>,
         active_group_cue_ids: HashMap<String, CueId>,
         cue_release_values: HashMap<CueId, HashMap<(FixtureId, String), u16>>,
-        values: HashMap<(FixtureId, String), u16>,
+        values: FixtureValueLayers,
         cue_value_origins: HashMap<(FixtureId, String), CueListId>,
         timeline_events: Vec<RuntimeTimelineEvent>,
         active_cue_id: Option<CueId>,
@@ -20792,6 +20874,19 @@ struct RuntimeVideoComposition {
 #[derive(Clone)]
 struct RuntimeVideoOutput {
     summary: VideoOutputSummary,
+    /// Authored enable/opacity/blackout under Cue playback overrides
+    /// (DEC-PLAYBACK-LAYER-001). Whole-vector rollbacks restore it with the
+    /// summary.
+    under_playback: VideoOutputPlaybackFields,
+}
+
+impl RuntimeVideoOutput {
+    fn authored(summary: VideoOutputSummary) -> Self {
+        Self {
+            summary,
+            under_playback: VideoOutputPlaybackFields::default(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -21106,8 +21201,12 @@ struct EngineRuntime {
     highlighted_fixtures: HashSet<FixtureId>,
     soloed_fixtures: HashSet<FixtureId>,
     parked_fixture_values: HashMap<FixtureId, HashMap<String, u16>>,
-    values: HashMap<(FixtureId, String), u16>,
+    values: FixtureValueLayers,
     cue_value_origins: HashMap<(FixtureId, String), CueListId>,
+    /// Authored effect enable flags under Cue playback overrides
+    /// (DEC-PLAYBACK-LAYER-001). Fixture levels keep theirs inside `values`,
+    /// node graphs and video outputs on their runtime entries.
+    effect_enabled_under_playback: HashMap<EffectId, bool>,
     programmer_enabled: bool,
     programmer_blind: bool,
     /// While Blind, a Cue whose FX were edited keeps outputting the FX it had
@@ -21555,8 +21654,9 @@ impl EngineRuntime {
             highlighted_fixtures: HashSet::new(),
             soloed_fixtures: HashSet::new(),
             parked_fixture_values: HashMap::new(),
-            values: HashMap::new(),
+            values: FixtureValueLayers::default(),
             cue_value_origins: HashMap::new(),
+            effect_enabled_under_playback: HashMap::new(),
             programmer_enabled: false,
             programmer_blind: false,
             blind_held_cue_effect_targets: HashMap::new(),
@@ -21886,7 +21986,7 @@ impl EngineRuntime {
     ) -> Result<(), String> {
         let prepared = self.prepare_fixture_patch_batch(candidates)?;
         self.fixtures.extend(prepared.fixtures);
-        self.values.extend(prepared.default_values);
+        self.values.extend_authored(prepared.default_values);
         self.rebuild_fixture_group_effect_targets();
         Ok(())
     }
@@ -22236,9 +22336,15 @@ impl EngineRuntime {
         }
     }
 
-    fn load_project_snapshot_checked(
+    /// Opens a project image with no Cue live (DEC-PLAYBACK-LAYER-001).
+    fn load_project_snapshot_checked(&mut self, snapshot: EngineSnapshot) -> Result<(), String> {
+        self.load_project_snapshot_with_playback(snapshot, PlaybackLoadPolicy::Discard)
+    }
+
+    fn load_project_snapshot_with_playback(
         &mut self,
         mut snapshot: EngineSnapshot,
+        playback: PlaybackLoadPolicy,
     ) -> Result<(), String> {
         // FC27: raw current-schema reference integrity runs before any
         // allocator reservation, migration, or staging so a rejected project
@@ -22298,6 +22404,20 @@ impl EngineRuntime {
             self.last_error = Some(error.clone());
             return Err(error);
         }
+        // The playback layer is resolved against the candidate image before
+        // the first mutation, so a rejected layer leaves the show untouched.
+        // Saved active Cue references were validated above (FC-27) and are
+        // never installed: a file opens with no Cue live.
+        let playback_layer = match playback {
+            PlaybackLoadPolicy::Discard => None,
+            PlaybackLoadPolicy::KeepCurrent => Some(self.carried_playback_layer(&snapshot)),
+            PlaybackLoadPolicy::Apply(mut layer) => {
+                reconcile_playback_layer(&mut layer, &snapshot, true).inspect_err(|error| {
+                    self.last_error = Some(error.clone());
+                })?;
+                Some(layer)
+            }
+        };
         // All candidate-only validation has passed. Reserving the next audio
         // transport revision is the first self mutation in this load path.
         let next_audio_transport_revision = self.reserve_timeline_audio_transport_revision()?;
@@ -22357,10 +22477,11 @@ impl EngineRuntime {
         self.fixtures = loaded_fixtures;
         self.values.clear();
         self.cue_value_origins.clear();
+        self.effect_enabled_under_playback.clear();
         for fixture in &loaded_fixture_summaries {
             for value in &fixture.attribute_values {
                 self.values
-                    .insert((fixture.id, value.attribute.clone()), value.value);
+                    .set_authored((fixture.id, value.attribute.clone()), value.value);
             }
         }
         self.programmer_values = snapshot
@@ -22645,18 +22766,7 @@ impl EngineRuntime {
         // subsequent Play evaluates it. Runtime-only consumed-boundary state is intentionally
         // not persisted in the project snapshot.
         self.timeline_playhead_boundary_armed = self.timeline_playing;
-        self.active_cue_id = snapshot
-            .active_cue_id
-            .filter(|cue_id| self.cues.iter().any(|cue| cue.id == *cue_id));
-        self.active_group_cue_ids = snapshot
-            .active_group_cue_ids
-            .into_iter()
-            .filter(|(group_id, cue_id)| {
-                self.cues.iter().any(|cue| {
-                    cue.id == *cue_id && cue.group_id.as_deref() == Some(group_id.as_str())
-                })
-            })
-            .collect();
+        self.install_loaded_active_cue_references(playback_layer.as_ref());
         self.group_colors = snapshot.group_colors;
         if let Some(active_cue) = self
             .active_cue_id
@@ -22680,6 +22790,9 @@ impl EngineRuntime {
                 .filter_map(|cue_list| cue_list.active_cue_id),
         );
         active_release_cue_ids.extend(self.active_cue_id);
+        if let Some(layer) = &playback_layer {
+            active_release_cue_ids.extend(layer.releasable_cue_ids.iter().copied());
+        }
         for cue_id in active_release_cue_ids {
             let Some(cue) = self.cues.iter().find(|cue| cue.id == cue_id).cloned() else {
                 continue;
@@ -22762,6 +22875,9 @@ impl EngineRuntime {
         self.last_frames_by_universe = dmx_previews_to_frames(&snapshot.dmx_previews);
         self.last_frames_by_universe
             .insert(self.output.universe, self.last_frame);
+        if let Some(layer) = &playback_layer {
+            self.install_playback_overrides(layer);
+        }
         self.last_error = if dropped_fixture_count > 0 {
             Some(format!(
                 "Dropped {dropped_fixture_count} invalid fixture(s) while loading project snapshot"
@@ -23571,7 +23687,9 @@ impl EngineRuntime {
                         return;
                     }
                 }
-                seed_default_values(fixture_id, &profile, mode_index, &mut self.values);
+                let mut default_values = HashMap::new();
+                seed_default_values(fixture_id, &profile, mode_index, &mut default_values);
+                self.values.extend_authored(default_values);
                 self.highlighted_fixtures.remove(&fixture_id);
                 self.soloed_fixtures.remove(&fixture_id);
                 self.parked_fixture_values.remove(&fixture_id);
@@ -23813,7 +23931,7 @@ impl EngineRuntime {
                     self.active_fade = None;
                     let key = (fixture_id, attribute);
                     self.cue_value_origins.remove(&key);
-                    self.values.insert(key, value);
+                    self.values.set_authored(key, value);
                     self.last_error = None;
                 }
                 Err(error) => self.last_error = Some(error),
@@ -23826,7 +23944,7 @@ impl EngineRuntime {
                         for (fixture_id, attribute) in targets {
                             let key = (fixture_id, attribute);
                             self.cue_value_origins.remove(&key);
-                            self.values.insert(key, value);
+                            self.values.set_authored(key, value);
                         }
                         self.last_error = None;
                     }
@@ -23844,7 +23962,7 @@ impl EngineRuntime {
                     for (fixture_id, attribute) in targets {
                         let key = (fixture_id, attribute);
                         self.cue_value_origins.remove(&key);
-                        self.values.insert(key, value);
+                        self.values.set_authored(key, value);
                     }
                     self.last_error = None;
                 }
@@ -24214,7 +24332,7 @@ impl EngineRuntime {
                 for (attribute, value) in values {
                     let key = (fixture_id, attribute);
                     self.cue_value_origins.remove(&key);
-                    self.values.insert(key, value);
+                    self.values.set_authored(key, value);
                 }
                 self.last_error = None;
             }
@@ -24223,6 +24341,7 @@ impl EngineRuntime {
             }
             EngineCommand::LoadProjectSnapshotPublished {
                 snapshot,
+                playback,
                 expires_at,
                 admission,
                 ack,
@@ -24235,7 +24354,7 @@ impl EngineRuntime {
                         Err("Project snapshot load expired or was cancelled before engine admission"
                             .to_string())
                     } else {
-                        self.load_project_snapshot_checked(snapshot)
+                        self.load_project_snapshot_with_playback(snapshot, playback)
                     };
                 #[cfg(any(test, feature = "test-support"))]
                 let accepted = admitted && result.is_ok();
@@ -24256,8 +24375,17 @@ impl EngineRuntime {
                     self.test_project_snapshot_publication_barrier = publication_barrier;
                 }
             }
-            EngineCommand::RequestPersistenceSnapshot { response } => {
-                let _ = response.send(self.build_persistence_snapshot());
+            EngineCommand::RequestPlaybackLayerSnapshot { response } => {
+                let _ = response.send(self.capture_playback_layer());
+            }
+            EngineCommand::RequestPersistenceSnapshot {
+                projection,
+                response,
+            } => {
+                let _ = response.send(match projection {
+                    PersistenceProjection::Authored => self.build_persistence_snapshot(),
+                    PersistenceProjection::LiveLook => self.build_live_look_persistence_snapshot(),
+                });
             }
             EngineCommand::RequestSnapshotPublication { expires_at, ack } => {
                 let result = if Instant::now() > expires_at {
@@ -26054,6 +26182,7 @@ impl EngineRuntime {
                     .find(|effect| effect.id == effect_id)
                 {
                     effect.enabled = enabled;
+                    self.effect_enabled_under_playback.remove(&effect_id);
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Effect {effect_id} was not found"));
@@ -26075,6 +26204,7 @@ impl EngineRuntime {
                 let rollback = PendingCommandRollback::RestoreEffectEnabled {
                     effect_id,
                     enabled: previous_enabled,
+                    under_playback: self.effect_enabled_under_playback.get(&effect_id).copied(),
                     last_error: previous_last_error.clone(),
                 };
                 let result = if Instant::now() > expires_at {
@@ -26085,6 +26215,7 @@ impl EngineRuntime {
                     .find(|effect| effect.id == effect_id)
                 {
                     effect.enabled = enabled;
+                    self.effect_enabled_under_playback.remove(&effect_id);
                     Ok(())
                 } else {
                     Err(format!("Effect {effect_id} was not found"))
@@ -27251,7 +27382,7 @@ impl EngineRuntime {
                     for key in values.keys() {
                         self.cue_value_origins.remove(key);
                     }
-                    self.values.extend(values);
+                    self.values.extend_authored(values);
                 }
                 self.last_error = None;
             }
@@ -30733,7 +30864,7 @@ impl EngineRuntime {
                 self.video_outputs
                     .retain(|candidate| candidate.summary.id != output.id);
                 self.video_outputs
-                    .push(RuntimeVideoOutput { summary: output });
+                    .push(RuntimeVideoOutput::authored(output));
                 self.last_error = None;
             }
             EngineCommand::AddVideoOutputPublished {
@@ -30842,6 +30973,7 @@ impl EngineRuntime {
                     return;
                 }
                 self.update_video_output(output_id, |output| output.enabled = enabled);
+                self.take_back_video_output_fields(output_id, VideoOutputFieldMask::ENABLED);
             }
             EngineCommand::SetVideoOutputRoutingPublished {
                 output_id,
@@ -30915,6 +31047,7 @@ impl EngineRuntime {
                     self.update_video_output(output_id, |output| {
                         output.opacity = opacity.clamp(0.0, 1.0)
                     });
+                    self.take_back_video_output_fields(output_id, VideoOutputFieldMask::OPACITY);
                 } else {
                     self.last_error = Some("Invalid video output opacity".to_string());
                 }
@@ -30946,6 +31079,7 @@ impl EngineRuntime {
                 let start_opacity = output.summary.opacity;
                 self.video_output_fades
                     .retain(|fade| fade.output_id != output_id);
+                self.take_back_video_output_fields(output_id, VideoOutputFieldMask::OPACITY);
                 if duration_ms == 0 {
                     self.update_video_output(output_id, |output| {
                         output.opacity = target_opacity;
@@ -30972,6 +31106,7 @@ impl EngineRuntime {
                     return;
                 }
                 self.update_video_output(output_id, |output| output.blackout = blackout);
+                self.take_back_video_output_fields(output_id, VideoOutputFieldMask::BLACKOUT);
             }
             EngineCommand::SetVideoOutputMapping { output_id, mapping } => {
                 if let Err(error) =
@@ -31075,7 +31210,13 @@ impl EngineRuntime {
             .iter_mut()
             .find(|existing| existing.summary.id == graph.id)
         {
+            // An edit that resends the live enable flag leaves a Cue's
+            // override in place; a different flag is an authored change.
+            let enabled_under_playback = existing
+                .enabled_under_playback
+                .filter(|_| existing.summary.enabled == graph.enabled);
             *existing = runtime_node_graph_from_summary(graph, Instant::now());
+            existing.enabled_under_playback = enabled_under_playback;
         } else {
             self.node_graphs
                 .push(runtime_node_graph_from_summary(graph, Instant::now()));
@@ -31096,6 +31237,7 @@ impl EngineRuntime {
             .find(|graph| graph.summary.id == graph_id)
             .ok_or_else(|| format!("Node graph {graph_id} was not found"))?;
         graph.summary.enabled = enabled;
+        graph.enabled_under_playback = None;
         for runtime in &mut graph.audio_nodes {
             reset_audio_reactive_runtime(runtime, now);
         }
@@ -31752,6 +31894,7 @@ impl EngineRuntime {
             PendingCommandRollback::RestoreEffectEnabled {
                 effect_id,
                 enabled,
+                under_playback,
                 last_error,
             } => {
                 if let Some(effect) = self
@@ -31760,6 +31903,15 @@ impl EngineRuntime {
                     .find(|effect| effect.id == effect_id)
                 {
                     effect.enabled = enabled;
+                    match under_playback {
+                        Some(authored) => {
+                            self.effect_enabled_under_playback
+                                .insert(effect_id, authored);
+                        }
+                        None => {
+                            self.effect_enabled_under_playback.remove(&effect_id);
+                        }
+                    }
                 }
                 self.last_error = last_error;
             }
@@ -32417,11 +32569,14 @@ impl EngineRuntime {
 
         for (key, value) in staged_values {
             if let Some(cue_list_id) = cue_list_id {
+                // A live scene's edit joins that scene's playback: it releases
+                // with the scene and never becomes authored base state.
                 self.cue_value_origins.insert(key.clone(), cue_list_id);
+                self.values.set_playback(&key, value);
             } else {
                 self.cue_value_origins.remove(&key);
+                self.values.set_authored(key, value);
             }
-            self.values.insert(key, value);
         }
     }
 
@@ -32434,7 +32589,7 @@ impl EngineRuntime {
         }
 
         self.values
-            .retain(|(candidate_id, _), _| *candidate_id != fixture_id);
+            .retain(|(candidate_id, _)| *candidate_id != fixture_id);
         self.cue_value_origins
             .retain(|(candidate_id, _), _| *candidate_id != fixture_id);
         self.programmer_values
@@ -36637,7 +36792,7 @@ impl EngineRuntime {
             return;
         }
         for (key, value) in &start_values {
-            self.values.insert(key.clone(), *value);
+            self.values.set_playback(key, *value);
         }
         let duration = Duration::from_millis(event.fade_out_ms);
         let target_values = start_values
@@ -36687,7 +36842,7 @@ impl EngineRuntime {
             return;
         };
         for (key, target) in fade.target_values {
-            self.values.insert(key.clone(), target);
+            self.values.set_playback(&key, target);
             self.cue_value_origins.remove(&key);
         }
     }
@@ -37914,7 +38069,7 @@ impl EngineRuntime {
             self.cue_value_origins.remove(key);
         }
         if duration.is_zero() {
-            self.values.extend(release_plan.target_values);
+            self.values.extend_playback(&release_plan.target_values);
             return;
         }
         let lighting_owners = release_plan
@@ -37952,7 +38107,7 @@ impl EngineRuntime {
     fn apply_cue_value_release_plan_immediately(&mut self, release_plan: CueValueReleasePlan) {
         for (key, target) in release_plan.target_values {
             self.cue_value_origins.remove(&key);
-            self.values.insert(key, target);
+            self.values.set_playback(&key, target);
         }
     }
 
@@ -40699,7 +40854,7 @@ impl EngineRuntime {
             .fold(video_duration, Duration::max);
         if duration.is_zero() {
             for (key, value) in target_values {
-                self.values.insert(key, value);
+                self.values.set_playback(&key, value);
             }
             for (layer_id, state) in video_target_states {
                 self.apply_video_target_state(layer_id, state);
@@ -40874,7 +41029,7 @@ impl EngineRuntime {
                     let key = (fixture_id, attribute.clone());
                     self.cue_value_origins
                         .insert(key.clone(), next_cue.cue_list_id);
-                    self.values.insert(key, *value);
+                    self.values.set_playback(&key, *value);
                 }
             }
         }
@@ -40997,10 +41152,8 @@ impl EngineRuntime {
     }
 
     fn apply_node_graph_targets(&mut self, targets: &HashMap<NodeGraphId, bool>) {
-        for graph in &mut self.node_graphs {
-            if let Some(enabled) = targets.get(&graph.summary.id) {
-                graph.summary.enabled = *enabled;
-            }
+        for (graph_id, enabled) in targets {
+            self.set_node_graph_enabled_by_playback(*graph_id, *enabled);
         }
     }
 
@@ -41086,13 +41239,7 @@ impl EngineRuntime {
 
     fn apply_cue_effect_targets(&mut self, targets: &[CueEffectTarget]) {
         for target in targets.iter().filter(|target| target.params.is_none()) {
-            if let Some(effect) = self
-                .effects
-                .iter_mut()
-                .find(|effect| effect.id == target.effect_id)
-            {
-                effect.enabled = target.enabled;
-            }
+            self.set_effect_enabled_by_playback(target.effect_id, target.enabled);
         }
     }
 
@@ -41266,17 +41413,12 @@ impl EngineRuntime {
     fn apply_video_output_target(&mut self, target: VideoOutputTarget, include_opacity: bool) {
         self.video_output_fades
             .retain(|fade| fade.output_id != target.output_id);
-        if let Some(output) = self
-            .video_outputs
-            .iter_mut()
-            .find(|output| output.summary.id == target.output_id)
-        {
-            output.summary.enabled = target.enabled;
-            output.summary.blackout = target.blackout;
-            if include_opacity {
-                output.summary.opacity = target.opacity.clamp(0.0, 1.0);
-            }
-        }
+        self.set_video_output_fields_by_playback(
+            target.output_id,
+            Some(target.enabled),
+            include_opacity.then(|| target.opacity.clamp(0.0, 1.0)),
+            Some(target.blackout),
+        );
     }
 
     fn apply_exclusive_video_take(
@@ -41557,6 +41699,10 @@ impl EngineRuntime {
                 .iter_mut()
                 .find(|output| output.summary.id == fade.output_id)
             {
+                // An authored opacity fade: each step is an authored write.
+                output
+                    .under_playback
+                    .take_back(VideoOutputFieldMask::OPACITY);
                 output.summary.opacity = (fade.start_opacity
                     + (fade.target_opacity - fade.start_opacity) * progress)
                     .clamp(0.0, 1.0);
@@ -41666,7 +41812,7 @@ impl EngineRuntime {
                 .unwrap_or((Duration::ZERO, fade.duration));
             let progress = delayed_fade_progress(elapsed, delay, duration);
             let value = interpolate_u16(start, *target, progress);
-            self.values.insert(key.clone(), value);
+            self.values.set_playback(key, value);
         }
         let video_updates = fade
             .video_target_states
@@ -41717,12 +41863,16 @@ impl EngineRuntime {
                 .iter_mut()
                 .find(|output| output.summary.id == *output_id)
             {
-                if let Some(target) = fade.video_output_targets.get(output_id) {
-                    output.summary.enabled = target.enabled;
-                    output.summary.blackout = target.blackout;
-                }
-                output.summary.opacity =
-                    (start_opacity + (target_opacity - start_opacity) * progress).clamp(0.0, 1.0);
+                let target = fade.video_output_targets.get(output_id);
+                write_video_output_by_playback(
+                    output,
+                    target.map(|target| target.enabled),
+                    Some(
+                        (start_opacity + (target_opacity - start_opacity) * progress)
+                            .clamp(0.0, 1.0),
+                    ),
+                    target.map(|target| target.blackout),
+                );
             }
         }
         if elapsed >= fade.duration {
@@ -42836,14 +42986,11 @@ impl EngineRuntime {
                         else {
                             continue;
                         };
-                        let key = (automation.fixture_id, automation.attribute.as_str());
-                        if let Some((_, current)) =
-                            self.values.iter_mut().find(|((fixture_id, attribute), _)| {
-                                *fixture_id == key.0 && attribute == key.1
-                            })
-                        {
-                            *current = value;
-                        }
+                        self.values.set_playback_existing(
+                            automation.fixture_id,
+                            &automation.attribute,
+                            value,
+                        );
                     }
                     for automation_index in 0..self.$field[transport_index].video_automations.len()
                     {
@@ -42903,7 +43050,7 @@ impl EngineRuntime {
                 })
                 .collect::<Vec<_>>();
             for (fixture_id, attribute, value) in lighting_updates {
-                self.values.insert((fixture_id, attribute), value);
+                self.values.set_playback(&(fixture_id, attribute), value);
             }
             // The Follow child and every nested descendant are incoming-only.
             // Their video automations must not mutate `self.video_layers`:
@@ -47267,7 +47414,7 @@ impl EngineRuntime {
             };
             let key = (automation.fixture_id, automation.attribute.clone());
             self.cue_value_origins.remove(&key);
-            self.values.insert(key, value);
+            self.values.set_playback(&key, value);
         }
     }
 
@@ -48983,9 +49130,8 @@ impl EngineRuntime {
         {
             return Err(format!("Video output {} already exists", output.id));
         }
-        self.video_outputs.push(RuntimeVideoOutput {
-            summary: sanitize_video_output(output),
-        });
+        self.video_outputs
+            .push(RuntimeVideoOutput::authored(sanitize_video_output(output)));
         Ok(())
     }
 
@@ -49372,7 +49518,7 @@ impl EngineRuntime {
         self.media_assets = next_assets;
         self.video_layers = next_layers;
         self.video_layer_fades.clear();
-        self.video_outputs = vec![RuntimeVideoOutput { summary: output }];
+        self.video_outputs = vec![RuntimeVideoOutput::authored(output)];
         self.video_output_fades.clear();
         Ok(())
     }
@@ -49503,7 +49649,7 @@ impl EngineRuntime {
                 self.media_assets = candidate_video.media_assets;
                 self.video_layers = next_layers;
                 self.video_layer_fades.clear();
-                self.video_outputs = vec![RuntimeVideoOutput { summary: output }];
+                self.video_outputs = vec![RuntimeVideoOutput::authored(output)];
                 self.video_output_fades.clear();
                 return Ok(());
             }
@@ -50820,8 +50966,13 @@ impl EngineRuntime {
             .iter_mut()
             .find(|output| output.summary.id == output_id)
         {
+            let before = output.summary.clone();
             update(&mut output.summary);
             output.summary = sanitize_video_output(output.summary.clone());
+            // A changed enable/opacity/blackout is an authored write.
+            output
+                .under_playback
+                .take_back(VideoOutputFieldMask::changed(&before, &output.summary));
             self.last_error = None;
         } else {
             self.last_error = Some(format!("Video output {output_id} was not found"));
@@ -51247,7 +51398,46 @@ impl EngineRuntime {
         }
     }
 
+    /// The authored project image (DEC-PLAYBACK-LAYER-001): the live-look
+    /// image with every playback-owned value replaced by its authored value
+    /// and without active Cue references or the running fade.
     fn build_persistence_snapshot(&self) -> EngineSnapshot {
+        let mut snapshot = self.build_live_look_persistence_snapshot();
+        self.apply_authored_persistence_projection(&mut snapshot);
+        snapshot
+    }
+
+    fn apply_authored_persistence_projection(&self, snapshot: &mut EngineSnapshot) {
+        protocol::clear_active_cue_references(snapshot);
+        snapshot.active_fade = None;
+        self.apply_authored_flag_projection(snapshot);
+        let mut fixture_indexes = HashMap::new();
+        for (key, authored) in self.values.authored_under_playback() {
+            if fixture_indexes.is_empty() {
+                fixture_indexes = snapshot
+                    .fixtures
+                    .iter()
+                    .enumerate()
+                    .map(|(index, fixture)| (fixture.id, index))
+                    .collect::<HashMap<_, _>>();
+            }
+            let Some(index) = fixture_indexes.get(&key.0) else {
+                continue;
+            };
+            let Some(value) = snapshot.fixtures[*index]
+                .attribute_values
+                .iter_mut()
+                .find(|value| value.attribute == key.1)
+            else {
+                continue;
+            };
+            value.value = authored
+                .or_else(|| self.fixture_attribute_default(key))
+                .unwrap_or(0);
+        }
+    }
+
+    fn build_live_look_persistence_snapshot(&self) -> EngineSnapshot {
         let mut snapshot = self.build_snapshot(0);
         // Persist only the authored blackout bit. The emergency S0 latch is
         // runtime-only and survives project replacement until an authorized
@@ -52951,12 +53141,10 @@ impl EngineRuntime {
                         .to_string(),
                 );
             }
-            self.video_outputs.push(RuntimeVideoOutput {
-                summary: expected_background.clone(),
-            });
-            self.video_outputs.push(RuntimeVideoOutput {
-                summary: expected_foreground.clone(),
-            });
+            self.video_outputs
+                .push(RuntimeVideoOutput::authored(expected_background.clone()));
+            self.video_outputs
+                .push(RuntimeVideoOutput::authored(expected_foreground.clone()));
             self.last_error = None;
             return Ok(());
         }
@@ -52985,9 +53173,9 @@ impl EngineRuntime {
             ) {
                 for output in &mut self.video_outputs {
                     if output.summary.id == expected_background.id {
-                        output.summary = expected_background.clone();
+                        *output = RuntimeVideoOutput::authored(expected_background.clone());
                     } else if output.summary.id == expected_foreground.id {
-                        output.summary = expected_foreground.clone();
+                        *output = RuntimeVideoOutput::authored(expected_foreground.clone());
                     }
                 }
                 self.last_error = None;
@@ -53059,9 +53247,9 @@ impl EngineRuntime {
         if active_matches {
             for output in &mut self.video_outputs {
                 if output.summary.id == restored_background.id {
-                    output.summary = restored_background.clone();
+                    *output = RuntimeVideoOutput::authored(restored_background.clone());
                 } else if output.summary.id == restored_foreground.id {
-                    output.summary = restored_foreground.clone();
+                    *output = RuntimeVideoOutput::authored(restored_foreground.clone());
                 }
             }
         }
@@ -58287,6 +58475,7 @@ fn runtime_node_graph_from_summary(
         .expect("runtime node graphs must be sanitized before compilation");
     RuntimeNodeGraph {
         summary,
+        enabled_under_playback: None,
         created_at,
         audio_nodes,
         outputs,
@@ -66921,7 +67110,7 @@ fn sanitize_loaded_video_outputs(
             if !video_composition_summary_exists(compositions, summary.composition_id) {
                 summary.composition_id = 1;
             }
-            Some(RuntimeVideoOutput { summary })
+            Some(RuntimeVideoOutput::authored(summary))
         })
         .collect()
 }
@@ -69098,6 +69287,9 @@ mod tests {
 
     #[path = "../persistence_video_snapshot_tests.rs"]
     mod persistence_video_snapshot_tests;
+
+    #[path = "../playback_layer_tests.rs"]
+    mod playback_layer_tests;
 
     #[path = "../persistence_timeline_snapshot_tests.rs"]
     mod persistence_timeline_snapshot_tests;
@@ -78350,8 +78542,11 @@ mod tests {
 
         let loader_engine = engine.clone();
         let loader = thread::spawn(move || {
-            loader_engine
-                .load_project_snapshot_and_wait_with_timeout(candidate, Duration::from_secs(1))
+            loader_engine.load_project_snapshot_and_wait_with_timeout(
+                candidate,
+                PlaybackLoadPolicy::Discard,
+                Duration::from_secs(1),
+            )
         });
         let queue_deadline = Instant::now() + Duration::from_secs(1);
         let queued_command = loop {
@@ -78524,7 +78719,11 @@ mod tests {
         let (cancelled, cancelled_layer_maximum) = snapshot_with_allocator_ids(cancelled_id);
 
         let timeout_error = engine
-            .load_project_snapshot_and_wait_with_timeout(cancelled, Duration::ZERO)
+            .load_project_snapshot_and_wait_with_timeout(
+                cancelled,
+                PlaybackLoadPolicy::Discard,
+                Duration::ZERO,
+            )
             .unwrap_err();
         assert!(
             timeout_error.contains("timed out"),
@@ -78547,7 +78746,11 @@ mod tests {
         }];
         rejected.timeline.events[0].layer_id = Some(u32::try_from(rejected_id).unwrap());
         let rejection_error = engine
-            .load_project_snapshot_and_wait_with_timeout(rejected, Duration::from_secs(1))
+            .load_project_snapshot_and_wait_with_timeout(
+                rejected,
+                PlaybackLoadPolicy::Discard,
+                Duration::from_secs(1),
+            )
             .unwrap_err();
         assert!(
             rejection_error.contains("invalid layer"),
@@ -78935,7 +79138,11 @@ mod tests {
 
         let started = Instant::now();
         let error = engine
-            .load_project_snapshot_and_wait_with_timeout(candidate, Duration::ZERO)
+            .load_project_snapshot_and_wait_with_timeout(
+                candidate,
+                PlaybackLoadPolicy::Discard,
+                Duration::ZERO,
+            )
             .unwrap_err();
         assert!(started.elapsed() < Duration::from_millis(500));
         assert!(error.contains("timed out"), "unexpected error: {error}");
@@ -78982,6 +79189,7 @@ mod tests {
         let (ack, receiver) = mpsc::sync_channel(1);
         let admission = ProjectSnapshotLoadAdmission::new();
         runtime.apply_command(EngineCommand::LoadProjectSnapshotPublished {
+            playback: PlaybackLoadPolicy::Discard,
             snapshot: EngineSnapshot {
                 stage_map: StageMapConfig {
                     locked: true,
@@ -79047,6 +79255,7 @@ mod tests {
         assert!(queue
             .push(QueuedEngineCommand {
                 command: EngineCommand::LoadProjectSnapshotPublished {
+                    playback: PlaybackLoadPolicy::Discard,
                     snapshot: replacement,
                     expires_at,
                     admission,
@@ -84472,9 +84681,9 @@ mod tests {
             timeline_layer_ids: Vec::new(),
             output_ids: Vec::new(),
         }));
-        runtime.video_outputs.push(RuntimeVideoOutput {
-            summary: published_display_output(41),
-        });
+        runtime
+            .video_outputs
+            .push(RuntimeVideoOutput::authored(published_display_output(41)));
         let published = RwLock::new(runtime.build_snapshot(0));
 
         let admission = ProjectSnapshotLoadAdmission::new();
@@ -84544,9 +84753,9 @@ mod tests {
             timeline_layer_ids: Vec::new(),
             output_ids: Vec::new(),
         }));
-        runtime.video_outputs.push(RuntimeVideoOutput {
-            summary: published_display_output(41),
-        });
+        runtime
+            .video_outputs
+            .push(RuntimeVideoOutput::authored(published_display_output(41)));
         let before_runtime = runtime.build_snapshot(0);
         let published = RwLock::new(before_runtime.clone());
         let before_bpm = runtime.clock.bpm;
@@ -84610,9 +84819,9 @@ mod tests {
             timeline_layer_ids: Vec::new(),
             output_ids: Vec::new(),
         }));
-        runtime.video_outputs.push(RuntimeVideoOutput {
-            summary: published_display_output(41),
-        });
+        runtime
+            .video_outputs
+            .push(RuntimeVideoOutput::authored(published_display_output(41)));
         let published = RwLock::new(runtime.build_snapshot(0));
         let before_bpm = runtime.clock.bpm;
         let queue = ArrayQueue::new(2);
@@ -90876,8 +91085,9 @@ mod tests {
                 output_ids: vec![3],
             },
         });
-        runtime.video_outputs.push(RuntimeVideoOutput {
-            summary: VideoOutputSummary {
+        runtime
+            .video_outputs
+            .push(RuntimeVideoOutput::authored(VideoOutputSummary {
                 id: 3,
                 label: "C1 lifecycle output".to_string(),
                 kind: VideoOutputKind::Display,
@@ -90892,8 +91102,7 @@ mod tests {
                 opacity: 1.0,
                 blackout: false,
                 mapping: Default::default(),
-            },
-        });
+            }));
         let base = runtime.video_effect_chains[0].clone();
         let scoped = |id, stage_id, effect_id, scope| VideoEffectChainSummary {
             id: VideoEffectChainId(id),
@@ -118754,6 +118963,7 @@ mod tests {
         let (barrier_ack, barrier_receiver) = mpsc::sync_channel(1);
         engine
             .send(EngineCommand::LoadProjectSnapshotPublished {
+                playback: PlaybackLoadPolicy::Discard,
                 snapshot: barrier_snapshot,
                 expires_at: Instant::now() + Duration::from_secs(1),
                 admission: barrier_admission.clone(),
@@ -118810,6 +119020,7 @@ mod tests {
         let (drain_ack, drain_receiver) = mpsc::sync_channel(1);
         engine
             .send(EngineCommand::LoadProjectSnapshotPublished {
+                playback: PlaybackLoadPolicy::Discard,
                 snapshot: before.clone(),
                 expires_at: Instant::now() + Duration::from_secs(1),
                 admission: ProjectSnapshotLoadAdmission::new(),
@@ -118961,6 +119172,7 @@ mod tests {
         let barrier_admission = ProjectSnapshotLoadAdmission::new();
         engine
             .send(EngineCommand::LoadProjectSnapshotPublished {
+                playback: PlaybackLoadPolicy::Discard,
                 snapshot: engine.snapshot(),
                 expires_at: Instant::now() + Duration::from_secs(1),
                 admission: barrier_admission.clone(),
@@ -119034,6 +119246,7 @@ mod tests {
         let barrier_admission = ProjectSnapshotLoadAdmission::new();
         engine
             .send(EngineCommand::LoadProjectSnapshotPublished {
+                playback: PlaybackLoadPolicy::Discard,
                 snapshot: engine.snapshot(),
                 expires_at: Instant::now() + Duration::from_secs(1),
                 admission: barrier_admission.clone(),
@@ -121588,8 +121801,9 @@ mod tests {
         runtime.timeline_audio_clips = vec![source_clip.clone()];
         runtime.timeline_bank[0].audio_clips = vec![source_clip];
         runtime.timeline_bank[1].audio_clips = vec![target_clip];
-        runtime.video_outputs.push(RuntimeVideoOutput {
-            summary: VideoOutputSummary {
+        runtime
+            .video_outputs
+            .push(RuntimeVideoOutput::authored(VideoOutputSummary {
                 id: 80_203,
                 label: "Follow presenter".to_string(),
                 kind: VideoOutputKind::Display,
@@ -121604,10 +121818,10 @@ mod tests {
                 opacity: 1.0,
                 blackout: false,
                 mapping: Default::default(),
-            },
-        });
-        runtime.video_outputs.push(RuntimeVideoOutput {
-            summary: VideoOutputSummary {
+            }));
+        runtime
+            .video_outputs
+            .push(RuntimeVideoOutput::authored(VideoOutputSummary {
                 id: 80_204,
                 label: "Second Follow presenter".to_string(),
                 kind: VideoOutputKind::Display,
@@ -121622,8 +121836,7 @@ mod tests {
                 opacity: 1.0,
                 blackout: false,
                 mapping: Default::default(),
-            },
-        });
+            }));
         runtime
             .begin_timeline_follow(
                 protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
@@ -122446,8 +122659,9 @@ mod tests {
         ] {
             let now = Instant::now();
             let mut runtime = timeline_follow_ltl5_runtime(policy);
-            runtime.video_outputs.push(RuntimeVideoOutput {
-                summary: VideoOutputSummary {
+            runtime
+                .video_outputs
+                .push(RuntimeVideoOutput::authored(VideoOutputSummary {
                     id: 80_204,
                     label: "Pending Follow presenter".to_string(),
                     kind: VideoOutputKind::Display,
@@ -122462,8 +122676,7 @@ mod tests {
                     opacity: 1.0,
                     blackout: false,
                     mapping: Default::default(),
-                },
-            });
+                }));
             runtime
                 .begin_timeline_follow(
                     protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
@@ -127165,7 +127378,9 @@ mod tests {
         create_effect_only_cue(&mut runtime, 1, vec![owned_lfo_target(91, request)]);
         runtime.timeline_events = vec![test_scene_block(10, 1, 0, 100, 2, 1.0)];
         runtime.sort_timeline_events();
-        runtime.values.insert((1, "Dimmer".to_string()), 12_345);
+        runtime
+            .values
+            .set_authored((1, "Dimmer".to_string()), 12_345);
         let started_at = Instant::now();
         runtime.rebuild_effect_activations(started_at);
 
@@ -127619,7 +127834,9 @@ mod tests {
     #[test]
     fn activation_scoped_manual_recall_replaces_prior_cue_list_instance_and_releases() {
         let mut runtime = runtime_with_lfo_effects(&[]);
-        runtime.values.insert((1, "Dimmer".to_string()), 20_000);
+        runtime
+            .values
+            .set_authored((1, "Dimmer".to_string()), 20_000);
         create_effect_only_cue(
             &mut runtime,
             1,
@@ -130494,7 +130711,7 @@ mod tests {
         ];
         let fade_started_at = Instant::now();
         runtime.active_cue_id = Some(1);
-        runtime.values.insert((1, "Dimmer".to_string()), 255);
+        runtime.values.set_authored((1, "Dimmer".to_string()), 255);
         runtime.active_fade = Some(RuntimeFade {
             cue_id: 1,
             source: PendingCueTriggerSource::Manual,
@@ -134923,11 +135140,14 @@ mod tests {
         assert!(persisted.direct_child_timeline_transports.is_empty());
         assert!(persisted.timeline.active_child_transports.is_empty());
 
+        // The live Cue is playback, not project data (DEC-PLAYBACK-LAYER-001).
+        assert_eq!(persisted.active_cue_id, None);
+
         runtime.apply_command(EngineCommand::LoadProjectSnapshot(persisted));
         let loaded = runtime.build_snapshot(0);
         assert!(loaded.direct_child_timeline_transports.is_empty());
         assert!(loaded.timeline.active_child_transports.is_empty());
-        assert_eq!(loaded.active_cue_id, Some(1));
+        assert_eq!(loaded.active_cue_id, None);
     }
 
     #[test]
@@ -134991,7 +135211,7 @@ mod tests {
             ],
             enabled: true,
         }];
-        runtime.values.insert((1, "Dimmer".to_string()), 0);
+        runtime.values.set_authored((1, "Dimmer".to_string()), 0);
 
         runtime.apply_command(EngineCommand::SeekTimeline(11_000));
         assert!(runtime.child_transports[0].active);
@@ -135561,6 +135781,12 @@ mod tests {
         engine
             .load_project_snapshot_checked(baseline.clone())
             .unwrap();
+        // The valid saved reference was checked and not installed: a file
+        // opens with no Cue live (DEC-PLAYBACK-LAYER-001). Fire it live so
+        // the rejected loads below must also leave live playback untouched.
+        assert_eq!(engine.active_cue_id, None);
+        engine.apply_command(EngineCommand::TriggerCue(1));
+        assert_eq!(engine.active_cue_id, Some(1));
         let authoritative_lists = engine.cue_lists.clone();
 
         let mut dangling_bank_active = baseline.clone();
@@ -138362,9 +138588,13 @@ mod tests {
 
         let mut generic = EngineRuntime::new(staged_show_artnet_loopback_output());
         seed_show_spout_v2_compositions(&mut generic);
-        generic.video_outputs.push(RuntimeVideoOutput {
-            summary: show_spout_output(99, "Generic Spout", 1),
-        });
+        generic
+            .video_outputs
+            .push(RuntimeVideoOutput::authored(show_spout_output(
+                99,
+                "Generic Spout",
+                1,
+            )));
         let generic_before = generic.build_snapshot(0);
         assert!(generic
             .apply_show_spout_outputs_enable(
@@ -138385,12 +138615,8 @@ mod tests {
         let disabled_background = show_spout_disabled_variant(&background);
         let disabled_foreground = show_spout_disabled_variant(&foreground);
         runtime.video_outputs = vec![
-            RuntimeVideoOutput {
-                summary: disabled_background.clone(),
-            },
-            RuntimeVideoOutput {
-                summary: disabled_foreground.clone(),
-            },
+            RuntimeVideoOutput::authored(disabled_background.clone()),
+            RuntimeVideoOutput::authored(disabled_foreground.clone()),
         ];
         let started_at = Instant::now();
         runtime.video_output_fades = vec![
@@ -138677,9 +138903,13 @@ mod tests {
                 safety.generation,
             )
             .unwrap();
-        runtime.video_outputs.push(RuntimeVideoOutput {
-            summary: show_spout_output(99, "Persisted Generic Spout", 1),
-        });
+        runtime
+            .video_outputs
+            .push(RuntimeVideoOutput::authored(show_spout_output(
+                99,
+                "Persisted Generic Spout",
+                1,
+            )));
 
         let error = runtime
             .apply_show_spout_outputs_retire_after_authority_loss(&background, &foreground)
@@ -138707,9 +138937,13 @@ mod tests {
                 safety.generation,
             )
             .unwrap();
-        runtime.video_outputs.push(RuntimeVideoOutput {
-            summary: show_spout_output(99, "Persisted Generic Spout", 1),
-        });
+        runtime
+            .video_outputs
+            .push(RuntimeVideoOutput::authored(show_spout_output(
+                99,
+                "Persisted Generic Spout",
+                1,
+            )));
         let before = runtime.build_snapshot(0);
         let before_error = runtime.last_error.clone();
 

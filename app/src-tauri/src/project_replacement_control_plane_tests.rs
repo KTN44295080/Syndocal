@@ -29,7 +29,12 @@ mod project_replacement_control_plane_contract_tests {
         // Compare the actual prepared/hash input, without sanitizing it here.
         // Runtime-only defaults must not be hidden from this assertion.
         let expected = serde_json::to_value(prepared.snapshot.clone()).unwrap();
-        request_project_snapshot_publication(&harness.state.engine, prepared.snapshot).unwrap();
+        request_project_snapshot_publication(
+            &harness.state.engine,
+            prepared.snapshot,
+            PlaybackLoadPolicy::Discard,
+        )
+        .unwrap();
         let actual = serde_json::to_value(project_snapshot_for_save(
             harness.state.engine.persistence_snapshot().unwrap(),
         ))
@@ -89,7 +94,12 @@ mod project_replacement_control_plane_contract_tests {
         );
         let prepared = prepare(&original, None).unwrap();
         let expected = serde_json::to_value(prepared.snapshot.clone()).unwrap();
-        request_project_snapshot_publication(&harness.state.engine, prepared.snapshot).unwrap();
+        request_project_snapshot_publication(
+            &harness.state.engine,
+            prepared.snapshot,
+            PlaybackLoadPolicy::Discard,
+        )
+        .unwrap();
         let after = harness.state.engine.output_ownership_status();
         assert!(!after.lighting_allowed && !after.video_allowed);
         let actual = serde_json::to_value(project_snapshot_for_save(
