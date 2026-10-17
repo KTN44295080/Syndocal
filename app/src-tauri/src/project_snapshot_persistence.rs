@@ -93,7 +93,9 @@ pub(super) fn project_snapshot_for_save(mut snapshot: EngineSnapshot) -> EngineS
     normalize_project_timeline_layers(&mut snapshot);
     // The shared clock's phase/counter/tap/external-lock fields advance at
     // runtime even while the authored project is idle. Project load only
-    // restores the authored BPM, so persist exactly that stable surface.
+    // restores the authored BPM, so persist exactly that stable surface. The
+    // engine persistence image already reports the project tempo rather than
+    // a live MIDI Clock/Link/Follow-ramp tempo; the writer keeps the rest local.
     snapshot.clock = ClockSnapshot {
         bpm: snapshot.clock.bpm,
         ..ClockSnapshot::default()

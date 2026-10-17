@@ -520,11 +520,16 @@ was **not run** (section 8.5).
   and every load clears the map.
 - **Remaining drift outside this decision.** Follow settlement and DJ Link start still install
   the active Timeline and retire tokens.
-- **PR KTN44295080/Syndocal#3.** Both change `crates/engine/src/lib.rs`, including
-  `build_persistence_snapshot` and the `mutates_persistence_snapshot` doc, so whichever merges
-  second resolves those. Its `cue_trigger_rewrites_the_saved_look_and_fails_closed` test then
-  flips to this contract; `cue_trigger_keeps_the_exact_token_and_undo` here is the
-  replacement.
+- **PR KTN44295080/Syndocal#3** merged first (`main` at `1c8e81b`), and this branch merged it
+  in:
+  - Both persistence projections keep #3's project tempo: the authored projection starts from
+    the live-look image, which holds `project_bpm`.
+  - The `mutates_persistence_snapshot` doc now names both contracts. Its one remaining
+    exception is the active Timeline that a Follow settlement or DJ Link start installs.
+  - #3's `cue_trigger_rewrites_the_saved_look_and_fails_closed` is now
+    `cue_trigger_and_live_clock_keep_the_committed_token_and_undo`. It drives a Cue and MIDI
+    Clock together and checks that the saved image keeps its exact bytes and the project tempo,
+    that the exact token and Undo survive, and that Undo keeps the live Cue.
 
 ### 8.6 Suite runs and warnings (Linux debug, single-threaded as CI runs them)
 
@@ -547,6 +552,14 @@ was **not run** (section 8.5).
     added.
   - `rustfmt`: new files format clean; `main.rs` and `authored_control_plane.rs` gained no
     unformatted hunks.
+- After merging `main` at `1c8e81b` (PR KTN44295080/Syndocal#3):
+  - `cargo test -p engine --lib -- --test-threads=1`: 1148 passed, 0 failed, 14 ignored.
+  - `cargo test -p syndocal --bin syndocal -- --test-threads=1`: 1740 passed, 0 failed,
+    13 ignored.
+  - `pnpm --dir app run check:release:static`: exit 0 (AI0 Engine 285).
+  - Warnings: still only the existing `safety_write_gate` warning.
+  - `rustfmt`: `crates/engine/src/lib.rs` has 66 hunks on `main`, on the branch and on the merge,
+    all the same hunks; `authored_control_plane.rs` has 0.
 - `rustfmt` (copies, counted per file against `88c5861`): `crates/engine/src/lib.rs` 66 hunks
   before and after; `app/src-tauri/src/main.rs` 229 before and after; touched child files
   unchanged. The new files format clean. `git diff --check` clean.

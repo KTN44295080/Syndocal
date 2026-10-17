@@ -5934,21 +5934,23 @@ pub enum PersistenceProjection {
 }
 
 impl EngineCommand {
-    /// Whether enqueueing this command can change the canonical project image
-    /// returned by [`EngineHandle::persistence_snapshot`].  External-input
-    /// authority polling uses this narrow classification as a seqlock: live
-    /// clock/DMX/cue-transport traffic must not starve a persistence read,
-    /// while every command not proven runtime-only remains conservatively
-    /// treated as authored/persistent.
+    /// Whether enqueueing this command must be serialized with project
+    /// persistence: `send` takes the persistence-mutation submission gate for
+    /// it, and external-input admission advances the seqlock that read-only
+    /// authority polling checks. Live clock/DMX/cue-transport traffic must not
+    /// wait behind a route transaction or starve a persistence read, while
+    /// every command not proven safe remains conservatively `true`.
     ///
     /// Keep the default conservative (`true`) so a newly added command cannot
     /// silently evade project-coordinator reconciliation. The explicit false
-    /// set is limited to state that `build_persistence_snapshot` removes or
-    /// that never belongs to an EngineSnapshot. Cue transport and Timeline
-    /// playback write only the playback layer, which the authored image
-    /// excludes (DEC-PLAYBACK-LAYER-001). Known exceptions, which checkpoint
-    /// reconciliation detects and fails closed on: the active Timeline that
-    /// Follow settlement or a DJ Link start installs, and the live clock tempo.
+    /// set never touches coordinator-owned state, and changes only engine
+    /// state that `build_persistence_snapshot` excludes: the live clock,
+    /// including a MIDI Clock, Link or Follow tempo (the image keeps the
+    /// project BPM); transport; DMX input; clip runtime; and the playback layer
+    /// that Cue transport and Timeline playback write (DEC-PLAYBACK-LAYER-001).
+    /// The known exception is the active Timeline that a Follow settlement or
+    /// DJ Link start installs. Checkpoint-hash reconciliation detects it and
+    /// fails closed: new revision, Undo/Redo cleared, exact tokens retired.
     pub fn mutates_persistence_snapshot(&self) -> bool {
         !matches!(
             self,
@@ -25276,7 +25278,7 @@ impl EngineRuntime {
                         .expect("BPM preflight must reserve a transport authority successor");
                 }
                 if self.timeline_has_conformed_events() {
-                    let current_bpm = self.clock.bpm;
+                    let current_bpm = self.clock.project_bpm;
                     self.last_error = self.reconform_timeline_events_to_bpm(current_bpm).err();
                 }
             }
@@ -25289,7 +25291,7 @@ impl EngineRuntime {
                 self.invalidate_timeline_transport_authority()
                     .expect("BPM tap preflight must reserve a transport authority successor");
                 if self.timeline_has_conformed_events() {
-                    let current_bpm = self.clock.bpm;
+                    let current_bpm = self.clock.project_bpm;
                     self.last_error = self.reconform_timeline_events_to_bpm(current_bpm).err();
                 }
             }
@@ -25691,7 +25693,7 @@ impl EngineRuntime {
                             reconform_referenced_events.then(|| self.timeline_events.clone());
                         self.effects[index].kind = RuntimeEffectKind::Lfo(request);
                         self.effects[index].created_at = Instant::now();
-                        let bpm = self.clock.bpm;
+                        let bpm = self.clock.project_bpm;
                         self.last_error = if reconform_referenced_events {
                             self.reconform_timeline_events_to_bpm(bpm).err()
                         } else {
@@ -25733,7 +25735,7 @@ impl EngineRuntime {
                             reconform_referenced_events.then(|| self.timeline_events.clone());
                         self.effects[index].kind = RuntimeEffectKind::PositionWave(request);
                         self.effects[index].created_at = Instant::now();
-                        let bpm = self.clock.bpm;
+                        let bpm = self.clock.project_bpm;
                         self.last_error = if reconform_referenced_events {
                             self.reconform_timeline_events_to_bpm(bpm).err()
                         } else {
@@ -25793,7 +25795,7 @@ impl EngineRuntime {
                         })
                         .and_then(|()| {
                             if reconform_referenced_events {
-                                let bpm = self.clock.bpm;
+                                let bpm = self.clock.project_bpm;
                                 self.reconform_timeline_events_to_bpm(bpm)
                             } else {
                                 Ok(())
@@ -25853,7 +25855,7 @@ impl EngineRuntime {
                         })
                         .and_then(|()| {
                             if reconform_referenced_events {
-                                let bpm = self.clock.bpm;
+                                let bpm = self.clock.project_bpm;
                                 self.reconform_timeline_events_to_bpm(bpm)
                             } else {
                                 Ok(())
@@ -25913,7 +25915,7 @@ impl EngineRuntime {
                         })
                         .and_then(|()| {
                             if reconform_referenced_events {
-                                let bpm = self.clock.bpm;
+                                let bpm = self.clock.project_bpm;
                                 self.reconform_timeline_events_to_bpm(bpm)
                             } else {
                                 Ok(())
@@ -25973,7 +25975,7 @@ impl EngineRuntime {
                         })
                         .and_then(|()| {
                             if reconform_referenced_events {
-                                let bpm = self.clock.bpm;
+                                let bpm = self.clock.project_bpm;
                                 self.reconform_timeline_events_to_bpm(bpm)
                             } else {
                                 Ok(())
@@ -26033,7 +26035,7 @@ impl EngineRuntime {
                         })
                         .and_then(|()| {
                             if reconform_referenced_events {
-                                let bpm = self.clock.bpm;
+                                let bpm = self.clock.project_bpm;
                                 self.reconform_timeline_events_to_bpm(bpm)
                             } else {
                                 Ok(())
@@ -26093,7 +26095,7 @@ impl EngineRuntime {
                         })
                         .and_then(|()| {
                             if reconform_referenced_events {
-                                let bpm = self.clock.bpm;
+                                let bpm = self.clock.project_bpm;
                                 self.reconform_timeline_events_to_bpm(bpm)
                             } else {
                                 Ok(())
@@ -26155,7 +26157,7 @@ impl EngineRuntime {
                         })
                         .and_then(|()| {
                             if reconform_referenced_events {
-                                let bpm = self.clock.bpm;
+                                let bpm = self.clock.project_bpm;
                                 self.reconform_timeline_events_to_bpm(bpm)
                             } else {
                                 Ok(())
@@ -26339,7 +26341,7 @@ impl EngineRuntime {
                             event.rate = None;
                         }
                     }
-                    let bpm = self.clock.bpm;
+                    let bpm = self.clock.project_bpm;
                     if let Err(error) = self.reconform_timeline_events_to_bpm(bpm) {
                         self.effects = previous_effects
                             .expect("Effect removal rollback must preserve effects");
@@ -28204,7 +28206,7 @@ impl EngineRuntime {
                 let result = if Instant::now() > expires_at {
                     Err("Timeline re-conform expired before engine execution".to_string())
                 } else {
-                    let bpm = self.clock.bpm;
+                    let bpm = self.clock.project_bpm;
                     self.reconform_timeline_events_to_bpm(bpm)
                 };
                 self.last_error = if result.is_ok() {
@@ -34638,7 +34640,7 @@ impl EngineRuntime {
             step_activation_range: RuntimeCueStepActivationRange::default(),
         });
         if reconform_referenced_events {
-            let bpm = self.clock.bpm;
+            let bpm = self.clock.project_bpm;
             if let Err(error) = self.reconform_timeline_events_to_bpm(bpm) {
                 self.cues = previous_cues.expect("Cue replacement rollback must preserve Cues");
                 self.timeline_events = previous_timeline_events
@@ -34695,7 +34697,7 @@ impl EngineRuntime {
         cue.parts = parts;
         cue.mib_fixture_ids = mib_fixture_ids;
         if reconform_referenced_events {
-            let bpm = self.clock.bpm;
+            let bpm = self.clock.project_bpm;
             if let Err(error) = self.reconform_timeline_events_to_bpm(bpm) {
                 self.cues[cue_index] =
                     previous_cue.expect("Cue update rollback must preserve the prior Cue");
@@ -34734,7 +34736,7 @@ impl EngineRuntime {
             .expect("resolved Cue index must remain valid")
             .effect_targets = effect_targets;
         if reconform_referenced_events {
-            let bpm = self.clock.bpm;
+            let bpm = self.clock.project_bpm;
             if let Err(error) = self.reconform_timeline_events_to_bpm(bpm) {
                 self.cues[cue_index].effect_targets = previous_effect_targets
                     .expect("Cue effect-target rollback must preserve prior targets");
@@ -34873,7 +34875,7 @@ impl EngineRuntime {
         cue.tracking = tracking;
         cue.notes = notes.trim().chars().take(500).collect();
         if reconform_referenced_events {
-            let bpm = self.clock.bpm;
+            let bpm = self.clock.project_bpm;
             if let Err(error) = self.reconform_timeline_events_to_bpm(bpm) {
                 self.cues[cue_index] =
                     previous_cue.expect("referenced Cue rollback must preserve the prior Cue");
@@ -39693,7 +39695,7 @@ impl EngineRuntime {
         next.time_beats = time_beats;
         next.track = track;
         next.layer_id = layer_id.or(next.layer_id);
-        let next = self.resolve_timeline_event_timing(next, self.clock.bpm)?;
+        let next = self.resolve_timeline_event_timing(next, self.clock.project_bpm)?;
         self.validate_timeline_event_placement(&next)?;
         self.timeline_events[index] = next;
         self.recompute_timeline_event_layers()?;
@@ -39818,7 +39820,7 @@ impl EngineRuntime {
                 loop_count: update.loop_count,
                 jump_to_event_id: update.jump_to_event_id,
             };
-            let event = self.resolve_timeline_event_timing(event, self.clock.bpm)?;
+            let event = self.resolve_timeline_event_timing(event, self.clock.project_bpm)?;
             self.validate_timeline_event_placement(&event)?;
             resolved_events.push((index, event));
         }
@@ -39925,7 +39927,7 @@ impl EngineRuntime {
         {
             return Err(format!("Timeline event {} already exists", event.id));
         }
-        let event = self.resolve_timeline_event_timing(event, self.clock.bpm)?;
+        let event = self.resolve_timeline_event_timing(event, self.clock.project_bpm)?;
         self.validate_timeline_scene_block(&event)?;
         self.validate_timeline_event_target_layer(&event)?;
         self.timeline_events.push(event);
@@ -39951,7 +39953,7 @@ impl EngineRuntime {
             ));
         }
         event.layer_id = event.layer_id.or(self.timeline_events[index].layer_id);
-        event = self.resolve_timeline_event_timing(event, self.clock.bpm)?;
+        event = self.resolve_timeline_event_timing(event, self.clock.project_bpm)?;
         self.validate_timeline_scene_block(&event)?;
         self.validate_timeline_event_target_layer(&event)?;
         self.timeline_events[index] = event;
@@ -41228,7 +41230,7 @@ impl EngineRuntime {
             .any(|cue_id| self.timeline_has_conformed_events_for_cue(*cue_id));
         self.blind_held_cue_effect_targets.clear();
         let error = if reconform {
-            let bpm = self.clock.bpm;
+            let bpm = self.clock.project_bpm;
             self.reconform_timeline_events_to_bpm(bpm).err()
         } else {
             None
@@ -44696,9 +44698,11 @@ impl EngineRuntime {
             predictive: false,
             declared_frame_override: None,
         });
+        // The settled destination tempo is persisted together with the
+        // destination Timeline it belongs to; the ramp before it is live-only.
         if !self.timeline_follow_bpm_is_externally_owned() {
             self.clock
-                .set_bpm_preserving_beat_position(transition.target_bpm, now);
+                .settle_project_bpm_preserving_beat_position(transition.target_bpm, now);
         }
         self.timeline_follow_runtime = TimelineFollowRuntimeSummary {
             generation: transition.generation,
@@ -51439,6 +51443,13 @@ impl EngineRuntime {
 
     fn build_live_look_persistence_snapshot(&self) -> EngineSnapshot {
         let mut snapshot = self.build_snapshot(0);
+        // Persist the project tempo, never the live clock: phase, source,
+        // external lock and an external or Follow-ramp tempo advance without
+        // any authored change, and project load restores only `bpm`.
+        snapshot.clock = ClockSnapshot {
+            bpm: self.clock.project_bpm,
+            ..ClockSnapshot::default()
+        };
         // Persist only the authored blackout bit. The emergency S0 latch is
         // runtime-only and survives project replacement until an authorized
         // R4 release explicitly clears it.
@@ -66760,7 +66771,13 @@ fn hash_u32(seed: u32) -> u32 {
 
 #[derive(Clone)]
 struct BpmClock {
+    /// Live tempo, including external estimates and the Follow ramp.
     bpm: f32,
+    /// Tempo a saved project restores and authored timing conforms to. Only
+    /// project load, SetBpm, Tap and a settled clock-owning Timeline Follow
+    /// write it; MIDI Clock and SyncExternalClock are followed live without
+    /// rewriting project data.
+    project_bpm: f32,
     anchor: Instant,
     anchor_beat: f64,
     taps: [Option<Instant>; 4],
@@ -66777,6 +66794,7 @@ impl BpmClock {
     fn new(bpm: f32, now: Instant) -> Self {
         Self {
             bpm: clamp_bpm(bpm),
+            project_bpm: clamp_bpm(bpm),
             anchor: now,
             anchor_beat: 0.0,
             taps: [None; 4],
@@ -66792,6 +66810,7 @@ impl BpmClock {
 
     fn set_bpm(&mut self, bpm: f32, now: Instant) {
         self.bpm = clamp_bpm(bpm);
+        self.project_bpm = self.bpm;
         self.anchor = now;
         self.anchor_beat = 0.0;
         self.tap_count = 0;
@@ -66807,6 +66826,11 @@ impl BpmClock {
         self.bpm = clamp_bpm(bpm);
         self.anchor = now;
         self.anchor_beat = beat_position;
+    }
+
+    fn settle_project_bpm_preserving_beat_position(&mut self, bpm: f32, now: Instant) {
+        self.set_bpm_preserving_beat_position(bpm, now);
+        self.project_bpm = self.bpm;
     }
 
     fn tap(&mut self, now: Instant) {
@@ -66834,6 +66858,7 @@ impl BpmClock {
             let average = total / (taps.len() - 1) as f32;
             if average > 0.0 {
                 self.bpm = clamp_bpm(60.0 / average);
+                self.project_bpm = self.bpm;
                 self.anchor = now;
                 self.anchor_beat = 0.0;
                 self.source = ClockSource::Tap;
@@ -120623,6 +120648,7 @@ mod tests {
                 outgoing_source,
             )]);
         runtime.clock.bpm = 100.0;
+        runtime.clock.project_bpm = 100.0;
 
         let layers = vec![
             TimelineLayerSummary {
@@ -120781,6 +120807,10 @@ mod tests {
         assert!((incoming_layer.state.opacity - 0.5).abs() < 0.01);
         assert_eq!(incoming_layer.media_asset_id, Some(202));
         let persisted_mid_transition = runtime.build_persistence_snapshot();
+        assert_eq!(
+            persisted_mid_transition.clock.bpm, 100.0,
+            "the Follow tempo ramp is live-only"
+        );
         let authored_video = persisted_mid_transition.authored_video.unwrap();
         assert_eq!(authored_video.layers.len(), 1);
         assert_eq!(authored_video.layers[0].id, 10);
@@ -120811,6 +120841,11 @@ mod tests {
         assert!(runtime.timeline_follow_transport.is_none());
         assert!(runtime.timeline_follow_transition.is_none());
         assert!((runtime.clock.bpm - 120.0).abs() < 0.01);
+        // Settlement persists the destination tempo with the destination
+        // Timeline, as one playback change.
+        let settled = runtime.build_persistence_snapshot();
+        assert_eq!(settled.timeline.id, TimelineId(402));
+        assert!((settled.clock.bpm - 120.0).abs() < 0.01);
         assert_eq!(
             runtime
                 .timeline_guide_cues
@@ -135317,6 +135352,106 @@ mod tests {
         });
         assert_eq!(runtime.values.get(&(1, "Dimmer".into())), Some(&50000));
         assert_eq!(runtime.cues[0].targets, saved);
+    }
+
+    #[test]
+    fn external_clock_traffic_never_rewrites_the_persisted_project_tempo() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.apply_command(EngineCommand::SetBpm(126.0));
+        let before = runtime.build_persistence_snapshot();
+        assert_eq!(
+            before.clock,
+            ClockSnapshot {
+                bpm: 126.0,
+                ..ClockSnapshot::default()
+            }
+        );
+
+        let start = Instant::now();
+        for pulse in 0..32_u64 {
+            runtime.apply_midi_clock_pulse_at(start + Duration::from_millis(pulse * 15));
+        }
+        assert_eq!(runtime.clock.source, ClockSource::MidiClock);
+        assert!((runtime.clock.bpm - 126.0).abs() > 1.0);
+        assert_eq!(runtime.build_persistence_snapshot(), before);
+        runtime.apply_command(EngineCommand::SyncExternalClock {
+            bpm: 131.0,
+            beat_phase: 0.5,
+            source: ClockSource::AbletonLink,
+        });
+        assert_eq!(runtime.clock.bpm, 131.0);
+        assert_eq!(runtime.build_persistence_snapshot(), before);
+
+        // Manual and tapped tempo are project data, also while external
+        // clock traffic owns the live tempo.
+        runtime.apply_command(EngineCommand::SetBpm(140.0));
+        assert_eq!(runtime.build_persistence_snapshot().clock.bpm, 140.0);
+        runtime.apply_command(EngineCommand::TapBpm);
+        std::thread::sleep(Duration::from_millis(300));
+        runtime.apply_command(EngineCommand::TapBpm);
+        assert_eq!(runtime.clock.source, ClockSource::Tap);
+        let tapped = runtime.clock.bpm;
+        assert_ne!(tapped, 140.0);
+        assert_eq!(runtime.build_persistence_snapshot().clock.bpm, tapped);
+
+        // Project load restores exactly the persisted tempo.
+        runtime.apply_command(EngineCommand::SyncExternalClock {
+            bpm: 99.0,
+            beat_phase: 0.0,
+            source: ClockSource::AbletonLink,
+        });
+        let mut reloaded = runtime_with_lfo_effects(&[]);
+        reloaded
+            .load_project_snapshot_checked(runtime.build_persistence_snapshot())
+            .unwrap();
+        assert_eq!(reloaded.clock.bpm, tapped);
+        assert_eq!(reloaded.build_persistence_snapshot().clock.bpm, tapped);
+    }
+
+    #[test]
+    fn authored_timing_conforms_to_the_project_tempo_under_external_clock() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_effect_only_cue(&mut runtime, 1, Vec::new());
+        runtime
+            .add_timeline_cue_event_state(
+                20,
+                1,
+                1_000,
+                Some(2.0),
+                TimelineTrackKind::Lighting,
+                None,
+            )
+            .unwrap();
+        runtime.apply_command(EngineCommand::SetBpm(60.0));
+        runtime.apply_command(EngineCommand::SyncExternalClock {
+            bpm: 120.0,
+            beat_phase: 0.0,
+            source: ClockSource::AbletonLink,
+        });
+        assert_eq!(runtime.clock.bpm, 120.0);
+
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::ReconformTimelineToBpm {
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack,
+        });
+        let published = RwLock::new(runtime.build_snapshot(0));
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        // Two beats at the 60 BPM project tempo, not at the live Link tempo.
+        assert_eq!(runtime.timeline_events[0].time_ms, 2_000);
+
+        // Reopening conforms at the saved tempo and reproduces the image, so
+        // a replacement or Redo of this image keeps its checkpoint hash.
+        let saved = runtime.build_persistence_snapshot();
+        let mut reopened = runtime_with_lfo_effects(&[]);
+        reopened
+            .load_project_snapshot_checked(saved.clone())
+            .unwrap();
+        assert_eq!(
+            reopened.build_persistence_snapshot().timeline.events,
+            saved.timeline.events
+        );
     }
 
     #[test]
