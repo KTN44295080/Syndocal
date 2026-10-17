@@ -114529,7 +114529,6 @@ pub(crate) mod tests {
         // A manifest from this version reads in a version-1 reader that
         // knows nothing of the sidecar fields.
         #[derive(serde::Deserialize)]
-        #[allow(dead_code)]
         struct VersionOneManifest {
             version: u32,
             project_file: String,
@@ -114538,6 +114537,7 @@ pub(crate) mod tests {
             fs::read(directory.join(standby_manifest_file_name("primary-a", 2))).unwrap();
         let older: VersionOneManifest = serde_json::from_slice(&manifest_bytes).unwrap();
         assert_eq!(older.version, STANDBY_SYNC_VERSION);
+        assert_eq!(older.project_file, manifest.project_file);
 
         // A damaged sidecar rejects the generation like a damaged project.
         let sidecar_path = directory.join(manifest.playback_file.as_ref().unwrap());
