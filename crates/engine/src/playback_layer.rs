@@ -20,8 +20,8 @@ use std::ops::Deref;
 
 use protocol::{
     CueId, EffectId, EngineSnapshot, FixtureId, NodeGraphId, PlaybackCueListActiveCue,
-    PlaybackEnabledFlag, PlaybackLayerSnapshot, PlaybackLevel, PlaybackVideoOutput, VideoOutputId,
-    VideoOutputSummary,
+    PlaybackCueReleaseTargets, PlaybackEnabledFlag, PlaybackLayerSnapshot, PlaybackLevel,
+    PlaybackVideoOutput, VideoOutputId, VideoOutputSummary,
 };
 
 use super::{
@@ -222,6 +222,9 @@ impl FixtureValueLayers {
 }
 
 impl EngineRuntime {
+    /// The live playback layer. A running fade is captured at its targets:
+    /// a load cannot resume it, and a frozen intermediate level would belong
+    /// to no Cue (a release fade) or never finish.
     pub(crate) fn capture_playback_layer(&self) -> PlaybackLayerSnapshot {
         let mut effects = self
             .effects
@@ -243,19 +246,30 @@ impl EngineRuntime {
             })
             .collect::<Vec<_>>();
         node_graphs.sort_by_key(|flag| flag.id);
+        let fade = self.active_fade.as_ref();
         let mut video_outputs = self
             .video_outputs
             .iter()
             .filter_map(|output| {
+                let id = output.summary.id;
                 let owned = &output.under_playback;
-                if owned.is_empty() {
+                let fade_opacity =
+                    fade.and_then(|fade| fade.video_output_target_opacities.get(&id));
+                let fade_target = fade.and_then(|fade| fade.video_output_targets.get(&id));
+                if owned.is_empty() && fade_opacity.is_none() && fade_target.is_none() {
                     return None;
                 }
                 Some(PlaybackVideoOutput {
-                    output_id: output.summary.id,
-                    enabled: owned.enabled.map(|_| output.summary.enabled),
-                    opacity: owned.opacity.map(|_| output.summary.opacity),
-                    blackout: owned.blackout.map(|_| output.summary.blackout),
+                    output_id: id,
+                    enabled: fade_target
+                        .map(|target| target.enabled)
+                        .or(owned.enabled.map(|_| output.summary.enabled)),
+                    opacity: fade_opacity
+                        .copied()
+                        .or(owned.opacity.map(|_| output.summary.opacity)),
+                    blackout: fade_target
+                        .map(|target| target.blackout)
+                        .or(owned.blackout.map(|_| output.summary.blackout)),
                 })
             })
             .collect::<Vec<_>>();
@@ -275,6 +289,34 @@ impl EngineRuntime {
         cue_list_active_cue_ids.sort_by_key(|entry| entry.cue_list_id);
         let mut releasable_cue_ids = self.cue_release_values.keys().copied().collect::<Vec<_>>();
         releasable_cue_ids.sort_unstable();
+        let release_targets = releasable_cue_ids
+            .iter()
+            .map(|cue_id| {
+                let mut values = self.cue_release_values[cue_id]
+                    .iter()
+                    .map(|((fixture_id, attribute), value)| {
+                        (*fixture_id, attribute.clone(), *value)
+                    })
+                    .collect::<Vec<_>>();
+                values.sort();
+                PlaybackCueReleaseTargets {
+                    cue_id: *cue_id,
+                    values,
+                }
+            })
+            .collect();
+        let mut levels = self
+            .values
+            .playback_levels()
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        if let Some(fade) = fade {
+            levels.extend(
+                fade.target_values
+                    .iter()
+                    .map(|(key, value)| (key.clone(), *value)),
+            );
+        }
         PlaybackLayerSnapshot {
             active_cue_id: self.active_cue_id,
             cue_list_active_cue_ids,
@@ -285,9 +327,7 @@ impl EngineRuntime {
                 .collect(),
             releasable_cue_ids,
             live_modifiers: self.cue_live_modifier_states(),
-            levels: self
-                .values
-                .playback_levels()
+            levels: levels
                 .into_iter()
                 .map(|(key, value)| PlaybackLevel {
                     cue_list_id: self.cue_value_origins.get(&key).copied(),
@@ -299,44 +339,36 @@ impl EngineRuntime {
             effects,
             node_graphs,
             video_outputs,
+            release_targets,
         }
     }
 
     /// The layer Undo/Redo keeps over `incoming`. Only reads current state, so
     /// a load rejected later leaves the show untouched.
+    ///
+    /// A live Cue the incoming image no longer has is released as Remove Cue
+    /// releases it. A live Cue that still exists keeps playing; its Bank and
+    /// group references follow the incoming Cue.
     pub(crate) fn carried_playback_layer(
         &self,
         incoming: &EngineSnapshot,
     ) -> PlaybackLayerSnapshot {
         let mut layer = self.capture_playback_layer();
-        let resolves = |cue_id: CueId, cue_list_id: Option<u64>, group_id: Option<&str>| {
-            incoming.cues.iter().any(|cue| {
-                cue.id == cue_id
-                    && cue_list_id.is_none_or(|cue_list_id| cue.cue_list_id == cue_list_id)
-                    && group_id.is_none_or(|group_id| cue.group_id.as_deref() == Some(group_id))
-            })
-        };
-        let mut removed = HashSet::new();
-        if let Some(cue_id) = layer.active_cue_id {
-            if !resolves(cue_id, None, None) {
-                removed.insert(cue_id);
-            }
-        }
-        for entry in &layer.cue_list_active_cue_ids {
-            if !resolves(entry.cue_id, Some(entry.cue_list_id), None) {
-                removed.insert(entry.cue_id);
-            }
-        }
-        for (group_id, cue_id) in &layer.active_group_cue_ids {
-            if !resolves(*cue_id, None, Some(group_id)) {
-                removed.insert(*cue_id);
-            }
-        }
-        for cue_id in &layer.releasable_cue_ids {
-            if !resolves(*cue_id, None, None) {
-                removed.insert(*cue_id);
-            }
-        }
+        let incoming_cue = |cue_id: CueId| incoming.cues.iter().find(|cue| cue.id == cue_id);
+        let removed = layer
+            .releasable_cue_ids
+            .iter()
+            .copied()
+            .chain(layer.active_cue_id)
+            .chain(
+                layer
+                    .cue_list_active_cue_ids
+                    .iter()
+                    .map(|entry| entry.cue_id),
+            )
+            .chain(layer.active_group_cue_ids.values().copied())
+            .filter(|cue_id| incoming_cue(*cue_id).is_none())
+            .collect::<HashSet<_>>();
         if !removed.is_empty() {
             let mut levels = std::mem::take(&mut layer.levels)
                 .into_iter()
@@ -347,11 +379,21 @@ impl EngineRuntime {
                     )
                 })
                 .collect::<BTreeMap<_, _>>();
+            // Remove Cue's immediate release, for every removed Cue at once:
+            // a key returns to its release target unless a surviving Cue
+            // still holds it. The level stays playback owned and leaves its
+            // Bank's scaling.
             for cue_id in &removed {
-                // Remove Cue's immediate release: the level stays playback
-                // owned and leaves its Bank's scaling.
-                for (key, value) in self.cue_value_release_plan(*cue_id).target_values {
-                    levels.insert(key, (value, None));
+                let Some(targets) = self.cue_release_values.get(cue_id) else {
+                    continue;
+                };
+                for (key, value) in targets {
+                    let held = self.cue_release_values.iter().any(|(other, values)| {
+                        !removed.contains(other) && values.contains_key(key)
+                    });
+                    if !held {
+                        levels.insert(key.clone(), (*value, None));
+                    }
                 }
             }
             layer.levels = levels
@@ -369,6 +411,9 @@ impl EngineRuntime {
                 .releasable_cue_ids
                 .retain(|cue_id| !removed.contains(cue_id));
             layer
+                .release_targets
+                .retain(|targets| !removed.contains(&targets.cue_id));
+            layer
                 .live_modifiers
                 .retain(|state| !removed.contains(&state.cue_id));
             layer.active_cue_id = layer
@@ -381,6 +426,32 @@ impl EngineRuntime {
                 .active_group_cue_ids
                 .retain(|_, cue_id| !removed.contains(cue_id));
         }
+        // A live Cue the undone step moved to another Bank or group stays
+        // live under its incoming Bank and group.
+        let mut entries = Vec::with_capacity(layer.cue_list_active_cue_ids.len());
+        for entry in &layer.cue_list_active_cue_ids {
+            let Some(cue) = incoming_cue(entry.cue_id) else {
+                continue;
+            };
+            if !entries
+                .iter()
+                .any(|kept: &PlaybackCueListActiveCue| kept.cue_list_id == cue.cue_list_id)
+            {
+                entries.push(PlaybackCueListActiveCue {
+                    cue_list_id: cue.cue_list_id,
+                    cue_id: entry.cue_id,
+                });
+            }
+        }
+        entries.sort_by_key(|entry| entry.cue_list_id);
+        layer.cue_list_active_cue_ids = entries;
+        let mut groups = BTreeMap::new();
+        for cue_id in layer.active_group_cue_ids.values() {
+            if let Some(group_id) = incoming_cue(*cue_id).and_then(|cue| cue.group_id.clone()) {
+                groups.entry(group_id).or_insert(*cue_id);
+            }
+        }
+        layer.active_group_cue_ids = groups;
         let _ = reconcile_playback_layer(&mut layer, incoming, false);
         layer
     }
@@ -424,6 +495,19 @@ impl EngineRuntime {
             self.values.set_playback(&key, level.value);
             if let Some(cue_list_id) = level.cue_list_id {
                 self.cue_value_origins.insert(key, cue_list_id);
+            }
+        }
+        for targets in &layer.release_targets {
+            if self.cue_release_values.contains_key(&targets.cue_id) {
+                let values = targets
+                    .values
+                    .iter()
+                    .map(|(fixture_id, attribute, value)| {
+                        ((*fixture_id, attribute.clone()), *value)
+                    })
+                    .filter(|(key, _)| self.values.contains_key(key))
+                    .collect();
+                self.cue_release_values.insert(targets.cue_id, values);
             }
         }
         for state in &layer.live_modifiers {
@@ -656,18 +740,13 @@ pub(crate) fn reconcile_playback_layer(
         .live_modifiers
         .retain(|_| keep.next().unwrap_or(false));
     let mut keep = Vec::with_capacity(layer.levels.len());
-    for level in &layer.levels {
+    for level in &mut layer.levels {
         let valid = snapshot.fixtures.iter().any(|fixture| {
             fixture.id == level.fixture_id
                 && fixture
                     .attribute_values
                     .iter()
                     .any(|value| value.attribute == level.attribute)
-        }) && level.cue_list_id.is_none_or(|cue_list_id| {
-            snapshot
-                .cue_lists
-                .iter()
-                .any(|cue_list| cue_list.id == cue_list_id)
         });
         keep.push(
             valid
@@ -676,6 +755,25 @@ pub(crate) fn reconcile_playback_layer(
                     format!("fixture {} attribute {}", level.fixture_id, level.attribute),
                 )?,
         );
+        let bank_exists = level.cue_list_id.is_none_or(|cue_list_id| {
+            snapshot
+                .cue_lists
+                .iter()
+                .any(|cue_list| cue_list.id == cue_list_id)
+        });
+        // A level whose Bank is gone keeps its value and leaves that Bank's
+        // scaling, as deleting the Bank does live.
+        if !bank_exists
+            && !reject(
+                strict,
+                format!(
+                    "Bank of fixture {} attribute {}",
+                    level.fixture_id, level.attribute
+                ),
+            )?
+        {
+            level.cue_list_id = None;
+        }
     }
     let mut keep = keep.into_iter();
     layer.levels.retain(|_| keep.next().unwrap_or(false));

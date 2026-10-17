@@ -25,7 +25,8 @@ pub mod timeline_persistence;
 pub mod playback_layer;
 pub use playback_layer::{
     clear_active_cue_references, has_active_cue_references, PlaybackCueListActiveCue,
-    PlaybackEnabledFlag, PlaybackLayerSnapshot, PlaybackLevel, PlaybackVideoOutput,
+    PlaybackCueReleaseTargets, PlaybackEnabledFlag, PlaybackLayerSnapshot, PlaybackLevel,
+    PlaybackVideoOutput,
 };
 pub use timeline_persistence::clear_timeline_transport_runtime;
 

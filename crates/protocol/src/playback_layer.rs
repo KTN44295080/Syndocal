@@ -32,6 +32,18 @@ pub struct PlaybackLayerSnapshot {
     pub effects: Vec<PlaybackEnabledFlag<EffectId>>,
     pub node_graphs: Vec<PlaybackEnabledFlag<NodeGraphId>>,
     pub video_outputs: Vec<PlaybackVideoOutput>,
+    /// Exact release targets of each releasable Cue. Carried within one
+    /// process (Undo/Redo) only; a Standby rebuilds them from the Cue, so
+    /// they never travel in a sidecar.
+    #[serde(skip)]
+    pub release_targets: Vec<PlaybackCueReleaseTargets>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaybackCueReleaseTargets {
+    pub cue_id: CueId,
+    /// (fixture, attribute, value) in key order.
+    pub values: Vec<(FixtureId, String, u16)>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

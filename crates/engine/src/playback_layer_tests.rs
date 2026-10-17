@@ -506,6 +506,72 @@ fn undo_that_removes_a_live_cue_releases_it_like_remove_cue() {
 }
 
 #[test]
+fn undo_keeps_a_live_cue_that_the_target_puts_in_another_bank_or_group() {
+    let mut runtime = live_show_after_edit();
+    let live = live_state(&runtime);
+    // Group Cue 3 is live as Bank 1's active Cue and the "front" group's.
+    assert_eq!(live.0.active_cue_id, Some(3));
+    assert_eq!(live.0.cue_list_active_cue_ids[0].cue_list_id, 1);
+    let mut target = runtime.build_persistence_snapshot();
+    let mut bank = target.cue_lists[0].clone();
+    bank.id = 2;
+    bank.label = "Bank 2".to_string();
+    target.cue_lists.push(bank);
+    let cue = target.cues.iter_mut().find(|cue| cue.id == 3).unwrap();
+    cue.cue_list_id = 2;
+    cue.group_id = Some("back".to_string());
+
+    runtime
+        .load_project_snapshot_with_playback(target, PlaybackLoadPolicy::KeepCurrent)
+        .unwrap();
+    assert_eq!(runtime.last_error, None);
+    assert_eq!(runtime.active_cue_id, Some(3));
+    let bank_active = |id| {
+        runtime
+            .cue_lists
+            .iter()
+            .find(|cue_list| cue_list.id == id)
+            .unwrap()
+            .active_cue_id
+    };
+    assert_eq!((bank_active(1), bank_active(2)), (None, Some(3)));
+    assert_eq!(
+        runtime.active_group_cue_ids,
+        HashMap::from([("back".to_string(), 3)])
+    );
+    assert_eq!(
+        (level(&runtime, "Dimmer"), level(&runtime, "Pan")),
+        (live.1, live.2)
+    );
+    assert!(effect_enabled(&runtime) && graph_enabled(&runtime));
+}
+
+#[test]
+fn undo_during_a_fade_lands_on_the_fade_targets() {
+    let mut runtime = playback_show();
+    runtime.apply_command(EngineCommand::TriggerCue(2));
+    runtime.apply_active_fade(Instant::now() + Duration::from_millis(500));
+    let midway = level(&runtime, "Pan").unwrap();
+    assert!(midway > 0 && midway < 50_000, "{midway}");
+    let mut twin = playback_show();
+    twin.apply_command(EngineCommand::TriggerCue(2));
+    settle(&mut twin);
+
+    let target = runtime.build_persistence_snapshot();
+    runtime
+        .load_project_snapshot_with_playback(target, PlaybackLoadPolicy::KeepCurrent)
+        .unwrap();
+    assert!(runtime.active_fade.is_none());
+    assert_eq!(level(&runtime, "Pan"), Some(50_000));
+    assert_eq!(live_state(&runtime), live_state(&twin));
+    for show in [&mut runtime, &mut twin] {
+        show.apply_command(EngineCommand::ReleaseCue(2));
+        settle(show);
+    }
+    assert_eq!(live_state(&runtime), live_state(&twin));
+}
+
+#[test]
 fn standby_apply_installs_the_primary_layer_and_rejects_a_mismatch() {
     let mut primary = playback_show();
     primary.apply_command(EngineCommand::TriggerCue(1));

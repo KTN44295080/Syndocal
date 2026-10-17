@@ -24261,6 +24261,19 @@ struct StandbyPlaybackSidecar {
     layer: protocol::PlaybackLayerSnapshot,
 }
 
+/// A Standby generation's playback layer, as read from its sidecar.
+#[derive(Debug, Clone, PartialEq)]
+enum StandbyPlayback {
+    /// No sidecar: a Primary that predates DEC-PLAYBACK-LAYER-001, or a load
+    /// that is not a Standby generation.
+    Absent,
+    Layer(protocol::PlaybackLayerSnapshot),
+    /// An intact sidecar this build cannot read, such as a newer Primary's.
+    /// Authored state still syncs and Take Over still works; the reason
+    /// becomes a load warning.
+    Unreadable(String),
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct StandbySyncStatus {
     running: bool,
@@ -24322,8 +24335,8 @@ struct StandbyCheckpoint {
     manifest: StandbySyncManifest,
     project: ProjectFile,
     mappings: ProjectControlMappings,
-    /// The Primary's live playback layer for this generation, if it sent one.
-    playback: Option<protocol::PlaybackLayerSnapshot>,
+    /// The Primary's live playback layer for this generation.
+    playback: StandbyPlayback,
 }
 
 /// Immutable identity of the checkpoint bound to a takeover authorization fence.
@@ -63749,6 +63762,14 @@ fn read_standby_manifest(path: &Path) -> Result<StandbySyncManifest, String> {
             path.display()
         ));
     }
+    if manifest.playback_file.as_ref().is_some_and(|file| {
+        *file != standby_playback_file_name(&manifest.session_id, manifest.generation)
+    }) {
+        return Err(format!(
+            "Invalid standby playback sidecar reference in {}",
+            path.display()
+        ));
+    }
     Ok(manifest)
 }
 
@@ -63789,8 +63810,11 @@ fn cleanup_standby_generations(directory: &Path, session_id: &str) -> Result<(),
         .skip(STANDBY_SYNC_RETENTION)
     {
         let _ = fs::remove_file(directory.join(&manifest.project_file));
-        if let Some(playback_file) = &manifest.playback_file {
-            let _ = fs::remove_file(directory.join(playback_file));
+        if manifest.playback_file.is_some() {
+            let _ = fs::remove_file(directory.join(standby_playback_file_name(
+                &manifest.session_id,
+                manifest.generation,
+            )));
         }
         let _ = fs::remove_file(directory.join(standby_manifest_file_name(
             &manifest.session_id,
@@ -63844,11 +63868,7 @@ fn write_standby_checkpoint_with_playback_in(
     write_immutable_sync_file(&directory.join(&project_file), &project_bytes)?;
     let playback = playback
         .map(|layer| -> Result<(String, Vec<u8>), String> {
-            let bytes = serde_json::to_vec(&StandbyPlaybackSidecar {
-                version: STANDBY_PLAYBACK_SIDECAR_VERSION,
-                layer: layer.clone(),
-            })
-            .map_err(|error| error.to_string())?;
+            let bytes = standby_playback_sidecar_bytes(layer)?;
             let file = standby_playback_file_name(session_id, generation);
             write_immutable_sync_file(&directory.join(&file), &bytes)?;
             Ok((file, bytes))
@@ -63907,18 +63927,41 @@ fn read_standby_checkpoint_manifest(
     })
 }
 
-/// A sidecar the manifest names must be present, intact and of a known
-/// version, or the generation is rejected like a damaged project file.
+fn standby_playback_sidecar_bytes(
+    layer: &protocol::PlaybackLayerSnapshot,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&StandbyPlaybackSidecar {
+        version: STANDBY_PLAYBACK_SIDECAR_VERSION,
+        layer: layer.clone(),
+    })
+    .map_err(|error| error.to_string())
+}
+
+/// What a Standby compares between generations: the sidecar checksum, or an
+/// empty layer's for a generation without a sidecar. The worker compares this
+/// with what it last synced, not with a fresh engine capture, so a layer it
+/// could not apply does not reload the project on every heartbeat.
+fn standby_playback_key(manifest: &StandbySyncManifest) -> Result<String, String> {
+    match &manifest.playback_checksum {
+        Some(checksum) => Ok(checksum.clone()),
+        None => standby_playback_sidecar_bytes(&protocol::PlaybackLayerSnapshot::default())
+            .map(|bytes| standby_checksum(&bytes)),
+    }
+}
+
+/// A sidecar the manifest names must be present and intact, or the generation
+/// is rejected like a damaged project file. An intact sidecar this build
+/// cannot read only drops the live layer.
 fn read_standby_playback_sidecar(
     directory: &Path,
     manifest: &StandbySyncManifest,
-) -> Result<Option<protocol::PlaybackLayerSnapshot>, String> {
+) -> Result<StandbyPlayback, String> {
     let (file, bytes_expected, checksum) = match (
         &manifest.playback_file,
         manifest.playback_bytes,
         &manifest.playback_checksum,
     ) {
-        (None, None, None) => return Ok(None),
+        (None, None, None) => return Ok(StandbyPlayback::Absent),
         (Some(file), Some(bytes), Some(checksum)) => (file, bytes, checksum),
         _ => return Err("Standby manifest names an incomplete playback sidecar".to_string()),
     };
@@ -63938,42 +63981,42 @@ fn read_standby_playback_sidecar(
             path.display()
         ));
     }
-    let sidecar: StandbyPlaybackSidecar = serde_json::from_slice(&bytes).map_err(|error| {
-        format!(
-            "Invalid standby playback sidecar {}: {error}",
-            path.display()
-        )
-    })?;
-    if sidecar.version != STANDBY_PLAYBACK_SIDECAR_VERSION {
-        return Err(format!(
-            "Unsupported standby playback sidecar version {} in {}",
-            sidecar.version,
-            path.display()
-        ));
-    }
-    Ok(Some(sidecar.layer))
+    Ok(
+        match serde_json::from_slice::<StandbyPlaybackSidecar>(&bytes) {
+            Ok(sidecar) if sidecar.version == STANDBY_PLAYBACK_SIDECAR_VERSION => {
+                StandbyPlayback::Layer(sidecar.layer)
+            }
+            Ok(sidecar) => StandbyPlayback::Unreadable(format!(
+                "playback sidecar version {} is not supported by this build",
+                sidecar.version
+            )),
+            Err(error) => {
+                StandbyPlayback::Unreadable(format!("playback sidecar is not readable: {error}"))
+            }
+        },
+    )
 }
 
 /// The load policy for a Standby generation: the Primary's playback layer if
 /// it matches the generation, otherwise none, with a load warning. A sidecar
 /// that does not match never blocks syncing authored state or Take Over.
 fn standby_playback_policy(
-    playback: Option<&protocol::PlaybackLayerSnapshot>,
+    playback: &StandbyPlayback,
     snapshot: &EngineSnapshot,
     warnings: &mut Vec<String>,
 ) -> PlaybackLoadPolicy {
-    let Some(layer) = playback else {
-        return PlaybackLoadPolicy::Discard;
+    let rejected = match playback {
+        StandbyPlayback::Absent => return PlaybackLoadPolicy::Discard,
+        StandbyPlayback::Layer(layer) => match engine::validate_playback_layer(layer, snapshot) {
+            Ok(()) => return PlaybackLoadPolicy::Apply(layer.clone()),
+            Err(error) => error,
+        },
+        StandbyPlayback::Unreadable(reason) => reason.clone(),
     };
-    match engine::validate_playback_layer(layer, snapshot) {
-        Ok(()) => PlaybackLoadPolicy::Apply(layer.clone()),
-        Err(error) => {
-            warnings.push(format!(
-                "The Primary's live Cue state was not applied: {error}"
-            ));
-            PlaybackLoadPolicy::Discard
-        }
-    }
+    warnings.push(format!(
+        "The Primary's live Cue state was not applied: {rejected}"
+    ));
+    PlaybackLoadPolicy::Discard
 }
 
 #[cfg(test)]
@@ -64121,25 +64164,45 @@ fn read_standby_checkpoint_for_session(
         .unwrap_or_else(|| "No valid standby synchronization checkpoint was found".to_string()))
 }
 
+/// `synced_playback` is the playback key of the last generation this worker
+/// synced; `None` before its first, which compares with the layer the Standby
+/// shows.
 fn standby_checkpoint_requires_identity_apply(
     state: &AppState,
-    project: &ProjectFile,
-    mappings: &ProjectControlMappings,
-    playback: Option<&protocol::PlaybackLayerSnapshot>,
+    checkpoint: &StandbyCheckpoint,
+    playback_key: &str,
+    synced_playback: Option<&str>,
 ) -> Result<bool, String> {
     let mut coordinator = lock_project_coordinator(state)?;
     let current = reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
-    let incoming_hash = project_checkpoint_hash(project, mappings)?;
+    // A Primary that predates DEC-PLAYBACK-LAYER-001 still sends live Cue
+    // references. The load drops them, so they are not a content change.
+    let incoming_hash = if protocol::has_active_cue_references(&checkpoint.project.snapshot) {
+        let mut project = checkpoint.project.clone();
+        protocol::clear_active_cue_references(&mut project.snapshot);
+        project_checkpoint_hash(&project, &checkpoint.mappings)?
+    } else {
+        project_checkpoint_hash(&checkpoint.project, &checkpoint.mappings)?
+    };
     // Generations are a heartbeat transport detail. A same-content primary
     // checkpoint must not repeatedly retire inputs/reset runtime or create
     // artificial project identity history on the Standby machine.
-    if project_checkpoint_content_requires_identity_apply(&current, mappings, &incoming_hash) {
+    if project_checkpoint_content_requires_identity_apply(
+        &current,
+        &checkpoint.mappings,
+        &incoming_hash,
+    ) {
         return Ok(true);
     }
     // Playback no longer moves the checkpoint hash (DEC-PLAYBACK-LAYER-001),
     // so a Cue fired on the Primary is a change of the playback layer alone.
-    let incoming_playback = playback.cloned().unwrap_or_default();
-    Ok(state.engine.playback_layer_snapshot()? != incoming_playback)
+    let synced = match synced_playback {
+        Some(key) => key.to_string(),
+        None => standby_checksum(&standby_playback_sidecar_bytes(
+            &state.engine.playback_layer_snapshot()?,
+        )?),
+    };
+    Ok(playback_key != synced)
 }
 
 /// Poll transport generations are heartbeats, not project identities. This
@@ -64424,6 +64487,7 @@ fn start_standby_sync(
             let mut selected_session: Option<String> = None;
             let mut observed_checkpoint: Option<(String, u64)> = None;
             let mut applied_checkpoint: Option<(String, u64)> = None;
+            let mut synced_playback: Option<String> = None;
             let mut last_progress_at = Instant::now();
             while !stop.load(Ordering::Relaxed) {
                 let manifests = match list_standby_manifests(&worker_directory) {
@@ -64474,19 +64538,25 @@ fn start_standby_sync(
                             // standby_sync_lifecycle. Normal replacement
                             // callers acquire it, request this stop, join us,
                             // and only then wait for output ownership.
-                            match standby_checkpoint_requires_identity_apply(
-                                &state,
-                                &checkpoint.project,
-                                &checkpoint.mappings,
-                                checkpoint.playback.as_ref(),
+                            match standby_playback_key(&checkpoint.manifest).and_then(
+                                |playback_key| {
+                                    standby_checkpoint_requires_identity_apply(
+                                        &state,
+                                        &checkpoint,
+                                        &playback_key,
+                                        synced_playback.as_deref(),
+                                    )
+                                    .map(|apply| (apply, playback_key))
+                                },
                             ) {
-                                Ok(false) => {
+                                Ok((false, playback_key)) => {
                                     // A fresh heartbeat carrying the same
                                     // canonical checkpoint is observed/applied
                                     // without triggering a replacement.
                                     applied_checkpoint = Some(checkpoint_identity);
+                                    synced_playback = Some(playback_key);
                                 }
-                                Ok(true) => {
+                                Ok((true, playback_key)) => {
                                     if let Err(error) =
                                         load_project_from_file_with_control_mappings_in_scope(
                                             &state,
@@ -64506,7 +64576,10 @@ fn start_standby_sync(
                                     {
                                         apply_error = Some(error);
                                     } else {
+                                        // Synced even if the layer was not
+                                        // applied: the load already warned.
                                         applied_checkpoint = Some(checkpoint_identity);
+                                        synced_playback = Some(playback_key);
                                     }
                                 }
                                 Err(error) => apply_error = Some(error),
@@ -66278,8 +66351,9 @@ struct ProjectLoadInput<'a> {
     path_label: String,
     current_path: Option<&'a Path>,
     scope: ProjectSnapshotReplacementScope,
-    /// A Standby generation's playback layer (DEC-PLAYBACK-LAYER-001).
-    standby_playback: Option<protocol::PlaybackLayerSnapshot>,
+    /// A Standby generation's playback layer (DEC-PLAYBACK-LAYER-001);
+    /// `Absent` for every other load.
+    standby_playback: StandbyPlayback,
 }
 
 struct ProjectTakeoverReplacementContext<'a> {
@@ -66317,7 +66391,7 @@ fn load_project_from_file(
             path_label,
             current_path,
             scope: ProjectSnapshotReplacementScope::ExternalCaller,
-            standby_playback: None,
+            standby_playback: StandbyPlayback::Absent,
         },
         None,
     )
@@ -66339,7 +66413,7 @@ fn load_project_from_file_with_control_mappings_and_disposition(
             path_label,
             current_path,
             scope: ProjectSnapshotReplacementScope::ExternalCaller,
-            standby_playback: None,
+            standby_playback: StandbyPlayback::Absent,
         },
         disposition,
         None,
@@ -66383,7 +66457,7 @@ fn load_project_from_file_with_control_mappings_in_scope_and_expected_output_fen
     )?;
     prepared.authority_disposition = ProjectAuthorityDisposition::CleanAtPath;
     prepared.playback = standby_playback_policy(
-        input.standby_playback.as_ref(),
+        &input.standby_playback,
         &prepared.snapshot,
         &mut prepared.result.warnings,
     );
@@ -66416,7 +66490,7 @@ fn load_project_from_file_with_control_mappings_in_scope_and_disposition(
     )?;
     prepared.authority_disposition = disposition;
     prepared.playback = standby_playback_policy(
-        input.standby_playback.as_ref(),
+        &input.standby_playback,
         &prepared.snapshot,
         &mut prepared.result.warnings,
     );
@@ -114498,7 +114572,7 @@ pub(crate) mod tests {
                 .unwrap()
                 .unwrap()
                 .playback,
-            None
+            StandbyPlayback::Absent
         );
 
         let manifest = write_standby_checkpoint_with_playback_in(
@@ -114517,7 +114591,7 @@ pub(crate) mod tests {
         );
         let checkpoint = read_standby_checkpoint_in(&directory).unwrap().unwrap();
         assert_eq!(checkpoint.manifest.generation, 2);
-        assert_eq!(checkpoint.playback, Some(layer.clone()));
+        assert_eq!(checkpoint.playback, StandbyPlayback::Layer(layer.clone()));
         // The sidecar is not a `.json` manifest candidate, so the exact Take
         // Over scanner still resolves this generation.
         strict_standby_manifest_path_for_exact_takeover(
@@ -114550,21 +114624,59 @@ pub(crate) mod tests {
                 .contains("integrity")
         );
 
-        // An unknown sidecar version is rejected even with a valid checksum.
-        let future = serde_json::to_vec(&serde_json::json!({
-            "version": STANDBY_PLAYBACK_SIDECAR_VERSION + 1,
-            "layer": layer,
-        }))
-        .unwrap();
-        fs::write(&sidecar_path, &future).unwrap();
-        let mut future_manifest = manifest.clone();
-        future_manifest.playback_bytes = Some(future.len() as u64);
-        future_manifest.playback_checksum = Some(standby_checksum(&future));
-        assert!(
-            read_standby_checkpoint_manifest(&directory, future_manifest)
-                .unwrap_err()
-                .contains("Unsupported standby playback sidecar version")
-        );
+        // An intact sidecar of an unknown version or shape (a newer Primary)
+        // drops only the live layer: authored state still syncs.
+        for future in [
+            serde_json::json!({
+                "version": STANDBY_PLAYBACK_SIDECAR_VERSION + 1,
+                "layer": layer,
+            }),
+            serde_json::json!({
+                "version": STANDBY_PLAYBACK_SIDECAR_VERSION,
+                "layer": layer,
+                "future_field": true,
+            }),
+        ] {
+            let future = serde_json::to_vec(&future).unwrap();
+            fs::write(&sidecar_path, &future).unwrap();
+            let mut future_manifest = manifest.clone();
+            future_manifest.playback_bytes = Some(future.len() as u64);
+            future_manifest.playback_checksum = Some(standby_checksum(&future));
+            let checkpoint = read_standby_checkpoint_manifest(&directory, future_manifest).unwrap();
+            assert_eq!(checkpoint.manifest.generation, 2);
+            let StandbyPlayback::Unreadable(reason) = &checkpoint.playback else {
+                panic!(
+                    "expected an unreadable sidecar, got {:?}",
+                    checkpoint.playback
+                );
+            };
+            let mut warnings = Vec::new();
+            assert_eq!(
+                standby_playback_policy(
+                    &checkpoint.playback,
+                    &checkpoint.project.snapshot,
+                    &mut warnings
+                ),
+                PlaybackLoadPolicy::Discard
+            );
+            assert_eq!(
+                warnings,
+                vec![format!(
+                    "The Primary's live Cue state was not applied: {reason}"
+                )]
+            );
+        }
+
+        // A manifest may name only its own generation's sidecar, so neither
+        // the reader nor retention cleanup touches another file.
+        let manifest_path = directory.join(standby_manifest_file_name("primary-a", 2));
+        let mut foreign = manifest.clone();
+        foreign.playback_file = Some("syndocal-standby-primary-a-1.sdc".to_string());
+        fs::write(&manifest_path, serde_json::to_vec_pretty(&foreign).unwrap()).unwrap();
+        assert!(read_standby_manifest(&manifest_path)
+            .unwrap_err()
+            .contains("Invalid standby playback sidecar reference"));
+        fs::write(&manifest_path, &manifest_bytes).unwrap();
 
         let mut incomplete = manifest;
         incomplete.playback_checksum = None;
@@ -114616,11 +114728,15 @@ pub(crate) mod tests {
         };
         let mut warnings = Vec::new();
         assert_eq!(
-            standby_playback_policy(Some(&matching), &snapshot, &mut warnings),
+            standby_playback_policy(
+                &StandbyPlayback::Layer(matching.clone()),
+                &snapshot,
+                &mut warnings
+            ),
             PlaybackLoadPolicy::Apply(matching)
         );
         assert_eq!(
-            standby_playback_policy(None, &snapshot, &mut warnings),
+            standby_playback_policy(&StandbyPlayback::Absent, &snapshot, &mut warnings),
             PlaybackLoadPolicy::Discard
         );
         assert!(warnings.is_empty());
@@ -114630,7 +114746,7 @@ pub(crate) mod tests {
             ..protocol::PlaybackLayerSnapshot::default()
         };
         assert_eq!(
-            standby_playback_policy(Some(&foreign), &snapshot, &mut warnings),
+            standby_playback_policy(&StandbyPlayback::Layer(foreign), &snapshot, &mut warnings),
             PlaybackLoadPolicy::Discard
         );
         assert_eq!(warnings.len(), 1);

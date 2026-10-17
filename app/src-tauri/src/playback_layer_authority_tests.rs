@@ -301,3 +301,167 @@ fn project_file_saved_with_a_live_cue_reopens_as_its_authored_image() {
         serde_json::to_value(&prepared.snapshot).unwrap()
     );
 }
+
+fn live_effect_enabled(state: &AppState, effect_id: protocol::EffectId) -> bool {
+    state
+        .engine
+        .snapshot()
+        .effects
+        .iter()
+        .find(|effect| effect.id == effect_id)
+        .expect("fixture effect remains present")
+        .enabled
+}
+
+#[test]
+fn effect_toggle_takes_a_cue_held_flag_back_without_moving_the_token() {
+    let _serial = serialized_authored_test_guard();
+    let (harness, query, effect_id, cue_id) = seeded_live_show();
+    let state = &harness.state;
+    // The Cue also turns the authored-off effect on (a legacy effect target).
+    let mut snapshot = state.engine.persistence_snapshot().unwrap();
+    snapshot
+        .cues
+        .iter_mut()
+        .find(|cue| cue.id == cue_id)
+        .unwrap()
+        .effect_targets
+        .push(protocol::CueEffectTarget {
+            effect_id,
+            enabled: true,
+            params: None,
+            transition_ms: None,
+        });
+    state
+        .engine
+        .load_project_snapshot_and_wait(snapshot)
+        .expect("install effect-target Cue");
+    *state.project_coordinator.lock().unwrap() = crate::project_coordinator_for_initial_snapshot(
+        state.engine.persistence_snapshot().unwrap(),
+    );
+    state
+        .engine
+        .send(EngineCommand::TriggerCue(cue_id))
+        .unwrap();
+    wait_for_live_cue(state, cue_id);
+    assert!(live_effect_enabled(state, effect_id));
+    let before = {
+        let coordinator = state.project_coordinator.lock().unwrap();
+        (
+            coordinator.epoch,
+            coordinator.revision,
+            coordinator.checkpoint_hash.clone(),
+        )
+    };
+
+    // Off is already the authored value, yet the operator sees the effect
+    // on. The toggle turns it off live and leaves authored state alone.
+    let applied = set_effect_enabled_authoritative_for_window_label(
+        state,
+        &query,
+        PRIMARY_WINDOW,
+        issued_request(state, &query, PRIMARY_WINDOW, effect_id, false, 302),
+    );
+    // Authored state did not change, so the receipt is a no-op.
+    assert!(matches!(
+        terminal_outcome(&applied),
+        SetEffectEnabledOutcomeV1::NoOp(_)
+    ));
+    assert!(!live_effect_enabled(state, effect_id));
+    assert_eq!(state.engine.snapshot().active_cue_id, Some(cue_id));
+    let coordinator = state.project_coordinator.lock().unwrap();
+    assert_eq!(
+        (
+            coordinator.epoch,
+            coordinator.revision,
+            coordinator.checkpoint_hash.clone()
+        ),
+        before
+    );
+    assert!(coordinator.history.undo.is_empty());
+}
+
+/// A generation of the current authored project; the decision under test
+/// reads only its project, mappings and manifest checksum.
+fn standby_checkpoint(project: ProjectFile) -> crate::StandbyCheckpoint {
+    crate::StandbyCheckpoint {
+        manifest: crate::StandbySyncManifest {
+            version: crate::STANDBY_SYNC_VERSION,
+            app: crate::APP_NAME.to_string(),
+            session_id: "primary-a".to_string(),
+            generation: 1,
+            written_at_unix_ms: 1,
+            project_file: crate::standby_project_file_name("primary-a", 1),
+            project_bytes: 0,
+            project_checksum: String::new(),
+            playback_file: None,
+            playback_bytes: None,
+            playback_checksum: None,
+        },
+        project,
+        mappings: crate::ProjectControlMappings::default(),
+        playback: crate::StandbyPlayback::Absent,
+    }
+}
+
+#[test]
+fn standby_judges_playback_by_what_it_last_synced() {
+    let _serial = serialized_authored_test_guard();
+    let (harness, _query, _effect_id, cue_id) = seeded_live_show();
+    let state = &harness.state;
+    let authored = {
+        let coordinator = state.project_coordinator.lock().unwrap();
+        crate::project_file_for_save_from_parts(
+            state.engine.persistence_snapshot().unwrap(),
+            &coordinator.ancillary,
+        )
+    };
+    let requires = |project: &ProjectFile, key: &str, synced: Option<&str>| {
+        crate::standby_checkpoint_requires_identity_apply(
+            state,
+            &standby_checkpoint(project.clone()),
+            key,
+            synced,
+        )
+        .unwrap()
+    };
+    // A generation without a sidecar compares as an empty layer, exactly as
+    // a current Primary with no Cue live writes it.
+    let idle = crate::standby_playback_key(&standby_checkpoint(authored.clone()).manifest).unwrap();
+    assert_eq!(
+        idle,
+        crate::standby_checksum(
+            &crate::standby_playback_sidecar_bytes(
+                &state.engine.playback_layer_snapshot().unwrap()
+            )
+            .unwrap()
+        )
+    );
+
+    // The worker's first generation compares with what the Standby shows.
+    assert!(!requires(&authored, &idle, None));
+    state
+        .engine
+        .send(EngineCommand::TriggerCue(cue_id))
+        .unwrap();
+    wait_for_live_cue(state, cue_id);
+    assert!(requires(&authored, &idle, None));
+
+    // Later generations compare with what the worker last synced, so a layer
+    // the Standby could not apply reloads once, not on every heartbeat.
+    assert!(!requires(&authored, &idle, Some(&idle)));
+    assert!(requires(&authored, "live-layer", Some(&idle)));
+    assert!(!requires(&authored, "live-layer", Some("live-layer")));
+
+    // An older Primary still sends live Cue references with otherwise
+    // identical content; the load drops them, so they are not a change.
+    let mut older = authored.clone();
+    older.snapshot.active_cue_id = Some(cue_id);
+    older.snapshot.cue_lists[0].active_cue_id = Some(cue_id);
+    assert!(!requires(&older, &idle, Some(&idle)));
+
+    // Authored changes still apply.
+    let mut edited = authored;
+    edited.snapshot.cues[0].label = "Edited".to_string();
+    assert!(requires(&edited, &idle, Some(&idle)));
+}

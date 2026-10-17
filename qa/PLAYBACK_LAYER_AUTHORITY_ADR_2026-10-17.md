@@ -370,10 +370,17 @@ was **not run** (section 8.5).
   - `RequestPlaybackLayerSnapshot` is a new internal read, inventoried as Engine source 285.
 - **Load policy.** `PlaybackLoadPolicy` has three values:
   - `Discard`: Open, recent, template, backup, recovery, New and Standby entry.
-  - `KeepCurrent`: Undo/Redo. A live Cue the target image removes is released as Remove Cue
-    releases it. Overrides for removed items are dropped.
-  - `Apply(layer)`: Standby. It is strict: a reference the image cannot satisfy rejects the
-    load unchanged.
+  - `KeepCurrent`: Undo/Redo.
+    - A running fade is carried at its targets, since a load cannot resume it.
+    - A live Cue the target image removes is released as Remove Cue releases it, to its exact
+      release targets. With several removed at once, a key returns to its release target
+      unless a surviving Cue still holds it.
+    - A live Cue the target keeps stays live under the target's Bank and group for that Cue.
+    - A level whose Bank the target removes stays live without Bank scaling.
+    - Overrides for removed items are dropped.
+    - Release targets travel inside the process only (`#[serde(skip)]`).
+  - `Apply(layer)`: Standby. It is strict: a reference the image cannot satisfy, including a
+    level's Bank, rejects the load unchanged.
   - Saved active references are still validated (FC-27) and then never installed.
 
 ### 8.2 App (`app/src-tauri`)
@@ -395,17 +402,27 @@ was **not run** (section 8.5).
     `playback_checksum` fields, so `STANDBY_SYNC_VERSION` stays 1.
   - The sidecar is not `.json`, so the exact Take Over scanner ignores it. Retention prunes it
     with its generation.
-  - The worker re-applies when the authored hash or the playback layer changes. Today it
-    already reloaded on every Cue trigger, because triggers moved the hash.
+  - A manifest may name only its own generation's sidecar. Retention computes the sidecar name
+    instead of trusting the manifest's.
+  - The worker reloads when the authored hash changes or the sidecar checksum differs from
+    the last one it synced. Before that, every Cue trigger moved the hash and reloaded.
+    - The worker's first generation compares with the Standby's own live layer, so a
+      Standby already showing the same project and no Cue does not reload.
+    - A layer the Standby could not apply counts as synced once the load succeeded with its
+      warning, so it does not reload on every heartbeat.
+    - An older Primary's live Cue references are dropped before the hash, as the load drops
+      them, so they are not a change.
   - Warm apply and Take Over use `Apply`. A sidecar that does not match its generation falls
     back to `Discard` with a warning, so it never blocks authored sync or Take Over.
-  - A damaged, incomplete or unknown-version sidecar rejects the generation, like a damaged
-    project file.
-- **Not changed, by design.**
-  - The authored control-plane `set_effect_enabled` decides its no-op on authored state: an
-    authored command edits authored state.
-  - The frontend legacy `projectComparableSnapshot` reads the live snapshot and is used only
-    before an authority baseline exists.
+  - A damaged, missing or incompletely named sidecar rejects the generation, like a damaged
+    project file. An intact sidecar of an unknown version or shape (a newer Primary) drops only
+    the live layer, with the warning `The Primary's live Cue state was not applied: ...`.
+- **Effect toggle.** The authored control-plane `set_effect_enabled` still decides on authored
+  state. When the request equals the authored flag but a Cue holds the live flag the other
+  way, the same engine write takes the effect back from playback. The receipt is `NoOp`, and
+  the token, revision and history do not move.
+- **Not changed, by design.** The frontend legacy `projectComparableSnapshot` reads the live
+  snapshot and is used only before an authority baseline exists.
 
 ### 8.3 Compatibility (old behaviour, new behaviour, reason)
 
@@ -417,18 +434,23 @@ was **not run** (section 8.5).
 | `PROJECT_FILE_VERSION` | 1 | 1 | Same shape; older builds open new files as "no Cue live" |
 | Future project version | Rejected | Rejected (unchanged) | Existing strict equality |
 | Standby manifest | v1 | v1 plus optional sidecar fields | Older readers ignore them and sync authored state |
-| Standby sidecar | none | v1; unknown version, damage or missing fields reject the generation | Fail closed |
+| Standby sidecar | none | v1; damage, a missing file, missing fields or a foreign file name reject the generation | Fail closed on integrity |
+| Standby sidecar from a newer Primary | none | Intact but unknown version or shape: authored state syncs, no live Cue state, load warning | An older Standby keeps syncing and can still Take Over |
 | Undo/Redo | Cleared by any playback; when reachable, reinstalled the historic look | Survives playback; keeps the live look | Decision Q2 |
 
 ### 8.4 Evidence (Linux, debug)
 
-- **New engine tests** (`playback_layer_tests.rs`, 9):
+- **New engine tests** (`playback_layer_tests.rs`, 11):
   - Cue, Timeline, release, toggle, group and automation playback never move the authored image.
   - The live look is still driven.
   - Authored edits over live playback reach the image.
   - Opening a live-Cue file starts with no Cue live.
   - Undo/Redo keeps the layer and continues exactly like a show that never undid anything.
   - An Undo that removes a live Cue matches Remove Cue.
+  - An Undo whose target puts the live Cue in another Bank and group keeps it live there.
+    **Mutation check:** with the Bank remap reverted, it fails (`left: None, right: Some(3)`).
+  - An Undo during a fade lands on the fade targets and then releases like a show that let
+    the fade finish.
   - Standby apply installs the layer, and rejects a mismatched one unchanged.
   - A live-scene programmer commit stays playback; a plain commit is authored.
   - **Mutation check:** with the fade-tick writer switched to `set_authored`, the invariant
@@ -443,7 +465,13 @@ was **not run** (section 8.5).
   - `project_file_saved_with_a_live_cue_reopens_as_its_authored_image`: old writer bytes
     through production ingress, publication and re-save. The re-saved image equals the
     prepared image.
-  - `standby_generation_carries_and_verifies_the_playback_sidecar`.
+  - `effect_toggle_takes_a_cue_held_flag_back_without_moving_the_token`.
+  - `standby_judges_playback_by_what_it_last_synced`: the first generation compares with the
+    live layer, later ones with the last synced checksum; an older Primary's live references
+    are not a change; an authored change still reloads.
+  - `standby_generation_carries_and_verifies_the_playback_sidecar`: damage and incomplete
+    fields reject; unknown version and unknown fields drop only the layer with the warning; a
+    manifest naming a foreign sidecar is rejected; retention prunes sidecars.
   - `standby_applies_only_a_playback_layer_that_matches_its_generation`.
 - **Changed assertions, because the contract changed:**
   - `project_snapshot_for_save_drops_volatile_runtime_state`: `active_cue_id` is now `None`.
@@ -476,6 +504,20 @@ was **not run** (section 8.5).
 - **Hidden authored base.** Release still goes to fixture defaults live, so after a release the
   stage can differ from the authored base until reopen or Undo shows it. Release-to-base would
   be a separate product decision.
+- **Undo of a level edit made over a live Cue.** The edit took the key back from playback (last
+  writer wins), so Undo shows the reverted authored level, not the Cue's. Before this change
+  Undo reinstalled the image from before the edit, which held the Cue's level. Re-firing the
+  Cue restores it.
+- **Release targets across machines.** They travel within one process (Undo/Redo). A Standby
+  that applies a Primary's layer uses each live Cue's default release values, as any load
+  did before. A release there can differ from the Primary's when the Primary's targets came
+  from earlier playback.
+- **Local playback on a Standby.** A Cue fired on the Standby machine stays live until the
+  Primary's project or playback layer next changes. Before this change it moved the hash and
+  the next heartbeat overwrote it.
+- **Stale effect overrides.** Remove Effect leaves the effect's playback entry. Nothing reads
+  it: entries are read only for effects that exist, effect ids are allocated monotonically,
+  and every load clears the map.
 - **Remaining drift outside this decision.** Follow settlement and DJ Link start still install
   the active Timeline and retire tokens.
 - **PR KTN44295080/Syndocal#3.** Both change `crates/engine/src/lib.rs`, including
@@ -496,6 +538,36 @@ was **not run** (section 8.5).
 - Warnings for the configurations run (engine lib and tests, syndocal bin and tests): baseline 1,
   current 1, delta 0. The one warning is the existing unused `safety_write_gate` in
   `crates/io/src/serial_dmx.rs`.
+- After the review fixes (8.7), on an idle machine:
+  - `cargo test -p engine --lib -- --test-threads=1`: 1146 passed, 0 failed, 14 ignored.
+  - `cargo test -p syndocal --bin syndocal -- --test-threads=1`: 1737 passed, 0 failed,
+    13 ignored.
+  - `pnpm --dir app run check:release:static`: exit 0.
+  - Warnings: still only the existing `safety_write_gate` warning. No `#[allow]` or `#[expect]`
+    added.
+  - `rustfmt`: new files format clean; `main.rs` and `authored_control_plane.rs` gained no
+    unformatted hunks.
 - `rustfmt` (copies, counted per file against `88c5861`): `crates/engine/src/lib.rs` 66 hunks
   before and after; `app/src-tauri/src/main.rs` 229 before and after; touched child files
   unchanged. The new files format clean. `git diff --check` clean.
+
+### 8.7 Independent review and fixes
+
+An independent review of `eb62381` raised the findings below. Each fix is in this branch and
+named by its evidence in 8.4.
+
+| # | Finding | Outcome |
+| --- | --- | --- |
+| 1 | Undo whose target puts a live Cue in another Bank or group released it | Fixed: the Cue stays live under the target's Bank and group |
+| 2 | An effect toggle to the authored value did nothing while a Cue held the live flag the other way | Fixed: the toggle takes the effect back from playback; `NoOp` receipt, token unchanged |
+| 3 | The Standby compared the sidecar with a fresh engine capture, so a layer it could not apply reloaded the project on every heartbeat | Fixed: it compares the sidecar checksum with the last one it synced |
+| 4 | Retention removed whatever sidecar file a manifest named | Fixed: a manifest may name only its own sidecar; retention computes the name |
+| 5 | Undo during a fade froze intermediate levels that no Cue owns | Fixed: a running fade is carried at its targets |
+| 6 | Carried Cues lost their exact release targets | Fixed within one process; across machines see 8.5 |
+| 7 | A level whose Bank the target removes made the carried layer invalid | Fixed: Undo keeps it without Bank scaling; Standby `Apply` rejects it |
+| 8 | Removing several live Cues at once released keys a surviving Cue still held | Fixed: a key returns to its release target only when no surviving Cue holds it |
+| 9 | An older Primary's live Cue references reloaded the Standby on every heartbeat | Fixed: they are dropped before the hash |
+| 10 | An unknown sidecar version blocked an older Standby from syncing a newer Primary | Fixed: only the live layer is dropped, with a warning |
+| 11 | Undo of a level edit made over a live Cue shows the authored level | Kept and documented in 8.5 |
+| 12 | Remove Effect leaves a stale playback entry | Kept: nothing reads it (8.5) |
+| 13 | Bank origins kept for authored keys | No change: an authored write already clears its origin |
