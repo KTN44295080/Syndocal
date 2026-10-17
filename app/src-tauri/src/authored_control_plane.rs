@@ -1004,6 +1004,9 @@ mod tests {
     mod bpm_history_tests {
         include!("bpm_history_tests.rs");
     }
+    mod live_traffic_authority_tests {
+        include!("live_traffic_authority_tests.rs");
+    }
     use std::{
         sync::{
             atomic::{AtomicU64, Ordering},
