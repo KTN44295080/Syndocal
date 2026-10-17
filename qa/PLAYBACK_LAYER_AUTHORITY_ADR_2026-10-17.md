@@ -1,7 +1,8 @@
 # Playback layer and project authority - ADR - 2026-10-17
 
-- Decision: `DEC-PLAYBACK-LAYER-001`, registered **Open** in `qa/SYNDOCAL_Q1_Q4_LEDGER.json`.
-  It is waiting for the product owner. No runtime code is changed by this document.
+- Decision: `DEC-PLAYBACK-LAYER-001`, **Accepted 2026-10-17** by the product owner, who chose the
+  recommended answer to all four questions in section 5. Recorded in `qa/SYNDOCAL_Q1_Q4_LEDGER.json`.
+  The proposal commit changed no runtime code. The implementation follows section 6.
 - Problem: Cue playback rewrites the persisted project image. Each Cue trigger and each Timeline
   Scene Block therefore advances the project revision, clears Undo/Redo and retires exact
   authority tokens.
@@ -240,6 +241,15 @@ Common engine model:
 - Same engine work as (a1), plus the format change. Not recommended.
 
 ## 5. Questions for the product owner
+
+Owner answers (AskUserQuestion, 2026-10-17). The recommended option was chosen for each question:
+
+1. Opening a file starts with no Cue live (a1).
+2. Architecture (a): authored base plus playback layer, and Undo/Redo keeps the playback layer.
+3. Standby Take Over carries the playback layer.
+4. Undo/Redo output behaviour stays as today.
+
+The questions as asked:
 
 1. **Reopen:** opening a file (Open, recent, template, backup, recovery) starts with no Cue live,
    authored state only. *Recommended: yes (a1).* Alternative: restore the last look (a2).
