@@ -89,7 +89,8 @@ mod tests {
         // The generated inventory contains the 278-command baseline plus the
         // disabled Spout restoration publication and authored blackout target
         // publication, atomic fixture repatching and network route publication added afterward.
-        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 284;
+        // RequestPlaybackLayerSnapshot (DEC-PLAYBACK-LAYER-001) is the 285th.
+        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 285;
         let descriptors = control_plane_engine_command_descriptors();
         let variant_names = EngineCommand::CONTROL_PLANE_VARIANT_NAMES
             .iter()
@@ -109,6 +110,7 @@ mod tests {
         assert!(variant_names.contains("RetireShowSpoutOutputsAfterAuthorityLossPublished"));
         assert!(variant_names.contains("ResetShowSpoutOutputsExactPublished"));
         assert!(variant_names.contains("RequestSnapshotPublication"));
+        assert!(variant_names.contains("RequestPlaybackLayerSnapshot"));
         assert!(variant_names.contains("SetNetworkDmxRoutesPublished"));
         assert!(variant_names.contains("EnableShowSerialDmxSafetyBlackoutRoute"));
         assert!(variant_names.contains("StopShowSerialDmxSafetyBlackoutRoute"));

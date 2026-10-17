@@ -907,8 +907,32 @@ fn execute_set_effect_enabled_with_publish(
         }
     };
     if current_enabled == request.payload.enabled {
-        // No engine send, publication generation, revision, history entry or
-        // Undo/Redo mutation. The DTO validator proves post_fence == start.
+        // The authored flag already matches: no publication generation,
+        // revision, history entry or Undo/Redo mutation, and the DTO validator
+        // proves post_fence == start. A Cue may still hold the live flag the
+        // other way (DEC-PLAYBACK-LAYER-001); the same engine write then takes
+        // the effect back from playback without changing authored state.
+        let live_enabled = match state.engine.live_look_snapshot() {
+            Ok(snapshot) => snapshot
+                .effects
+                .iter()
+                .find(|effect| effect.id == request.payload.effect_id)
+                .map(|effect| effect.enabled),
+            Err(_) => {
+                return terminal_failure(
+                    request,
+                    shape_sha256,
+                    AuthoredCommandErrorCodeV1::Internal,
+                )
+            }
+        };
+        if live_enabled != Some(request.payload.enabled) && publish().is_err() {
+            return terminal_failure(
+                request,
+                shape_sha256,
+                AuthoredCommandErrorCodeV1::PublicationFailed,
+            );
+        }
         return terminal_applied(
             request,
             shape_sha256,
@@ -1006,6 +1030,9 @@ mod tests {
     }
     mod live_traffic_authority_tests {
         include!("live_traffic_authority_tests.rs");
+    }
+    mod playback_layer_authority_tests {
+        include!("playback_layer_authority_tests.rs");
     }
     use std::{
         sync::{
@@ -1268,6 +1295,7 @@ mod tests {
         crate::publish_project_snapshot_with_runtime_reset_admission(
             state,
             prepared.snapshot.clone(),
+            prepared.playback.clone(),
         )?;
         crate::reset_project_runtime_after_published_snapshot_infallible(state);
         crate::commit_history_navigation_coordinator_after_ack(

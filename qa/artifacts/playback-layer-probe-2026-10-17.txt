@@ -1,0 +1,409 @@
+# Temporary playback write-set probe (not compiled into the product)
+#
+# Base: 88c5861 (main). Probe source appended inside the engine `mod tests` with include!,
+# run with: cargo test -p engine --lib zz_probe -- --nocapture --test-threads=1
+# then the include was reverted. Diffs are JSON paths of build_persistence_snapshot().
+# The app save projection (project_snapshot_for_save) additionally drops telemetry,
+# active_fade, clock phase, auto_vj status and swaps 'video' for 'authored_video'.
+
+## Output
+
+running 3 tests
+test tests::zz_probe_output_modifier_group_write_set ... === TriggerCue(3) [video output target]: 8 changed path(s)
+    .active_cue_id: null -> 3
+    .authored_video.outputs[0].blackout: false -> true
+    .authored_video.outputs[0].enabled: false -> true
+    .authored_video.outputs[0].opacity: 1.0 -> 0.4000000059604645
+    .cue_lists[0].active_cue_id: null -> 3
+    .video.outputs[0].blackout: false -> true
+    .video.outputs[0].enabled: false -> true
+    .video.outputs[0].opacity: 1.0 -> 0.4000000059604645
+=== ReleaseCue(3) vs authored: 6 changed path(s)
+    .authored_video.outputs[0].blackout: false -> true
+    .authored_video.outputs[0].enabled: false -> true
+    .authored_video.outputs[0].opacity: 1.0 -> 0.4000000059604645
+    .video.outputs[0].blackout: false -> true
+    .video.outputs[0].enabled: false -> true
+    .video.outputs[0].opacity: 1.0 -> 0.4000000059604645
+live modifier err=None
+=== SetCueLiveModifier(1): 0 changed path(s)
+=== TriggerCue(4) [group cue]: 4 changed path(s)
+    .active_cue_id: null -> 4
+    .active_group_cue_ids: None -> Some(Object {"front": Number(4)})
+    .cue_lists[0].active_cue_id: null -> 4
+    .fixtures[0].attribute_values[0].value: 0 -> 30000
+ok
+test tests::zz_probe_playback_write_set ... base dimmer=Some(1000) pan=Some(0) cues=[(1, 1, true, Coexist), (2, 1, true, Coexist)]
+=== TriggerCue(1) [fixture+video layer+legacy effect]: 8 changed path(s)
+    .active_cue_id: null -> 1
+    .cue_lists[0].active_cue_id: null -> 1
+    .effects[0].enabled: false -> true
+    .fixtures[0].attribute_values[0].value: 1000 -> 40000
+    .telemetry.enabled_effect_count: 0 -> 1
+    .video.layers[0].state.opacity: 1.0 -> 0.25
+    .video.layers[0].state.playing: false -> true
+    .video.layers[0].state.position_ms: 0 -> 250
+live dimmer=Some(40000) pan=Some(0)
+=== TriggerCue(2) mid-fade vs after cue 1: 4 changed path(s)
+    .active_cue_id: 1 -> 2
+    .active_fade: null -> {"cue_id":2,"paused":false,"progress":0.0,"remaining_ms":1000}
+    .cue_lists[0].active_cue_id: 1 -> 2
+    .fixtures[0].attribute_values[1].value: 0 -> 25004
+mid dimmer=Some(40000) pan=Some(25004) active_fade=true
+reopened mid: dimmer=Some(40000) pan=Some(25004) active_cue=Some(2) active_fade=false effect10=[true]
+=== reopen(mid) image vs saved mid image: 8 changed path(s)
+    .active_fade: {"cue_id":2,"paused":false,"progress":0.0,"remaining_ms":1000} -> null
+    .authored_video.auto_vj.status.show_revision: 0 -> 1640902986908497915
+    .clock.beat_phase: 3.4899999263870995e-6 -> 0.0
+    .fixtures[0].profile_source_path: "memory://fixture.gdtf" -> "snapshot://fixture/1"
+    .video.auto_vj.status.show_revision: 0 -> 1640902986908497915
+    .video.layers[0].state.opacity: 0.25 -> 1.0
+    .video.layers[0].state.playing: true -> false
+    .video.layers[0].state.position_ms: 250 -> 0
+after cue 2: dimmer=Some(40000) pan=Some(50000) active=Some(2)
+after release 2: dimmer=Some(40000) pan=Some(0) active=None err=None
+after release 1: dimmer=Some(0) pan=Some(0) active=None err=None
+=== live release of both vs authored: 6 changed path(s)
+    .effects[0].enabled: false -> true
+    .fixtures[0].attribute_values[0].value: 1000 -> 0
+    .telemetry.enabled_effect_count: 0 -> 1
+    .video.layers[0].state.opacity: 1.0 -> 0.25
+    .video.layers[0].state.playing: false -> true
+    .video.layers[0].state.position_ms: 0 -> 250
+reopened after_b: dimmer=Some(40000) pan=Some(50000) active=Some(2)
+=== reopen(after_b) image vs saved: 7 changed path(s)
+    .authored_video.auto_vj.status.show_revision: 0 -> 1640902986908497915
+    .clock.beat_phase: 3.4899999263870995e-6 -> 0.0
+    .fixtures[0].profile_source_path: "memory://fixture.gdtf" -> "snapshot://fixture/1"
+    .video.auto_vj.status.show_revision: 0 -> 1640902986908497915
+    .video.layers[0].state.opacity: 0.25 -> 1.0
+    .video.layers[0].state.playing: true -> false
+    .video.layers[0].state.position_ms: 250 -> 0
+reopened release 2: dimmer=Some(40000) pan=Some(0) active=None err=None
+=== reopened+released vs authored: 7 changed path(s)
+    .authored_video.auto_vj.status.show_revision: 0 -> 1640902986908497915
+    .clock.beat_phase: 3.4899999263870995e-6 -> 0.0
+    .effects[0].enabled: false -> true
+    .fixtures[0].attribute_values[0].value: 1000 -> 40000
+    .fixtures[0].profile_source_path: "memory://fixture.gdtf" -> "snapshot://fixture/1"
+    .telemetry.enabled_effect_count: 0 -> 1
+    .video.auto_vj.status.show_revision: 0 -> 1640902986908497915
+fader over live cue: dimmer=Some(20000)
+after release: dimmer=Some(0) (authored base was 1000, fader wrote 20000)
+ok
+test tests::zz_probe_timeline_playback_write_set ... automation add err=None
+=== SetTimelinePlaying(true) alone: 1 changed path(s)
+    .telemetry.last_tick_interval_us: 0 -> 10000
+timeline pos=500 active=Some(1) dimmer=Some(40000) pan=Some(30000)
+=== Timeline 500 ms (Scene Block @20 ms + Pan automation): 10 changed path(s)
+    .active_cue_id: null -> 1
+    .cue_lists[0].active_cue_id: null -> 1
+    .effects[0].enabled: false -> true
+    .fixtures[0].attribute_values[0].value: 1000 -> 40000
+    .fixtures[0].attribute_values[1].value: 0 -> 30000
+    .telemetry.enabled_effect_count: 0 -> 1
+    .telemetry.last_tick_interval_us: 0 -> 10000
+    .video.layers[0].state.opacity: 1.0 -> 0.25
+    .video.layers[0].state.playing: false -> true
+    .video.layers[0].state.position_ms: 0 -> 250
+=== Timeline stopped vs authored: 10 changed path(s)
+    .active_cue_id: null -> 1
+    .cue_lists[0].active_cue_id: null -> 1
+    .effects[0].enabled: false -> true
+    .fixtures[0].attribute_values[0].value: 1000 -> 40000
+    .fixtures[0].attribute_values[1].value: 0 -> 30000
+    .telemetry.enabled_effect_count: 0 -> 1
+    .telemetry.last_tick_interval_us: 0 -> 10000
+    .video.layers[0].state.opacity: 1.0 -> 0.25
+    .video.layers[0].state.playing: false -> true
+    .video.layers[0].state.position_ms: 0 -> 250
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1149 filtered out; finished in 0.04s
+
+## Probe source
+
+// Temporary measurement probe (not committed). Included at the end of
+// `crates/engine/src/lib.rs` `mod tests` to diff the persistence image.
+
+fn probe_diff(path: &str, a: &serde_json::Value, b: &serde_json::Value, out: &mut Vec<String>) {
+    use serde_json::Value;
+    match (a, b) {
+        (Value::Object(x), Value::Object(y)) => {
+            let mut keys: Vec<&String> = x.keys().chain(y.keys()).collect();
+            keys.sort();
+            keys.dedup();
+            for k in keys {
+                let p = format!("{path}.{k}");
+                match (x.get(k), y.get(k)) {
+                    (Some(l), Some(r)) => probe_diff(&p, l, r, out),
+                    (l, r) => out.push(format!("{p}: {:?} -> {:?}", l, r)),
+                }
+            }
+        }
+        (Value::Array(x), Value::Array(y)) if x.len() == y.len() => {
+            for (i, (l, r)) in x.iter().zip(y).enumerate() {
+                probe_diff(&format!("{path}[{i}]"), l, r, out);
+            }
+        }
+        _ if a == b => {}
+        _ => {
+            let s = |v: &Value| {
+                let t = v.to_string();
+                if t.len() > 160 { format!("{}...", &t[..160]) } else { t }
+            };
+            out.push(format!("{path}: {} -> {}", s(a), s(b)));
+        }
+    }
+}
+
+fn probe_image(runtime: &EngineRuntime) -> serde_json::Value {
+    serde_json::to_value(runtime.build_persistence_snapshot()).unwrap()
+}
+
+fn probe_report(label: &str, a: &serde_json::Value, b: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    probe_diff("", a, b, &mut out);
+    eprintln!("=== {label}: {} changed path(s)", out.len());
+    for line in &out {
+        eprintln!("    {line}");
+    }
+    out
+}
+
+fn probe_dimmer(runtime: &EngineRuntime) -> Option<u16> {
+    runtime.values.get(&(1, "Dimmer".to_string())).copied()
+}
+
+fn probe_pan(runtime: &EngineRuntime) -> Option<u16> {
+    runtime.values.get(&(1, "Pan".to_string())).copied()
+}
+
+fn probe_runtime() -> EngineRuntime {
+    let mut runtime = runtime_with_lfo_effects(&[(10, false)]);
+    runtime.apply_command(EngineCommand::AddVideoLayer {
+        layer_id: 1,
+        label: "Layer 1".to_string(),
+        source: VideoSourceSummary {
+            kind: protocol::VideoSourceKind::File,
+            path: Some("memory://clip.mp4".to_string()),
+            name: None,
+            codec: Some("H264".to_string()),
+            metadata: None,
+        },
+    });
+    assert_eq!(runtime.last_error, None);
+    // Authored base level, written by a fader.
+    runtime.apply_command(EngineCommand::SetAttribute {
+        fixture_id: 1,
+        attribute: "Dimmer".into(),
+        value: 1_000,
+    });
+    runtime.apply_command(EngineCommand::CreateCue {
+        authored_beats: None,
+        cue_id: 1,
+        label: "Look A".to_string(),
+        fade_ms: 0,
+        targets: vec![CueFixtureTarget {
+            fixture_id: 1,
+            values: vec![AttributeValueSummary {
+                attribute: "Dimmer".to_string(),
+                value: 40_000,
+            }],
+        }],
+        video_targets: vec![VideoLayerTarget {
+            layer_id: 1,
+            state: VideoLayerState {
+                opacity: 0.25,
+                playing: true,
+                position_ms: 250,
+                ..VideoLayerState::default()
+            },
+        }],
+        video_output_targets: Vec::new(),
+        node_graph_targets: Vec::new(),
+        effect_targets: vec![CueEffectTarget {
+            effect_id: 10,
+            enabled: true,
+            params: None,
+            transition_ms: None,
+        }],
+    });
+    assert_eq!(runtime.last_error, None);
+    runtime.apply_command(EngineCommand::CreateCue {
+        authored_beats: None,
+        cue_id: 2,
+        label: "Look B (pan only, 1 s fade)".to_string(),
+        fade_ms: 1_000,
+        targets: vec![CueFixtureTarget {
+            fixture_id: 1,
+            values: vec![AttributeValueSummary {
+                attribute: "Pan".to_string(),
+                value: 50_000,
+            }],
+        }],
+        video_targets: Vec::new(),
+        video_output_targets: Vec::new(),
+        node_graph_targets: Vec::new(),
+        effect_targets: Vec::new(),
+    });
+    assert_eq!(runtime.last_error, None);
+    runtime
+}
+
+#[test]
+fn zz_probe_playback_write_set() {
+    // 1. Trigger cue 1 (fixture + video layer + legacy effect target).
+    let mut runtime = probe_runtime();
+    let authored = probe_image(&runtime);
+    eprintln!("base dimmer={:?} pan={:?} cues={:?}", probe_dimmer(&runtime), probe_pan(&runtime),
+        runtime.cues.iter().map(|c| (c.id, c.cue_list_id, c.tracking, c.recall_mode)).collect::<Vec<_>>());
+    runtime.apply_command(EngineCommand::TriggerCue(1));
+    runtime.apply_active_fade(Instant::now() + Duration::from_secs(5));
+    let after_a = probe_image(&runtime);
+    probe_report("TriggerCue(1) [fixture+video layer+legacy effect]", &authored, &after_a);
+    eprintln!("live dimmer={:?} pan={:?}", probe_dimmer(&runtime), probe_pan(&runtime));
+
+    // 2. GO cue 2 (pan only, 1 s fade) in the same list; sample mid-fade.
+    runtime.apply_command(EngineCommand::TriggerCue(2));
+    let t0 = Instant::now();
+    runtime.apply_active_fade(t0 + Duration::from_millis(500));
+    let mid = probe_image(&runtime);
+    probe_report("TriggerCue(2) mid-fade vs after cue 1", &after_a, &mid);
+    eprintln!("mid dimmer={:?} pan={:?} active_fade={}", probe_dimmer(&runtime), probe_pan(&runtime), runtime.active_fade.is_some());
+
+    // 3. Reopen the mid-fade image.
+    let mut reopened = child_graph_test_engine();
+    reopened
+        .load_project_snapshot_checked(serde_json::from_value(mid.clone()).unwrap())
+        .unwrap();
+    eprintln!(
+        "reopened mid: dimmer={:?} pan={:?} active_cue={:?} active_fade={} effect10={:?}",
+        probe_dimmer(&reopened), probe_pan(&reopened), reopened.active_cue_id,
+        reopened.active_fade.is_some(),
+        reopened.effects.iter().map(|e| e.enabled).collect::<Vec<_>>()
+    );
+    probe_report("reopen(mid) image vs saved mid image", &mid, &probe_image(&reopened));
+
+    // 4. Finish the fade, release cue 2 then cue 1 live; compare to authored.
+    runtime.apply_active_fade(t0 + Duration::from_secs(5));
+    eprintln!("after cue 2: dimmer={:?} pan={:?} active={:?}", probe_dimmer(&runtime), probe_pan(&runtime), runtime.active_cue_id);
+    let after_b = probe_image(&runtime);
+    runtime.apply_command(EngineCommand::ReleaseCue(2));
+    runtime.apply_active_fade(Instant::now() + Duration::from_secs(5));
+    eprintln!("after release 2: dimmer={:?} pan={:?} active={:?} err={:?}", probe_dimmer(&runtime), probe_pan(&runtime), runtime.active_cue_id, runtime.last_error);
+    runtime.apply_command(EngineCommand::ReleaseCue(1));
+    runtime.apply_active_fade(Instant::now() + Duration::from_secs(5));
+    eprintln!("after release 1: dimmer={:?} pan={:?} active={:?} err={:?}", probe_dimmer(&runtime), probe_pan(&runtime), runtime.active_cue_id, runtime.last_error);
+    probe_report("live release of both vs authored", &authored, &probe_image(&runtime));
+
+    // 5. Reopen the settled cue-2 image, then release there.
+    let mut reopened = child_graph_test_engine();
+    reopened
+        .load_project_snapshot_checked(serde_json::from_value(after_b.clone()).unwrap())
+        .unwrap();
+    eprintln!("reopened after_b: dimmer={:?} pan={:?} active={:?}", probe_dimmer(&reopened), probe_pan(&reopened), reopened.active_cue_id);
+    probe_report("reopen(after_b) image vs saved", &after_b, &probe_image(&reopened));
+    let active = reopened.active_cue_id;
+    if let Some(cue) = active {
+        reopened.apply_command(EngineCommand::ReleaseCue(cue));
+        reopened.apply_active_fade(Instant::now() + Duration::from_secs(5));
+        eprintln!("reopened release {cue}: dimmer={:?} pan={:?} active={:?} err={:?}", probe_dimmer(&reopened), probe_pan(&reopened), reopened.active_cue_id, reopened.last_error);
+    }
+    probe_report("reopened+released vs authored", &authored, &probe_image(&reopened));
+
+    // 6. Fader edit while cue 1 is live, then release cue 1.
+    let mut runtime = probe_runtime();
+    runtime.apply_command(EngineCommand::TriggerCue(1));
+    runtime.apply_active_fade(Instant::now() + Duration::from_secs(5));
+    runtime.apply_command(EngineCommand::SetAttribute { fixture_id: 1, attribute: "Dimmer".into(), value: 20_000 });
+    eprintln!("fader over live cue: dimmer={:?}", probe_dimmer(&runtime));
+    runtime.apply_command(EngineCommand::ReleaseCue(1));
+    runtime.apply_active_fade(Instant::now() + Duration::from_secs(5));
+    eprintln!("after release: dimmer={:?} (authored base was 1000, fader wrote 20000)", probe_dimmer(&runtime));
+}
+
+#[test]
+fn zz_probe_timeline_playback_write_set() {
+    let mut runtime = probe_runtime();
+    runtime.apply_command(EngineCommand::AddTimelineCueEvent {
+        time_beats: None,
+        event_id: 50,
+        cue_id: 1,
+        time_ms: 20,
+        track: TimelineTrackKind::Lighting,
+        layer_id: None,
+    });
+    assert_eq!(runtime.last_error, None);
+    runtime.apply_command(EngineCommand::AddTimelineAutomation {
+        automation_id: 60,
+        fixture_id: 1,
+        attribute: "Pan".to_string(),
+        keyframes: vec![
+            AutomationKeyframeSummary { time_ms: 0, value: 0, interpolation: AutomationInterpolation::Linear },
+            AutomationKeyframeSummary { time_ms: 1_000, value: 60_000, interpolation: AutomationInterpolation::Linear },
+        ],
+    });
+    eprintln!("automation add err={:?}", runtime.last_error);
+    let authored = probe_image(&runtime);
+    runtime.last_tick_interval = Duration::from_millis(10);
+    runtime.apply_command(EngineCommand::SetTimelinePlaying(true));
+    let started = Instant::now();
+    let after_play_cmd = probe_image(&runtime);
+    probe_report("SetTimelinePlaying(true) alone", &authored, &after_play_cmd);
+    for step in 1..=50u64 {
+        let now = started + Duration::from_millis(step * 10);
+        runtime.advance_timeline(now);
+        runtime.advance_pending_cue(now);
+        runtime.apply_timeline_automations();
+        runtime.apply_active_fade(now);
+    }
+    eprintln!("timeline pos={} active={:?} dimmer={:?} pan={:?}", runtime.timeline_position_ms, runtime.active_cue_id, probe_dimmer(&runtime), probe_pan(&runtime));
+    probe_report("Timeline 500 ms (Scene Block @20 ms + Pan automation)", &authored, &probe_image(&runtime));
+    runtime.apply_command(EngineCommand::SetTimelinePlaying(false));
+    probe_report("Timeline stopped vs authored", &authored, &probe_image(&runtime));
+}
+
+#[test]
+fn zz_probe_output_modifier_group_write_set() {
+    let mut runtime = probe_runtime();
+    runtime.apply_command(EngineCommand::AddVideoOutput(allocator_video_output(7)));
+    assert_eq!(runtime.last_error, None);
+    runtime.apply_command(EngineCommand::CreateCue {
+        authored_beats: None,
+        cue_id: 3,
+        label: "Output dip".to_string(),
+        fade_ms: 0,
+        targets: Vec::new(),
+        video_targets: Vec::new(),
+        video_output_targets: vec![VideoOutputTarget { output_id: 7, enabled: true, opacity: 0.4, blackout: true }],
+        node_graph_targets: Vec::new(),
+        effect_targets: Vec::new(),
+    });
+    assert_eq!(runtime.last_error, None);
+    let authored = probe_image(&runtime);
+    runtime.apply_command(EngineCommand::TriggerCue(3));
+    runtime.apply_active_fade(Instant::now() + Duration::from_secs(5));
+    probe_report("TriggerCue(3) [video output target]", &authored, &probe_image(&runtime));
+    runtime.apply_command(EngineCommand::ReleaseCue(3));
+    runtime.apply_active_fade(Instant::now() + Duration::from_secs(5));
+    probe_report("ReleaseCue(3) vs authored", &authored, &probe_image(&runtime));
+
+    let mut runtime = probe_runtime();
+    let authored = probe_image(&runtime);
+    runtime.apply_command(EngineCommand::SetCueLiveModifier {
+        cue_id: 1, speed: 2.0, size: 0.5, phase: 0.25, direction: CueLiveDirection::Reverse, segment: 0,
+    });
+    eprintln!("live modifier err={:?}", runtime.last_error);
+    probe_report("SetCueLiveModifier(1)", &authored, &probe_image(&runtime));
+
+    let mut runtime = runtime_with_lfo_effects(&[]);
+    create_group_recall_cue(
+        &mut runtime, 4, "front", RecallMode::Coexist,
+        GroupRecallTarget { fade_ms: 0, attribute: "Dimmer", value: 30_000 }, Vec::new(),
+    );
+    let authored = probe_image(&runtime);
+    runtime.apply_command(EngineCommand::TriggerCue(4));
+    runtime.apply_active_fade(Instant::now() + Duration::from_secs(5));
+    probe_report("TriggerCue(4) [group cue]", &authored, &probe_image(&runtime));
+}

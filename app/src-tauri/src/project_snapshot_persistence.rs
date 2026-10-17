@@ -104,6 +104,10 @@ pub(super) fn project_snapshot_for_save(mut snapshot: EngineSnapshot) -> EngineS
         graph.audio_runtime.clear();
     }
     snapshot.active_fade = None;
+    // The live Cue is playback, not project data (DEC-PLAYBACK-LAYER-001).
+    // The engine's persistence image already omits it; the writer keeps that
+    // guarantee locally too.
+    protocol::clear_active_cue_references(&mut snapshot);
     snapshot.direct_child_timeline_transports.clear();
     clear_project_timeline_runtime(&mut snapshot);
     snapshot.video.auto_vj.status = protocol::AutoVjStatus::default();
