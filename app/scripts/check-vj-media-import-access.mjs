@@ -242,7 +242,7 @@ const mixerClipGridStyles = finalCssBlockWithDeclaration(styles, mixerClipGridSe
 const mixerClipPadStyles = finalCssBlock(styles, mixerClipPadSelector, "mixer clip-pad viewport");
 const mixerThumbnailStyles = finalCssBlock(styles, mixerThumbnailSelector, "mixer thumbnail viewport");
 const baseClipPadStyles = exactCssBlock(styles, ".videoClipPad", "base clip-pad sizing");
-const shortHeightMixerMarker = "/* At the 720/768 px operating floor";
+const shortHeightMixerMarker = "/* Low-height windows keep enough room for the lower media/clip workspace.";
 const shortHeightMixerIndex = requiredIndex(styles, shortHeightMixerMarker, "short-height mixer reflow");
 const mixerLayoutStyles = lastExactCssBlock(
   styles.slice(0, shortHeightMixerIndex),
@@ -304,17 +304,17 @@ assert.match(
 );
 assert.match(
   mixerLayoutStyles,
-  /grid-template-rows:\s*36px\s+minmax\(0,\s*0\.46fr\)\s+5px\s+minmax\(0,\s*0\.54fr\);/,
+  /grid-template-rows:\s*36px\s+minmax\(0,\s*0\.64fr\)\s+5px\s+minmax\(0,\s*0\.36fr\);/,
   "Video must use a header, spanning top pane, structural splitter, and lower grid",
 );
 assert.match(
   shortHeightMixerLayoutStyles,
-  /grid-template-columns:\s*minmax\(390px,\s*1\.1fr\)\s+minmax\(520px,\s*1fr\);/,
+  /grid-template-columns:\s*minmax\(390px,\s*1\.04fr\)\s+minmax\(520px,\s*1fr\);/,
   "short-height Video keeps the shared two-column grid while favoring the clip-bank column",
 );
 assert.match(
   shortHeightMixerLayoutStyles,
-  /grid-template-rows:\s*36px\s+minmax\(0,\s*0\.36fr\)\s+5px\s+minmax\(0,\s*0\.64fr\);/,
+  /grid-template-rows:\s*36px\s+minmax\(0,\s*0\.64fr\)\s+5px\s+minmax\(0,\s*0\.36fr\);/,
   "short-height Video reflows height to the lower clip/context pair instead of shrinking controls",
 );
 const mixerClipColumnCount = Number(mixerClipGridResponsiveStyles.match(/grid-template-columns:\s*repeat\((\d+)/)?.[1]);
@@ -327,7 +327,7 @@ assert.match(
 );
 assert.match(
   fullscreenMixerLayoutStyles,
-  /grid-template-rows:\s*minmax\(0,\s*0\.47fr\)\s+5px\s+minmax\(0,\s*0\.53fr\);/,
+  /grid-template-rows:\s*minmax\(0,\s*0\.64fr\)\s+5px\s+minmax\(0,\s*0\.36fr\);/,
   "fullscreen hidden-header layout keeps top / divider / lower shared rows",
 );
 assert.match(
@@ -337,7 +337,7 @@ assert.match(
 );
 assert.match(
   paneMixerLayoutStyles,
-  /grid-template-rows:\s*36px\s+minmax\(0,\s*0\.46fr\)\s+5px\s+minmax\(0,\s*0\.54fr\);/,
+  /grid-template-rows:\s*36px\s+minmax\(0,\s*0\.64fr\)\s+5px\s+minmax\(0,\s*0\.36fr\);/,
   "the 860px mixer pane balances >=100px real monitor viewports with active lower local-scroll rows",
 );
 assert.match(shortHeightMixerStyles, /\.videoControlPanelMixer \.liveVideoMonitorPanel\s*\{[\s\S]*?gap:\s*5px;[\s\S]*?padding:\s*6px;/, "short-height monitor reflow must retain the base 5px gap and 6px padding");
@@ -553,7 +553,7 @@ assert.doesNotMatch(mediaAssetThumbnailEffect, /captureProjectAuthorityIdentity\
 // deferred native-read races. Do not duplicate it with a hand-written model
 // that can drift from createLatestThumbnailBatch/readThumbnailWithRetry.
 await import("./check-media-thumbnail-controller.mjs");
-assert.match(app, /if \(mode === "mixer"\) authorizeVideoThumbnailAccess\(\);/, "an explicit Mixer selection authorizes thumbnails");
+assert.match(app, /if \(mode === "mixer" \|\| mode === "perform"\) authorizeVideoThumbnailAccess\(\);/, "an explicit Mixer or Perform selection authorizes thumbnails");
 assert.match(app, /onRequestThumbnails: authorizeVideoThumbnailAccess/, "the visible thumbnail request authorizes the same cache");
 assert.match(clipGrid, /data-vj-thumbnail-request[\s\S]*?onClick=\{props\.onRequestThumbnails\}/, "populated grid exposes an explicit source-read action");
 const projectReset = sliceBetween(
@@ -617,7 +617,7 @@ assert.match(controller, /end_media_asset_preview[\s\S]*?catch/, "End is a best-
 assert.match(controlPanel, /const \[previewAssetId, setPreviewAssetId\] = createSignal<MediaAssetId \| null>\(null\);[\s\S]*?setPreviewAssetId\(asset\.id\);/, "a single active asset ID limits concurrent video playback to one card");
 assert.match(controlPanel, /const \[previewAssetIdentity, setPreviewAssetIdentity\] = createSignal<string \| null>\(null\);/, "video preview remembers the exact catalog asset identity, not only its reusable numeric ID");
 assert.match(controlPanel, /asset\.content_hash\?\.algorithm[\s\S]*?asset\.content_hash\?\.hex[\s\S]*?asset\.byte_size/, "video preview identity includes persisted content hash and byte size, not only source path");
-assert.match(controlPanel, /if \(!props\.clipGrid\.thumbnailsAuthorized \|\| !activeAsset \|\| mediaPreviewIdentity\(activeAsset\) !== previewAssetIdentity\(\)\) \{[\s\S]*?stopMediaLibraryPreviewNow\(\);/, "project replacement, authorization reset, missing asset, or changed path immediately invalidates an old preview stream");
+assert.match(controlPanel, /if \(props\.performance \|\| !props\.clipGrid\.thumbnailsAuthorized \|\| !activeAsset \|\| mediaPreviewIdentity\(activeAsset\) !== previewAssetIdentity\(\)\) \{[\s\S]*?stopMediaLibraryPreviewNow\(\);/, "project replacement, authorization reset, missing asset, or changed path immediately invalidates an old preview stream");
 assert.match(controlPanel, /prefers-reduced-motion: reduce/, "reduced-motion preference fails safely to the still thumbnail");
 assert.match(libraryRail, /onVerify\(\[asset\.id\]\)/, "each asset has a dedicated Verify action");
 assert.match(libraryRail, /onRelink\(asset\.id\)/, "each local asset has a Relink picker action");
@@ -643,7 +643,7 @@ assert.doesNotMatch(controller, /pickerOperation\.setPhase\("hashing"\)/, "Relin
 const librarySurfaceStyles = cssBlock(styles, ".videoMediaLibrarySurface", "Media Library overlay");
 assert.match(librarySurfaceStyles, /position: absolute;/, "open Media Library overlays instead of shrinking the clip bank");
 assert.match(librarySurfaceStyles, /overflow: hidden auto;/, "open Media Library scrolls internally");
-assert.match(librarySurfaceStyles, /max-height: min\(340px, calc\(100vh - 120px\)\);/, "Media Library remains within the one-screen viewport envelope");
+assert.match(librarySurfaceStyles, /max-height: min\(340px, calc\(43dvh - 8px\)\);/, "Media Library remains within the one-screen viewport envelope");
 const libraryGridStyles = cssBlock(styles, ".videoMediaLibraryList", "Media Library card grid");
 assert.match(libraryGridStyles, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/, "Media Library preserves at least two responsive thumbnail columns in the clip pane");
 assert.match(styles, /@media \(min-width: 1500px\) \{[\s\S]*?\.videoMediaLibraryList \{[\s\S]*?repeat\(3, minmax\(0, 1fr\)\)/, "Media Library expands its responsive grid on wide operator screens");

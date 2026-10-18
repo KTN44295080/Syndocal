@@ -25,6 +25,15 @@ export const djLinkMachineBlockReasonText = (reason: string): string => ({
 }[reason] ?? "DJ Link is blocked until its machine authority can be verified.");
 
 const japaneseText: Record<string, string> = {
+  Theme: "テーマ",
+  Tally: "タリー",
+  Graphite: "グラファイト",
+  Ice: "アイス",
+  Cobalt: "コバルト",
+  Forest: "フォレスト",
+  Ember: "エンバー",
+  Neon: "ネオン",
+  Safe: "色覚サポート",
   Loaded: "読み込み済み",
   Queued: "キュー中",
   Error: "エラー",

@@ -156,7 +156,7 @@ const matrixFocusSource = `
  import { render } from 'solid-js/web';
  import { VideoPerformMatrix } from '/src/components/VideoPerformMatrix.tsx';
  import { viewportFixtureData } from '/src/viewportFixtureData.ts';
- import '/src/styles.css';
+ import '/src/theme.css';import '/src/styles.css';
  const initial=viewportFixtureData.vjBankLayers.slice(0,3).map((layer,i)=>({...structuredClone(layer),clip_slots:[101,102].map(id=>({id:i*100+id,media_asset_id:id,launch_quantization:'Immediate'}))}));
  const [layers,setLayers]=createSignal(initial);
  const [selectedLayer,setSelectedLayer]=createSignal(1),[selected,setSelected]=createSignal(101);
@@ -180,7 +180,7 @@ const quickFxFocusSource = `
  import { createSignal } from 'solid-js';
  import { render } from 'solid-js/web';
  import { VideoPerformQuickFx } from '/src/components/VideoPerformQuickFx.tsx';
- import '/src/styles.css';
+ import '/src/theme.css';import '/src/styles.css';
  const control={name:'gain',kind:'Float',value:[0.5,0,0,0],default:[0.5,0,0,0],minimum:[0,0,0,0],maximum:[1,0,0,0],values:[],labels:[]};
  const [layer,setLayer]=createSignal({id:1,label:'Focus layer',isf_effect:{label:'Focus effect',enabled:true,controls:[control],stack:[]}});
  const calls=[];
@@ -222,7 +222,7 @@ try {
   await new Promise((done, reject) => { reservation.once("error", reject); reservation.listen(0, "127.0.0.1", done); });
   const vitePort = reservation.address().port;
   await new Promise((done, reject) => reservation.close((error) => error ? reject(error) : done()));
-  server = await createServer({ root: appRoot, server: { host: "127.0.0.1", port: vitePort, strictPort: true }, clearScreen: false, plugins: [focusFixturePlugin] });
+  server = await createServer({ root: appRoot, cacheDir: resolve(evidenceDir, "vite-cache"), server: { host: "127.0.0.1", port: vitePort, strictPort: true }, clearScreen: false, plugins: [focusFixturePlugin] });
   await server.listen();
   const origin = server.resolvedUrls.local[0];
   profile = await mkdtemp(join(tmpdir(), "syndocal-perform-check-"));

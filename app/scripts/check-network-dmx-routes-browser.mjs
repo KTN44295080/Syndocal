@@ -19,7 +19,7 @@ try {
 import {render} from 'solid-js/web';
 import {createSignal} from 'solid-js';
 import {DmxOutputConfigPanel} from './src/components/DmxOutputConfigPanel';
-import './src/styles.css';
+import './src/theme.css';import './src/styles.css';
 const primary={enabled:true,protocol:'ArtNet',target_ip:'127.0.0.1',port:6454,universe:0,serial_port:'',serial_baud_rate:57600};
 const [routes,setRoutes]=createSignal([primary]),[epoch,setEpoch]=createSignal(1);
 window.__networkProof={calls:[],replace(rows){setRoutes([primary,...rows]);},newProject(){setEpoch(epoch()+1);setRoutes([primary]);}};

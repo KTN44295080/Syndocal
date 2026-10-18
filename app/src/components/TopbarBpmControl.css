@@ -11,6 +11,6 @@
 .topbarBpmError {
   position: fixed; z-index: 100;
   width: 260px; padding: 8px; white-space: normal; overflow-wrap: anywhere;
-  background: var(--panel, #161b20); color: var(--text, #e4e7eb);
-  border: 1px solid var(--border, #38424b);
+  background: var(--theme-panel); color: var(--theme-text);
+  border: 1px solid var(--theme-line);
 }

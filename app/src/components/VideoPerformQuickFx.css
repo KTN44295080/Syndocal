@@ -6,7 +6,7 @@
   overflow: hidden;
   padding: 4px 6px;
   border: 1px solid var(--ui-border);
-  background: #14191f;
+  background: var(--theme-panel);
 }
 
 /* One compact row: the title block is fixed so the chain scrolls beside it. The
@@ -47,7 +47,7 @@
 }
 
 .videoPerformQuickFxHeader span {
-  color: #b6c6d5;
+  color: var(--theme-muted);
 }
 
 .videoPerformQuickFxChain {
@@ -70,13 +70,13 @@
   height: 44px;
   gap: 8px;
   padding: 0 6px;
-  border-left: 3px solid #68829a;
-  background: #1a232d;
+  border-left: 3px solid var(--theme-accent);
+  background: var(--theme-raised);
 }
 
 .videoPerformQuickFxStage[data-fx-enabled="false"] {
-  border-left-color: #87919a;
-  background: #20232a;
+  border-left-color: var(--theme-line-strong);
+  background: var(--theme-inset);
 }
 
 .videoPerformQuickFxStageHeader {
@@ -92,7 +92,7 @@
 }
 
 .videoPerformQuickFxNumber {
-  color: #b6c6d5;
+  color: var(--theme-muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -109,7 +109,7 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  color: #d5e1ec;
+  color: var(--theme-text);
 }
 
 .videoPerformQuickFxParameter > span {
@@ -145,7 +145,7 @@
 }
 
 .videoPerformQuickFx :focus-visible {
-  outline: 2px solid #a8d9ff;
+  outline: 2px solid var(--theme-focus);
   outline-offset: -2px;
 }
 
@@ -153,5 +153,5 @@
 .videoPerformQuickFx .emptyHint {
   align-self: center;
   margin: 0;
-  color: #bbc6d0;
+  color: var(--theme-muted);
 }

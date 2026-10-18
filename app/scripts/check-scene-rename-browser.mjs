@@ -13,7 +13,7 @@ const root=resolve(dirname(fileURLToPath(import.meta.url)),'..'),name='.scene-re
 const artifacts=resolve(process.env.SYNDOCAL_SCENE_RENAME_ARTIFACT_DIR??resolve(root,'../target/qa/scene-rename-alpha77'));await mkdir(artifacts,{recursive:true});let server,browser;
 try{
 await writeFile(fixture,`
-import {createSignal} from 'solid-js';import {render} from 'solid-js/web';import {SceneMatrixPanel} from '/src/components/SceneMatrixPanel';import '/src/styles.css';
+import {createSignal} from 'solid-js';import {render} from 'solid-js/web';import {SceneMatrixPanel} from '/src/components/SceneMatrixPanel';import '/src/theme.css';import '/src/styles.css';
 const initial={id:1,label:'Old scene',cue_number:'1',cue_list_id:1,fade_ms:0,targets:[],effect_targets:[],recall_mode:'Coexist'};
 const [cues,setCues]=createSignal([{...initial}]),[selected,setSelected]=createSignal(1),[epoch,setEpoch]=createSignal(1);let reject=false,wait=null;
 window.proof={loadSameId:()=>{setEpoch(2);setCues([{...initial,label:'Other project'}])},calls:[],triggers:[],releases:[],flash:()=>setCues(cues().map(c=>({...c,live_modifier_defaults:{speed:1,size:1,phase:0,direction:'Forward',segment:0,flash:true}}))),reject:v=>reject=v,poll:()=>setCues(cues().map(c=>({...c}))),replace:()=>{setCues([]);queueMicrotask(()=>setCues([{...initial,label:'Replacement'}]))},delay:()=>{let resolve; wait=new Promise(r=>resolve=r);return ()=>resolve()},};

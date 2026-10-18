@@ -7,10 +7,10 @@
   min-height: 28px;
   align-items: center;
   gap: 8px;
-  border: 1px solid #514a43;
-  border-radius: 2px;
-  background: #171310;
-  color: #d9d2ca;
+  border: 1px solid var(--theme-line);
+  border-radius: 0;
+  background: var(--theme-panel);
+  color: var(--theme-text);
   padding: 0 8px;
   pointer-events: none;
   font-size: 10px;
@@ -20,22 +20,22 @@
 }
 
 .desktopWindowModeNotice strong {
-  color: #f4eee8;
+  color: var(--theme-text);
   font-size: inherit;
   font-weight: 800;
 }
 
 .desktopWindowModeNotice span {
-  color: #a69d94;
+  color: var(--theme-muted);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
 }
 
 .desktopWindowModeNotice[data-mode="fullscreen"] {
-  border-color: #8a6d4f;
+  border-color: var(--theme-accent);
 }
 
 .desktopWindowModeNotice[data-mode="error"] {
-  border-color: #a8564d;
-  color: #e8b0aa;
+  border-color: var(--theme-error);
+  color: var(--theme-error);
 }

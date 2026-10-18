@@ -27,7 +27,7 @@ import {render} from 'solid-js/web';
 import {createSignal} from 'solid-js';
 import {DmxOutputConfigPanel} from './src/components/DmxOutputConfigPanel';
 import {serialDmxConfirmationRequest} from './src/serialDmxDeviceInstance';
-import './src/styles.css';
+import './src/theme.css';import './src/styles.css';
 const [ports,setPorts]=createSignal([]), [binding,setBinding]=createSignal(null);
 const [cables,setCables]=createSignal({bindings:[],cables:[],persistenceError:null});
 const proof={requests:[], cableBinds:[], platform: v=>{

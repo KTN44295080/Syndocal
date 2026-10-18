@@ -1,18 +1,10 @@
 /* ---- Control skin (2026-10-14 design pass).
    One slider language for every native range input: a slim recessed track,
    the filled part in the accent (cue identity where a cue owns the control),
-   and a light round thumb that glows on hover/drag. Geometry is unchanged:
+   and a flat square cap on hover/drag. Geometry is unchanged:
    each component keeps its own input width/height and hit target; only the
    painted track and thumb change. `--range-fill` is maintained by
    rangeFill.ts. Vertical Live Edit faders keep their own chrome below. */
-:root {
-  --ui-range-track: #2a3035;
-  --ui-range-fill: #e98a3c;
-  --ui-range-thumb: #f4f6f7;
-  --ui-range-glow: rgb(233 138 60 / 0.28);
-  --ui-range-disabled: #59616a;
-}
-
 input[type="range"]:not(.verticalFaderNativeInput) {
   --range-fill-color: var(--ui-range-fill);
   --range-direction: to right;
@@ -25,12 +17,13 @@ input[type="range"]:not(.verticalFaderNativeInput) {
 }
 
 input[type="range"]:not(.verticalFaderNativeInput):focus-visible {
-  outline: none;
+  outline: 2px solid var(--theme-focus);
+  outline-offset: 1px;
 }
 
 input[type="range"]:not(.verticalFaderNativeInput)::-webkit-slider-runnable-track {
   block-size: 4px;
-  border-radius: 999px;
+  border-radius: 0;
   background: linear-gradient(
     var(--range-direction),
     var(--range-fill-color) 0 var(--range-fill, 50%),
@@ -45,8 +38,8 @@ input[type="range"]:not(.verticalFaderNativeInput)::-webkit-slider-thumb {
   inline-size: 14px;
   block-size: 14px;
   margin-block-start: -5px;
-  border: 2px solid var(--range-fill-color);
-  border-radius: 50%;
+  border: 2px solid var(--theme-fader-mark);
+  border-radius: 0;
   background: var(--ui-range-thumb);
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.6);
   transition: box-shadow 120ms ease, transform 120ms ease;
@@ -71,7 +64,7 @@ input[type="range"]:not(.verticalFaderNativeInput):disabled {
 }
 
 input[type="range"]:not(.verticalFaderNativeInput):disabled::-webkit-slider-thumb {
-  background: #9aa2a8;
+  background: var(--theme-disabled-text);
   box-shadow: none;
 }
 
@@ -97,7 +90,7 @@ input[type="range"]:not(.verticalFaderNativeInput):disabled::-webkit-slider-thum
 /* The saturation strip paints its own ramp on the input; the track stays
    clear so the ramp shows, and the thumb reads against any colour. */
 .colorSaturationStrip input[type="range"] {
-  border-radius: 999px;
+  border-radius: 0;
 }
 
 .colorSaturationStrip input[type="range"]::-webkit-slider-runnable-track {
@@ -110,8 +103,8 @@ input[type="range"]:not(.verticalFaderNativeInput):disabled::-webkit-slider-thum
   block-size: 18px;
   inline-size: 18px;
   margin-block-start: 2px;
-  border-color: #101214;
-  box-shadow: 0 0 0 2px #f4f6f7, 0 1px 4px rgb(0 0 0 / 0.7);
+  border-color: var(--theme-inset);
+  box-shadow: 0 0 0 2px var(--theme-fader-cap), 0 1px 4px rgb(0 0 0 / 0.7);
 }
 
 /* ---- Live Edit vertical faders: recessed slot with a scale, a lit level
@@ -139,9 +132,9 @@ input[type="range"]:not(.verticalFaderNativeInput):disabled::-webkit-slider-thum
 
 .verticalFaderTrack {
   width: 6px;
-  border-color: #3a3f43;
+  border-color: var(--theme-line-strong);
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.55);
-  background-color: #11100f;
+  background-color: var(--theme-fader-track);
   background-image: linear-gradient(
     to top,
     var(--fader-accent) 0 calc(100% - var(--syndocal-fader-position)),
@@ -152,9 +145,9 @@ input[type="range"]:not(.verticalFaderNativeInput):disabled::-webkit-slider-thum
 .verticalFaderThumb {
   width: 34px;
   height: 18px;
-  border: 1px solid #848c92;
-  border-radius: 4px;
-  background: linear-gradient(to bottom, #6a7277 0%, #4a5156 48%, #3a4045 52%, #30353a 100%);
+  border: 1px solid var(--theme-line-strong);
+  border-radius: 0;
+  background: var(--theme-fader-cap);
   box-shadow:
     0 2px 5px rgb(0 0 0 / 0.65),
     inset 0 1px 0 rgb(255 255 255 / 0.22);
@@ -166,12 +159,12 @@ input[type="range"]:not(.verticalFaderNativeInput):disabled::-webkit-slider-thum
   right: 6px;
   height: 2px;
   border-radius: 1px;
-  background: var(--fader-accent);
-  box-shadow: 0 0 4px rgb(233 138 60 / 0.55);
+  background: var(--theme-fader-mark);
+  box-shadow: none;
 }
 
 .verticalFaderChrome:hover > .verticalFaderThumb {
-  border-color: #b3bbc1;
+  border-color: var(--theme-focus);
 }
 
 .verticalFaderChrome:has(> .verticalFaderNativeInput[data-fader-pointer-captured="true"]) > .verticalFaderThumb {
@@ -182,25 +175,25 @@ input[type="range"]:not(.verticalFaderNativeInput):disabled::-webkit-slider-thum
     inset 0 1px 0 rgb(255 255 255 / 0.22);
 }
 
-/* ---- Progress bars share the slider language: slim rounded track, accent
+/* ---- Progress bars share the slider language: slim square track, accent
    value (cue identity on scene cards). Heights stay with each component. */
 progress {
   --progress-color: var(--ui-range-fill);
   -webkit-appearance: none;
   appearance: none;
   border: 0;
-  border-radius: 999px;
+  border-radius: 0;
   overflow: hidden;
   background-color: var(--ui-range-track);
 }
 
 progress::-webkit-progress-bar {
-  border-radius: 999px;
+  border-radius: 0;
   background-color: var(--ui-range-track);
 }
 
 progress::-webkit-progress-value {
-  border-radius: 999px;
+  border-radius: 0;
   background-color: var(--progress-color);
   transition: inline-size 80ms linear;
 }
@@ -210,5 +203,5 @@ progress::-webkit-progress-value {
 }
 
 .liveFadeMeter progress {
-  --progress-color: #cfd6db;
+  --progress-color: var(--theme-fader-fill);
 }

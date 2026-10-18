@@ -43,7 +43,7 @@
   min-width: 0;
   overflow: hidden;
   background: #000;
-  border: 1px solid rgba(148, 176, 196, 0.28);
+  border: 1px solid var(--theme-line);
   box-sizing: border-box;
 }
 
@@ -61,7 +61,7 @@
 }
 
 .timelineOutputPreviewError {
-  color: #ffb4b4;
+  color: var(--theme-error);
   overflow-wrap: anywhere;
 }
 

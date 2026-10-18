@@ -17,9 +17,9 @@ const fnv1a = (input: string): number => {
   return hash >>> 0;
 };
 
-// Accent orange used by the GO button (--ray-accent: #ed8435 ≈ 25.8°). Identity
-// hues must never sit near it, so identity can never be confused with the GO
-// accent. Derived once here; the palette guard excludes the ±band around it.
+// Keep the legacy reserved orange band stable so the same show entity retains
+// its deterministic identity across theme changes. Program/Preview status now
+// uses theme roles plus words and symbols, independently of these identity hues.
 const ACCENT_HUE = 26;
 const ACCENT_GUARD_DEG = 20;
 

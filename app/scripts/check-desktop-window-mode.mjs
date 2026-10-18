@@ -1115,7 +1115,7 @@ assert.ok(
   "frameless resize zones must include corners and stay inactive outside windowed mode",
 );
 assert.ok(
-  workspaceChrome.includes('<header class="topbar" data-tauri-drag-region>') &&
+  workspaceChrome.includes('<header class="topbar topbarOrganized" data-tauri-drag-region>') &&
     workspaceChrome.includes('<div class="topbarLeft" data-tauri-drag-region ref={projectMenuRoot}>') &&
     workspaceChrome.includes('<div class="status" data-tauri-drag-region>') &&
     workspaceChrome.includes("<strong data-tauri-drag-region>Syndocal</strong>") &&

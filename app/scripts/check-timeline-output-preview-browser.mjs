@@ -29,7 +29,7 @@ await writeFile(fixture, `
 import { createSignal, Show } from 'solid-js';
 import { render } from 'solid-js/web';
 import { TimelineOutputPreview } from '/src/components/TimelineOutputPreview';
-import '/src/styles.css';
+import '/src/theme.css';import '/src/styles.css';
 const [visible, setVisible] = createSignal(true);
 const [epoch,setEpoch]=createSignal(1);
 const [outputs, setOutputs] = createSignal([

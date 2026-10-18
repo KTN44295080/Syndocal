@@ -18,7 +18,8 @@ import type {
 } from "../types";
 import { editDomainModes, setupAreaForSubTab, setupAreas, setupSubTabs, setupSubTabsForArea } from "../uiModes";
 import type { ControlMode, SetupSubTab, WorkspaceTab } from "../uiModes";
-import type { UiLocale } from "../uiLocalization";
+import { translateUiText, type UiLocale } from "../uiLocalization";
+import { uiThemeOptions, type UiTheme } from "../uiTheme";
 import { summarizeShowClockForShell } from "../showClockShell";
 import { TopbarPulseMeter } from "./TopbarPulseMeter";
 import { TopbarBpmControl } from "./TopbarBpmControl";
@@ -68,6 +69,7 @@ type WorkspaceChromeProps = {
   applicationUpdateError: string | null;
   uiScale: 90 | 100 | 110;
   uiLocale: UiLocale;
+  uiTheme: UiTheme;
   canBack: boolean;
   canGo: boolean;
   canPauseFade: boolean;
@@ -118,6 +120,7 @@ type WorkspaceChromeProps = {
   onRedo: () => void;
   onUiLocale: (locale: UiLocale) => void;
   onUiScale: (scale: 90 | 100 | 110) => void;
+  onUiTheme: (theme: UiTheme) => void;
   onResetWorkspaceLayout: () => void;
   onLoadSample: () => void;
   onRunSmoke: () => void;
@@ -457,6 +460,27 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
                 >
                   Japanese
                 </button>
+              </div>
+              <div class="appProjectMenuLabel" role="separator">
+                <span>Theme</span>
+              </div>
+              <div class="uiThemeMenu" role="group" aria-label="Theme">
+                <For each={uiThemeOptions}>
+                  {(theme) => (
+                    <button
+                      type="button"
+                      class={`uiThemeOption${props.uiTheme === theme.id ? " active" : ""}`}
+                      data-theme-option={theme.id}
+                      aria-pressed={props.uiTheme === theme.id}
+                      onClick={() => props.onUiTheme(theme.id)}
+                    >
+                      <span class="uiThemeSwatch" data-theme-swatch={theme.id} aria-hidden="true">
+                        <i /><i /><i />
+                      </span>
+                      <span data-no-localize>{translateUiText(theme.label, props.uiLocale)}</span>
+                    </button>
+                  )}
+                </For>
               </div>
               <div class="appProjectMenuLabel" role="separator">
                 <span>Workspace Layout</span>

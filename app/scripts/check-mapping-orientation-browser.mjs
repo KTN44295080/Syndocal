@@ -12,7 +12,7 @@ const root=resolve(dirname(fileURLToPath(import.meta.url)),'..'),name=`.orientat
 const artifacts=resolve(root,'../target/qa/mapping-orientation-20260905');await mkdir(artifacts,{recursive:true});
 await writeFile(fixture,`
 import {createSignal} from 'solid-js';import {render} from 'solid-js/web';
-import {MappingSelectionActionsPanel} from '/src/components/MappingSelectionActionsPanel';import '/src/styles.css';
+import {MappingSelectionActionsPanel} from '/src/components/MappingSelectionActionsPanel';import '/src/theme.css';import '/src/styles.css';
 const [count,setCount]=createSignal(2);window.proof={calls:[],setCount,finish:null};
 render(()=><main style={{width:'min(100%, 320px)'}}><MappingSelectionActionsPanel selectedCount={count()} flagState={{count:count(),allHighlighted:false,allSoloed:false,allParked:false}}
 snapSize={1} hasSelectedStageObject={false} onMatchOrientations={async()=>{window.proof.calls.push('match');await new Promise(r=>window.proof.finish=r)}}

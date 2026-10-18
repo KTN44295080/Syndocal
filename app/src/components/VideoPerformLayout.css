@@ -13,8 +13,8 @@
   height: 100%;
   padding: 6px;
   overflow: hidden;
-  color: #e8edef;
-  background: #15191b;
+  color: var(--theme-text);
+  background: var(--theme-bg);
   font-size: 14px;
 }
 .videoPerformDeskHeader { display:flex; align-items:center; gap:16px; min-width:0; }
@@ -39,11 +39,11 @@
 .videoPerformMaster label { display:grid; grid-template-columns:1fr auto; grid-template-rows:20px 44px; align-items:center; }
 .videoPerformMaster label input { grid-column:1 / -1; width:100%; }
 .videoPerformMaster button { width:100%; }
-.videoPerformMaster > span { text-align:center; color:#f7d2ce; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.videoPerformMaster > span { text-align:center; color:var(--theme-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .videoPerformHealth { display:flex; flex:1 1 0; gap:12px; align-items:center; padding:0 8px; border-left:1px solid var(--ui-border); min-width:0; }
 .videoPerformHealth > strong, .videoPerformHealth button { flex-shrink:0; }
 .videoPerformHealth > span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.videoPerformLegend { max-width:min(760px,90vw); max-height:85vh; overflow:auto; padding:24px; color:#edf4f6; background:#1b252b; border:2px solid #a9dbea; font-size:16px; }
+.videoPerformLegend { max-width:min(760px,90vw); max-height:85vh; overflow:auto; padding:24px; color:var(--theme-text); background:var(--theme-raised); border:2px solid var(--theme-line-strong); font-size:16px; }
 .videoPerformLegend::backdrop { background:#000a; }
 .videoPerformLegend dl { display:grid; grid-template-columns:auto 1fr; gap:16px 24px; }
 .videoPerformLegend dt { font-weight:700; }
@@ -74,4 +74,86 @@
 }
 @media (min-width:1700px) and (min-height:900px) {
   .layoutControl.controlModePerform .videoPerformLayout { grid-template-rows:48px 208px minmax(0,1fr) 66px; }
+}
+
+/* Tally chrome frames the video without changing its black image surface. */
+.videoPerformLayout .liveVideoMonitor {
+  --perform-monitor-tally: var(--theme-preview);
+  --perform-monitor-ink: var(--theme-on-preview);
+  --perform-monitor-pattern: var(--theme-pattern-preview, none);
+  border-color: var(--perform-monitor-tally);
+  border-radius: 0;
+  box-shadow: inset 0 0 0 2px var(--perform-monitor-tally);
+}
+.videoPerformLayout .liveVideoMonitor-program {
+  --perform-monitor-tally: var(--theme-program);
+  --perform-monitor-ink: var(--theme-on-program);
+  --perform-monitor-pattern: var(--theme-pattern-program, none);
+}
+.videoPerformLayout .liveVideoMonitor header {
+  background-color: var(--perform-monitor-tally);
+  background-image: var(--perform-monitor-pattern);
+  color: var(--perform-monitor-ink);
+  border-color: var(--perform-monitor-tally);
+  font-family: var(--theme-font-label);
+  text-transform: uppercase;
+  font-weight: 700;
+}
+.videoPerformLayout .liveVideoMonitor header :is(strong, span) { color: inherit; }
+.videoPerformLayout .liveVideoMonitor header span {
+  font-family: var(--theme-font-ui);
+  font-weight: 600;
+  text-transform: none;
+}
+.videoPerformLayout .liveVideoMonitor footer {
+  background: var(--theme-inset);
+  color: var(--theme-text);
+  border-color: var(--theme-line);
+}
+.videoPerformLayout .liveVideoMonitorStatus.live { background: var(--perform-monitor-tally); color: var(--perform-monitor-ink); }
+.videoPerformLayout .liveVideoMonitorStatus.error { color: var(--theme-on-error); }
+.videoPerformLayout .liveVideoMonitorStatus.starting { color: var(--theme-queued); }
+.videoPerformLayout :is(.videoPerformDeskHeader h2, .videoPerformHealth > strong, .videoPerformQuickFxHeader strong) {
+  font-family: var(--theme-font-label);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.videoPerformLayout [data-video-perform-take]:not(:disabled) {
+  background-color: var(--theme-inset);
+  background-image: none;
+  border: 2px solid var(--theme-program);
+  box-shadow: inset 0 -4px 0 var(--theme-program), inset 0 0 0 1px var(--theme-program-deep);
+  color: var(--theme-text);
+  border-radius: 0;
+  font-family: var(--theme-font-label);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.videoPerformLayout [data-video-perform-take]:not(:disabled):is(:hover, :active) {
+  background-color: var(--theme-program);
+  background-image: var(--theme-pattern-program, none);
+  border-color: var(--theme-program);
+  color: var(--theme-on-program);
+  box-shadow: inset 0 -3px 0 var(--theme-program-deep);
+}
+.videoPerformLayout [data-video-perform-blackout] {
+  background-color: var(--theme-danger-bg);
+  background-image: linear-gradient(transparent calc(100% - 3px), transparent 0), var(--theme-hazard);
+  background-size: 100% calc(100% - 3px), 100% 3px;
+  background-position: top, bottom;
+  background-repeat: no-repeat;
+  border-color: var(--theme-danger);
+  color: var(--theme-text);
+  border-radius: 0;
+  font-family: var(--theme-font-label);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.videoPerformLayout [data-video-perform-blackout].engaged {
+  background-color: var(--theme-danger);
+  background-image: var(--theme-pattern-program, none);
+  background-size: auto;
+  color: var(--theme-on-program);
 }

@@ -8,16 +8,16 @@
   box-sizing: border-box;
   gap: 10px;
   padding: 10px;
-  border: 1px solid #2e2925;
-  border-radius: 6px;
-  background: #181410;
+  border: 1px solid var(--theme-line);
+  border-radius: 0;
+  background: var(--theme-panel);
 }
 
 /* The setup context has a more-specific edge-only rule for this panel. Keep
  * the inspector bounded when it is rendered there as well as in the sidebar. */
 .fixtureLimitsEditor[data-fixture-limits-editor] {
   border-width: 1px;
-  border-radius: 6px;
+  border-radius: 0;
 }
 
 .fixtureLimitsEditor .fixtureLimitsSections {
@@ -32,21 +32,21 @@
   display: grid;
   gap: 8px;
   min-width: 0;
-  border: 1px solid #332d28;
-  border-radius: 4px;
-  background: #1d1915;
+  border: 1px solid var(--theme-line);
+  border-radius: 0;
+  background: var(--theme-raised);
   padding: 8px;
 }
 
 .fixtureLimitsEditor .fixtureLimitsSectionHeader {
   align-items: baseline;
   flex-wrap: wrap;
-  border-bottom: 1px solid #332d28;
+  border-bottom: 1px solid var(--theme-line);
   padding-bottom: 6px;
 }
 
 .fixtureLimitsEditor .fixtureLimitsSectionHeader strong {
-  color: #ffffff;
+  color: var(--theme-text);
   font-size: 13px;
 }
 
@@ -66,7 +66,7 @@
 .fixtureLimitsEditor .dimmerLimitTrack {
   min-height: 132px;
   width: 18px;
-  background: #111820;
+  background: var(--theme-inset);
 }
 
 .fixtureLimitsEditor .fixtureLimitFieldGrid {
@@ -89,7 +89,7 @@
   justify-content: space-between;
   gap: 5px;
   min-width: 0;
-  color: #aab6c6;
+  color: var(--theme-muted);
   font-size: 11px;
   font-weight: 700;
 }
@@ -101,7 +101,7 @@
 
 .fixtureLimitsEditor .fixtureLimitFieldLabel small {
   flex: 0 0 auto;
-  color: #8f9caf;
+  color: var(--theme-dim);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   font-weight: 400;
@@ -126,7 +126,7 @@
   min-width: 180px;
   max-width: 220px;
   justify-self: start;
-  background: #111820;
+  background: var(--theme-inset);
 }
 
 .fixtureLimitsEditor .movementLimitMap::before,
@@ -134,7 +134,7 @@
   position: absolute;
   z-index: 0;
   display: block;
-  background: rgba(255, 255, 255, 0.22);
+  background: var(--theme-line-strong);
   content: "";
   pointer-events: none;
 }
@@ -178,7 +178,7 @@
 .fixtureLimitsEditor .fixtureLimitsActions {
   justify-content: flex-end;
   align-items: center;
-  border-top: 1px solid #332d28;
+  border-top: 1px solid var(--theme-line);
   padding-top: 8px;
 }
 

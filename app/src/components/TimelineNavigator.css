@@ -28,9 +28,9 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: var(--panel, #161b20);
-  color: var(--text, #e4e7eb);
-  border-left: 1px solid var(--border, #38424b);
+  background: var(--theme-panel);
+  color: var(--theme-text);
+  border-left: 1px solid var(--theme-line);
 }
 .timelineNavigator header { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 8px; }
 .timelineNavigatorScroll { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 8px; }
@@ -43,12 +43,12 @@
   font: inherit;
   color: inherit;
   background: transparent;
-  border: 1px solid var(--border, #38424b);
-  border-radius: 4px;
+  border: 1px solid var(--theme-line);
+  border-radius: 0;
   padding: 8px 12px;
   cursor: pointer;
 }
 .timelineNavigator section > button { display: block; width: 100%; margin-bottom: 4px; text-align: left; }
 .timelineNavigator button span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.timelineNavigator button[aria-current="page"] { background: var(--accent-soft, #244756); border-color: var(--accent, #76bfdc); }
-.timelineNavigator button:focus-visible { outline: 2px solid var(--accent, #76bfdc); outline-offset: -2px; }
+.timelineNavigator button[aria-current="page"] { background: var(--theme-selected); border-color: var(--theme-selected); color: var(--theme-on-selected); }
+.timelineNavigator button:focus-visible { outline: 2px solid var(--theme-focus); outline-offset: -2px; }

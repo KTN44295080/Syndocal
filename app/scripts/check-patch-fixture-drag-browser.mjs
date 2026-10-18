@@ -21,7 +21,7 @@ try {
  if(baseline) await writeFile(baselinePath,execFileSync('git',['show','efd8374b5e19e054dd7f60c9531c832e8d881e78:app/src/components/DmxPatchMapPanel.tsx'],{cwd:root,encoding:'utf8'}));
  await writeFile(fixturePath,`
 import {createSignal,createMemo} from 'solid-js';import {render} from 'solid-js/web';
-import {DmxPatchMapPanel} from '/src/components/${baseline?baselineName:'DmxPatchMapPanel'}';import '/src/styles.css';
+import {DmxPatchMapPanel} from '/src/components/${baseline?baselineName:'DmxPatchMapPanel'}';import '/src/theme.css';import '/src/styles.css';
 const fixture=(id,address,label)=>({id,address,label,universe:1,controls:[{attribute:'Dimmer',offsets:[8]}],manufacturer:'Generic',profile_name:'8ch'});
 const [fixtures,setFixtures]=createSignal([fixture(1,1,'Front'),fixture(2,17,'Back'),fixture(3,65,'Fixed')]);
 const [selected,setSelected]=createSignal(null),[hover,setHover]=createSignal(null),[drag,setDrag]=createSignal(null),[mode,setMode]=createSignal('grid');

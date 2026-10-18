@@ -36,7 +36,7 @@ import {createSignal} from 'solid-js'; import {render} from 'solid-js/web';
 import {WorkspaceChrome} from '/src/components/WorkspaceChrome';
 import {WorkspaceChrome as BaselineChrome} from '/src/components/${baselineName}';
 import {WorkspaceOperationsMenu} from '/src/components/WorkspaceOperationsMenu';
-import '/src/styles.css';
+import '/src/theme.css';import '/src/styles.css';
 const [workspace,setWorkspace]=createSignal('touch'),[bpm,setBpm]=createSignal(120),[learn,setLearn]=createSignal(null);
 const [dmx,setDmx]=createSignal(false),[video,setVideo]=createSignal(false),[safety,setSafety]=createSignal(false);
 const [dirty,setDirty]=createSignal(false),[lock,setLock]=createSignal(null),[label,setLabel]=createSignal('Untitled.sdc');

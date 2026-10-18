@@ -22,27 +22,19 @@ const hueDistance = (left, right) => {
   return Math.min(delta, 360 - delta);
 };
 
-// Derive the accent hue straight from styles.css so the guard tracks the real
-// GO button colour rather than a copied constant.
+// Theme accents now change independently of deterministic show identities.
+// Preserve the historical 26-degree exclusion so switching palettes never
+// changes cue/group identity hues; check the visual token alias separately.
 const stylesSource = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
-const accentMatch = stylesSource.match(/--ray-accent:\s*#([0-9a-fA-F]{6})/);
-assert.ok(accentMatch, "styles.css must define --ray-accent so the guard hue can be derived");
-const hexToHue = (hex) => {
-  const r = parseInt(hex.slice(0, 2), 16) / 255;
-  const g = parseInt(hex.slice(2, 4), 16) / 255;
-  const b = parseInt(hex.slice(4, 6), 16) / 255;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const delta = max - min;
-  if (delta === 0) return 0;
-  let hue;
-  if (max === r) hue = 60 * (((g - b) / delta) % 6);
-  else if (max === g) hue = 60 * ((b - r) / delta + 2);
-  else hue = 60 * ((r - g) / delta + 4);
-  return (hue + 360) % 360;
-};
-const accentHue = hexToHue(accentMatch[1]);
-assert.ok(accentHue > 15 && accentHue < 45, `accent hue ${accentHue} should be in the orange band`);
+const themeSource = await readFile(new URL("../src/theme.css", import.meta.url), "utf8");
+const identitySource = await readFile(new URL("../src/identityColor.ts", import.meta.url), "utf8");
+assert.match(themeSource, /--ray-accent:\s*var\(--theme-accent\);/, "legacy accent aliases the authoritative theme accent");
+assert.match(themeSource, /--theme-accent:\s*var\(--accent\);/, "semantic accent uses the selected palette");
+assert.match(themeSource, /:root\[data-theme="tally"\]\s*\{[^}]*--accent:\s*#ffffff\s*;/s, "default Tally accent matches the white Broadcast key");
+const accentMatch = identitySource.match(/const ACCENT_HUE\s*=\s*(\d+);/);
+assert.ok(accentMatch, "identity source must declare its stable exclusion hue");
+const accentHue = Number(accentMatch[1]);
+assert.equal(accentHue, 26, "theme migration must preserve the deterministic identity palette");
 
 // 1. Stable across runs: the same id/path always yields the same hue.
 for (const cueId of [1, 7, 42, 128, 500]) {
@@ -55,7 +47,7 @@ for (const groupId of ["front", "front/movers", "floor/bars/left", ""]) {
 assert.equal(identity.cueIdentityHue(1), identity.cueIdentityHue(1));
 assert.ok(identity.groupIdentityHue("front") !== identity.groupIdentityHue("back"), "distinct group paths should generally differ");
 
-// 2. Guard: no produced hue lands within 20° of the accent hue.
+// 2. Guard: no produced hue lands within 20° of the stable identity exclusion hue.
 const producedHues = new Set();
 for (let cueId = 0; cueId <= 600; cueId += 1) producedHues.add(identity.cueIdentityHue(cueId));
 for (const groupId of [
@@ -68,7 +60,7 @@ for (const groupId of [
 for (const hue of producedHues) {
   assert.ok(
     hueDistance(hue, accentHue) >= 20,
-    `identity hue ${hue} is within 20° of the accent hue ${accentHue.toFixed(1)}`,
+    `identity hue ${hue} is within 20° of the stable exclusion hue ${accentHue.toFixed(1)}`,
   );
 }
 assert.ok(producedHues.size >= 8, `identity palette should offer many hues, saw ${producedHues.size}`);
@@ -130,7 +122,7 @@ assert.ok(sceneMatrixEditStripBandRule, "Scene Matrix identity band rule must ex
 const sceneMatrixEditStripBandDeclarations = sceneMatrixEditStripBandRule[1];
 assert.match(
   sceneMatrixEditStripBandDeclarations,
-  /background:\s*color-mix\(in\s+srgb,\s*var\(--cue-identity\)\s+24%,\s*#111619\);/,
+  /background:\s*color-mix\(in\s+srgb,\s*var\(--cue-identity\)\s+24%,\s*var\(--theme-panel\)\);/,
   "unselected Scene Matrix strips must retain a darkened cue identity color",
 );
 assert.doesNotMatch(
@@ -177,4 +169,4 @@ assert.match(
   "Scene Matrix scene names must retain identity-colored text while idle",
 );
 
-console.log(`identity color helpers ok (${producedHues.size} distinct hues, accent hue ${accentHue.toFixed(1)}°)`);
+console.log(`identity color helpers ok (${producedHues.size} distinct hues, stable exclusion hue ${accentHue.toFixed(1)}°)`);

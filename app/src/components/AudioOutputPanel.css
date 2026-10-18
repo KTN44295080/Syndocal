@@ -2,7 +2,7 @@
   display: grid;
   gap: 10px;
   min-width: 0;
-  color: #edf3fb;
+  color: var(--theme-text);
 }
 
 .audioOutputPanelHeader {
@@ -20,7 +20,7 @@
 
 .audioOutputPanelHeader p {
   margin: 3px 0 0;
-  color: #aeb8c5;
+  color: var(--theme-muted);
   text-wrap: pretty;
 }
 
@@ -39,21 +39,21 @@
 .audioOutputState span {
   max-width: 34ch;
   overflow-wrap: anywhere;
-  color: #aeb8c5;
+  color: var(--theme-muted);
   font-size: 12px;
 }
 
 .audioOutputState--ready strong {
-  color: #72d8b4;
+  color: var(--theme-ok);
 }
 
 .audioOutputState--locked strong,
 .audioOutputState--fault strong {
-  color: #ef8989;
+  color: var(--theme-error);
 }
 
 .audioOutputState--active strong {
-  color: #f0bd72;
+  color: var(--theme-warn);
 }
 
 .audioOutputActions {
@@ -70,20 +70,20 @@
 }
 
 .audioOutputActions button[data-audio-output-action="return-to-normal"] {
-  color: #9ceccd;
+  color: var(--theme-ok);
 }
 
 .audioOutputDisclosure {
   min-width: 0;
-  border: 1px solid #343d49;
-  border-radius: 6px;
-  background: #171d24;
+  border: 1px solid var(--theme-line);
+  border-radius: 0;
+  background: var(--theme-panel);
 }
 
 .audioOutputDisclosure > summary {
   min-height: 34px;
   padding: 7px 10px;
-  color: #edf3fb;
+  color: var(--theme-text);
   cursor: pointer;
   font-weight: 700;
 }
@@ -92,7 +92,7 @@
   display: grid;
   gap: 10px;
   min-width: 0;
-  border-top: 1px solid #343d49;
+  border-top: 1px solid var(--theme-line);
   padding: 10px;
 }
 
@@ -114,7 +114,7 @@
 .audioOutputNormalNotice {
   max-width: 86ch;
   margin: 0;
-  color: #aeb8c5;
+  color: var(--theme-muted);
   text-wrap: pretty;
 }
 
@@ -122,9 +122,9 @@
   display: grid;
   gap: 10px;
   min-width: 0;
-  border: 1px solid #343d49;
-  border-radius: 6px;
-  background: #171d24;
+  border: 1px solid var(--theme-line);
+  border-radius: 0;
+  background: var(--theme-panel);
   padding: 10px;
 }
 
@@ -143,7 +143,7 @@
 
 .audioOutputTimelineCueAudioHeader p,
 .audioOutputTimelineCueAudioPolicy {
-  color: #aeb8c5;
+  color: var(--theme-muted);
   text-wrap: pretty;
 }
 
@@ -153,12 +153,12 @@
 
 .audioOutputTimelineCueAudioHeader output {
   flex: 0 0 auto;
-  color: #72d8b4;
+  color: var(--theme-ok);
   font-weight: 700;
 }
 
 .audioOutputTimelineCueAudioHeader output.fault {
-  color: #ef8989;
+  color: var(--theme-error);
 }
 
 .audioOutputTimelineCueAudioBody {
@@ -166,7 +166,7 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   min-width: 0;
-  border-top: 1px solid #343d49;
+  border-top: 1px solid var(--theme-line);
   padding-top: 10px;
 }
 
@@ -186,7 +186,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  color: #c5d0dd;
+  color: var(--theme-muted);
 }
 
 @media (max-width: 600px) {
@@ -199,7 +199,7 @@
   display: grid;
   min-width: 0;
   gap: 6px;
-  color: #aeb8c5;
+  color: var(--theme-muted);
 }
 
 .audioOutputField > span {
@@ -225,21 +225,21 @@
 
 .audioOutputDisconnected {
   margin: 0;
-  color: #f0bd72;
+  color: var(--theme-warn);
   text-wrap: pretty;
 }
 
 .audioOutputTestFieldset {
   min-width: 0;
   margin: 0;
-  border: 1px solid #343d49;
-  border-radius: 6px;
+  border: 1px solid var(--theme-line);
+  border-radius: 0;
   padding: 8px;
 }
 
 .audioOutputTestFieldset legend {
   padding: 0 4px;
-  color: #aeb8c5;
+  color: var(--theme-muted);
 }
 
 .audioOutputTestGrid {
@@ -249,9 +249,9 @@
 }
 
 .audioOutputTestGrid button.active {
-  border-color: #72d8b4;
-  color: #0d211a;
-  background: #72d8b4;
+  border-color: var(--theme-ok);
+  color: var(--theme-on-ok);
+  background: var(--theme-ok);
 }
 
 .audioOutputStopTest {
@@ -260,7 +260,7 @@
 
 .audioOutputTestHint {
   margin: 8px 0 0;
-  color: #aeb8c5;
+  color: var(--theme-muted);
   text-wrap: pretty;
 }
 

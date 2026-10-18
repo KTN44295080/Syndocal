@@ -20,7 +20,7 @@ await writeFile(fixture, `
 import { createSignal, Show } from 'solid-js';
 import { render } from 'solid-js/web';
 import { TimelineNavigator } from '/src/components/TimelineNavigator';
-import '/src/styles.css';
+import '/src/theme.css';import '/src/styles.css';
 const [open,setOpen]=createSignal(true),[child,setChild]=createSignal(null),[active,setActive]=createSignal(1);
 let resolve; window.proof={calls:[],finish:()=>resolve?.(),setOpen};
 const [timelines,setTimelines]=createSignal([{id:1,label:'統合本編'},{id:2,label:'Encore'}]);

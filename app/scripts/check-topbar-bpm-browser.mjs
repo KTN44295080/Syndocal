@@ -19,7 +19,7 @@ const chrome = await readFile(resolve(root, "src/components/WorkspaceChrome.tsx"
 assert.match(chrome, /<TopbarBpmControl bpm=\{props\.bpm\} onSetBpm=\{props\.onSetBpm\}/);
 await writeFile(fixture, `
 import {createSignal,Show} from 'solid-js'; import {render} from 'solid-js/web';
-import {TopbarBpmControl} from '/src/components/TopbarBpmControl'; import '/src/styles.css';
+import {TopbarBpmControl} from '/src/components/TopbarBpmControl'; import '/src/theme.css';import '/src/styles.css';
 const [bpm,setBpm]=createSignal(120),[open,setOpen]=createSignal(true);
 window.proof={calls:[],mode:'ok',drag:0,setBpm,setOpen,finish:null};
 const apply=async value=>{window.proof.calls.push(value);if(window.proof.mode==='reject')throw Error('backend rejected');

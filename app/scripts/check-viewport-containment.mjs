@@ -36278,6 +36278,18 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
         innerRect.bottom <= outerRect.bottom + 1
       );
     };
+    const themeColor = (token) => {
+      if (!getComputedStyle(document.documentElement).getPropertyValue(token).trim()) {
+        throw new Error('Missing required theme token: ' + token);
+      }
+      const probe = document.createElement('span');
+      probe.style.cssText = 'display:none;color:var(' + token + ')';
+      document.documentElement.appendChild(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    const themeFaderTrack = themeColor('--theme-fader-track');
     const grid = document.querySelector('.fixtureTypeColumnGrid');
     const columns = [...document.querySelectorAll('[data-fixture-type-column]')].filter(visible);
     const headers = columns.map((column) => column.querySelector('[data-fixture-type-select]')).filter(visible);
@@ -36503,7 +36515,7 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       faderTrackInsetCount: faderTrackStyles.filter((style) =>
         style.boxShadow.includes('inset') &&
         style.borderStyle === 'solid' &&
-        style.backgroundColor === 'rgb(17, 16, 15)'
+        style.backgroundColor === themeFaderTrack
       ).length,
       faderGripLineCount: faderGripRects.filter((rect) => rect.width >= 12 && rect.height >= 2).length,
       faderNativeAppearanceNoneCount: faderNativeInputs.filter((input) => {
@@ -37356,6 +37368,26 @@ async function readControlFaderWriteVisibility(client) {
       }
       return matches;
     };
+    const themeColor = (token) => {
+      if (!getComputedStyle(document.documentElement).getPropertyValue(token).trim()) {
+        throw new Error('Missing required theme token: ' + token);
+      }
+      const probe = document.createElement('span');
+      probe.style.cssText = 'display:none;color:var(' + token + ')';
+      document.documentElement.appendChild(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    const themeModeColors = {
+      preview: themeColor('--theme-preview'),
+      program: themeColor('--theme-program'),
+      error: themeColor('--theme-error'),
+      onPreview: themeColor('--theme-on-preview'),
+      onProgram: themeColor('--theme-on-program'),
+      onError: themeColor('--theme-on-error'),
+      dim: themeColor('--theme-dim'),
+    };
     const buttonSpans = [...document.querySelectorAll('[data-control-fader-write-mode-option]')]
       .map((button) => {
         const span = button.querySelector('span');
@@ -37367,9 +37399,11 @@ async function readControlFaderWriteVisibility(client) {
         const spanStyle = span ? getComputedStyle(span) : null;
         const option = button.getAttribute('data-control-fader-write-mode-option') ?? '';
         const pressed = button.getAttribute('aria-pressed') === 'true';
-        const expectedColor = option === 'live'
-          ? (pressed ? 'rgb(255, 253, 242)' : 'rgb(170, 166, 161)')
-          : (pressed ? 'rgb(255, 255, 255)' : 'rgb(170, 166, 161)');
+        const role = option === 'live' ? 'program' : header?.classList.contains('blindActive') ? 'error' : 'preview';
+        const expectedColor = pressed
+          ? themeModeColors[role === 'program' ? 'onProgram' : role === 'error' ? 'onError' : 'onPreview']
+          : themeModeColors.dim;
+        const expectedBackground = themeModeColors[role];
         return {
           option,
           pressed,
@@ -37378,6 +37412,7 @@ async function readControlFaderWriteVisibility(client) {
           spanHeight: spanRect?.height ?? 0,
           spanColor: spanStyle?.color ?? '',
           expectedColor,
+          expectedBackground,
           buttonWidth: buttonRect.width,
           buttonHeight: buttonRect.height,
           buttonColor: buttonStyle.color,
@@ -37447,9 +37482,10 @@ async function readControlFaderWriteVisibility(client) {
       modeTextIsBold:
         buttonSpans.length === 2 && buttonSpans.every((entry) => entry.buttonFontWeight >= 700),
       activeModeUsesFullSurfaceColor:
+        new Set([themeModeColors.preview, themeModeColors.program, themeModeColors.error]).size === 3 &&
         buttonSpans.filter((entry) => entry.pressed).length === 1 &&
         buttonSpans.filter((entry) => entry.pressed).every((entry) =>
-          entry.buttonBackground === (entry.option === 'live' ? 'rgb(197, 173, 31)' : 'rgb(66, 200, 52)') &&
+          entry.buttonBackground === entry.expectedBackground &&
           entry.buttonBoxShadow !== 'none'
         ),
       buttonsInEditBlindLiveOrder:
@@ -37876,6 +37912,25 @@ async function runBlindViewport(client, viewport) {
         ? Object.fromEntries(["left", "top", "width", "height"].map((key) => [key, Math.round(bounds[key] * 100) / 100]))
         : null;
     };
+    const themeColor = (token) => {
+      if (!getComputedStyle(document.documentElement).getPropertyValue(token).trim()) {
+        throw new Error('Missing required theme token: ' + token);
+      }
+      const probe = document.createElement('span');
+      probe.style.cssText = 'display:none;color:var(' + token + ')';
+      document.documentElement.appendChild(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    const themeModeColors = {
+      preview: themeColor('--theme-preview'),
+      program: themeColor('--theme-program'),
+      error: themeColor('--theme-error'),
+      onPreview: themeColor('--theme-on-preview'),
+      onProgram: themeColor('--theme-on-program'),
+      onError: themeColor('--theme-on-error'),
+    };
     const snapshot = window.__syndocalReadEditLiveFixtureSnapshot?.();
     const cue = snapshot?.cues?.find((candidate) => candidate.id === 301);
     const nonActiveCue = snapshot?.cues?.find((candidate) => candidate.id === 302);
@@ -37898,6 +37953,7 @@ async function runBlindViewport(client, viewport) {
     const liveModeStyle = liveModeButton ? getComputedStyle(liveModeButton) : null;
     const app = document.querySelector('.app');
     return {
+      themeModeColors,
       blind: snapshot?.programmer?.blind === true,
       stagedCount: snapshot?.programmer?.values?.length ?? 0,
       liveDmxSignature: JSON.stringify(snapshot?.dmx_previews ?? []),
@@ -38071,21 +38127,24 @@ async function runBlindViewport(client, viewport) {
       initial.toggleTitle === initial.toggleAriaLabel && initial.toggleIconCount === 1],
     ["editAndLiveLabelsAreBold", () =>
       initial.editModeFontWeight >= 700 && initial.liveModeFontWeight >= 700],
-    ["editModeUsesFullGreenSurface", () =>
-      initial.editModeBackground === "rgb(66, 200, 52)" &&
-      initial.editModeColor === "rgb(255, 255, 255)" &&
+    ["editModeUsesFullThemePreviewSurface", () =>
+      new Set([initial.themeModeColors.preview, initial.themeModeColors.program, initial.themeModeColors.error]).size === 3 &&
+      initial.editModeBackground === initial.themeModeColors.preview &&
+      initial.editModeColor === initial.themeModeColors.onPreview &&
       initial.editModeBoxShadow !== "none"],
     ["blindStartsOffWithLiveRedStage", () =>
       !initial.blind && initial.togglePressed === "false" && initial.stageColor === "rgb(255, 0, 0)" &&
       initial.activeCueId === 301 && initial.selectedCueId === 301],
     ["blindOneClickFromLiveAutoSelectsEditAndUsesUnifiedWarningSurface", () =>
       liveBeforeOneClickBlind.liveModePressed === "true" && !liveBeforeOneClickBlind.toggleDisabled &&
+      liveBeforeOneClickBlind.liveModeBackground === liveBeforeOneClickBlind.themeModeColors.program &&
+      liveBeforeOneClickBlind.liveModeColor === liveBeforeOneClickBlind.themeModeColors.onProgram &&
       oneClickBlind.blind && oneClickBlind.editModePressed === "true" && oneClickBlind.liveModePressed === "false" &&
       oneClickBlind.togglePressed === "true" && oneClickBlind.selectedCueId === 301 &&
-      oneClickBlind.editModeBackground === "rgb(240, 75, 50)" &&
+      oneClickBlind.editModeBackground === oneClickBlind.themeModeColors.error &&
       oneClickBlind.toggleBackground === oneClickBlind.editModeBackground &&
-      oneClickBlind.editModeColor === "rgb(255, 255, 255)" &&
-      oneClickBlind.toggleColor === "rgb(255, 255, 255)"],
+      oneClickBlind.editModeColor === oneClickBlind.themeModeColors.onError &&
+      oneClickBlind.toggleColor === oneClickBlind.themeModeColors.onError],
     ["blindStripSelectsNonActiveSceneWithoutTriggering", () =>
       nonActiveSelected.selectedCueId === 302 && nonActiveSelected.activeCueId === 301 &&
       nonActiveSelected.liveDmxSignature === initial.liveDmxSignature &&
@@ -38094,11 +38153,11 @@ async function runBlindViewport(client, viewport) {
     ["blindCanEnableAndEditGreen", () =>
       blindEnabled && greenEdit && staged.blind && staged.togglePressed === "true" && staged.stagedCount >= 3 &&
       staged.stageColor === "rgb(0, 255, 0)" && staged.liveColorSource === "preview"],
-    ["blindModeUsesFullWarningSurfaceOnEditAndBlind", () =>
-      staged.editModeBackground === "rgb(240, 75, 50)" &&
+    ["blindModeUsesFullThemeErrorSurfaceOnEditAndBlind", () =>
+      staged.editModeBackground === staged.themeModeColors.error &&
       staged.toggleBackground === staged.editModeBackground &&
-      staged.editModeColor === "rgb(255, 255, 255)" &&
-      staged.toggleColor === "rgb(255, 255, 255)" &&
+      staged.editModeColor === staged.themeModeColors.onError &&
+      staged.toggleColor === staged.themeModeColors.onError &&
       staged.editModeBoxShadow !== "none" && staged.toggleBoxShadow !== "none"],
     ["blindEditKeepsLiveDmxByteIdentical", () => staged.liveDmxSignature === initial.liveDmxSignature],
     ["blindOneClickFxPreviewsStageWithoutChangingLiveDmx", () =>

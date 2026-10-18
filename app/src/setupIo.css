@@ -32,14 +32,14 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   min-width: 0;
-  border: 1px solid #3b4148;
+  border: 1px solid var(--theme-line);
   border-radius: var(--ui-radius-control);
-  background: #191d21;
+  background: var(--theme-panel);
 }
 
 .setupIoPanel[data-io-layout="operator"] .setupIoConnectionCard.active {
-  border-color: #72d8b4;
-  background: #18251f;
+  border-color: var(--theme-selected);
+  background: var(--theme-raised);
 }
 
 .setupIoPanel[data-io-layout="operator"] .setupIoConnectionSelect {
@@ -62,13 +62,13 @@
 }
 
 .setupIoPanel[data-io-layout="operator"] .setupIoConnectionSelect:focus-visible {
-  outline: 2px solid #9ceccd;
+  outline: 2px solid var(--theme-focus);
   outline-offset: -2px;
 }
 
 .setupIoPanel[data-io-layout="operator"] .setupIoConnectionLabel {
   overflow: hidden;
-  color: #f3f5f7;
+  color: var(--theme-text);
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -86,7 +86,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: #aeb8c5;
+  color: var(--theme-muted);
   font-size: 12px;
   white-space: nowrap;
 }
@@ -94,13 +94,13 @@
 .setupIoPanel[data-io-layout="operator"] .setupIoConnectionState > i {
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: 0;
   background: currentcolor;
 }
 
-.setupIoPanel[data-io-layout="operator"] .setupIoConnectionState.ok { color: #72d8b4; }
-.setupIoPanel[data-io-layout="operator"] .setupIoConnectionState.warning { color: #f0bd72; }
-.setupIoPanel[data-io-layout="operator"] .setupIoConnectionState.error { color: #ef8989; }
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionState.ok { color: var(--theme-ok); }
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionState.warning { color: var(--theme-warn); }
+.setupIoPanel[data-io-layout="operator"] .setupIoConnectionState.error { color: var(--theme-error); }
 
 .setupIoPanel[data-io-layout="operator"] .setupIoConnectionAction {
   display: contents;
@@ -117,9 +117,9 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid #3b4148;
+  border: 1px solid var(--theme-line);
   border-radius: var(--ui-radius-control);
-  background: #171b1f;
+  background: var(--theme-panel);
 }
 
 .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody {
@@ -222,7 +222,7 @@
 .layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .dmxDiagnosticsDisclosure > .outputDiagnosticsDesk,
 .layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .lightingRuntimeDesk,
 .layoutSetup .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody .dmxEndpointDesk {
-  border-right: 1px solid #39342f;
+  border-right: 1px solid var(--theme-line);
   padding-right: 6px;
 }
 
@@ -262,7 +262,7 @@
 
 .setupIoPanel[data-io-layout="operator"] .ioDisclosureDescription {
   margin: 0 0 8px;
-  color: #aeb8c5;
+  color: var(--theme-muted);
   line-height: 1.45;
 }
 

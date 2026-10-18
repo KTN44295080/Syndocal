@@ -1,13 +1,13 @@
 /* Operator-facing Control only (internal route: touch). Keep authored tile
    geometry and all hit targets intact; Edit and Setup do not consume these. */
 .app .layout.layoutTouch {
-  --ui-range-accent: #f0b15d;
-  --control-surface: #171c22;
-  --control-raised: #20272f;
-  --control-border: #303a44;
-  --control-muted: #aab6c2;
-  --control-accent: #f0b15d;
-  background: #101419;
+  --ui-range-accent: var(--theme-fader-fill);
+  --control-surface: var(--theme-panel);
+  --control-raised: var(--theme-raised);
+  --control-border: var(--theme-line);
+  --control-muted: var(--theme-muted);
+  --control-accent: var(--theme-accent);
+  background: var(--theme-bg);
 }
 
 .app .layout.layoutTouch .touchControlDomainTabs {
@@ -19,16 +19,16 @@
 
 .app .layout.layoutTouch .touchControlDomainTabs button {
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: 0;
   background: transparent;
   color: var(--control-muted);
   font-weight: 600;
 }
 
 .app .layout.layoutTouch .touchControlDomainTabs button.active {
-  border-color: #765a35;
-  background: #30271c;
-  color: #ffd69a;
+  border-color: var(--theme-selected);
+  background: var(--theme-selected);
+  color: var(--theme-on-selected);
 }
 
 .app .layout.layoutTouch .touchSurfacePanel,
@@ -45,23 +45,23 @@
 
 .app .layout.layoutTouch .touchSurfaceModeToggle {
   gap: 0;
-  border-radius: 5px;
-  background: #11171c;
+  border-radius: 0;
+  background: var(--theme-inset);
 }
 
 .app .layout.layoutTouch .touchSurfaceModeToggle button,
 .app .layout.layoutTouch .touchPageTabs button {
   border-color: transparent;
-  border-radius: 4px;
+  border-radius: 0;
   background: transparent;
   color: var(--control-muted);
   font-weight: 600;
 }
 
 .app .layout.layoutTouch .touchSurfaceModeToggle button.active {
-  border-color: #765a35;
-  background: #30271c;
-  color: #ffd69a;
+  border-color: var(--theme-selected);
+  background: var(--theme-selected);
+  color: var(--theme-on-selected);
 }
 
 /* Page creation/removal belongs to layout editing, not live playback. The
@@ -74,7 +74,7 @@
 .app .layout.layoutTouch .touchPageTabs button.active {
   border-color: var(--control-border);
   background: var(--control-raised);
-  color: #f3f5f7;
+  color: var(--theme-text);
 }
 
 .app .layout.layoutTouch .touchSurfaceStatus {
@@ -89,7 +89,7 @@
 
 .app .layout.layoutTouch .touchPlacedControl {
   border-color: transparent;
-  border-radius: 6px;
+  border-radius: 0;
   background: var(--control-raised);
 }
 
@@ -113,7 +113,7 @@
 }
 
 .app .layout.layoutTouch .touchPlacedImage {
-  background: #1b222a;
+  background: var(--theme-inset);
   color: var(--control-muted);
 }
 
@@ -121,25 +121,25 @@
 .app .layout.layoutTouch .touchPlacedDial,
 .app .layout.layoutTouch .touchPlacedColor,
 .app .layout.layoutTouch .touchPlacedIncremental {
-  color: #dde4eb;
+  color: var(--theme-text);
   font-weight: 600;
 }
 
 .app .layout.layoutTouch .touchPlacedIncremental button {
   border-color: var(--control-border);
-  border-radius: 5px;
-  background: #29323c;
+  border-radius: 0;
+  background: var(--theme-raised);
 }
 
 .app .layout.layoutTouch .touchPlacedXy {
   border-color: var(--control-border);
-  border-radius: 6px;
-  background-color: #131a21;
+  border-radius: 0;
+  background-color: var(--theme-inset);
 }
 
 .app .layout.layoutTouch .touchPlacedColor input[type="color"] {
   border-color: transparent;
-  border-radius: 5px;
+  border-radius: 0;
   background: transparent;
 }
 
@@ -151,8 +151,8 @@
 
 .app .layout.layoutTouch .videoClipSlotBankPanel {
   border-color: var(--control-border);
-  border-radius: 6px;
-  background: #151b21;
+  border-radius: 0;
+  background: var(--theme-panel);
 }
 
 .app .layout.layoutTouch .mappingPersistentWorkspaceBand,
@@ -170,6 +170,6 @@
 }
 
 .app .layout.layoutTouch :is(button, input, select):focus-visible {
-  outline: 2px solid #f0b15d;
+  outline: 2px solid var(--theme-focus);
   outline-offset: -2px;
 }

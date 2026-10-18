@@ -955,10 +955,12 @@ import {
   installUiLocalization,
   loadUiLocale,
   saveUiLocale,
+  uiLocaleStorageKey,
   timelineOverviewMarkerAriaLabel,
   translateUiText,
   type UiLocale,
 } from "./uiLocalization";
+import { applyUiTheme, loadUiTheme, saveUiTheme, uiThemeStorageKey, type UiTheme } from "./uiTheme";
 import {
   draftRangeFromKeyframes,
   evaluateTimelineKeyframes,
@@ -2000,6 +2002,7 @@ export default function App() {
   };
   const [uiScale, setUiScale] = createSignal<UiScale>(loadUiScale());
   const [uiLocale, setUiLocale] = createSignal<UiLocale>(loadUiLocale());
+  const [uiTheme, setUiTheme] = createSignal<UiTheme>(loadUiTheme());
   const [setupSubTab, setSetupSubTab] = createSignal<SetupSubTab>(initialWorkspaceLayout.setup_sub_tab);
   const [controlMode, setControlMode] = createSignal<ControlMode>(initialWorkspaceLayout.control_mode);
   const activeTopSplitRatio = () =>
@@ -2181,24 +2184,6 @@ export default function App() {
   const [liveFaderValues, setFaderValues] = createSignal<Record<string, number>>({});
   const [sceneEditValues, setSceneEditValues] = createSignal<Record<number, Record<string, number>>>({});
   const faderValueController = createFaderValueController({ setValues: setFaderValues });
-  const midiFaderInput = createMidiFaderInput({
-    projectEpoch: () => captureProjectAuthorityIdentity().project_epoch,
-    apply: values => {
-      if (!faderValueController.applyMidiInput(values)) return;
-      const cueId = controlEditCueIdForWrite();
-      if (cueId === null || controlFaderModeChanging()) return;
-      setSceneEditValues(current => ({ ...current, [cueId]: { ...current[cueId], ...values } }));
-      const fixtureIds = new Set(Object.keys(values).map(key => Number(key.split(":")[0])));
-      for (const fixtureId of fixtureIds) queueControlEditLookUpdate(cueId, { kind: "selectedFixture", fixtureId });
-    },
-  });
-  createEffect(() => { if (!midiControlConnected()) midiFaderInput.setConnection(null); });
-  let midiFaderMappingsIdentity: string | null = null;
-  createEffect(() => {
-    const identity = JSON.stringify(midiMappings());
-    if (identity !== midiFaderMappingsIdentity) midiFaderInput.setConnection(null);
-    midiFaderMappingsIdentity = identity;
-  });
   const continuousFixtureFader = createContinuousFixtureFader(invoke);
   onCleanup(continuousFixtureFader.cancel);
   const [rawDmxUniverse, setRawDmxUniverse] = createSignal(0);
@@ -2300,6 +2285,24 @@ export default function App() {
   const projectReadGuardIsCurrent = (guard: ReturnType<typeof captureProjectReadGuard>) =>
     guard.generation === projectReadGeneration
     && projectAuthorityTokenIsCurrent(guard.authority, projectMappingsAuthority());
+  const midiFaderInput = createMidiFaderInput({
+    projectEpoch: () => captureProjectAuthorityIdentity().project_epoch,
+    apply: values => {
+      if (!faderValueController.applyMidiInput(values)) return;
+      const cueId = controlEditCueIdForWrite();
+      if (cueId === null || controlFaderModeChanging()) return;
+      setSceneEditValues(current => ({ ...current, [cueId]: { ...current[cueId], ...values } }));
+      const fixtureIds = new Set(Object.keys(values).map(key => Number(key.split(":")[0])));
+      for (const fixtureId of fixtureIds) queueControlEditLookUpdate(cueId, { kind: "selectedFixture", fixtureId });
+    },
+  });
+  createEffect(() => { if (!midiControlConnected()) midiFaderInput.setConnection(null); });
+  let midiFaderMappingsIdentity: string | null = null;
+  createEffect(() => {
+    const identity = JSON.stringify(midiMappings());
+    if (identity !== midiFaderMappingsIdentity) midiFaderInput.setConnection(null);
+    midiFaderMappingsIdentity = identity;
+  });
   // Coordinator status may observe B before the B replacement result arrives.
   // Track the stronger identity application separately so an event/reply
   // duplicate is a real no-op, not another mapping invalidation.
@@ -5410,6 +5413,21 @@ export default function App() {
       // The preference remains active for this session when storage is unavailable.
     }
   });
+  createEffect(() => {
+    const theme = uiTheme();
+    applyUiTheme(theme);
+    saveUiTheme(theme);
+  });
+  // Same-origin pane webviews receive preference changes without reopening.
+  // Re-read storage so an older queued event cannot replace a newer preference.
+  const syncUiPreferences = (event: StorageEvent) => {
+    if (event.storageArea !== window.localStorage) return;
+    if (event.key === null || event.key === uiThemeStorageKey) setUiTheme(loadUiTheme());
+    if (event.key === null || event.key === uiScaleStorageKey) setUiScale(loadUiScale());
+    if (event.key === null || event.key === uiLocaleStorageKey) setUiLocale(loadUiLocale());
+  };
+  window.addEventListener("storage", syncUiPreferences);
+  onCleanup(() => window.removeEventListener("storage", syncUiPreferences));
   const uiLocalization = installUiLocalization(document.body, uiLocale);
   onCleanup(uiLocalization.dispose);
   createEffect(() => {
@@ -26862,6 +26880,7 @@ export default function App() {
         applicationUpdateError={applicationUpdateError()}
         uiScale={uiScale()}
         uiLocale={uiLocale()}
+        uiTheme={uiTheme()}
         canBack={snapshot().cues.length > 0}
         canGo={snapshot().cues.length > 0}
         canPauseFade={Boolean(snapshot().active_fade)}
@@ -26935,6 +26954,7 @@ export default function App() {
         onCheckForUpdates={() => void checkForApplicationUpdate(false)}
         onInstallUpdate={() => void installAvailableApplicationUpdate()}
         onUiLocale={setUiLocale}
+        onUiTheme={setUiTheme}
         onUndo={() => void undoProject()}
         onRedo={() => void redoProject()}
         onUiScale={(scale) => setUiScale(scale)}

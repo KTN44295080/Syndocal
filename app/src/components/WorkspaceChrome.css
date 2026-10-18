@@ -33,18 +33,18 @@
   height: 40px;
   min-width: 0;
   padding: 0 4px;
-  color: #b9b0a8;
+  color: var(--theme-muted);
   font-size: 10px;
   line-height: 14px;
 }
 .topbarSyncSource { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbarSyncRow { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; }
 .topbarBeats { display: inline-flex; flex: 0 0 auto; gap: 2px; }
-.topbarBeats i { width: 8px; height: 8px; box-sizing: border-box; border: 1px solid #849297; border-radius: 50%; background: #384349; }
-.topbarBeats i.lit { border-color: #b5e9f9; background: #b5e9f9; box-shadow: 0 0 0 2px #3b6979; }
+.topbarBeats i { width: 8px; height: 8px; box-sizing: border-box; border: 1px solid var(--theme-line-strong); border-radius: 0; background: var(--theme-inset); }
+.topbarBeats i.lit { border-color: var(--theme-ok); background: var(--theme-ok); box-shadow: 0 0 0 2px var(--theme-line); }
 .topbarSyncStatus { flex: 0 0 auto; white-space: nowrap; font-size: 9px; font-weight: 700; letter-spacing: 0; }
-.topbarTempoSync[data-topbar-sync-state="LOCK"] .topbarSyncStatus { color: #8ed19a; }
-.topbarTempoSync[data-topbar-sync-state="STALE"] .topbarSyncStatus { color: #e8b45a; }
+.topbarTempoSync[data-topbar-sync-state="LOCK"] .topbarSyncStatus { color: var(--theme-ok); }
+.topbarTempoSync[data-topbar-sync-state="STALE"] .topbarSyncStatus { color: var(--theme-warn); }
 
 .topbarTools { position: relative; flex: 0 0 auto; }
 .topbarTools > summary {
@@ -62,7 +62,7 @@
 }
 .topbarTools > summary::-webkit-details-marker { display: none; }
 .topbarTools[open] > summary { background: var(--ui-surface-panel); }
-.topbarTools.active > summary { border-color: #d184dc; color: #f2b8f8; }
+.topbarTools.active > summary { border-color: var(--theme-selected); color: var(--theme-text); }
 
 .topbarToolsPopover {
   position: absolute;
@@ -79,7 +79,7 @@
   box-shadow: 0 8px 24px rgb(0 0 0 / 40%);
 }
 .topbarToolsPopover > section { display: grid; gap: 6px; }
-.topbarToolsPopover > section > strong { color: #9e958d; font-size: 11px; font-weight: 700; }
+.topbarToolsPopover > section > strong { color: var(--theme-muted); font-size: 11px; font-weight: 700; }
 .topbarWorkspaceMenu .workspaceOperationsButton { width: 100%; text-align: left; }
 /* While locked, the lock state and Unlock sit in the header beside the disabled menu. */
 .topbarLockedOperations { display: flex; align-items: center; min-width: 0; }
@@ -92,4 +92,13 @@
   .topbarOrganized > .topbarProject { display: none; }
   .topbarOrganized .topbarShowClockStatus > span { display: none; }
   .topbarOrganized .topbarTransportCluster > [data-global-operator-action="dmx-blackout"] { margin-left: 0; }
+}
+
+/* Condensed label typography retains the existing title row and hit targets. */
+.topbarOrganized :is(.workspaceTab, .workspaceOperationsButton, .topbarTools > summary),
+.topbarToolsPopover > section > strong {
+  font-family: var(--theme-font-label);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
 }

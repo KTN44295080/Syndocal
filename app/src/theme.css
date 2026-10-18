@@ -1,0 +1,324 @@
+/* =====================================================================
+   DIRECTION B — "BROADCAST"   live-production switcher: tally semantics,
+   bold square keys with tally bars, crisp 1px grid, condensed uppercase
+   labels, dense.   Every colour is a token; eight themes below
+   ( [data-theme="<id>"] ) swap palettes only — layout/shapes never change.
+   Port a theme by copying its block.  ids: tally graphite ice cobalt forest ember neon safe
+   ===================================================================== */
+
+/* ---- non-colour tokens (shared by all themes) ---- */
+:root{
+  --r:0px; --r-sm:2px;
+  --ico-w:1.8;
+  --bar:5px;                /* tally bar thickness */
+  --font-ui:"Segoe UI Variable Text","Segoe UI Variable","Segoe UI","Yu Gothic UI","Meiryo",sans-serif;
+  --font-label:"Bahnschrift SemiCondensed","Bahnschrift","Arial Narrow","Segoe UI Semibold","Yu Gothic UI","Meiryo",sans-serif;
+  --font-num:"Cascadia Mono",Consolas,monospace;
+  /* optional fill patterns (only the colour-vision-safe theme sets these) */
+  --pat-pgm:none; --pat-pvw:none; --pat-queued:none; --pat-error:none;
+  --art-sat:1;              /* placeholder-thumbnail saturation (themes may tone it down) */
+}
+
+/* ---- colour token contract (what each theme must define) ----
+   surfaces  --s0 (wells/inputs/topbar) --s1 (app) --s2 (pane) --s3 (pane header/strips) --s4 (cards/pads)
+   keys      --key --key-hi --key-down
+   lines     --line (1px grid) --line-strong
+   text      --text --text-2 --text-dim            (all >= 4.5:1 on s2/s3/s4)
+   chrome    --accent/--accent-ink (pane label block, tab underline)  --readout (BPM digits)
+             --select/--select-ink (selected tab / selected pad)  --latched-bg/--latched-ink (latched key)
+   tally     --pgm --pvw --queued --error  (+ -ink text colour on each)  --pgm-deep
+   status    --ok/--ok-ink --warn/--warn-ink
+   danger    --danger --danger-bg --danger-bg-hi --hazard-a --hazard-b
+   faders    --fader-track --fader-fill --fader-cap --fader-mark
+   misc      --tally-bar --focus --focus-ring --disabled-bg/-ink/-line --empty-ink --pad-line
+             --beat-on --beat-off --beat-line --missing-a --missing-b */
+
+/* 1 · tally — reference palette */
+:root, :root[data-theme="tally"]{
+  --s0:#000000; --s1:#0a0c0f; --s2:#10141a; --s3:#171d26; --s4:#1d2530;
+  --key:#232b36; --key-hi:#2f3946; --key-down:#3b4656;
+  --line:#2a323d; --line-strong:#566170;
+  --text:#f5f7f9; --text-2:#d9dfe6; --text-dim:#b6bec9;
+  --accent:#ffffff; --accent-ink:#000000; --readout:#ffffff;
+  --select:#ffffff; --select-ink:#000000; --latched-bg:#ffffff; --latched-ink:#000000;
+  --pgm:#e5262b; --pgm-ink:#ffffff; --pgm-deep:#7c0f13;
+  --pvw:#1ec45a; --pvw-ink:#03170a;
+  --queued:#ffb400; --queued-ink:#1a1100;
+  --error:#ff4fa6; --error-ink:#1a0010;
+  --ok:#1ec45a; --ok-ink:#03170a; --warn:#ffb400; --warn-ink:#1a1100;
+  --danger:#e5262b; --danger-bg:#2b0a0d; --danger-bg-hi:#42101a; --hazard-a:#ffb400; --hazard-b:#111111;
+  --fader-track:#0a0c0f; --fader-fill:#d2d8e0; --fader-cap:#f5f7f9; --fader-mark:#000000;
+  --tally-bar:#566170; --focus:#ffffff; --focus-ring:#000000;
+  --disabled-bg:#12161c; --disabled-ink:#7a8594; --disabled-line:#2a323d; --empty-ink:#8793a3; --pad-line:#3a4452;
+  --beat-on:#1ec45a; --beat-off:#17261d; --beat-line:#2e4a38;
+  --missing-a:#2a1216; --missing-b:#3a1a20;
+}
+
+/* 2 · graphite — near-neutral, restrained. Program warm orange, Preview cool blue */
+:root[data-theme="graphite"]{
+  --s0:#0a0a0b; --s1:#111213; --s2:#171819; --s3:#1f2022; --s4:#27292c;
+  --key:#2f3236; --key-hi:#3a3e43; --key-down:#464a50;
+  --line:#2c2e32; --line-strong:#62666e;
+  --text:#f1f1ef; --text-2:#d3d4d6; --text-dim:#b0b3b8;
+  --accent:#e4e4e1; --accent-ink:#111213; --readout:#f1f1ef;
+  --select:#e4e4e1; --select-ink:#111213; --latched-bg:#d6d7d9; --latched-ink:#111213;
+  --pgm:#ff8a2b; --pgm-ink:#1c0d00; --pgm-deep:#7a3b0a;
+  --pvw:#5aa9ff; --pvw-ink:#031628;
+  --queued:#efe39a; --queued-ink:#1a1700;
+  --error:#e263c8; --error-ink:#1d0018;
+  --ok:#7cd59a; --ok-ink:#06180d; --warn:#efe39a; --warn-ink:#1a1700;
+  --danger:#f1f1ef; --danger-bg:#1d1d1f; --danger-bg-hi:#2a2a2d; --hazard-a:#efe39a; --hazard-b:#151516;
+  --fader-track:#0c0c0d; --fader-fill:#c4c6ca; --fader-cap:#ececea; --fader-mark:#111213;
+  --tally-bar:#62666e; --focus:#ffffff; --focus-ring:#000000;
+  --disabled-bg:#151617; --disabled-ink:#7d8187; --disabled-line:#2c2e32; --empty-ink:#8b8f95; --pad-line:#3d4046;
+  --beat-on:#5aa9ff; --beat-off:#1b2330; --beat-line:#33425a;
+  --missing-a:#261624; --missing-b:#33202f; --art-sat:.55;
+}
+
+/* 3 · ice — blue-black, cyan/white. Program coral, Preview cyan, Queued amber */
+:root[data-theme="ice"]{
+  --s0:#03060b; --s1:#070d16; --s2:#0b1521; --s3:#112133; --s4:#182c42;
+  --key:#1d3349; --key-hi:#274462; --key-down:#2f5276;
+  --line:#1e3349; --line-strong:#4e7090;
+  --text:#f2f9ff; --text-2:#d0e2f3; --text-dim:#a2bcd4;
+  --accent:#8fe9ff; --accent-ink:#03141b; --readout:#8fe9ff;
+  --select:#eaf8ff; --select-ink:#03141b; --latched-bg:#bdf1ff; --latched-ink:#03141b;
+  --pgm:#ff6a5c; --pgm-ink:#220300; --pgm-deep:#7d2018;
+  --pvw:#19d3f0; --pvw-ink:#021a22;
+  --queued:#ffb02e; --queued-ink:#1d1200;
+  --error:#d983ff; --error-ink:#1d0529;
+  --ok:#3de0b0; --ok-ink:#031a13; --warn:#ffb02e; --warn-ink:#1d1200;
+  --danger:#ff6a5c; --danger-bg:#2a0f14; --danger-bg-hi:#40171d; --hazard-a:#ffb02e; --hazard-b:#0a121c;
+  --fader-track:#060c14; --fader-fill:#66cfe8; --fader-cap:#eaf8ff; --fader-mark:#03141b;
+  --tally-bar:#4e7090; --focus:#8fe9ff; --focus-ring:#03060b;
+  --disabled-bg:#0c1622; --disabled-ink:#6f879d; --disabled-line:#1e3349; --empty-ink:#7f9bb4; --pad-line:#2d4962;
+  --beat-on:#19d3f0; --beat-off:#10283a; --beat-line:#24516b;
+  --missing-a:#24131f; --missing-b:#311a2b;
+}
+
+/* 3b · cobalt — deep cobalt/navy, noticeably bluer than ice; blue accent. Program coral, Preview teal, Queued gold, Error magenta */
+:root[data-theme="cobalt"]{
+  --s0:#02050f; --s1:#050b1e; --s2:#08122c; --s3:#0e1c42; --s4:#14275a;
+  --key:#1a2f6a; --key-hi:#244089; --key-down:#2d4fa6;
+  --line:#1a2f66; --line-strong:#4a6fd0;
+  --text:#f3f6ff; --text-2:#d0dcff; --text-dim:#a3b6ee;
+  --accent:#5b8cff; --accent-ink:#020a24; --readout:#8fb0ff;
+  --select:#eaf0ff; --select-ink:#040b24; --latched-bg:#9db8ff; --latched-ink:#040b24;
+  --pgm:#ff6459; --pgm-ink:#250300; --pgm-deep:#7d1f1c;
+  --pvw:#22d3a6; --pvw-ink:#021a14;
+  --queued:#ffbf2e; --queued-ink:#1d1300;
+  --error:#ff58c8; --error-ink:#200018;
+  --ok:#3be08f; --ok-ink:#031a0f; --warn:#ffbf2e; --warn-ink:#1d1300;
+  --danger:#ff6459; --danger-bg:#2a0c14; --danger-bg-hi:#40121f; --hazard-a:#ffbf2e; --hazard-b:#060d24;
+  --fader-track:#030818; --fader-fill:#6f9bff; --fader-cap:#eaf0ff; --fader-mark:#040b24;
+  --tally-bar:#4a6fd0; --focus:#9db8ff; --focus-ring:#02050f;
+  --disabled-bg:#0b1636; --disabled-ink:#7488c4; --disabled-line:#1a2f66; --empty-ink:#8397d6; --pad-line:#2c4796;
+  --beat-on:#5b8cff; --beat-off:#13224f; --beat-line:#2a4590;
+  --missing-a:#2a1030; --missing-b:#371845; --art-sat:.95;
+}
+
+/* 3c · forest — green-black / deep moss, mint accent. Program warm red-orange, Preview sky blue (never green), Queued amber, Error magenta */
+:root[data-theme="forest"]{
+  --s0:#040806; --s1:#09100c; --s2:#0e1812; --s3:#15231b; --s4:#1c2e23;
+  --key:#243a2d; --key-hi:#2f4a3a; --key-down:#3a5a46;
+  --line:#213529; --line-strong:#4f7a5f;
+  --text:#f1f8f3; --text-2:#d0e3d6; --text-dim:#a4c0ae;
+  --accent:#7fe0a0; --accent-ink:#04170c; --readout:#8ff0b0;
+  --select:#e8f6ec; --select-ink:#06120a; --latched-bg:#cdeed7; --latched-ink:#06120a;
+  --pgm:#ff6a3d; --pgm-ink:#200800; --pgm-deep:#7a2a12;
+  --pvw:#4cc3ff; --pvw-ink:#021622;
+  --queued:#ffb92e; --queued-ink:#1d1300;
+  --error:#f05cc0; --error-ink:#20001a;
+  --ok:#5fd68a; --ok-ink:#04170c; --warn:#ffb92e; --warn-ink:#1d1300;
+  --danger:#ff6a3d; --danger-bg:#2a120a; --danger-bg-hi:#411c10; --hazard-a:#ffb92e; --hazard-b:#0a120d;
+  --fader-track:#050a07; --fader-fill:#7fcf9a; --fader-cap:#e8f6ec; --fader-mark:#06120a;
+  --tally-bar:#4f7a5f; --focus:#8ff0b0; --focus-ring:#040806;
+  --disabled-bg:#101a14; --disabled-ink:#71887a; --disabled-line:#213529; --empty-ink:#85a08f; --pad-line:#34523f;
+  --beat-on:#7fe0a0; --beat-off:#14281c; --beat-line:#2c5a3d;
+  --missing-a:#2a1322; --missing-b:#381a2e; --art-sat:.85;
+}
+
+/* 4 · ember — warm charcoal, amber accent. Program red-orange, Preview teal, Queued gold */
+:root[data-theme="ember"]{
+  --s0:#080605; --s1:#100d0b; --s2:#171310; --s3:#211b16; --s4:#2b231c;
+  --key:#352b23; --key-hi:#43372c; --key-down:#52443a;
+  --line:#33291f; --line-strong:#74604c;
+  --text:#f7f0e7; --text-2:#ddd0c0; --text-dim:#baa994;
+  --accent:#ff9f1c; --accent-ink:#1c1000; --readout:#ffb347;
+  --select:#f4e6cf; --select-ink:#1a1109; --latched-bg:#f4e6cf; --latched-ink:#1a1109;
+  --pgm:#ff4d2a; --pgm-ink:#1c0400; --pgm-deep:#7a2010;
+  --pvw:#2fc4b0; --pvw-ink:#021a17;
+  --queued:#ffd23f; --queued-ink:#1c1500;
+  --error:#f0589a; --error-ink:#200010;
+  --ok:#8fd66b; --ok-ink:#0a1a04; --warn:#ffd23f; --warn-ink:#1c1500;
+  --danger:#ff4d2a; --danger-bg:#2a0f09; --danger-bg-hi:#40180f; --hazard-a:#ff9f1c; --hazard-b:#140e0a;
+  --fader-track:#0b0806; --fader-fill:#ffb454; --fader-cap:#f4e6cf; --fader-mark:#1a1109;
+  --tally-bar:#74604c; --focus:#ffb347; --focus-ring:#080605;
+  --disabled-bg:#16120f; --disabled-ink:#857665; --disabled-line:#33291f; --empty-ink:#907f6b; --pad-line:#4a3d30;
+  --beat-on:#ff9f1c; --beat-off:#2c1f12; --beat-line:#5a4125;
+  --missing-a:#2a1412; --missing-b:#381c18; --art-sat:.8;
+}
+
+/* 5 · neon — deep navy, saturated club look. Program hot pink, Preview electric blue, Queued lime, Error orange */
+:root[data-theme="neon"]{
+  --s0:#03030b; --s1:#070918; --s2:#0c0f25; --s3:#141838; --s4:#1b2049;
+  --key:#232a5a; --key-hi:#2f3873; --key-down:#3c4690;
+  --line:#242b5c; --line-strong:#5560b4;
+  --text:#f5f7ff; --text-2:#d5daff; --text-dim:#abb4f0;
+  --accent:#b57cff; --accent-ink:#12041f; --readout:#7ff0ff;
+  --select:#f5f7ff; --select-ink:#070918; --latched-bg:#7ff0ff; --latched-ink:#031a1f;
+  --pgm:#ff2d95; --pgm-ink:#1c0010; --pgm-deep:#7a0f4a;
+  --pvw:#3d8bff; --pvw-ink:#020816;
+  --queued:#c6ff3d; --queued-ink:#121a00;
+  --error:#ff8a1f; --error-ink:#1f0d00;
+  --ok:#3dffb0; --ok-ink:#02170f; --warn:#c6ff3d; --warn-ink:#121a00;
+  --danger:#ff2d95; --danger-bg:#2a0a20; --danger-bg-hi:#40102f; --hazard-a:#c6ff3d; --hazard-b:#0c0f25;
+  --fader-track:#05061a; --fader-fill:#8f9bff; --fader-cap:#f5f7ff; --fader-mark:#070918;
+  --tally-bar:#5560b4; --focus:#7ff0ff; --focus-ring:#03030b;
+  --disabled-bg:#0e1128; --disabled-ink:#7a83c4; --disabled-line:#242b5c; --empty-ink:#8790d8; --pad-line:#363f86;
+  --beat-on:#7ff0ff; --beat-off:#161d4a; --beat-line:#2f3b86;
+  --missing-a:#2a1020; --missing-b:#38172b;
+}
+
+/* 6 · safe — colour-vision-safe (Okabe–Ito hues). Program vermillion, Preview blue, Queued yellow, Error reddish purple.
+   Also carries fill PATTERNS so state survives grayscale: Program solid, Preview diagonal, Queued dots, Error cross-hatch */
+:root[data-theme="safe"]{
+  --s0:#050607; --s1:#0d0f11; --s2:#13161a; --s3:#1b1f24; --s4:#23282e;
+  --key:#2b3138; --key-hi:#363d46; --key-down:#434b55;
+  --line:#2a2f36; --line-strong:#626b77;
+  --text:#f4f5f6; --text-2:#d3d7dc; --text-dim:#b0b7c0;
+  --accent:#e9eaec; --accent-ink:#0d0f11; --readout:#f4f5f6;
+  --select:#e9eaec; --select-ink:#0d0f11; --latched-bg:#d3d6da; --latched-ink:#0d0f11;
+  --pgm:#e8681a; --pgm-ink:#1e0a00; --pgm-deep:#7a3408;
+  --pvw:#4aa3e8; --pvw-ink:#021220;
+  --queued:#f0e442; --queued-ink:#1a1700;
+  --error:#cc79a7; --error-ink:#1f0716;
+  --ok:#00b88a; --ok-ink:#021a13; --warn:#f0e442; --warn-ink:#1a1700;
+  --danger:#e9eaec; --danger-bg:#1c1e21; --danger-bg-hi:#2a2d31; --hazard-a:#f0e442; --hazard-b:#111214;
+  --fader-track:#08090a; --fader-fill:#c3c8ce; --fader-cap:#eceef0; --fader-mark:#0d0f11;
+  --tally-bar:#626b77; --focus:#ffffff; --focus-ring:#000000;
+  --disabled-bg:#14171a; --disabled-ink:#7b838d; --disabled-line:#2a2f36; --empty-ink:#8a929c; --pad-line:#424a54;
+  --beat-on:#4aa3e8; --beat-off:#162431; --beat-line:#2d4a63;
+  --missing-a:#241520; --missing-b:#301c2a; --art-sat:.7;
+  --pat-pvw:repeating-linear-gradient(135deg,rgba(255,255,255,.42) 0 2px,transparent 2px 7px);
+  --pat-queued:radial-gradient(rgba(255,255,255,.7) 1.1px,transparent 1.5px) 0 0/6px 6px;
+  --pat-error:repeating-linear-gradient(45deg,rgba(255,255,255,.4) 0 1.5px,transparent 1.5px 6px),repeating-linear-gradient(135deg,rgba(255,255,255,.4) 0 1.5px,transparent 1.5px 6px);
+}
+
+/* Canonical roles; legacy names are compatibility aliases, never palettes. */
+:root {
+  --theme-bg: var(--s1);
+  --theme-panel: var(--s2);
+  --theme-raised: var(--s3);
+  --theme-card: var(--s4);
+  --theme-inset: var(--s0);
+  --theme-line: var(--line);
+  --theme-line-strong: var(--line-strong);
+  --theme-text: var(--text);
+  --theme-muted: var(--text-2);
+  --theme-dim: var(--text-dim);
+  --theme-accent: var(--accent);
+  --theme-on-accent: var(--accent-ink);
+  --theme-program: var(--pgm);
+  --theme-on-program: var(--pgm-ink);
+  --theme-program-deep: var(--pgm-deep);
+  --theme-preview: var(--pvw);
+  --theme-on-preview: var(--pvw-ink);
+  --theme-queued: var(--queued);
+  --theme-on-queued: var(--queued-ink);
+  --theme-error: var(--error);
+  --theme-on-error: var(--error-ink);
+  --theme-warn: var(--warn);
+  --theme-on-warn: var(--warn-ink);
+  --theme-ok: var(--ok);
+  --theme-on-ok: var(--ok-ink);
+  --theme-danger: var(--danger);
+  --theme-danger-bg: var(--danger-bg);
+  --theme-danger-hover: var(--danger-bg-hi);
+  --theme-selected: var(--select);
+  --theme-on-selected: var(--select-ink);
+  --theme-latched: var(--latched-bg);
+  --theme-on-latched: var(--latched-ink);
+  --theme-focus: var(--focus);
+  --theme-focus-inset: var(--focus-ring);
+  --theme-font-label: var(--font-label);
+  --theme-font-ui: var(--font-ui);
+  --theme-font-number: var(--font-num);
+  --theme-key: var(--key);
+  --theme-key-hover: var(--key-hi);
+  --theme-key-down: var(--key-down);
+  --theme-fader-fill: var(--fader-fill);
+  --theme-fader-track: var(--fader-track);
+  --theme-fader-cap: var(--fader-cap);
+  --theme-fader-mark: var(--fader-mark);
+  --theme-tally-bar: var(--tally-bar);
+  --theme-disabled-bg: var(--disabled-bg);
+  --theme-disabled-text: var(--disabled-ink);
+  --theme-disabled-line: var(--disabled-line);
+  --theme-pattern-program: var(--pat-pgm);
+  --theme-pattern-preview: var(--pat-pvw);
+  --theme-pattern-queued: none;
+  --theme-pattern-error: var(--pat-error);
+  --ui-label-size: 11px;
+  --ui-label-tracking: 0.065em;
+  --ui-label-color: var(--theme-dim);
+  --ui-surface-app: var(--theme-bg);
+  --ui-surface-panel: var(--theme-panel);
+  --ui-surface-control: var(--theme-key);
+  --ui-border-width: 1px;
+  --ui-border: var(--theme-line);
+  --ui-radius-control: 0px;
+  --ui-radius-card: 0px;
+  --ui-selection-line: var(--theme-selected);
+  --ui-range-accent: var(--theme-fader-fill);
+  --ui-focus-ring: var(--theme-focus);
+  --ui-icon-size: 18px;
+  --ui-icon-button-width: 28px;
+  --ray-bg: var(--theme-bg);
+  --ray-surface: var(--theme-panel);
+  --ray-surface-raised: var(--theme-raised);
+  --ray-surface-control: var(--theme-key);
+  --ray-surface-hover: var(--theme-key-hover);
+  --ray-border: var(--theme-line);
+  --ray-border-strong: var(--theme-line-strong);
+  --ray-text: var(--theme-text);
+  --ray-text-muted: var(--theme-muted);
+  --ray-text-faint: var(--theme-dim);
+  --ray-accent: var(--theme-accent);
+  --ray-accent-strong: var(--theme-selected);
+  --ray-success: var(--theme-ok);
+  --ray-edit: var(--theme-preview);
+  --ray-live: var(--theme-program);
+  --ray-cyan: var(--theme-preview);
+  --ray-danger: var(--theme-danger);
+  --ui-range-track: var(--theme-fader-track);
+  --ui-range-fill: var(--theme-fader-fill);
+  --ui-range-thumb: var(--theme-fader-cap);
+  --ui-range-glow: color-mix(in srgb, var(--theme-focus) 28%, transparent);
+  --ui-range-disabled: var(--disabled-ink);
+  --control-surface: var(--theme-panel);
+  --control-raised: var(--theme-raised);
+  --control-border: var(--theme-line);
+  --control-muted: var(--theme-muted);
+  --control-accent: var(--theme-accent);
+  --theme-hazard: repeating-linear-gradient(135deg, var(--hazard-a) 0 6px, var(--hazard-b) 6px 12px);
+}
+
+[data-theme-swatch="tally"] { --swatch-program:#e5262b; --swatch-preview:#1ec45a; --swatch-queued:#ffb400; }
+
+[data-theme-swatch="graphite"] { --swatch-program:#ff8a2b; --swatch-preview:#5aa9ff; --swatch-queued:#efe39a; }
+
+[data-theme-swatch="ice"] { --swatch-program:#ff6a5c; --swatch-preview:#19d3f0; --swatch-queued:#ffb02e; }
+
+[data-theme-swatch="cobalt"] { --swatch-program:#ff6459; --swatch-preview:#22d3a6; --swatch-queued:#ffbf2e; }
+
+[data-theme-swatch="forest"] { --swatch-program:#ff6a3d; --swatch-preview:#4cc3ff; --swatch-queued:#ffb92e; }
+
+[data-theme-swatch="ember"] { --swatch-program:#ff4d2a; --swatch-preview:#2fc4b0; --swatch-queued:#ffd23f; }
+
+[data-theme-swatch="neon"] { --swatch-program:#ff2d95; --swatch-preview:#3d8bff; --swatch-queued:#c6ff3d; }
+
+[data-theme-swatch="safe"] { --swatch-program:#e8681a; --swatch-preview:#4aa3e8; --swatch-queued:#f0e442; }
+
+/* Separate the dot image from its tile size so background-image is valid CSS. */
+:root[data-theme="safe"] { --theme-pattern-queued: radial-gradient(rgba(255,255,255,.7) 1.1px, transparent 1.5px); }
