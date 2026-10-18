@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, onMount } from "solid-js";
 import type {
   MediaAssetSummary,
   VideoClipCuePointSummary,
@@ -35,7 +35,16 @@ const focusableSelector = "button:not([disabled]), input:not([disabled]), select
 
 export function VideoClipSlotInspectorPanel(props: VideoClipSlotInspectorPanelProps) {
   const slot = createMemo(() => props.layer?.clip_slots?.find((candidate) => candidate.id === props.slotId) ?? null);
-  const [assetId, setAssetId] = createSignal<number | null>(null);
+  // The operator's unsaved asset choice. `null` means "untouched": the select then mirrors the
+  // authoritative slot asset, so it can never fall out of sync with the slot being inspected.
+  const [assetDraft, setAssetDraft] = createSignal<number | null>(null);
+  const currentAssetId = createMemo(() => slot()?.media_asset_id ?? null);
+  const selectedAssetId = createMemo(() => assetDraft() ?? currentAssetId() ?? props.assets[0]?.id ?? null);
+  const assetMissing = createMemo(() => {
+    const id = currentAssetId();
+    return id !== null && !props.assets.some((asset) => asset.id === id);
+  });
+  const assignDisabled = createMemo(() => assetDraft() === null || assetDraft() === currentAssetId() || !props.assets.some((asset) => asset.id === assetDraft()));
   const [inPointMs, setInPointMs] = createSignal(0);
   const [outPointMs, setOutPointMs] = createSignal("");
   const [loopMode, setLoopMode] = createSignal<VideoClipSlotSummary["loop_mode"]>("Once");
@@ -46,9 +55,14 @@ export function VideoClipSlotInspectorPanel(props: VideoClipSlotInspectorPanelPr
   const [localError, setLocalError] = createSignal<string | null>(null);
   let panel!: HTMLElement;
 
-  createEffect(() => {
+  // Drafts are discarded when a different slot is inspected or the authoritative asset changes
+  // (an Assign landed, or another surface reassigned it). Snapshot refreshes that merely hand back
+  // new objects for the same slot do not retrigger this, so an in-progress choice is preserved.
+  createEffect(on([() => props.slotId, currentAssetId], () => setAssetDraft(null)));
+  // Other fields re-sync only when the authoritative slot content really changes.
+  const slotSignature = createMemo(() => JSON.stringify(slot()));
+  createEffect(on([() => props.slotId, slotSignature], () => {
     const current = slot();
-    setAssetId(current?.media_asset_id ?? props.assets[0]?.id ?? null);
     setInPointMs(current?.in_point_ms ?? 0);
     setOutPointMs(current?.out_point_ms == null ? "" : String(current.out_point_ms));
     setLoopMode(current?.loop_mode ?? "Once");
@@ -57,7 +71,7 @@ export function VideoClipSlotInspectorPanel(props: VideoClipSlotInspectorPanelPr
     setCuePoints(JSON.stringify(current?.cue_points ?? [], null, 2));
     setEffectOverrides(JSON.stringify(current?.effect_overrides ?? [], null, 2));
     setLocalError(null);
-  });
+  }));
 
   const close = () => {
     props.onClose();
@@ -132,19 +146,24 @@ export function VideoClipSlotInspectorPanel(props: VideoClipSlotInspectorPanelPr
       <Show when={props.layer} fallback={<p>Select a Video layer to author a clip bank.</p>}>
         <label>
           Media asset
-          <select value={assetId() ?? ""} onInput={(event) => setAssetId(Number(event.currentTarget.value))}>
-            <For each={props.assets}>{(asset) => <option value={asset.id} data-no-localize>{asset.label}</option>}</For>
+          {/* Selection is bound per option (`selected`) rather than via select.value: when the asset list is
+              replaced the <For> recreates every option and the browser would otherwise fall back to the first one. */}
+          <select onInput={(event) => setAssetDraft(Number(event.currentTarget.value))} data-clip-inspector-asset>
+            <Show when={assetMissing()}>
+              <option value={currentAssetId() ?? ""} selected={assetDraft() === null} disabled data-no-localize>{`Asset ${currentAssetId()} (not in library)`}</option>
+            </Show>
+            <For each={props.assets}>{(asset) => <option value={asset.id} selected={asset.id === selectedAssetId()} data-no-localize>{asset.label}</option>}</For>
           </select>
         </label>
         <Show when={slot()} fallback={
-          <button type="button" class="primary" disabled={assetId() === null} onClick={() => assetId() !== null && void props.onCreate(assetId()!, null)}>
+          <button type="button" class="primary" disabled={selectedAssetId() === null} onClick={() => selectedAssetId() !== null && void props.onCreate(selectedAssetId()!, null)}>
             Create Slot
           </button>
         }>
           {(current) => <>
             <dl><div><dt>Slot ID</dt><dd data-no-localize>{current().id}</dd></div><div><dt>Runtime</dt><dd>See bank badges</dd></div></dl>
             <div class="videoClipSlotInspectorActions">
-              <button type="button" onClick={() => assetId() !== null && void props.onAssign(current().id, assetId()!)}>Assign</button>
+              <button type="button" disabled={assignDisabled()} onClick={() => !assignDisabled() && void props.onAssign(current().id, assetDraft()!)}>Assign</button>
               <button type="button" onClick={() => void props.onDuplicate(current().id)}>Duplicate</button>
               <button type="button" onClick={() => void props.onSetDefault(current().id)} disabled={props.layer?.default_clip_slot_id === current().id}>Default</button>
               <button type="button" onClick={() => void props.onReorder(current().id, -1)}>Move Earlier</button>
