@@ -6,12 +6,13 @@
 //! makes the whole renderer killable without detaching an in-process thread.
 
 use super::video_recording::encoder::process::ReapingChild;
+use protocol::hidden_console_command::hidden_command;
 use serde::{Deserialize, Serialize};
 use std::{
     env,
     ffi::OsString,
     io::{self, Read, Write},
-    process::{Command, Stdio},
+    process::Stdio,
     sync::{mpsc, Arc, Mutex},
     thread,
     time::{Duration, Instant},
@@ -94,7 +95,7 @@ impl RecordingRendererProcess {
     pub(crate) fn spawn(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<Self, String> {
         let executable = env::current_exe()
             .map_err(|error| format!("Unable to locate Syndocal recording renderer: {error}"))?;
-        let mut command = Command::new(executable);
+        let mut command = hidden_command(executable);
         command
             .arg(WORKER_ARGUMENT)
             .stdin(Stdio::piped())

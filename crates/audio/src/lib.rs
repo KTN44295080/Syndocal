@@ -4,10 +4,12 @@ pub mod ltc;
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
-use protocol::{AudioAnalysisSummary, AudioSpectrumPoint, AudioWaveformPoint};
+use protocol::{
+    hidden_console_command::hidden_command, AudioAnalysisSummary, AudioSpectrumPoint,
+    AudioWaveformPoint,
+};
 use thiserror::Error;
 
 const DEFAULT_WAVEFORM_POINTS: usize = 512;
@@ -112,7 +114,7 @@ pub fn analyze_audio_file_with_ffmpeg_binary(
 ) -> Result<AudioAnalysisSummary, AudioError> {
     let path = path.as_ref();
     let sample_rate = DEFAULT_FFMPEG_SAMPLE_RATE;
-    let output = Command::new(binary.as_ref())
+    let output = hidden_command(binary.as_ref())
         .args(["-hide_banner", "-loglevel", "error", "-i"])
         .arg(path)
         .args([

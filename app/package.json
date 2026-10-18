@@ -125,6 +125,8 @@
     "check:warnings": "node scripts/check-warning-ratchet.mjs",
     "check:warnings:self-test": "node scripts/test-warning-ratchet.mjs",
     "check:tauri-build-wrapper": "node scripts/check-tauri-build-wrapper.mjs",
+    "check:hidden-child-console": "node scripts/check-hidden-child-console.mjs",
+    "check:hidden-child-console:self-test": "node scripts/check-hidden-child-console.mjs --self-test",
     "check:agent-bridge": "node scripts/check-agent-bridge.mjs",
     "check:media-thumbnails": "node scripts/check-media-thumbnail-controller.mjs",
     "check:media-asset-operations": "node --no-warnings --experimental-strip-types scripts/check-media-asset-operation-controller.mjs",

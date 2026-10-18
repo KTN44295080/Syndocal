@@ -4,7 +4,7 @@ use super::{
     recording_receipts, VideoRecordingEndReason, VideoRecordingState, VideoRecordingStatus,
 };
 use engine::EngineHandle;
-use protocol::VideoOutputId;
+use protocol::{hidden_console_command::hidden_command, VideoOutputId};
 use std::{
     env,
     ffi::OsStr,
@@ -118,7 +118,7 @@ pub(super) fn video_recording_ffmpeg_command(
 ) -> Command {
     let dimensions = format!("{width}x{height}");
     let rate = frame_rate.to_string();
-    let mut command = Command::new(ffmpeg);
+    let mut command = hidden_command(ffmpeg);
     command
         .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo"])
         .args([

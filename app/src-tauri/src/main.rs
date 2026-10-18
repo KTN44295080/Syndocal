@@ -1,9 +1,15 @@
 #![cfg_attr(test, recursion_limit = "256")]
+// Release builds are GUI-subsystem apps so Windows never opens a console window on
+// launch. Terminal-invoked CLI modes attach to the parent console (`cli_console`).
+// Test harnesses (including `cargo test --release`) stay console-subsystem.
+#![cfg_attr(all(not(debug_assertions), not(test)), windows_subsystem = "windows")]
 
 mod agent_bridge;
 mod agent_bridge_execution;
+mod cli_console;
 mod native_adapter_error;
 mod process_identity_cli;
+use protocol::hidden_console_command::hidden_command;
 use std::{
     cell::RefCell,
     collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
@@ -13,13 +19,14 @@ use std::{
     io::{Read, Seek, Write},
     net::{IpAddr, UdpSocket},
     path::{Path, PathBuf},
-    process::Command,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
         mpsc, Arc, Condvar, LazyLock, Mutex, TryLockError,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+#[cfg(test)]
+use std::process::Command;
 
 mod fixture_profile_contract;
 use fixture_profile_contract::{
@@ -27638,7 +27645,7 @@ fn download_gdtf_from_url(window: WebviewWindow, url: String) -> Result<Option<S
     };
     let path = normalize_gdtf_save_path(path)?;
 
-    let status = Command::new(curl_binary_name())
+    let status = hidden_command(curl_binary_name())
         .args([
             "-L",
             "--fail",
@@ -88071,7 +88078,7 @@ fn gdtf_share_api_url(endpoint: &str) -> String {
 }
 
 fn run_curl(args: &[&OsStr]) -> Result<Vec<u8>, String> {
-    let output = Command::new(curl_binary_name())
+    let output = hidden_command(curl_binary_name())
         .args(args)
         .output()
         .map_err(|error| format!("Failed to start curl: {error}"))?;
@@ -133984,6 +133991,7 @@ fn main() {
         return;
     }
     if updater_release_identity_cli_requested(env::args_os().skip(1)) {
+        cli_console::attach_parent_console_for_cli();
         match application_update_release_identity_json() {
             Ok(identity) => {
                 println!("{identity}");

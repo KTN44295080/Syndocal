@@ -4,6 +4,7 @@
 //! capture endpoint.  DirectShow's alternative name is the exact device
 //! identity and the only name accepted by the opaque endpoint selector.
 
+use protocol::hidden_console_command::hidden_command;
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Read,
@@ -163,7 +164,7 @@ pub(crate) fn verified_ffmpeg_executable() -> Result<PathBuf, String> {
     let executable = std::env::var_os("SYNDOCAL_FFMPEG")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("ffmpeg"));
-    let mut command = Command::new(&executable);
+    let mut command = hidden_command(&executable);
     command
         .arg("-version")
         .stdin(Stdio::null())
@@ -265,7 +266,7 @@ pub fn probe_video_camera_profile(
     let plan = crate::capture_transport::capture_ffmpeg_plan("camera", &endpoint_name)
         .map_err(|error| error.message)?;
     let mut process = Some(
-        Command::new(&ffmpeg)
+        hidden_command(&ffmpeg)
             .args(&plan.args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -598,7 +599,7 @@ fn run_dshow_listing_output<const N: usize>(
     args: [&str; N],
     label: &str,
 ) -> Result<DshowListingOutput, String> {
-    let mut command = Command::new(ffmpeg);
+    let mut command = hidden_command(ffmpeg);
     command
         .args(args)
         .stdin(Stdio::null())

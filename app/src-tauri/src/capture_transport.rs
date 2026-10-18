@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     ffi::OsString,
     io::Read,
-    process::{Child, Command, Stdio},
+    process::{Child, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc, Mutex,
@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use protocol::VideoLayerId;
+use protocol::{hidden_console_command::hidden_command, VideoLayerId};
 
 pub const SCREEN_CAPTURE_WIDTH: u32 = 1280;
 pub const SCREEN_CAPTURE_HEIGHT: u32 = 720;
@@ -122,7 +122,7 @@ impl CaptureRouteWorker {
     ) -> Result<Self, video::ExternalVideoTransportDriverError> {
         let ffmpeg = crate::capture_catalog::verified_ffmpeg_executable().map_err(driver_error)?;
         let plan = capture_ffmpeg_plan(backend_id, endpoint_name)?;
-        let mut process = Command::new(&ffmpeg)
+        let mut process = hidden_command(&ffmpeg)
             .args(&plan.args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -550,6 +550,7 @@ fn driver_error(message: impl Into<String>) -> video::ExternalVideoTransportDriv
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     fn arg_strings(args: &[OsString]) -> Vec<String> {
         args.iter()

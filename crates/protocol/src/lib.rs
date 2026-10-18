@@ -23,6 +23,7 @@ pub mod show_clock_runtime;
 pub mod timeline_audio_policy;
 pub mod timeline_persistence;
 pub mod playback_layer;
+pub mod hidden_console_command;
 pub use playback_layer::{
     clear_active_cue_references, has_active_cue_references, PlaybackCueListActiveCue,
     PlaybackCueReleaseTargets, PlaybackEnabledFlag, PlaybackLayerSnapshot, PlaybackLevel,

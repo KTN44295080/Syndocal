@@ -8,15 +8,15 @@ use std::{
 };
 
 use protocol::{
-    validate_video_layer_transition_runtime, ClockSnapshot, CompositionId, CompositionSummary,
-    MachineOutputRole, TimelineId, Transform2D, VideoBackendState, VideoBackendStatus,
-    VideoBlendMode, VideoClipRuntimeSnapshot, VideoClipSlotId, VideoColorAdjust,
-    VideoCuePointSummary, VideoEffectChainId, VideoEffectChainSummary, VideoEffectId,
-    VideoEffectKind, VideoEffectScope, VideoEffectStageId, VideoFxAdjust, VideoIsfEffectSummary,
-    VideoLayerId, VideoLayerState, VideoLayerSummary, VideoLayerTransitionCurve,
-    VideoLayerTransitionRuntimeSnapshot, VideoLayerTransitionTarget, VideoMediaMetadata,
-    VideoOutputAspectMode, VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputSummary,
-    VideoRuntimeStatus, VideoSnapshot, VideoSourceKind, VideoSourceSummary,
+    hidden_console_command::hidden_command, validate_video_layer_transition_runtime, ClockSnapshot,
+    CompositionId, CompositionSummary, MachineOutputRole, TimelineId, Transform2D,
+    VideoBackendState, VideoBackendStatus, VideoBlendMode, VideoClipRuntimeSnapshot,
+    VideoClipSlotId, VideoColorAdjust, VideoCuePointSummary, VideoEffectChainId,
+    VideoEffectChainSummary, VideoEffectId, VideoEffectKind, VideoEffectScope, VideoEffectStageId,
+    VideoFxAdjust, VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerSummary,
+    VideoLayerTransitionCurve, VideoLayerTransitionRuntimeSnapshot, VideoLayerTransitionTarget,
+    VideoMediaMetadata, VideoOutputAspectMode, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputSummary, VideoRuntimeStatus, VideoSnapshot, VideoSourceKind, VideoSourceSummary,
     VideoTransitionEffectOwner, VIDEO_EFFECT_CHAIN_MAX_STAGES,
     VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION, VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY,
 };
@@ -3366,7 +3366,7 @@ fn capture_backend_status(id: &str, label: &str, binary: &Path) -> VideoBackendS
 }
 
 fn command_backend_status(id: &str, label: &str, binary: &Path) -> VideoBackendStatus {
-    match Command::new(binary).arg("-version").output() {
+    match hidden_command(binary).arg("-version").output() {
         Ok(output) if output.status.success() => VideoBackendStatus {
             id: id.to_string(),
             label: label.to_string(),
@@ -3398,7 +3398,7 @@ fn ffmpeg_decoder_backend_status(
     binary: &Path,
     decoder_name: &str,
 ) -> VideoBackendStatus {
-    match Command::new(binary).arg("-decoders").output() {
+    match hidden_command(binary).arg("-decoders").output() {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if ffmpeg_decoders_list_contains(&stdout, decoder_name) {
@@ -3482,7 +3482,7 @@ pub fn probe_video_file_metadata_with_binary(
     binary: impl AsRef<Path>,
 ) -> Result<VideoProbeSummary, VideoProbeError> {
     let path = path.as_ref();
-    let output = Command::new(binary.as_ref())
+    let output = hidden_command(binary.as_ref())
         .arg("-v")
         .arg("error")
         .arg("-show_entries")
@@ -7935,7 +7935,7 @@ fn ffmpeg_frame_command(request: &VideoFrameRequest, binary: &Path, path: &Path)
         "scale={}:{}:flags=fast_bilinear,format=rgba",
         request.width, request.height
     );
-    let mut command = Command::new(binary);
+    let mut command = hidden_command(binary);
     command
         .args([
             "-hide_banner",
