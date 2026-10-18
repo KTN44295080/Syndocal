@@ -204,57 +204,55 @@ fn manual_tempo_outside_a_transaction_still_retires_the_token() {
     assert!(coordinator.history.undo.is_empty());
 }
 
+/// DEC-PLAYBACK-LAYER-001 replaced the fail-closed Cue contract: a Cue and
+/// live clock traffic together leave the saved image, the exact token and
+/// Undo untouched, and Undo keeps the live look.
 #[test]
-fn cue_trigger_rewrites_the_saved_look_and_fails_closed() {
+fn cue_trigger_and_live_clock_keep_the_committed_token_and_undo() {
     let _serial = serialized_authored_test_guard();
     let (harness, query, effect_id, cue_id) = seeded_live_show();
     let state = &harness.state;
     let token = commit_effect_enabled(state, &query, effect_id);
+    let committed_image = engine_persistence_bytes(state);
 
     state
         .engine
         .send(EngineCommand::TriggerCue(cue_id))
         .unwrap();
-    let mut saved = state.engine.persistence_snapshot().unwrap();
-    for _ in 0..40 {
-        if saved.fixtures[0]
-            .attribute_values
-            .iter()
-            .any(|value| value.value == CUE_DIMMER)
-        {
-            break;
-        }
-        thread::sleep(Duration::from_millis(25));
-        saved = state.engine.persistence_snapshot().unwrap();
-    }
-    // The saved image deliberately carries the recalled look: the active Cue
-    // reference and the Cue's level in the same fixture values an authored
-    // fader edit owns. Neither can leave the checkpoint identity.
-    let saved = crate::project_snapshot_for_save(saved);
-    assert_eq!(saved.active_cue_id, Some(cue_id));
-    assert!(saved.fixtures[0]
+    drive_midi_clock(state);
+    let live = state.engine.snapshot();
+    assert_eq!(live.active_cue_id, Some(cue_id));
+    assert!(live.fixtures[0]
         .attribute_values
         .iter()
         .any(|value| value.attribute == "Dimmer" && value.value == CUE_DIMMER));
 
-    let error = exact_preview_authority(state, &token.authority).unwrap_err();
-    assert!(
-        error.contains("Project changed before VJ Preview staging"),
-        "{error}"
-    );
+    // The saved image is the authored one: no live Cue, no Cue level, the
+    // project tempo.
+    assert_eq!(engine_persistence_bytes(state), committed_image);
+    let saved = crate::project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
+    assert_eq!(saved.active_cue_id, None);
+    assert!(saved.fixtures[0]
+        .attribute_values
+        .iter()
+        .all(|value| value.value != CUE_DIMMER));
+    assert_eq!(saved.clock.bpm, PROJECT_BPM);
+
+    exact_preview_authority(state, &token.authority)
+        .expect("Cue and clock traffic leave the committed exact token current");
     {
         let coordinator = state.project_coordinator.lock().unwrap();
-        assert_eq!(coordinator.revision, token.authority.revision + 1);
-        assert!(
-            coordinator.history.undo.is_empty(),
-            "Undo would replace the whole image and silently revert the recalled look"
-        );
+        assert_eq!(coordinator.revision, token.authority.revision);
+        assert_eq!(coordinator.history.undo.len(), 1, "Undo survives playback");
     }
-    assert!(undo_with_exact_token(state, &token).is_err());
-    let after = crate::project_snapshot_for_save(state.engine.persistence_snapshot().unwrap());
-    assert_eq!(
-        after.active_cue_id,
-        Some(cue_id),
-        "the refused Undo kept the live look"
-    );
+    let undone = undo_with_exact_token(state, &token)
+        .expect("the exact Undo token is still valid after Cue and clock traffic");
+    assert_eq!(undone.history_status.undo_depth, 0);
+    assert!(!effect_enabled(state, effect_id));
+    let after = state.engine.snapshot();
+    assert_eq!(after.active_cue_id, Some(cue_id), "Undo keeps the live Cue");
+    assert!(after.fixtures[0]
+        .attribute_values
+        .iter()
+        .any(|value| value.attribute == "Dimmer" && value.value == CUE_DIMMER));
 }

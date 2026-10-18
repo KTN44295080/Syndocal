@@ -129,7 +129,8 @@ async function run() {
   }
 
   const engineSource = countMacroVariants(engine, "define_engine_command!", false);
-  assert.equal(engineSource.length, 284, "EngineCommand declaration inventory count drifted");
+  assert.equal(engineSource.length, 285, "EngineCommand declaration inventory count drifted");
+  assert.ok(engineSource.includes("RequestPlaybackLayerSnapshot"), "Standby playback-layer read must remain inventoried");
   assert.ok(engineSource.includes("SetNetworkDmxRoutesPublished"), "network route publication must remain inventoried");
   assert.ok(engineSource.includes("RequestSnapshotPublication"), "Internal read publication barrier must remain inventoried");
   assertNeedles(engineInventory, "crates/engine/src/control_plane.rs", [
