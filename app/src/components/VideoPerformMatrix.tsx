@@ -65,7 +65,8 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
     if (props.keyboardEnabled === false || event.defaultPrevented || event.repeat || event.isComposing
       || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
     const target = event.target instanceof Element ? event.target : null;
-    if (target?.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])")
+    // A focused pane divider owns its Arrow/Home/End resize keys.
+    if (target?.closest("input, textarea, select, [role='separator'], [contenteditable]:not([contenteditable='false'])")
       || document.querySelector("[role='dialog'], dialog[open], [aria-modal='true'], .app[data-control-learn-mode]")) return;
     const layerId = selectedLayerId();
     if (layerId === null) return;

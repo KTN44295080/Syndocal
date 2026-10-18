@@ -72,6 +72,17 @@ class Cdp {
     assert.ok(!result.exceptionDetails, JSON.stringify(result.exceptionDetails));
     return result.result.value;
   }
+  // Headless Chromium occasionally stalls one screenshot (most often with a modal
+  // dialog open); evidence capture retries instead of failing the layout contract.
+  async capture(params = { format: "png" }, timeout = 30_000) {
+    for (let attempt = 1; ; attempt++) {
+      try { return await this.send("Page.captureScreenshot", params, timeout); }
+      catch (error) {
+        if (attempt >= 3 || !/CDP timeout/.test(error.message)) throw error;
+        await this.send("Page.bringToFront").catch(() => {});
+      }
+    }
+  }
   async key(key, code = key, virtualKey) {
     const params = { key, code, ...(virtualKey ? { windowsVirtualKeyCode: virtualKey, nativeVirtualKeyCode: virtualKey } : {}) };
     await this.send("Input.dispatchKeyEvent", { type: "keyDown", ...params, ...(key === "Enter" ? { text: "\r", unmodifiedText: "\r" } : {}) });
@@ -271,7 +282,7 @@ try {
       });
       await cdp.evaluate("document.fonts.ready.then(() => true)");
       const expectedHeading = locale === "ja" ? "ライブ映像" : "Perform";
-      await waitFor(() => cdp.evaluate(`document.querySelector('${root} .videoPerformDeskHeader h2')?.textContent === ${JSON.stringify(expectedHeading)}`), `${label}: rendered locale`);
+      await waitFor(() => cdp.evaluate(`document.querySelector('${root} [data-video-perform-pane="matrix"] .workspacePaneTitle')?.textContent === ${JSON.stringify(expectedHeading)}`), `${label}: rendered locale`);
       if (locale === "ja") {
         for (const [state, translated] of [["Loaded", "読み込み済み"], ["Queued", "キュー中"]]) {
           await waitFor(() => cdp.evaluate(`Array.from(document.querySelectorAll('[data-video-perform-cell-state="${state}"] .videoPerformClipState')).some(e => e.textContent.includes(${JSON.stringify(translated)}))`), `${label}: dynamic ${state} state localized`);
@@ -288,9 +299,9 @@ try {
       assert.equal(identity.overlay, false, `${label}: framework overlay`);
       assert.equal(identity.scrollWidth, width, `${label}: outer horizontal scroll`);
       assert.equal(identity.scrollHeight, height, `${label}: outer vertical scroll`);
-      await writeFile(join(evidenceDir, `${label}-before.png`), Buffer.from((await cdp.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, optimizeForSpeed: true }, 30_000)).data, "base64"));
+      await writeFile(join(evidenceDir, `${label}-before.png`), Buffer.from((await cdp.capture( { format: "png", captureBeyondViewport: false, optimizeForSpeed: true }, 30_000)).data, "base64"));
       const inspect = (selector) => cdp.evaluate('('+inspectInPage+')('+JSON.stringify(selector)+')');
-      const regions = ['matrix','transition','quick-fx','health'].map(name => root+' [data-video-perform-region="'+name+'"]');
+      const regions = ['matrix','transition','quick-fx','health','output'].map(name => root+' [data-video-perform-region="'+name+'"]');
       const required = [...Object.values(selectors), ...regions];
       const geometry = [];
       for (const selector of required) {
@@ -301,9 +312,9 @@ try {
         }
       }
       // Health lives in the desk header between the title and the shortcuts button and never below the matrix.
-      const headerOrder = await cdp.evaluate('(()=>{const r=(s)=>document.querySelector(s)?.getBoundingClientRect();const h=r('+JSON.stringify(root+' .videoPerformDeskHeader [data-video-perform-region="health"]')+'),t=r('+JSON.stringify(root+' .videoPerformDeskHeader h2')+'),l=r('+JSON.stringify(root+' .videoPerformDeskHeader [data-video-perform-legend-toggle]')+');return h&&t&&l?{titleRight:t.right,healthLeft:h.left,healthRight:h.right,legendLeft:l.left,healthH:h.height,standalone:!!document.querySelector('+JSON.stringify(root+' > .videoPerformHealth')+')}:null})()');
-      assert.ok(headerOrder, label+': health region is rendered inside the desk header');
-      assert.ok(headerOrder.healthLeft >= headerOrder.titleRight - 1 && headerOrder.healthRight <= headerOrder.legendLeft + 1, label+': health sits between title and shortcuts '+JSON.stringify(headerOrder));
+      const headerOrder = await cdp.evaluate('(()=>{const r=(s)=>document.querySelector(s)?.getBoundingClientRect();const h=r('+JSON.stringify(root+' .workspacePaneHeader [data-video-perform-region="health"]')+'),t=r('+JSON.stringify(root+' [data-video-perform-pane="matrix"] .workspacePaneTitle')+'),l=r('+JSON.stringify(root+' .workspacePaneHeader [data-video-perform-legend-toggle]')+');return h&&t&&l?{titleRight:t.right,healthLeft:h.left,healthRight:h.right,legendLeft:l.left,healthH:h.height,standalone:!!document.querySelector('+JSON.stringify(root+' > .videoPerformHealth')+')}:null})()');
+      assert.ok(headerOrder, label+': health region is rendered inside the Perform pane header');
+      assert.ok(headerOrder.healthLeft >= headerOrder.titleRight - 1 && headerOrder.healthRight <= headerOrder.legendLeft + 1, label+': health sits between title and shortcuts in the pane header '+JSON.stringify(headerOrder));
       assert.equal(headerOrder.standalone, false, label+': no separate bottom health row');
       // One tempo cluster: the Perform desk no longer carries its own BPM, Tap, sync or beat lights.
       const tempo = await cdp.evaluate('(()=>{const vis=(e)=>{const r=e.getBoundingClientRect();const s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility==="visible"&&s.display!=="none"};const count=(q)=>[...document.querySelectorAll(q)].filter(vis).length;const rect=(q)=>{const r=document.querySelector(q)?.getBoundingClientRect();return r&&{left:r.left,right:r.right,top:r.top,bottom:r.bottom}};const sync=document.querySelector("[data-topbar-sync]");const dots=[...(sync?.querySelectorAll(".topbarBeats i")??[])];const lit=dots.map((d,i)=>d.classList.contains("lit")?i:-1).filter(i=>i>=0);const top=document.querySelector(".topbar");const fits=(q)=>{const e=document.querySelector(q);if(!e)return false;const range=document.createRange();range.selectNodeContents(e);return range.getBoundingClientRect().width<=e.getBoundingClientRect().width+1&&e.scrollWidth<=e.clientWidth+1};return {tap:count("[data-topbar-tap]"),tapTargets:count("[data-control-map-target*=\\\"TapBpm\\\"]"),bpm:count(".topbarBpmControl"),bpmTargets:count("[data-control-map-target*=\\\"SetBpm\\\"]"),deskTempo:document.querySelectorAll("[data-video-perform-layout] [data-video-perform-tap], [data-video-perform-layout] [data-video-perform-region=tempo], [data-video-perform-layout] .videoPerformTempo, [data-video-perform-layout] input[aria-label*=BPM]").length,tapWords:[...document.querySelectorAll("button")].filter(b=>vis(b)&&/^(Tap|タップ)$/.test(b.textContent.trim())).length,dots:dots.length,lit,beat:Number(sync?.querySelector(".topbarBeats")?.dataset.topbarBeat),source:sync?.querySelector(".topbarSyncSource")?.textContent.trim(),status:sync?.querySelector(".topbarSyncStatus")?.textContent.trim(),title:sync?.title,sourceFits:fits("[data-topbar-sync] .topbarSyncSource"),statusFits:fits("[data-topbar-sync] .topbarSyncStatus")&&fits("[data-topbar-sync] .topbarSyncRow"),cluster:rect(".topbarTempoCluster"),state:rect(".topbarStateCluster"),windowControls:rect("[data-window-controls]"),topbarOverflow:top.scrollWidth-top.clientWidth,viewportWidth:innerWidth}})()');
@@ -349,10 +360,115 @@ try {
         const selector=rowSelector+' [data-video-layer-'+attr+']';const measurement=await inspect(selector);geometry.push(measurement);
         assert.equal(measurement.failure,null,label+': strip '+attr);assert.ok(measurement.height>=44&&measurement.width>=44,label+': strip hit target '+attr);
       }
-      const quick = await cdp.evaluate('(()=>{const q=document.querySelector('+JSON.stringify(root+' [data-video-perform-region="quick-fx"]')+');const stage=q.querySelector("[data-perform-fx-stage]");const title=q.querySelector(".videoPerformQuickFxHeader strong").getBoundingClientRect();const edit=q.querySelector("[data-video-perform-fx-editor]").getBoundingClientRect();return {height:q.getBoundingClientRect().height,stageHeight:stage?.getBoundingClientRect().height??null,sameLine:Math.abs((title.top+title.height/2)-(edit.top+edit.height/2))<=24,headerWidth:q.querySelector(".videoPerformQuickFxHeader").getBoundingClientRect().width}})()');
-      assert.ok(quick.height <= 72, label+': Quick FX is a single compact row '+JSON.stringify(quick));
-      assert.ok(quick.stageHeight === null || quick.stageHeight <= 56, label+': Quick FX stage row stays compact '+JSON.stringify(quick));
-      assert.ok(quick.sameLine && quick.headerWidth >= 240 && quick.headerWidth <= 280, label+': Quick FX title, layer and editor share one fixed-width line '+JSON.stringify(quick));
+      // ---- Top 1 / bottom 2: Perform shares the Lighting arrangement. ----
+      const paneRect = (name) => cdp.evaluate('(()=>{const e=document.querySelector('+JSON.stringify(root+' [data-video-perform-pane="'+name+'"]')+');if(!e)return null;const r=e.getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height}})()');
+      const panes = { matrix: await paneRect('matrix'), output: await paneRect('output'), inspector: await paneRect('inspector') };
+      for (const [name, rect] of Object.entries(panes)) {
+        assert.ok(rect && rect.width > 100 && rect.height > 100, label+': '+name+' pane is visible '+JSON.stringify(rect));
+        assert.ok(rect.left >= -1 && rect.top >= -1 && rect.right <= width + 1 && rect.bottom <= height + 1, label+': '+name+' pane stays inside the window '+JSON.stringify(rect));
+      }
+      assert.ok(panes.matrix.bottom <= panes.output.top + 8 && panes.matrix.bottom <= panes.inspector.top + 8, label+': matrix pane is above the output and inspector panes');
+      assert.ok(panes.output.right <= panes.inspector.left + 8 && Math.abs(panes.output.top - panes.inspector.top) <= 1 && Math.abs(panes.output.bottom - panes.inspector.bottom) <= 1, label+': output (left) and inspector (right) share the bottom band');
+      assert.ok(Math.abs(panes.matrix.width - (panes.output.width + panes.inspector.width)) <= 12, label+': the top pane spans the full width');
+      assert.ok(panes.matrix.height / (panes.matrix.height + panes.output.height) >= 0.55 && panes.matrix.height / (panes.matrix.height + panes.output.height) <= 0.7, label+': default top/bottom split keeps the matrix at about 55-60% (clamped up to keep 3 layer rows) '+JSON.stringify(panes));
+      const inside = (region, pane) => cdp.evaluate('(()=>{const e=document.querySelector('+JSON.stringify(region)+');const p=document.querySelector('+JSON.stringify(root+' [data-video-perform-pane="'+pane+'"]')+');const a=e.getBoundingClientRect(),b=p.getBoundingClientRect();return a.left>=b.left-1&&a.right<=b.right+1&&a.top>=b.top-1&&a.bottom<=b.bottom+1})()');
+      for (const [region, pane] of [['matrix', 'matrix'], ['health', 'matrix'], ['transition', 'output'], ['quick-fx', 'inspector']]) {
+        assert.equal(await inside(root+' [data-video-perform-region="'+region+'"]', pane), true, label+': '+region+' region lies inside the '+pane+' pane');
+      }
+      for (const selector of [selectors.take, selectors.guardedBlackout, selectors.master, selectors.transitionKind, selectors.transitionDuration]) {
+        assert.equal(await inside(selector, 'output'), true, label+': '+selector+' lies inside the Output pane');
+      }
+      assert.equal(await inside(selectors.fxEditor, 'inspector'), true, label+': Full FX editor lies inside the Inspector pane');
+      const monitors = await cdp.evaluate('(()=>{const p=document.querySelector('+JSON.stringify(selectors.preview)+').getBoundingClientRect(),g=document.querySelector('+JSON.stringify(selectors.program)+').getBoundingClientRect();return {previewW:p.width,previewH:p.height,programW:g.width,programH:g.height,side:g.left>=p.right-1&&Math.abs(g.top-p.top)<=1}})()');
+      assert.equal(monitors.side, true, label+': Preview and Program sit side by side '+JSON.stringify(monitors));
+      assert.ok(Math.abs(monitors.previewW / monitors.previewH - 16 / 9) < 0.05 && Math.abs(monitors.programW / monitors.programH - 16 / 9) < 0.05, label+': monitors are 16:9 '+JSON.stringify(monitors));
+      assert.ok(monitors.previewW >= (width === 1366 ? 296 : width >= 1920 ? 400 : 240) && monitors.programW >= (width === 1366 ? 296 : width >= 1920 ? 400 : 240), label+': monitors are large '+JSON.stringify(monitors));
+      // Matrix pane header: title, health and shortcuts; the removed desk header and 66px Quick FX strip are gone.
+      assert.equal(await cdp.evaluate('document.querySelectorAll('+JSON.stringify(root+' .videoPerformDeskHeader, '+root+' .videoPerformQuickFxHeader strong')+').length'), 0, label+': legacy desk header and Quick FX strip are removed');
+      // ---- Inspector: FX tab shows every stage toggle and its parameters. ----
+      const fxTab = await cdp.evaluate('(()=>{const q=document.querySelector('+JSON.stringify(root+' [data-video-perform-region="quick-fx"]')+');const stage=q.querySelector("[data-perform-fx-stage]");const bypass=q.querySelector("[data-perform-fx-bypass]");const control=q.querySelector("[data-perform-fx-control]");return {selected:document.querySelector("[data-video-perform-inspector-tab=fx]").getAttribute("aria-selected"),stages:q.querySelectorAll("[data-perform-fx-stage]").length,bypass:!!bypass,bypassPressed:bypass?.getAttribute("aria-pressed"),stageHeight:stage?.getBoundingClientRect().height,controls:q.querySelectorAll("[data-perform-fx-control]").length,value:q.querySelector("[data-perform-fx-control] output")?.textContent??null,rangeHeight:control?.querySelector("input")?.getBoundingClientRect().height??null}})()');
+      assert.equal(fxTab.selected, 'true', label+': FX is the default Inspector tab '+JSON.stringify(fxTab));
+      assert.ok(fxTab.stages >= 1 && fxTab.bypass && fxTab.controls >= 1, label+': FX tab shows the stage toggles and parameters '+JSON.stringify(fxTab));
+      assert.ok(fxTab.stageHeight >= 44 && fxTab.rangeHeight >= 44, label+': FX stage rows and parameter controls keep 44px targets '+JSON.stringify(fxTab));
+      assert.ok(fxTab.value && fxTab.value.length > 0, label+': FX parameters show their value '+JSON.stringify(fxTab));
+      assert.equal((await inspect(root+' [data-perform-fx-stage="0"] [data-perform-fx-bypass]')).failure, null, label+': stage toggle fully visible');
+      assert.equal((await inspect(root+' [data-perform-fx-control] input')).failure, null, label+': first parameter fully visible');
+      // ---- Inspector tabs switch; the Clip tab embeds the existing Clip Inspector without a modal. ----
+      const tabState = () => cdp.evaluate('({selected:[...document.querySelectorAll("[data-video-perform-inspector-tab]")].filter(t=>t.getAttribute("aria-selected")==="true").map(t=>t.dataset.videoPerformInspectorTab),panel:document.querySelector("[data-video-perform-inspector-panel]")?.dataset.videoPerformInspectorPanel,clip:!!document.querySelector("[data-video-clip-slot-inspector-embedded]"),clipDialog:!!document.querySelector("[data-video-clip-slot-inspector][role=dialog]"),browser:!!document.querySelector("[data-video-perform-effect-browser]"),fx:!!document.querySelector("[data-perform-quick-fx]")})');
+      const clickTab = (name) => cdp.evaluate('document.querySelector("[data-video-perform-inspector-tab='+name+']").click()');
+      await clickTab('clip');
+      assert.deepEqual(await tabState(), { selected: ['clip'], panel: 'clip', clip: true, clipDialog: false, browser: false, fx: false }, label+': Clip tab embeds the Clip Inspector (no dialog)');
+      assert.equal((await inspect(root+' [data-video-clip-slot-inspector-embedded] > header')).failure, null, label+': embedded Clip Inspector header is visible (the body scrolls inside the pane)');
+      await clickTab('browser');
+      assert.deepEqual(await tabState(), { selected: ['browser'], panel: 'browser', clip: false, clipDialog: false, browser: true, fx: false }, label+': Browser tab is the Task 12 placeholder container');
+      assert.ok((await cdp.evaluate('document.querySelector("[data-video-perform-effect-browser]").innerText')).length > 20, label+': Browser tab explains itself');
+      await clickTab('fx');
+      assert.deepEqual(await tabState(), { selected: ['fx'], panel: 'fx', clip: false, clipDialog: false, browser: false, fx: true }, label+': FX tab returns');
+      // Clip… (corner) and right-click open the options in the Clip tab, never a popover.
+      await cdp.evaluate('document.querySelector('+JSON.stringify(selectors.clipOptions)+').click()');
+      assert.deepEqual(await tabState(), { selected: ['clip'], panel: 'clip', clip: true, clipDialog: false, browser: false, fx: false }, label+': Clip… opens the Inspector Clip tab');
+      assert.equal(await cdp.evaluate('document.querySelectorAll("dialog[open],[role=dialog]").length'), 0, label+': no popover or dialog was opened for clip options');
+      await clickTab('fx');
+      // ---- Dividers: drag changes the ratio, persists, double-click resets, keyboard resizes. ----
+      const stored = () => cdp.evaluate('(()=>{const v=JSON.parse(localStorage.getItem("syndocal.workspaceLayout.v1")||"{}");return {top:v.perform_top_split_ratio,lower:v.perform_lower_split_ratio}})()');
+      const mouse = (type, x, y, extra = {}) => cdp.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1, ...extra });
+      const handleCenter = async (kind) => { const r = await cdp.evaluate('(()=>{const r=document.querySelector("[data-video-perform-layout] [data-workspace-splitter=\\"'+kind+'\\"]").getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()'); return r; };
+      const aria = (kind) => cdp.evaluate('Number(document.querySelector("[data-video-perform-layout] [data-workspace-splitter=\\"'+kind+'\\"]").getAttribute("aria-valuenow"))');
+      const drag = async (kind, dx, dy) => { const c = await handleCenter(kind); await mouse('mouseMoved', c.x, c.y, { buttons: 0 }); await mouse('mousePressed', c.x, c.y); for (let i = 1; i <= 6; i++) await mouse('mouseMoved', c.x + dx * i / 6, c.y + dy * i / 6); await mouse('mouseReleased', c.x + dx, c.y + dy); };
+      const dblclick = async (kind) => { const c = await handleCenter(kind); await mouse('mouseMoved', c.x, c.y, { buttons: 0 }); await mouse('mousePressed', c.x, c.y); await mouse('mouseReleased', c.x, c.y); await mouse('mousePressed', c.x, c.y, { clickCount: 2 }); await mouse('mouseReleased', c.x, c.y, { clickCount: 2 }); };
+      const defaults = { top: 0.58, lower: 0.67 };
+      await waitFor(async () => (await stored()).top !== undefined, label+': Perform ratios reach layout storage');
+      const before = { stored: await stored(), topAria: await aria('upper-lower'), lowerAria: await aria('lower-left-right') };
+      assert.equal(before.stored.top, defaults.top, label+': persisted top ratio starts at the default '+JSON.stringify(before));
+      assert.equal(before.stored.lower, defaults.lower, label+': persisted lower ratio starts at the default '+JSON.stringify(before));
+      await drag('upper-lower', 0, 24);
+      await waitFor(async () => (await stored()).top > defaults.top, label+': horizontal divider drag persists a larger top ratio');
+      assert.ok(await aria('upper-lower') > before.topAria, label+': horizontal divider aria value follows the drag');
+      await drag('lower-left-right', -60, 0);
+      await waitFor(async () => (await stored()).lower < defaults.lower, label+': vertical divider drag persists a smaller output ratio');
+      assert.ok(await aria('lower-left-right') < before.lowerAria, label+': vertical divider aria value follows the drag');
+      const dragged = await stored();
+      assert.ok((await inspect(selectors.take)).failure === null && (await inspect(selectors.guardedBlackout)).failure === null, label+': Take and Blackout stay visible after resizing');
+      await dblclick('upper-lower');
+      await waitFor(async () => (await stored()).top === defaults.top, label+': double-click resets the horizontal divider');
+      await dblclick('lower-left-right');
+      await waitFor(async () => (await stored()).lower === defaults.lower, label+': double-click resets the vertical divider');
+      await cdp.evaluate('document.querySelector("[data-video-perform-layout] [data-workspace-splitter=\\"upper-lower\\"]").focus()');
+      await cdp.key('ArrowDown', 'ArrowDown', 40);
+      await waitFor(async () => (await stored()).top > defaults.top, label+': keyboard resizes the horizontal divider');
+      await dblclick('upper-lower');
+      await waitFor(async () => (await stored()).top === defaults.top, label+': divider reset after keyboard resize');
+      assert.equal(await cdp.evaluate('document.activeElement?.closest("[data-video-perform-layout]") !== null'), true, label+': divider keyboard focus stays in the desk');
+      // ---- Collapse and maximise from the pane header icons (session state, panes stay mounted). ----
+      const paneState = () => cdp.evaluate('(()=>{const r=(n)=>{const e=document.querySelector("[data-video-perform-pane=\\""+n+"\\"]");const b=e.getBoundingClientRect();return {w:Math.round(b.width),h:Math.round(b.height)}};const l=document.querySelector("[data-video-perform-layout]");return {matrix:r("matrix"),output:r("output"),inspector:r("inspector"),focus:l.dataset.performFocus??null,collapsed:l.dataset.performBottomCollapsed??null,takeMounted:!!document.querySelector("[data-video-perform-take]")}})()');
+      const normal = await paneState();
+      const restored = async (message) => { await waitFor(async () => JSON.stringify(await paneState()) === JSON.stringify(normal), message); };
+      await cdp.evaluate('document.querySelector("[data-video-perform-maximise=matrix]").click()');
+      let state = await paneState();
+      assert.ok(state.focus === 'matrix' && state.output.h === 0 && state.inspector.h === 0 && state.matrix.h > normal.matrix.h + 100 && state.takeMounted, label+': maximising the matrix hides the bottom band '+JSON.stringify(state));
+      assert.equal(await cdp.evaluate('document.querySelector("[data-video-perform-maximise=matrix]").getAttribute("aria-pressed")'), 'true', label+': maximise reports its state');
+      await cdp.evaluate('document.querySelector("[data-video-perform-maximise=matrix]").click()');
+      await restored(label+': restoring brings back the exact pane sizes');
+      await cdp.evaluate('document.querySelector("[data-video-perform-collapse=output]").click()');
+      await waitFor(async () => (await paneState()).collapsed === 'true' && (await paneState()).output.h <= 48, label+': bottom panes collapsed');
+      state = await paneState();
+      assert.ok(state.collapsed === 'true' && state.output.h <= 48 && state.inspector.h <= 48 && state.matrix.h > normal.matrix.h + 100, label+': collapsing the bottom panes leaves only their headers '+JSON.stringify(state));
+      assert.equal(await cdp.evaluate('document.querySelector("[data-video-perform-collapse=inspector]").getAttribute("aria-pressed")'), 'true', label+': collapse reports its state on both bottom panes');
+      await cdp.evaluate('document.querySelector("[data-video-perform-collapse=inspector]").click()');
+      await restored(label+': expanding restores the bottom panes');
+      await cdp.evaluate('document.querySelector("[data-video-perform-maximise=output]").click()');
+      await waitFor(async () => (await paneState()).output.w > normal.output.w, label+': Output maximised');
+      state = await paneState();
+      assert.ok(state.focus === 'output' && state.matrix.h === 0 && state.inspector.w === 0 && state.output.w > normal.output.w, label+': maximising Output gives it the workspace '+JSON.stringify(state));
+      assert.equal((await inspect(selectors.take)).failure, null, label+': Take is visible with Output maximised');
+      await cdp.evaluate('document.querySelector("[data-video-perform-maximise=output]").click()');
+      await restored(label+': Output restored before the next pane is maximised');
+      await cdp.evaluate('document.querySelector("[data-video-perform-maximise=inspector]").click()');
+      await waitFor(async () => (await paneState()).inspector.w > normal.inspector.w, label+': Inspector maximised');
+      state = await paneState();
+      assert.ok(state.focus === 'inspector' && state.matrix.h === 0 && state.output.w === 0 && state.inspector.w > normal.inspector.w, label+': maximising Inspector gives it the workspace '+JSON.stringify(state));
+      await cdp.evaluate('document.querySelector("[data-video-perform-maximise=inspector]").click()');
+      await restored(label+': every pane restored after maximise/collapse');
       const focus = (selector) => cdp.evaluate('document.querySelector('+JSON.stringify(selector)+').focus({preventScroll:true})');
       // Real Tab traversal catches hidden tab stops, focus traps and omitted controls.
       await cdp.evaluate('document.activeElement?.blur()');
@@ -404,14 +520,14 @@ try {
         assert.ok(await cdp.evaluate('!!document.querySelector("[data-video-perform-layout] [data-video-perform-legend][open]")'),label+': '+key+' leaves modal and Perform workspace intact');
       }
       if(locale==='ja')assert.doesNotMatch(await cdp.evaluate('document.querySelector("[data-video-perform-legend]").innerText'),/\?{2,}|\uFFFD/,label+': Japanese legend has no replacement runs');
-      await writeFile(join(evidenceDir,label+'-legend.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false})).data,'base64'));
+      await writeFile(join(evidenceDir,label+'-legend.png'),Buffer.from((await cdp.capture({format:'png',captureBeyondViewport:false})).data,'base64'));
       await cdp.key('Escape','Escape',27);
       await waitFor(()=>cdp.evaluate('!document.querySelector("[data-video-perform-legend][open]")'),label+': keyboard legend hidden');
       for(const selector of required.filter(s=>s!==selectors.launch))assert.equal((await inspect(selector)).failure,null,label+': after interactions '+selector);
       assert.deepEqual(await cdp.evaluate('[scrollX,scrollY,document.documentElement.scrollWidth,document.documentElement.scrollHeight]'),[0,0,width,height],label+': no outer scroll after interaction');
-      await writeFile(join(evidenceDir,label+'-after.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false,optimizeForSpeed:true},30_000)).data,'base64'));
+      await writeFile(join(evidenceDir,label+'-after.png'),Buffer.from((await cdp.capture({format:'png',captureBeyondViewport:false,optimizeForSpeed:true},30_000)).data,'base64'));
       assert.deepEqual(cdp.errors,[],label+': console errors/warnings/runtime exceptions');
-      results.push({label,identity,geometry,visibleColumns:visibleColumns.length,fullLayerRows:matrixDensity.fullRows,totalLayerRows:matrixDensity.totalRows,quickFx:quick,tabTargets:reached.size,interactions:'matrix arrows/Home/End; numeric queue native-required refusal; Take; opacity/blend/master keyboard; blackout first-activation guard; legend',consoleErrors:cdp.errors});
+      results.push({label,identity,geometry,visibleColumns:visibleColumns.length,fullLayerRows:matrixDensity.fullRows,totalLayerRows:matrixDensity.totalRows,fxTab,monitors,panes,dragged,tabTargets:reached.size,interactions:'matrix arrows/Home/End; numeric queue native-required refusal; Take; opacity/blend/master keyboard; blackout first-activation guard; legend',consoleErrors:cdp.errors});
       console.log('PASS '+label+' ('+visibleColumns.length+' columns, '+matrixDensity.fullRows+'/'+matrixDensity.totalRows+' full layer rows)');
     }
   }
@@ -511,7 +627,7 @@ try {
   await freshTarget();
   await cdp.send('Page.navigate',{url:origin+'__perform-quick-fx-focus'});
   await waitFor(()=>cdp.evaluate('!!window.__quickFxFocus && !!document.querySelector("[data-perform-fx-control] input")'),currentCase+': fixture ready');
-  const fxParameter='[data-perform-fx-stage="0"] [data-perform-fx-control="gain"] input';
+  const fxParameter='[data-perform-fx-detail="0"] [data-perform-fx-control="gain"] input';
   const fxBypass='[data-perform-fx-stage="0"] [data-perform-fx-bypass]';
   const rememberFx = (selector) => cdp.evaluate('window.__fxOriginal=document.querySelector('+JSON.stringify(selector)+');window.__fxOriginal.focus();true');
   const fxState = (selector) => cdp.evaluate('({connected:window.__fxOriginal.isConnected,sameElement:document.querySelector('+JSON.stringify(selector)+')===window.__fxOriginal,focused:document.activeElement===window.__fxOriginal,value:window.__fxOriginal.value,pressed:window.__fxOriginal.getAttribute("aria-pressed")})');
@@ -534,6 +650,20 @@ try {
   assert.deepEqual(cdp.errors,[],currentCase+': console errors/warnings');
   focusResults.push({label:currentCase,focusRetainedAcross:'polling and same-ID authored layer/stage/control replacement',scopedCalls:await cdp.evaluate('window.__quickFxFocus.calls'),consoleErrors:cdp.errors});
   console.log('PASS '+currentCase);
+  currentCase='divider-persistence';
+  await freshTarget();
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1366,height:768,deviceScaleFactor:1,mobile:false});
+  const persistedScript=await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:"localStorage.setItem('syndocal.uiLocale.v1','en');localStorage.setItem('syndocal.workspaceLayout.v1',JSON.stringify({workspace_tab:'control',control_mode:'perform',perform_top_split_ratio:0.66,perform_lower_split_ratio:0.6}));"});
+  await cdp.send('Page.navigate',{url:`${origin}?syndocalViewportFixture=vj-bank&performCase=persistence`});
+  await waitFor(()=>cdp.evaluate("!!document.querySelector('#edit-domain-tab-perform')"),currentCase+': workspace chrome');
+  await cdp.evaluate("document.querySelector('#edit-domain-tab-perform').click()");
+  await waitFor(()=>cdp.evaluate('!!document.querySelector('+JSON.stringify(root)+') && !!document.querySelector('+JSON.stringify(selectors.launch)+')'),currentCase+': Perform loaded');
+  await cdp.send('Page.removeScriptToEvaluateOnNewDocument',{identifier:persistedScript.identifier});
+  const restoredRatios=await cdp.evaluate('(()=>{const a=(k)=>Number(document.querySelector("[data-video-perform-layout] [data-workspace-splitter=\\""+k+"\\"]").getAttribute("aria-valuenow"));return {top:a("upper-lower"),lower:a("lower-left-right")}})()');
+  assert.deepEqual(restoredRatios,{top:66,lower:60},currentCase+': a stored Perform layout restores both divider positions');
+  assert.deepEqual(cdp.errors,[],currentCase+': console errors/warnings');
+  focusResults.push({label:currentCase,restoredRatios,consoleErrors:cdp.errors});
+  console.log('PASS '+currentCase);
   assert.deepEqual(cdp.errors, [], "browser console errors/warnings and runtime exceptions");
   await writeFile(join(evidenceDir, "results.json"), JSON.stringify({ browser: "raw CDP (Browser plugin not available; no Playwright dependency)", results, focusResults, consoleErrors: cdp.errors }, null, 2));
   console.log(`Perform layout: ${results.length} viewport/locale cases and ${focusResults.length} runtime-focus cases passed; evidence ${evidenceDir}`);
@@ -541,7 +671,7 @@ try {
   if (cdp?.socket?.readyState === WebSocket.OPEN) {
     const diagnostic = await cdp.evaluate("({url:location.href,text:document.body.innerText,workspace:localStorage.getItem('syndocal.workspaceLayout.v1'),keys:window.__performKeys})").catch(() => null);
     await writeFile(join(evidenceDir, "failure.json"), JSON.stringify({ currentCase, error: error.stack, diagnostic, consoleErrors: cdp.errors, results }, null, 2));
-    const screenshot = await cdp.send("Page.captureScreenshot", { format: "png" }).catch(() => null);
+    const screenshot = await cdp.capture( { format: "png" }).catch(() => null);
     if (screenshot) await writeFile(join(evidenceDir, `${currentCase}-failure.png`), Buffer.from(screenshot.data, "base64"));
   }
   throw error;

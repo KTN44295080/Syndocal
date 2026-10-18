@@ -253,6 +253,36 @@ render(()=><main class="app" style="height:100vh;grid-template-rows:56px minmax(
           assert.equal(performCase.monitorChrome?.text, "PREVIEW", `${theme} Perform monitor badge strong renders uppercase`);
           assert.equal(performCase.matrixHeaderChrome?.textTransform, "uppercase", `${theme} Perform matrix header chrome is uppercase`);
         }
+        if (["lighting-edit", "setup-patch", "control-perform"].includes(workspace.id) && configuration.locale === "en") {
+          // Task 13b: every workspace pane header shares the Broadcast chrome: 44px, a
+          // condensed-uppercase accent label block, and the raised header surface.
+          const chrome = await page.evaluate(() => {
+            const headers = [...document.querySelectorAll(".workspacePaneHeader, .controlContextHeader:not(.timelineArrangerHeader), .mappingPersistentWorkspaceGrid > .mappingGroupStrip, .layout > * > .panelHeader, .layout > * > * > .panelHeader, .layout > * > * > * > .panelHeader, .layout .patchProfileBrowserHeader")]
+              .filter(element => element.getBoundingClientRect().width > 0);
+            return headers.map(header => {
+              const title = header.querySelector("h2, h3, :scope > span");
+              const probe = document.createElement("i");
+              probe.style.color = "var(--theme-accent)"; document.body.append(probe);
+              const accent = getComputedStyle(probe).color; probe.remove();
+              return {
+                cls: header.className.toString().split(" ")[0],
+                height: Math.round(header.getBoundingClientRect().height),
+                titleHeight: title ? Math.round(title.getBoundingClientRect().height) : 0,
+                title: title?.textContent?.trim() ?? "",
+                titleTransform: title ? getComputedStyle(title).textTransform : null,
+                titleBackground: title ? getComputedStyle(title).backgroundColor : null,
+                accent,
+              };
+            });
+          });
+          assert.ok(chrome.length >= 2, `${theme} ${workspace.id} shows the shared pane headers ${JSON.stringify(chrome)}`);
+          for (const header of chrome) {
+            assert.ok(header.height >= 44 || (workspace.id === "control-perform" ? false : header.titleHeight >= 36), `${theme} ${workspace.id} ${header.cls} pane header is 44px ${JSON.stringify(header)}`);
+            assert.equal(header.titleTransform, "uppercase", `${theme} ${workspace.id} ${header.cls} title is condensed uppercase`);
+            assert.equal(header.titleBackground, header.accent, `${theme} ${workspace.id} ${header.cls} title block uses the accent token`);
+          }
+          if (workspace.id === "control-perform") assert.equal(chrome.filter(header => header.cls === "workspacePaneHeader").length, 3, `${theme} Perform has Matrix, Output and Inspector pane headers`);
+        }
         const textContrast = await page.evaluate(() => {
           const ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
           const rgba = value => { ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = value; ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data].map((v, index) => index === 3 ? v / 255 : v); };

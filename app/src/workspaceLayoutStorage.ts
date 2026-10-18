@@ -19,6 +19,9 @@ export type WorkspaceLayout = {
   top_split_ratio: number;
   video_top_split_ratio: number;
   lower_split_ratio: number;
+  /** Perform's own top/bottom and Output/Inspector splits. */
+  perform_top_split_ratio: number;
+  perform_lower_split_ratio: number;
 };
 
 export const defaultWorkspaceLayout: WorkspaceLayout = {
@@ -32,6 +35,8 @@ export const defaultWorkspaceLayout: WorkspaceLayout = {
   top_split_ratio: 0.58,
   video_top_split_ratio: 0.68,
   lower_split_ratio: 0.44,
+  perform_top_split_ratio: 0.58,
+  perform_lower_split_ratio: 0.67,
 };
 
 export const workspaceLayoutStorageKey = "syndocal.workspaceLayout.v1";
@@ -117,6 +122,14 @@ export const workspaceLayoutFromUnknown = (candidate: unknown): WorkspaceLayout 
       defaultWorkspaceLayout.video_top_split_ratio,
     ),
     lower_split_ratio: ratioValue(value.lower_split_ratio, defaultWorkspaceLayout.lower_split_ratio),
+    perform_top_split_ratio: ratioValue(
+      value.perform_top_split_ratio,
+      defaultWorkspaceLayout.perform_top_split_ratio,
+    ),
+    perform_lower_split_ratio: ratioValue(
+      value.perform_lower_split_ratio,
+      defaultWorkspaceLayout.perform_lower_split_ratio,
+    ),
   };
 };
 

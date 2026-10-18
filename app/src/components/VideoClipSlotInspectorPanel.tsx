@@ -11,6 +11,10 @@ import type {
 import { VideoEffectScopePanel } from "./VideoEffectScopePanel";
 
 export interface VideoClipSlotInspectorPanelProps {
+  /** Rendered inside a workspace pane (the Perform Inspector's Clip tab): an
+   * ordinary in-flow region with no modal role, focus trap or Escape handling,
+   * so the performance shortcuts keep working. */
+  embedded?: boolean;
   layer: VideoLayerSummary | null;
   slotId: VideoClipSlotId | null;
   assets: MediaAssetSummary[];
@@ -78,6 +82,7 @@ export function VideoClipSlotInspectorPanel(props: VideoClipSlotInspectorPanelPr
     window.requestAnimationFrame(() => props.returnFocus?.focus());
   };
   const keyDown = (event: KeyboardEvent) => {
+    if (props.embedded) return;
     if (event.key === "Escape") {
       event.preventDefault();
       close();
@@ -96,7 +101,9 @@ export function VideoClipSlotInspectorPanel(props: VideoClipSlotInspectorPanelPr
       first.focus();
     }
   };
-  onMount(() => window.requestAnimationFrame(() => panel.querySelector<HTMLElement>(focusableSelector)?.focus()));
+  onMount(() => {
+    if (!props.embedded) window.requestAnimationFrame(() => panel.querySelector<HTMLElement>(focusableSelector)?.focus());
+  });
 
   const save = () => {
     const current = slot();
@@ -132,15 +139,19 @@ export function VideoClipSlotInspectorPanel(props: VideoClipSlotInspectorPanelPr
     <aside
       ref={panel}
       class="videoClipSlotInspectorPanel"
-      role="dialog"
-      aria-modal="true"
+      classList={{ videoClipSlotInspectorEmbedded: props.embedded }}
+      role={props.embedded ? undefined : "dialog"}
+      aria-modal={props.embedded ? undefined : "true"}
       aria-labelledby="video-clip-slot-inspector-title"
       data-video-clip-slot-inspector
+      data-video-clip-slot-inspector-embedded={props.embedded ? "true" : undefined}
       onKeyDown={keyDown}
     >
       <header>
         <div><h3 id="video-clip-slot-inspector-title">Clip Inspector</h3><span>{props.layer?.label ?? "No layer"}</span></div>
-        <button type="button" aria-label="Close clip inspector" onClick={close}>Close</button>
+        <Show when={!props.embedded}>
+          <button type="button" aria-label="Close clip inspector" onClick={close}>Close</button>
+        </Show>
       </header>
       <Show when={localError()}>{(error) => <p class="videoClipSlotInspectorError" role="alert" data-no-localize>{error()}</p>}</Show>
       <Show when={props.layer} fallback={<p>Select a Video layer to author a clip bank.</p>}>

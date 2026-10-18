@@ -366,6 +366,8 @@ assert.deepEqual(
     top_split_ratio: workspaceLayout.defaultWorkspaceLayout.top_split_ratio,
     video_top_split_ratio: workspaceLayout.defaultWorkspaceLayout.video_top_split_ratio,
     lower_split_ratio: workspaceLayout.defaultWorkspaceLayout.lower_split_ratio,
+    perform_top_split_ratio: workspaceLayout.defaultWorkspaceLayout.perform_top_split_ratio,
+    perform_lower_split_ratio: workspaceLayout.defaultWorkspaceLayout.perform_lower_split_ratio,
   },
 );
 assert.deepEqual(
@@ -430,6 +432,17 @@ assert.equal(
   workspaceLayout.workspaceLayoutFromUnknown({ video_top_split_ratio: 0.73 }).video_top_split_ratio,
   0.73,
   "Video keeps its independently persisted upper/lower workspace ratio",
+);
+// Perform keeps its own top/bottom and Output/Inspector ratios, clamped like the others.
+assert.deepEqual(
+  workspaceLayout.workspaceLayoutFromUnknown({ perform_top_split_ratio: 0.62, perform_lower_split_ratio: 0.55 }),
+  { ...workspaceLayout.defaultWorkspaceLayout, perform_top_split_ratio: 0.62, perform_lower_split_ratio: 0.55 },
+  "Perform persists its own pane ratios independently of the shared lower split",
+);
+assert.deepEqual(
+  workspaceLayout.workspaceLayoutFromUnknown({ perform_top_split_ratio: -1, perform_lower_split_ratio: "wide" }),
+  { ...workspaceLayout.defaultWorkspaceLayout, perform_top_split_ratio: 0.15 },
+  "invalid Perform ratios clamp or fall back to the default",
 );
 assert.deepEqual(
   workspaceLayout.workspaceLayoutFromUnknown({

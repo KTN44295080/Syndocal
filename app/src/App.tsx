@@ -1992,6 +1992,8 @@ export default function App() {
   const [topSplitRatio, setTopSplitRatio] = createSignal(initialWorkspaceLayout.top_split_ratio);
   const [videoTopSplitRatio, setVideoTopSplitRatio] = createSignal(initialWorkspaceLayout.video_top_split_ratio);
   const [lowerSplitRatio, setLowerSplitRatio] = createSignal(initialWorkspaceLayout.lower_split_ratio);
+  const [performTopSplitRatio, setPerformTopSplitRatio] = createSignal(initialWorkspaceLayout.perform_top_split_ratio);
+  const [performLowerSplitRatio, setPerformLowerSplitRatio] = createSignal(initialWorkspaceLayout.perform_lower_split_ratio);
   const [activeIoConnection, setActiveIoConnection] = createSignal<IoConnectionId>("dmx");
   const [extensionStatus, setExtensionStatus] = createSignal<ExtensionStatus>({ configured: true, dj_link_enabled: false, error: null });
   const refreshExtensions = async () => {
@@ -5448,6 +5450,8 @@ export default function App() {
       top_split_ratio: topSplitRatio(),
       video_top_split_ratio: videoTopSplitRatio(),
       lower_split_ratio: lowerSplitRatio(),
+      perform_top_split_ratio: performTopSplitRatio(),
+      perform_lower_split_ratio: performLowerSplitRatio(),
     });
   });
   const projectTransactionOwnerRegistrationStatusKey = "project-owner-registration";
@@ -5692,6 +5696,8 @@ export default function App() {
     top_split_ratio: topSplitRatio(),
     video_top_split_ratio: videoTopSplitRatio(),
     lower_split_ratio: lowerSplitRatio(),
+    perform_top_split_ratio: performTopSplitRatio(),
+    perform_lower_split_ratio: performLowerSplitRatio(),
   });
   const applyWorkspaceLayout = (layout: WorkspaceLayout) => {
     setWorkspaceTab(layout.workspace_tab);
@@ -5705,6 +5711,8 @@ export default function App() {
     setTopSplitRatio(layout.top_split_ratio);
     setVideoTopSplitRatio(layout.video_top_split_ratio);
     setLowerSplitRatio(layout.lower_split_ratio);
+    setPerformTopSplitRatio(layout.perform_top_split_ratio);
+    setPerformLowerSplitRatio(layout.perform_lower_split_ratio);
   };
 
   const operatorLockSessionStorageKey = "syndocal.operatorLockSession.v1";
@@ -21232,6 +21240,51 @@ export default function App() {
     setVideoClipSlotInspectorTrigger(trigger);
     setVideoClipSlotInspectorOpen(true);
   };
+  // One clip inspector wiring for the popover and for Perform's embedded Clip tab.
+  const renderVideoClipSlotInspector = (embedded: boolean) => (
+    <VideoClipSlotInspectorPanel
+      embedded={embedded}
+      layer={selectedVideoClipSlotLayer()}
+      slotId={selectedVideoClipSlotId()}
+      assets={snapshot().video.media_assets}
+      effectCatalog={videoEffectCatalog()}
+      returnFocus={videoClipSlotInspectorTrigger()}
+      removeDisabledReason={selectedVideoClipSlotId() === null ? "Select a Clip Slot to remove." : videoClipSlotRemoveDisabledReason(selectedVideoClipSlotId()!)}
+      onClose={() => {
+        setVideoClipSlotInspectorTrigger(null);
+        setVideoClipSlotInspectorOpen(false);
+      }}
+      onCreate={(assetId, beforeSlotId) => {
+        const layer = selectedVideoClipSlotLayer();
+        return layer ? createVideoClipSlot(layer.id, assetId, beforeSlotId) : Promise.resolve(null);
+      }}
+      onAssign={(slotId, assetId) => {
+        const layer = selectedVideoClipSlotLayer();
+        return layer ? assignVideoClipSlotAsset(layer.id, slotId, assetId) : Promise.resolve(null);
+      }}
+      onUpdate={(slot) => {
+        const layer = selectedVideoClipSlotLayer();
+        return layer ? updateVideoClipSlot(layer.id, slot) : Promise.resolve(null);
+      }}
+      onRemove={(slotId) => {
+        const layer = selectedVideoClipSlotLayer();
+        return layer ? removeVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
+      }}
+      onDuplicate={(slotId) => {
+        const layer = selectedVideoClipSlotLayer();
+        return layer ? duplicateVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
+      }}
+      onSetDefault={(slotId) => {
+        const layer = selectedVideoClipSlotLayer();
+        return layer ? setDefaultVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
+      }}
+      onReorder={reorderVideoClipSlotByDirection}
+      onApplyEffectCatalog={applyVideoEffectCatalog}
+      onImportScopeIsf={importVideoEffectScopeIsf}
+      onApplyEffectPreset={applyVideoEffectPreset}
+      onRemoveEffectChain={removeVideoEffectChain}
+    />
+  );
   const previewVideoClipSlot = async (slotId: VideoClipSlotId) => {
     // B3 has no isolated clip-slot preview transport. Selecting the pad reveals
     // its catalog thumbnail without staging or claiming the whole layer.
@@ -27899,47 +27952,7 @@ export default function App() {
           }}
         />
         <Show when={videoClipSlotInspectorOpen() && selectedVideoClipSlotLayer()}>
-          <VideoClipSlotInspectorPanel
-            layer={selectedVideoClipSlotLayer()}
-            slotId={selectedVideoClipSlotId()}
-            assets={snapshot().video.media_assets}
-            effectCatalog={videoEffectCatalog()}
-            returnFocus={videoClipSlotInspectorTrigger()}
-            removeDisabledReason={selectedVideoClipSlotId() === null ? "Select a Clip Slot to remove." : videoClipSlotRemoveDisabledReason(selectedVideoClipSlotId()!)}
-            onClose={() => {
-              setVideoClipSlotInspectorTrigger(null);
-              setVideoClipSlotInspectorOpen(false);
-            }}
-            onCreate={(assetId, beforeSlotId) => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? createVideoClipSlot(layer.id, assetId, beforeSlotId) : Promise.resolve(null);
-            }}
-            onAssign={(slotId, assetId) => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? assignVideoClipSlotAsset(layer.id, slotId, assetId) : Promise.resolve(null);
-            }}
-            onUpdate={(slot) => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? updateVideoClipSlot(layer.id, slot) : Promise.resolve(null);
-            }}
-            onRemove={(slotId) => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? removeVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
-            }}
-            onDuplicate={(slotId) => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? duplicateVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
-            }}
-            onSetDefault={(slotId) => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? setDefaultVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
-            }}
-            onReorder={reorderVideoClipSlotByDirection}
-            onApplyEffectCatalog={applyVideoEffectCatalog}
-            onImportScopeIsf={importVideoEffectScopeIsf}
-            onApplyEffectPreset={applyVideoEffectPreset}
-            onRemoveEffectChain={removeVideoEffectChain}
-          />
+          {renderVideoClipSlotInspector(false)}
         </Show>
         </Show>
         <Show when={workspaceTab() === "setup" && setupSubTab() === "patch"}>
@@ -28208,6 +28221,13 @@ export default function App() {
             get runtimes() { return videoClipRuntime().layers; },
             get keyboardEnabled() { return !controlLearnMode() && operatorLockMode() === null; },
             onOpenEditor: () => selectControlMode("mixer"),
+            layout: {
+              get topRatio() { return performTopSplitRatio(); },
+              get lowerRatio() { return performLowerSplitRatio(); },
+              onTopRatio: setPerformTopSplitRatio,
+              onLowerRatio: setPerformLowerSplitRatio,
+            },
+            renderClipInspector: () => renderVideoClipSlotInspector(true),
           }}
           invokeCommand={invoke}
           selectedMediaAssetId={selectedMediaLibraryAssetId()}
@@ -28487,47 +28507,7 @@ export default function App() {
           }}
         />
         <Show when={videoClipSlotInspectorOpen() && selectedVideoClipSlotLayer()}>
-          <VideoClipSlotInspectorPanel
-            layer={selectedVideoClipSlotLayer()}
-            slotId={selectedVideoClipSlotId()}
-            assets={snapshot().video.media_assets}
-            effectCatalog={videoEffectCatalog()}
-            returnFocus={videoClipSlotInspectorTrigger()}
-            removeDisabledReason={selectedVideoClipSlotId() === null ? "Select a Clip Slot to remove." : videoClipSlotRemoveDisabledReason(selectedVideoClipSlotId()!)}
-            onClose={() => {
-              setVideoClipSlotInspectorTrigger(null);
-              setVideoClipSlotInspectorOpen(false);
-            }}
-            onCreate={(assetId, beforeSlotId) => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? createVideoClipSlot(layer.id, assetId, beforeSlotId) : Promise.resolve(null);
-            }}
-            onAssign={(slotId, assetId) => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? assignVideoClipSlotAsset(layer.id, slotId, assetId) : Promise.resolve(null);
-            }}
-            onUpdate={(slot) => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? updateVideoClipSlot(layer.id, slot) : Promise.resolve(null);
-            }}
-            onRemove={(slotId) => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? removeVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
-            }}
-            onDuplicate={(slotId) => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? duplicateVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
-            }}
-            onSetDefault={(slotId) => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? setDefaultVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
-            }}
-            onReorder={reorderVideoClipSlotByDirection}
-            onApplyEffectCatalog={applyVideoEffectCatalog}
-            onImportScopeIsf={importVideoEffectScopeIsf}
-            onApplyEffectPreset={applyVideoEffectPreset}
-            onRemoveEffectChain={removeVideoEffectChain}
-          />
+          {renderVideoClipSlotInspector(false)}
         </Show>
         </Show>
 

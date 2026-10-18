@@ -40777,3 +40777,199 @@ body.outputBody, body.outputBody #root { background: #000; color: #fff; }
 ) {
   text-transform: none;
 }
+
+/* ==========================================================================
+   Broadcast pane chrome (Task 13b). One recipe for the header of every
+   workspace pane: a label-block title, a muted context readout, optional tabs
+   or tools, and 44px icon actions. `.workspacePaneHeader` is the component;
+   the same declarations are applied to the legacy pane headers below.
+   ========================================================================== */
+.app :is(.workspacePaneHeader, .controlContextHeader) {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 10px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  background: var(--theme-raised);
+  border: 0;
+  border-bottom: 1px solid var(--theme-line-strong);
+  color: var(--theme-text);
+  white-space: nowrap;
+}
+.app .workspacePaneHeader { height: 44px; position: relative; z-index: 6; }
+.app :is(.workspacePaneTitle, .workspacePaneHeader > h2, .controlContextHeader > h2) {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0 14px;
+  background: var(--theme-accent);
+  color: var(--theme-on-accent);
+  font-family: var(--theme-font-label);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  line-height: 1;
+  text-transform: uppercase;
+  box-shadow: none;
+}
+.app .workspacePaneContext {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--theme-dim);
+  font-family: var(--theme-font-label);
+  font-size: 14px;
+  letter-spacing: .06em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.app .workspacePaneTools {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  height: 100%;
+}
+.app .workspacePaneTools:empty { display: none; }
+.app .workspacePaneTabs { display: flex; align-self: stretch; margin-left: 2px; }
+.app .workspacePaneTabs > button {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-right: 1px solid var(--theme-line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--theme-dim);
+  font-family: var(--theme-font-label);
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  box-shadow: none;
+}
+.app .workspacePaneTabs > button:first-child { border-left: 1px solid var(--theme-line); }
+.app .workspacePaneTabs > button:hover:not(.active) { background: var(--theme-card); color: var(--theme-text); }
+.app .workspacePaneTabs > button.active {
+  border-color: var(--theme-line);
+  background: var(--theme-selected);
+  color: var(--theme-on-selected);
+  box-shadow: none;
+}
+.app .workspacePaneActions {
+  display: flex;
+  align-self: stretch;
+  flex: 0 0 auto;
+  margin-left: auto;
+  border-left: 1px solid var(--theme-line-strong);
+}
+.app :is(.workspacePaneTools, .workspacePaneTabs) + .workspacePaneActions { margin-left: 0; }
+.app :is(.workspacePaneButton, .controlContextHeader .panePopoutToggle) {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--theme-line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--theme-dim);
+  box-shadow: none;
+}
+.app :is(.workspacePaneButton, .controlContextHeader .panePopoutToggle) svg { width: 20px; height: 20px; }
+.app :is(.workspacePaneButton, .controlContextHeader .panePopoutToggle):hover:not(:disabled) { background: var(--theme-key-hover); color: var(--theme-text); }
+.app :is(.workspacePaneButton, .controlContextHeader .panePopoutToggle):is(.active, .expanded, [aria-pressed="true"]) {
+  border-color: var(--theme-line);
+  background: var(--theme-key-down);
+  color: var(--theme-text);
+  box-shadow: none;
+}
+.app :is(.workspacePaneButton, .workspacePaneTabs > button):focus-visible { outline: 3px solid var(--theme-focus); outline-offset: -3px; }
+
+/* The same chrome on the headers each workspace already renders: top-pane
+   `.panelHeader`s (Setup Patch, Video, Timeline), the Setup source header, the
+   band's left Groups ribbon and right context header. Pane-level means at most
+   three levels below `.layout`; nested card headers keep their own style. */
+.app .layout :is(
+  .layout > * > :is(.panelHeader, .profileLoadHeader),
+  .layout > * > * > :is(.panelHeader, .profileLoadHeader),
+  .layout > * > * > * > :is(.panelHeader, .profileLoadHeader)
+) {
+  background: var(--theme-raised);
+  border-color: var(--theme-line-strong);
+  color: var(--theme-text);
+}
+.app .layout :is(
+  .layout > * > :is(.panelHeader, .profileLoadHeader, .controlContextHeader) > :is(h2, h3),
+  .layout > * > * > :is(.panelHeader, .profileLoadHeader, .controlContextHeader) > :is(h2, h3),
+  .layout > * > * > * > :is(.panelHeader, .profileLoadHeader, .controlContextHeader) > :is(h2, h3)
+) {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 14px;
+  background: var(--theme-accent);
+  color: var(--theme-on-accent);
+  font-family: var(--theme-font-label);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  box-shadow: none;
+}
+.app .layout :is(
+  .layout > * > :is(.panelHeader, .profileLoadHeader),
+  .layout > * > * > :is(.panelHeader, .profileLoadHeader),
+  .layout > * > * > * > :is(.panelHeader, .profileLoadHeader)
+) > span:not([class]) {
+  color: var(--theme-dim);
+  font-family: var(--theme-font-label);
+  font-size: 14px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.app .layout .layout > .panel > .panelHeader { min-height: 44px; }
+
+/* Band left header: the Groups ribbon is the pane header of the Stage pane. */
+.app .mappingPersistentWorkspaceGrid { grid-template-rows: 44px minmax(0, 1fr); }
+.app .mappingPersistentWorkspaceGrid > .mappingGroupStrip {
+  min-height: 44px;
+  gap: 8px;
+  padding: 0 8px 0 0;
+  background: var(--theme-raised);
+  border: 0;
+  border-bottom: 1px solid var(--theme-line-strong);
+}
+.app .mappingPersistentWorkspaceGrid > .mappingGroupStrip > span {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  padding: 0 14px;
+  background: var(--theme-accent);
+  color: var(--theme-on-accent);
+  font-family: var(--theme-font-label);
+  font-size: 16px;
+  letter-spacing: .08em;
+  line-height: 1;
+}
+
+/* Lighting Edit's top pane keeps its contract-pinned 32px surface header (bank
+   strip and view toggles); only the chrome tokens apply. */
+.app .sceneMatrixSurfaceHeader { border-bottom-color: var(--theme-line-strong); }
+
+/* Video Control's header sits in a fixed 36px grid track that the Video viewport
+   contracts pin; its title block fills that track instead of forcing 44px. */
+.app .layoutControl.controlModeMixer .videoControlPanelMixer > .panelHeader { padding-block: 0; }
+.app .layoutControl.controlModeMixer .videoControlPanelMixer > .panelHeader > h2 { min-height: 0; align-self: stretch; }

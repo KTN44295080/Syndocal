@@ -36869,7 +36869,8 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     ["legacyTargetSummaryRowRemovedForMultipleSelection", () =>
       multiple.legacyTargetSummaryCount === 0
       && multiple.faderDeskStartsAtEditorBodyTop
-      && Math.abs(multiple.sharedHeaderHeight - 34) <= 1
+      // Task 13b: the band's context header is the shared 44px Broadcast pane header.
+      && Math.abs(multiple.sharedHeaderHeight - 44) <= 1
     ],
     ["legacyEditorHiddenForMultipleSelection", () => multiple.legacyFaderGridCount === 0 && multiple.legacyDimmerPanelCount === 0],
     ["categoryRailPreservedForMultipleSelection", () => multiple.categoryRailButtonCount === 8 && multiple.activeCategoryLabel.includes("Dimmer")],
@@ -38663,7 +38664,8 @@ async function runEditLiveViewport(client, viewport) {
     ],
     ["sharedHeaderAndContextTabsStayCompact", () =>
       initial.sharedHeaderSingleRow &&
-      Math.abs(initial.sharedHeaderHeight - 34) <= 1 &&
+      // Task 13b: the shared 44px Broadcast pane header.
+      Math.abs(initial.sharedHeaderHeight - 44) <= 1 &&
       initial.modeTabWidths.length === 4 &&
       initial.modeTabWidths.every((width) => width > 0 && width <= 96) &&
       initial.editDeskTabWidths.length === 0 &&

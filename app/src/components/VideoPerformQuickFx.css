@@ -1,64 +1,77 @@
+/* The FX tab of the Perform Inspector: a stage list beside the selected stage's
+ * parameters. Controls keep 44px targets; the list and parameters scroll
+ * inside the tab, never the page. */
 .videoPerformQuickFx {
-  display: flex;
-  gap: 8px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 4px;
   min-width: 0;
   min-height: 0;
+  height: 100%;
   overflow: hidden;
-  padding: 4px 6px;
-  border: 1px solid var(--ui-border);
+  padding: 4px;
+  box-sizing: border-box;
   background: var(--theme-panel);
 }
 
-/* One compact row: the title block is fixed so the chain scrolls beside it. The
- * right edge of the strip stays free for the later FX browser. */
 .videoPerformQuickFxHeader {
   display: flex;
-  flex: 0 0 260px;
   align-items: center;
-  min-width: 0;
+  justify-content: space-between;
   gap: 8px;
+  min-width: 0;
 }
 
-.videoPerformQuickFxHeader > div {
+.videoPerformQuickFxLayer {
   display: flex;
-  flex: 1 1 0;
   align-items: center;
-  min-width: 0;
+  flex: 1 1 0;
   gap: 8px;
+  min-width: 0;
 }
 
-.videoPerformQuickFxHeader strong {
+.videoPerformQuickFxLayerName {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0 10px;
+  border: 1px solid var(--theme-line-strong);
+  background: var(--theme-inset);
+  color: var(--theme-text);
+  font-weight: 700;
+  line-height: 30px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoPerformQuickFxCount {
   flex: 0 0 auto;
+  color: var(--theme-muted);
   white-space: nowrap;
 }
 
 .videoPerformQuickFxHeader > button {
   flex: 0 0 auto;
-  padding-inline: 8px;
+  padding-inline: 10px;
   white-space: nowrap;
 }
 
-.videoPerformQuickFxHeader span,
-.videoPerformQuickFxStageHeader > strong,
-.videoPerformQuickFxParameter > span {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.videoPerformQuickFxHeader span {
-  color: var(--theme-muted);
+.videoPerformQuickFxBody {
+  display: grid;
+  grid-template-columns: minmax(196px, 1.1fr) minmax(0, 1fr);
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
 }
 
 .videoPerformQuickFxChain {
   display: flex;
-  flex: 1 1 auto;
-  align-items: flex-start;
+  flex-direction: column;
+  gap: 3px;
   min-width: 0;
   min-height: 0;
-  gap: 8px;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
 }
@@ -66,11 +79,11 @@
 .videoPerformQuickFxStage {
   display: flex;
   flex: 0 0 auto;
-  align-items: center;
+  align-items: stretch;
+  min-width: 0;
   height: 44px;
-  gap: 8px;
-  padding: 0 6px;
-  border-left: 3px solid var(--theme-accent);
+  border: 1px solid var(--theme-line);
+  border-left: 4px solid var(--theme-accent);
   background: var(--theme-raised);
 }
 
@@ -79,16 +92,29 @@
   background: var(--theme-inset);
 }
 
-.videoPerformQuickFxStageHeader {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
+.videoPerformQuickFxStage[data-fx-selected="true"] {
+  outline: 2px solid var(--theme-selected);
+  outline-offset: -2px;
 }
 
-.videoPerformQuickFxStageHeader > strong {
-  max-width: 120px;
+.videoPerformQuickFxSelect {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--theme-text);
+  text-align: left;
+}
+
+.videoPerformQuickFxSelect > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .videoPerformQuickFxNumber {
@@ -96,24 +122,101 @@
   font-variant-numeric: tabular-nums;
 }
 
-.videoPerformQuickFxParameters {
+.videoPerformQuickFxSwitch {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
+  padding: 0 6px;
+  border: 0;
+  border-left: 1px solid var(--theme-line);
+  background: transparent;
+  color: var(--theme-muted);
+  white-space: nowrap;
+}
+
+.videoPerformQuickFxKnob {
+  position: relative;
+  width: 30px;
+  height: 18px;
+  border: 1px solid var(--theme-line-strong);
+  background: var(--theme-inset);
+}
+
+.videoPerformQuickFxKnob::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  background: var(--theme-dim);
+}
+
+.videoPerformQuickFxSwitch.active { color: var(--theme-text); }
+
+.videoPerformQuickFxSwitch.active .videoPerformQuickFxKnob {
+  background: var(--theme-latched);
+  border-color: var(--theme-latched);
+}
+
+.videoPerformQuickFxSwitch.active .videoPerformQuickFxKnob::after {
+  left: 14px;
+  background: var(--theme-on-latched);
+}
+
+.videoPerformQuickFxParameters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: min-content;
+  align-content: start;
+  gap: 4px 10px;
   min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 6px;
+  border: 1px solid var(--theme-line);
+  background: var(--theme-inset);
+  scrollbar-width: thin;
 }
 
 .videoPerformQuickFxParameter {
-  display: flex;
+  display: grid;
+  grid-template-rows: 20px 44px;
   align-items: center;
-  gap: 6px;
+  gap: 0;
   min-width: 0;
+  margin: 0;
   color: var(--theme-text);
 }
 
-.videoPerformQuickFxParameter > span {
-  max-width: 72px;
+.videoPerformQuickFxParameterHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  line-height: 20px;
+}
+
+.videoPerformQuickFxParameterHead > span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--theme-muted);
+  font-family: var(--theme-font-label);
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.videoPerformQuickFxValue {
+  flex: 0 0 auto;
+  color: var(--theme-text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .videoPerformQuickFx button,
@@ -123,12 +226,14 @@
   min-width: 44px;
   margin: 0;
   font: inherit;
+  box-sizing: border-box;
 }
 
 .videoPerformQuickFxParameter > input[type="range"],
-.videoPerformQuickFxParameter > select {
-  width: 96px;
-  box-sizing: border-box;
+.videoPerformQuickFxParameter > select,
+.videoPerformQuickFxParameter > button,
+.videoPerformQuickFxParameter > input[type="color"] {
+  width: 100%;
 }
 
 .videoPerformQuickFxPoint {
@@ -138,10 +243,10 @@
 }
 
 .videoPerformQuickFxPoint input {
-  width: 56px;
+  flex: 1 1 0;
+  width: 0;
   min-width: 44px;
   padding-inline: 2px;
-  box-sizing: border-box;
 }
 
 .videoPerformQuickFx :focus-visible {
@@ -152,6 +257,33 @@
 .videoPerformQuickFx .emptyState,
 .videoPerformQuickFx .emptyHint {
   align-self: center;
+  grid-column: 1 / -1;
   margin: 0;
+  padding: 4px;
   color: var(--theme-muted);
 }
+
+/* The global pressed/active button treatment is a latched block; the stage rows
+ * carry their state in the switch knob, the number and the row outline instead. */
+.app .videoPerformQuickFx .videoPerformQuickFxSelect,
+.app .videoPerformQuickFx .videoPerformQuickFxSelect[aria-pressed="true"] {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--theme-text);
+}
+.app .videoPerformQuickFx .videoPerformQuickFxSwitch,
+.app .videoPerformQuickFx .videoPerformQuickFxSwitch[aria-pressed="true"] {
+  border: 0;
+  border-left: 1px solid var(--theme-line);
+  background: transparent;
+  box-shadow: none;
+  color: var(--theme-muted);
+}
+.app .videoPerformQuickFx .videoPerformQuickFxSwitch.active { color: var(--theme-text); }
+.app .videoPerformQuickFx .videoPerformQuickFxSwitch:hover:not(:disabled),
+.app .videoPerformQuickFx .videoPerformQuickFxSelect:hover:not(:disabled) { background: var(--theme-key-hover); }
+
+/* A layer with no FX has nothing to parameterise: the message takes the whole tab. */
+.videoPerformQuickFxBody[data-fx-empty="true"] { grid-template-columns: minmax(0, 1fr); }
+.videoPerformQuickFxBody[data-fx-empty="true"] > .videoPerformQuickFxParameters { display: none; }
