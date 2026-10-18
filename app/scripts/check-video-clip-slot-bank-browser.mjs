@@ -17,7 +17,10 @@ const viewports = [
   { width: 1920, height: 1032 },
   { width: 1366, height: 768 },
   { width: 1280, height: 720 },
-  { width: 860, height: 520 },
+  // The native window minimum (tauri.conf.json minWidth/minHeight). The one-row
+  // header (98ac087b) is built and verified from 960px; 860px is below what the
+  // app can be resized to.
+  { width: 960, height: 640 },
 ];
 const chromeCandidates = [
   process.env.CHROME_PATH,

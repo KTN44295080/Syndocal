@@ -3966,6 +3966,20 @@ async function measureLiveDeskHeaderState(client) {
       ? [...globalTransport.querySelectorAll('[data-global-operator-action]')].filter(isVisible)
       : [];
     const toolbarControls = directTransportButtons;
+    // Fade, Timeline and Clear flags live in the Tools disclosure since the
+    // one-row header (98ac087b); they are measured here, and only count as
+    // visible while Tools is open.
+    const toolsDisclosure = document.querySelector('details.topbarTools');
+    const toolsTransportButtons = toolsDisclosure
+      ? [...toolsDisclosure.querySelectorAll('.topbarTransportCluster [data-global-operator-action]')].filter(isVisible)
+      : [];
+    const toolsTransportCenters = toolsTransportButtons.map((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.y + rect.height / 2;
+    });
+    const toolsTransportCenterSpread = toolsTransportCenters.length > 0
+      ? Math.max(...toolsTransportCenters) - Math.min(...toolsTransportCenters)
+      : Number.POSITIVE_INFINITY;
     const viewActionButtons = toolbarActions
       ? [...toolbarActions.querySelectorAll('[data-live-desk-view-action]')].filter(isVisible)
       : [];
@@ -4082,6 +4096,11 @@ async function measureLiveDeskHeaderState(client) {
       statusToggleContained: contained(statusToggleRect, toolbarRect),
       transportButtonMetrics: directTransportButtons.map((element) =>
         actionMetrics(element, 'data-global-operator-action')),
+      toolsOpen: toolsDisclosure?.open === true,
+      toolsTransportButtonCount: toolsTransportButtons.length,
+      toolsTransportCenterSpread: Math.round(toolsTransportCenterSpread * 100) / 100,
+      toolsTransportButtonMetrics: toolsTransportButtons.map((element) =>
+        actionMetrics(element, 'data-global-operator-action')),
       viewActionButtonMetrics: viewActionButtons.map((element) =>
         actionMetrics(element, 'data-live-desk-view-action')),
       iconSizeToken: getComputedStyle(document.documentElement).getPropertyValue('--ui-icon-size').trim(),
@@ -4135,20 +4154,37 @@ async function runLiveDeskHeaderViewport(client, viewport) {
   await selectControlSurface(client, 'edit');
   await sleep(120);
   const matrix = await measureLiveDeskHeaderState(client);
+  // Open the Tools disclosure to measure the three Playback actions it hosts,
+  // then close it again so the Learn flow below starts from the baseline.
+  await clickWorkspaceSelector(client, 'details.topbarTools > summary');
+  await sleep(120);
+  const toolsOpened = await measureLiveDeskHeaderState(client);
+  await clickWorkspaceSelector(client, 'details.topbarTools > summary');
+  await sleep(120);
   await client.evaluate(`(() => {
     const clone = (value) => JSON.parse(JSON.stringify(value));
-    const mock = { calls: [] };
+    const mock = { calls: [], nextCallbackId: 0, nextEventId: 0, nextMidiSession: 0 };
     window.__TAURI_INTERNALS__ = {
+      transformCallback: () => ++mock.nextCallbackId,
       invoke: async (command, args = {}) => {
         mock.calls.push({ command, args: clone(args) });
         // The alpha.9 owner-registration barrier precedes every invoke; this
         // browser mock answers the registration so learn flows can proceed.
         if (command === 'register_project_transaction_owner') return null;
+        // MIDI Learn subscribes to syndocal://midi-learn-ready through the
+        // Tauri event plugin before it invokes learn_midi_control (3ff8c0e8).
+        if (command === 'plugin:event|listen') return ++mock.nextEventId;
+        if (command === 'plugin:event|unlisten') return null;
         if (command === 'list_midi_inputs') return [{ index: 4, name: 'Learn Controller' }];
         if (command === 'learn_midi_control') {
           return { channel: 1, message: 'ControlChange', number: 74, value: 96 };
         }
-        if (command === 'connect_midi_control' || command === 'disconnect_midi_control') return null;
+        // connect_midi_control answers the exact connection identity the
+        // direct-fader path validates (7f116105); disconnect has no result.
+        if (command === 'connect_midi_control') {
+          return { schema_version: 1, project_epoch: args.expectedEpoch, input_session: ++mock.nextMidiSession };
+        }
+        if (command === 'disconnect_midi_control') return null;
         if (command === 'learn_osc_control') {
           return { address: '/learn/cue', value: 1, argument_count: 1 };
         }
@@ -4199,7 +4235,7 @@ async function runLiveDeskHeaderViewport(client, viewport) {
   await sleep(100);
   const pads = await measureLiveDeskHeaderState(client);
   const killMetrics = [...matrix.killButtonMetrics, ...matrix.killClearMetrics];
-  const transportIconMetrics = matrix.transportButtonMetrics.filter((metric) =>
+  const transportIconMetrics = [...matrix.transportButtonMetrics, ...toolsOpened.toolsTransportButtonMetrics].filter((metric) =>
     ['back', 'fade', 'timeline', 'clear-flags'].includes(metric.action));
   const transportTextMetrics = matrix.transportButtonMetrics.filter((metric) =>
     ['go', 'dmx-blackout', 'video-blackout', 'all-blackout'].includes(metric.action));
@@ -4224,8 +4260,14 @@ async function runLiveDeskHeaderViewport(client, viewport) {
       matrix.liveDeskStateCount === 0 &&
       matrix.liveDeskSceneMetaCount === 0,
     globalTopbarOwnsEightTransportActions:
+      // Five stay in the one-row header (Back, GO, three blackouts); Fade,
+      // Timeline and Clear flags are the three Tools > Playback actions.
       matrix.toolbarCount === 1 &&
-      matrix.directTransportButtonCount === 8,
+      matrix.directTransportButtonCount === 5 &&
+      toolsOpened.toolsOpen &&
+      toolsOpened.toolsTransportButtonCount === 3 &&
+      JSON.stringify(toolsOpened.toolsTransportButtonMetrics.map((metric) => metric.action)) ===
+        JSON.stringify(['fade', 'timeline', 'clear-flags']),
     globalTopbarOwnsMidiOscAndDmxLearnWithoutShrinking:
       matrix.learnButtonCount === 3 &&
       JSON.stringify(matrix.learnButtonMetrics.map((metric) => metric.action)) === JSON.stringify(['midi', 'osc', 'dmx']) &&
@@ -4253,7 +4295,9 @@ async function runLiveDeskHeaderViewport(client, viewport) {
           mapping.message === 'ControlChange' &&
           mapping.channel === 1 &&
           mapping.number === 74 &&
-          mapping.action === 'TriggerCue' &&
+          // A Scene Matrix trigger maps MIDI to Scene play / stop (7f116105);
+          // OSC and DMX keep TriggerCue.
+          mapping.action === 'ToggleCue' &&
           Number.isInteger(mapping.cue_id) &&
           mapping.cue_id > 0)),
     nextOscInputCreatesAndStartsTheSelectedMapping:
@@ -4348,9 +4392,11 @@ async function runLiveDeskHeaderViewport(client, viewport) {
       matrix.toolbarFitsAvailableWidth &&
       matrix.toolbarScrollWidth <= matrix.toolbarClientWidth + 1,
     globalTransportControlsShareOneVisualRow:
-      matrix.toolbarControlCount === 8 &&
+      matrix.toolbarControlCount === 5 &&
       matrix.toolbarControlCenterSpread <= 1 &&
-      matrix.globalTransportRect?.height === 40,
+      matrix.globalTransportRect?.height === 40 &&
+      toolsOpened.toolsTransportButtonCount === 3 &&
+      toolsOpened.toolsTransportCenterSpread <= 1,
     sceneReadoutMovedIntoExpandedStatus:
       // The Edit-hosted inspector is unmounted while collapsed, so the
       // readout must be absent at baseline and appear only inside the
@@ -38666,7 +38712,8 @@ async function runEditLiveViewport(client, viewport) {
       initial.sharedHeaderSingleRow &&
       // Task 13b: the shared 44px Broadcast pane header.
       Math.abs(initial.sharedHeaderHeight - 44) <= 1 &&
-      initial.modeTabWidths.length === 4 &&
+      // Edit, Live, Video, Both and Perform (59fbfa7b added Perform).
+      initial.modeTabWidths.length === 5 &&
       initial.modeTabWidths.every((width) => width > 0 && width <= 96) &&
       initial.editDeskTabWidths.length === 0 &&
       initial.editDeskTabWidths.every((width) => width > 0 && width <= 100)

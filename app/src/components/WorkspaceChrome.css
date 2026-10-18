@@ -92,6 +92,11 @@
   .topbarOrganized > .topbarProject { display: none; }
   .topbarOrganized .topbarShowClockStatus > span { display: none; }
   .topbarOrganized .topbarTransportCluster > [data-global-operator-action="dmx-blackout"] { margin-left: 0; }
+  /* The tempo cluster (BPM, Tap, sync) must fit the 960px window minimum next to
+     the window controls. Keep the sync source and LOCK/STALE status; the beat
+     lights are the part omitted at the compact boundary. */
+  .topbarTempoSync { width: 70px; }
+  .topbarTempoSync .topbarBeats { display: none; }
 }
 
 /* Condensed label typography retains the existing title row and hit targets. */
