@@ -23,6 +23,29 @@
 }
 .topbarOrganized .topbarTransportCluster > [data-global-operator-action="dmx-blackout"] { margin-left: 8px; }
 
+/* Read-only clock context beside BPM and Tap: source over beat lights + sync. */
+.topbarTempoSync {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-rows: 14px 14px;
+  align-content: center;
+  width: 106px;
+  height: 40px;
+  min-width: 0;
+  padding: 0 4px;
+  color: #b9b0a8;
+  font-size: 10px;
+  line-height: 14px;
+}
+.topbarSyncSource { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbarSyncRow { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; }
+.topbarBeats { display: inline-flex; flex: 0 0 auto; gap: 2px; }
+.topbarBeats i { width: 8px; height: 8px; box-sizing: border-box; border: 1px solid #849297; border-radius: 50%; background: #384349; }
+.topbarBeats i.lit { border-color: #b5e9f9; background: #b5e9f9; box-shadow: 0 0 0 2px #3b6979; }
+.topbarSyncStatus { flex: 0 0 auto; white-space: nowrap; font-size: 9px; font-weight: 700; letter-spacing: 0; }
+.topbarTempoSync[data-topbar-sync-state="LOCK"] .topbarSyncStatus { color: #8ed19a; }
+.topbarTempoSync[data-topbar-sync-state="STALE"] .topbarSyncStatus { color: #e8b45a; }
+
 .topbarTools { position: relative; flex: 0 0 auto; }
 .topbarTools > summary {
   display: grid;

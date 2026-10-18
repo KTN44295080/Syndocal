@@ -10,6 +10,7 @@ import type {
   ApplicationUpdateCheck,
   ApplicationUpdateConfiguration,
   ApplicationUpdateProgress,
+  EngineSnapshot,
   ProjectBackupSummary,
   ProjectHistoryStatus,
   OperatorLockMode,
@@ -21,6 +22,7 @@ import type { UiLocale } from "../uiLocalization";
 import { summarizeShowClockForShell } from "../showClockShell";
 import { TopbarPulseMeter } from "./TopbarPulseMeter";
 import { TopbarBpmControl } from "./TopbarBpmControl";
+import { TopbarTempoSync } from "./TopbarTempoSync";
 import "./WorkspaceChrome.css";
 import { TopbarTools } from "./TopbarTools";
 import {
@@ -37,6 +39,7 @@ type WorkspaceChromeProps = {
   lightingMaster: number;
   videoMaster: number;
   bpm: number;
+  clock: EngineSnapshot["clock"];
   liveAudioInputRunning: boolean;
   liveAudioInputStale: boolean;
   liveAudioInputSafetyClearPending: boolean;
@@ -766,7 +769,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
           >
             Tap
           </button>
-
+          <TopbarTempoSync clock={props.clock} uiLocale={props.uiLocale} />
           </div>
           <div class="topbarStateCluster" role="group" aria-label="Show status">
           <span

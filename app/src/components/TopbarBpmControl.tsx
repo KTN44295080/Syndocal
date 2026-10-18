@@ -1,5 +1,6 @@
 import { createSignal, onCleanup, Show } from "solid-js";
 import { Portal } from "solid-js/web";
+import { controlMappingTargetData } from "../controlMappingLearn";
 import "./TopbarBpmControl.css";
 
 export function TopbarBpmControl(props: { bpm: number; onSetBpm: (bpm: number) => void | Promise<void> }) {
@@ -32,7 +33,8 @@ export function TopbarBpmControl(props: { bpm: number; onSetBpm: (bpm: number) =
     }
   };
   return <span ref={container} class="bpmReadout topbarBpmControl" onClick={begin} onPointerDown={event => event.stopPropagation()}
-    onMouseDown={event => event.stopPropagation()} onDblClick={event => event.stopPropagation()}>
+    onMouseDown={event => event.stopPropagation()} onDblClick={event => event.stopPropagation()}
+    {...controlMappingTargetData({ action: "SetBpm", label: "BPM" })}>
     <small>BPM</small>
     <Show when={editing()} fallback={<button type="button" class="topbarBpmValue" aria-label="Edit BPM"
       title="Edit BPM" onClick={begin}><strong>{props.bpm.toFixed(0)}</strong></button>}>

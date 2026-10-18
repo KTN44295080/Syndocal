@@ -1,19 +1,15 @@
 import { For, Show, onCleanup, onMount } from "solid-js";
-import type { EngineSnapshot, VideoClipLayerRuntimeSummary } from "../types";
+import type { VideoClipLayerRuntimeSummary } from "../types";
 import type { VideoControlPanelProps } from "./VideoControlPanel";
 import { LiveVideoMonitorPanel } from "./LiveVideoMonitorPanel";
 import { VideoStagePreviewButton } from "./VideoClipGridPanel";
 import { VideoPerformMatrix } from "./VideoPerformMatrix";
 import { VideoPerformQuickFx } from "./VideoPerformQuickFx";
-import { clockSourceLabel, clockSyncStatusLabel } from "../clockDisplay";
 import { controlMappingTargetData } from "../controlMappingLearn";
 
 export interface VideoPerformContext {
   runtimes: VideoClipLayerRuntimeSummary[];
-  clock: EngineSnapshot["clock"];
   keyboardEnabled: boolean;
-  onTap: () => void | Promise<unknown>;
-  onSetBpm: (value: number) => void | Promise<unknown>;
   onOpenEditor: () => void;
 }
 
@@ -51,19 +47,6 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
     class="panel videoControlPanel videoPerformLayout" data-video-perform-layout aria-label="VJ performance desk">
     <header class="videoPerformDeskHeader">
       <h2>Perform</h2>
-      <div class="videoPerformTempo" data-video-perform-region="tempo" aria-label="Performance tempo">
-        <label>BPM<input type="number" min="20" max="300" step="0.1" aria-label="Performance BPM"
-          value={props.performContext?.clock.bpm ?? 120}
-          onChange={event => { const value = Number(event.currentTarget.value); if (Number.isFinite(value) && value >= 20 && value <= 300) void props.performContext?.onSetBpm(value); }}
-          {...controlMappingTargetData({ action: "SetBpm", label: "BPM" })} /></label>
-        <button data-video-perform-tap onClick={() => void props.performContext?.onTap()}
-          {...controlMappingTargetData({ action: "TapBpm", label: "Tap BPM" })}>Tap</button>
-        <span class="videoPerformSync"><span>{props.performContext ? clockSourceLabel(props.performContext.clock.source) : "—"}</span>
-          <span>{props.performContext ? clockSyncStatusLabel(props.performContext.clock) : "Not checked"}</span></span>
-        <span class="videoPerformBeats" aria-label="Beat indicator" data-video-perform-beat={props.performContext?.clock.beat_counter ?? 0}>
-          <For each={[0,1,2,3]}>{beat => <i class={(props.performContext?.clock.beat_counter ?? 0) % 4 === beat ? "lit" : ""} />}</For>
-        </span>
-      </div>
       <section class="videoPerformHealth" data-video-perform-region="health" aria-label="Media and monitor health">
         <strong>Media health</strong><span title={errors() || undefined}><Show when={errors()} fallback={<><span>Assets</span>: <span data-no-localize>{props.mediaLibrary.assets.length}</span> · <span>Not verified</span>: <span data-no-localize>{unchecked()}</span></>}>{error => <span data-no-localize>{error()}</span>}</Show></span>
         <Show when={!props.clipGrid.thumbnailsAuthorized}><button onClick={props.clipGrid.onRequestThumbnails}>Load Thumbnails</button></Show>

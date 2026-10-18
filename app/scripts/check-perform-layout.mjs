@@ -88,13 +88,17 @@ const selectors = {
   take: `${root} [data-video-perform-take]`,
   transitionKind: `${root} [data-video-perform-transition-kind]`,
   transitionDuration: `${root} [data-video-perform-transition-duration]`,
-  tap: `${root} [data-video-perform-tap]`,
   fxEditor: `${root} [data-video-perform-fx-editor]`,
   guardedBlackout: `${root} [data-video-perform-blackout]`,
   legend: `${root} [data-video-perform-legend-toggle]`,
   inspect: `${root} [data-video-perform-inspect]`,
   clipOptions: `${root} [data-video-perform-clip-options]`,
   blackout: "[data-global-operator-action='video-blackout']",
+  // Tempo has one home: the global top bar cluster, visible in every workspace.
+  tap: ".topbarTempoCluster [data-topbar-tap]",
+  bpm: ".topbarTempoCluster .topbarBpmControl",
+  sync: ".topbarTempoCluster [data-topbar-sync]",
+  beats: ".topbarTempoCluster [data-topbar-sync] .topbarBeats",
 };
 
 // Intersect every scroll/clipping ancestor as well as the viewport. A center
@@ -286,7 +290,7 @@ try {
       assert.equal(identity.scrollHeight, height, `${label}: outer vertical scroll`);
       await writeFile(join(evidenceDir, `${label}-before.png`), Buffer.from((await cdp.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, optimizeForSpeed: true }, 30_000)).data, "base64"));
       const inspect = (selector) => cdp.evaluate('('+inspectInPage+')('+JSON.stringify(selector)+')');
-      const regions = ['matrix','transition','tempo','quick-fx','health'].map(name => root+' [data-video-perform-region="'+name+'"]');
+      const regions = ['matrix','transition','quick-fx','health'].map(name => root+' [data-video-perform-region="'+name+'"]');
       const required = [...Object.values(selectors), ...regions];
       const geometry = [];
       for (const selector of required) {
@@ -296,11 +300,19 @@ try {
           assert.ok(measurement.height >= 44 && measurement.width >= 44, label+': preserved 44px control target '+selector);
         }
       }
-      // Health lives in the desk header between the tempo block and the shortcuts button and never below the matrix.
-      const headerOrder = await cdp.evaluate('(()=>{const r=(s)=>document.querySelector(s)?.getBoundingClientRect();const h=r('+JSON.stringify(root+' .videoPerformDeskHeader [data-video-perform-region="health"]')+'),t=r('+JSON.stringify(root+' .videoPerformDeskHeader [data-video-perform-region="tempo"]')+'),l=r('+JSON.stringify(root+' .videoPerformDeskHeader [data-video-perform-legend-toggle]')+');return h&&t&&l?{tempoRight:t.right,healthLeft:h.left,healthRight:h.right,legendLeft:l.left,healthH:h.height,standalone:!!document.querySelector('+JSON.stringify(root+' > .videoPerformHealth')+')}:null})()');
+      // Health lives in the desk header between the title and the shortcuts button and never below the matrix.
+      const headerOrder = await cdp.evaluate('(()=>{const r=(s)=>document.querySelector(s)?.getBoundingClientRect();const h=r('+JSON.stringify(root+' .videoPerformDeskHeader [data-video-perform-region="health"]')+'),t=r('+JSON.stringify(root+' .videoPerformDeskHeader h2')+'),l=r('+JSON.stringify(root+' .videoPerformDeskHeader [data-video-perform-legend-toggle]')+');return h&&t&&l?{titleRight:t.right,healthLeft:h.left,healthRight:h.right,legendLeft:l.left,healthH:h.height,standalone:!!document.querySelector('+JSON.stringify(root+' > .videoPerformHealth')+')}:null})()');
       assert.ok(headerOrder, label+': health region is rendered inside the desk header');
-      assert.ok(headerOrder.healthLeft >= headerOrder.tempoRight - 1 && headerOrder.healthRight <= headerOrder.legendLeft + 1, label+': health sits between tempo and shortcuts '+JSON.stringify(headerOrder));
+      assert.ok(headerOrder.healthLeft >= headerOrder.titleRight - 1 && headerOrder.healthRight <= headerOrder.legendLeft + 1, label+': health sits between title and shortcuts '+JSON.stringify(headerOrder));
       assert.equal(headerOrder.standalone, false, label+': no separate bottom health row');
+      // One tempo cluster: the Perform desk no longer carries its own BPM, Tap, sync or beat lights.
+      const tempo = await cdp.evaluate('(()=>{const vis=(e)=>{const r=e.getBoundingClientRect();const s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility==="visible"&&s.display!=="none"};const count=(q)=>[...document.querySelectorAll(q)].filter(vis).length;const rect=(q)=>{const r=document.querySelector(q)?.getBoundingClientRect();return r&&{left:r.left,right:r.right,top:r.top,bottom:r.bottom}};const sync=document.querySelector("[data-topbar-sync]");const dots=[...(sync?.querySelectorAll(".topbarBeats i")??[])];const lit=dots.map((d,i)=>d.classList.contains("lit")?i:-1).filter(i=>i>=0);const top=document.querySelector(".topbar");const fits=(q)=>{const e=document.querySelector(q);if(!e)return false;const range=document.createRange();range.selectNodeContents(e);return range.getBoundingClientRect().width<=e.getBoundingClientRect().width+1&&e.scrollWidth<=e.clientWidth+1};return {tap:count("[data-topbar-tap]"),tapTargets:count("[data-control-map-target*=\\\"TapBpm\\\"]"),bpm:count(".topbarBpmControl"),bpmTargets:count("[data-control-map-target*=\\\"SetBpm\\\"]"),deskTempo:document.querySelectorAll("[data-video-perform-layout] [data-video-perform-tap], [data-video-perform-layout] [data-video-perform-region=tempo], [data-video-perform-layout] .videoPerformTempo, [data-video-perform-layout] input[aria-label*=BPM]").length,tapWords:[...document.querySelectorAll("button")].filter(b=>vis(b)&&/^(Tap|タップ)$/.test(b.textContent.trim())).length,dots:dots.length,lit,beat:Number(sync?.querySelector(".topbarBeats")?.dataset.topbarBeat),source:sync?.querySelector(".topbarSyncSource")?.textContent.trim(),status:sync?.querySelector(".topbarSyncStatus")?.textContent.trim(),title:sync?.title,sourceFits:fits("[data-topbar-sync] .topbarSyncSource"),statusFits:fits("[data-topbar-sync] .topbarSyncStatus")&&fits("[data-topbar-sync] .topbarSyncRow"),cluster:rect(".topbarTempoCluster"),state:rect(".topbarStateCluster"),windowControls:rect("[data-window-controls]"),topbarOverflow:top.scrollWidth-top.clientWidth,viewportWidth:innerWidth}})()');
+      assert.deepEqual([tempo.tap, tempo.tapTargets, tempo.tapWords, tempo.bpm, tempo.bpmTargets, tempo.deskTempo], [1, 1, 1, 1, 1, 0], label+': exactly one Tap and one BPM control, none on the Perform desk '+JSON.stringify(tempo));
+      assert.equal(tempo.dots, 4, label+': four beat lights '+JSON.stringify(tempo));
+      assert.deepEqual(tempo.lit, [tempo.beat % 4], label+': exactly the current beat is lit '+JSON.stringify(tempo));
+      assert.ok(tempo.source && tempo.status && tempo.title?.includes(tempo.source) && tempo.title.includes(tempo.status), label+': sync source and status are shown and carried in title '+JSON.stringify(tempo));
+      assert.ok(tempo.sourceFits && tempo.statusFits, label+': sync text is not truncated '+JSON.stringify(tempo));
+      assert.ok(tempo.cluster.right <= tempo.state.left + 1 && tempo.state.right <= tempo.windowControls.left + 1 && tempo.windowControls.right <= tempo.viewportWidth + 1 && tempo.topbarOverflow <= 0, label+': top bar tempo cluster fits without overlap or overflow '+JSON.stringify(tempo));
       const rowSelector=root+' [data-video-perform-row="1"]';
       // Density: complete layer rows inside the matrix viewport (excluding the sticky head and horizontal scrollbar).
       const matrixDensity = await cdp.evaluate('(()=>{const sc=document.querySelector('+JSON.stringify(root+' .videoPerformMatrixScroll')+');sc.scrollTop=0;const b=sc.getBoundingClientRect();const head=sc.querySelector(".videoPerformMatrixHead").getBoundingClientRect();const limit=b.top+sc.clientTop+sc.clientHeight;const rows=[...sc.querySelectorAll("[data-video-perform-row]")];const full=rows.filter(r=>{const x=r.getBoundingClientRect();return x.top>=head.bottom-1&&x.bottom<=limit+1});const first=rows[0].getBoundingClientRect();const cell=rows[0].querySelector(".videoPerformMatrixCell");return {fullRows:full.length,totalRows:rows.length,headHeight:head.height,rowHeight:first.height,stripHeight:rows[0].querySelector(".videoPerformLayerStrip").getBoundingClientRect().height,cellButtons:cell.querySelectorAll("button").length,actionRows:document.querySelectorAll(".videoPerformClipActions").length,numberBadges:document.querySelectorAll(".videoPerformClipNumber").length,keyBadges:cell.querySelectorAll("kbd").length}})()');

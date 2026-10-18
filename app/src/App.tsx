@@ -26829,6 +26829,7 @@ export default function App() {
         lightingMaster={snapshot().lighting_master}
         videoMaster={snapshot().video.master_opacity}
         bpm={snapshot().clock.bpm}
+        clock={snapshot().clock}
         liveAudioInputRunning={liveAudioInputStatus().running}
         liveAudioInputStale={liveAudioInputStatus().stale}
         liveAudioInputSafetyClearPending={liveAudioInputStatus().safety_clear_pending}
@@ -28185,10 +28186,7 @@ export default function App() {
           performance={controlMode() === "perform"}
           performContext={{
             get runtimes() { return videoClipRuntime().layers; },
-            get clock() { return snapshot().clock; },
             get keyboardEnabled() { return !controlLearnMode() && operatorLockMode() === null; },
-            onTap: tapBpm,
-            onSetBpm: setOperatorBpm,
             onOpenEditor: () => selectControlMode("mixer"),
           }}
           invokeCommand={invoke}

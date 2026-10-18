@@ -48,7 +48,7 @@ const operations=()=> <WorkspaceOperationsMenu profiles={[]} selectedProfileId={
  onTogglePane={noop} onConfigurePolicy={async()=>true} onClearPolicy={async()=>true}
  onLock={setLock} onUnlock={async()=>true}/>;
 const props={get workspaceTab(){return workspace()},setupSubTab:'output',controlMode:'live',
- get blackout(){return dmx()||safety()},get videoBlackout(){return video()},lightingMaster:1,videoMaster:1,get bpm(){return bpm()},
+ get blackout(){return dmx()||safety()},get videoBlackout(){return video()},lightingMaster:1,videoMaster:1,get bpm(){return bpm()},clock:{bpm:120,source:'Manual',external_sync_locked:false,beat_counter:0},
  liveAudioInputRunning:false,liveAudioInputStale:false,liveAudioInputSafetyClearPending:false,
  liveAudioInputTelemetryFresh:false,liveAudioInputRms:0,liveAudioInputPeak:0,tickMs:25,jitterUs:0,
  packetBytes:0,dmxSuccessCount:0,dmxOutputCount:0,get projectLabel(){return label()},get projectDirty(){return dirty()},
