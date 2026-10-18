@@ -6,7 +6,7 @@
 .layoutControl.controlModePerform .videoPerformLayout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: 48px 176px minmax(120px, 1fr) 144px 44px;
+  grid-template-rows: 48px 176px minmax(0, 1fr) 66px;
   gap: 6px;
   min-width: 0;
   min-height: 0;
@@ -17,9 +17,10 @@
   background: #15191b;
   font-size: 14px;
 }
-.videoPerformDeskHeader { display:flex; align-items:center; justify-content:space-between; gap:16px; min-width:0; }
-.videoPerformDeskHeader h2 { font-size:18px; margin:0; }
-.videoPerformTempo { display:flex; gap:10px; align-items:center; min-width:0; }
+.videoPerformDeskHeader { display:flex; align-items:center; gap:16px; min-width:0; }
+.videoPerformDeskHeader h2 { flex:0 0 auto; font-size:18px; margin:0; }
+.videoPerformDeskHeader > button { flex:0 0 auto; }
+.videoPerformTempo { display:flex; flex:0 0 auto; gap:10px; align-items:center; min-width:0; }
 .videoPerformLayout label { margin:0; min-width:0; }
 .videoPerformLayout button, .videoPerformLayout input, .videoPerformLayout select { min-height:44px; min-width:44px; font-size:14px; }
 .videoPerformTempo label { display:flex; align-items:center; gap:8px; }
@@ -36,17 +37,17 @@
 .videoPerformLayout .liveVideoMonitor header, .videoPerformLayout .liveVideoMonitor footer { font-size:14px; line-height:20px; overflow:hidden; white-space:nowrap; }
 /* Monitor errors converge in the health rail; transport editing remains in Video. */
 .videoPerformLayout .vjPreviewTransport, .videoPerformLayout .liveVideoMonitorError, .videoPerformLayout .liveVideoMonitorRetry { display:none; }
-.videoPerformTransition { display:grid; grid-template-rows:58px 58px 44px; gap:4px; min-width:0; }
+.videoPerformTransition { display:grid; grid-template-rows:44px 44px 44px; gap:4px; align-content:center; min-width:0; }
 .videoPerformTransition > label { display:grid; grid-template-columns:78px minmax(0,1fr); gap:4px; align-items:center; }
 .videoPerformTransition > .videoPerformDuration { grid-template-columns:44px minmax(0,1fr) 108px; }
 .videoPerformTakeRow { display:grid; grid-template-columns:60px minmax(0,1fr); gap:8px; }
 .videoPerformLayout .videoPerformTakeRow .videoClipPreview { position:static; width:60px; height:44px; padding:4px; font-size:14px; }
-.videoPerformMaster { display:grid; grid-template-rows:76px 52px 24px; gap:8px; align-content:center; padding:0 8px; border-left:1px solid var(--ui-border); min-width:0; }
-.videoPerformMaster label { display:grid; grid-template-columns:1fr auto; align-items:center; }
+.videoPerformMaster { display:grid; grid-template-rows:auto 44px 24px; gap:6px; align-content:center; padding:0 8px; border-left:1px solid var(--ui-border); min-width:0; }
+.videoPerformMaster label { display:grid; grid-template-columns:1fr auto; grid-template-rows:20px 44px; align-items:center; }
 .videoPerformMaster label input { grid-column:1 / -1; width:100%; }
 .videoPerformMaster button { width:100%; }
 .videoPerformMaster > span { text-align:center; color:#f7d2ce; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.videoPerformHealth { display:flex; gap:12px; align-items:center; padding:0 8px; border-top:1px solid var(--ui-border); min-width:0; }
+.videoPerformHealth { display:flex; flex:1 1 0; gap:12px; align-items:center; padding:0 8px; border-left:1px solid var(--ui-border); min-width:0; }
 .videoPerformHealth > strong, .videoPerformHealth button { flex-shrink:0; }
 .videoPerformHealth > span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .videoPerformLegend { max-width:min(760px,90vw); max-height:85vh; overflow:auto; padding:24px; color:#edf4f6; background:#1b252b; border:2px solid #a9dbea; font-size:16px; }
@@ -55,7 +56,29 @@
 .videoPerformLegend dt { font-weight:700; }
 .videoPerformLegend dd { margin:0; }
 .videoPerformLegend button { min-height:44px; }
+/* Laptop heights: the monitors keep their video area while Preview/Program labels
+ * overlay it and the transition and master controls reflow into two rows, so
+ * the matrix keeps at least three complete layer rows. */
+@media (max-height:800px) {
+  .layoutControl.controlModePerform .videoPerformLayout { grid-template-rows:48px 128px minmax(0,1fr) 66px; gap:4px; padding:4px; }
+  .videoPerformMonitors { grid-template-columns:minmax(0,1fr) 400px 320px; }
+  .videoPerformLayout .liveVideoMonitor { grid-template-rows:minmax(0,1fr); padding:0; }
+  .videoPerformLayout .liveVideoMonitor header, .videoPerformLayout .liveVideoMonitor footer { position:absolute; z-index:1; width:max-content; max-width:100%; padding:0 6px; background:#000b; pointer-events:none; }
+  .videoPerformLayout .liveVideoMonitor header { top:0; left:0; border:0; }
+  .videoPerformLayout .liveVideoMonitor header span { display:none; }
+  .videoPerformLayout .liveVideoMonitor footer { right:0; bottom:0; border:0; }
+  .videoPerformTransition { grid-template-columns:minmax(0,1fr) minmax(0,1.1fr); grid-template-rows:44px 44px; column-gap:8px; }
+  .videoPerformTransition > label { grid-template-columns:auto minmax(0,1fr); }
+  .videoPerformTransition > .videoPerformDuration { grid-template-columns:auto minmax(0,1fr) 96px; }
+  .videoPerformTransition > .videoPerformTakeRow { grid-column:1 / -1; }
+  .videoPerformMaster { grid-template-columns:116px minmax(0,1fr); grid-template-rows:44px 44px; row-gap:4px; column-gap:8px; }
+  .videoPerformMaster label { grid-column:1 / -1; display:flex; gap:8px; }
+  .videoPerformMaster label input { flex:1 1 0; grid-column:auto; width:auto; }
+  .videoPerformMaster > span { text-align:left; }
+}
+@media (max-height:740px) {
+  .layoutControl.controlModePerform .videoPerformLayout { grid-template-rows:48px 104px minmax(0,1fr) 66px; }
+}
 @media (min-width:1700px) and (min-height:900px) {
-  .layoutControl.controlModePerform .videoPerformLayout { grid-template-rows:48px 208px minmax(120px,1fr) 144px 44px; }
-  .videoPerformTransition { align-content:center; }
+  .layoutControl.controlModePerform .videoPerformLayout { grid-template-rows:48px 208px minmax(0,1fr) 66px; }
 }

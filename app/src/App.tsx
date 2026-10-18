@@ -15714,6 +15714,10 @@ export default function App() {
     if (newProjectInFlight) return;
     newProjectInFlight = true;
     try {
+      if (workspaceTab() === "control" && controlMode() === "perform" &&
+        !window.confirm(translateUiText(
+          "Create a new project and stop this show? Confirm to replace the current project.", uiLocale(),
+        ))) return;
       if (!await confirmDiscardProjectChanges("create a new project")) {
         setMessage("New project canceled.");
         return;
@@ -26122,6 +26126,10 @@ export default function App() {
       event.stopImmediatePropagation();
       return;
     }
+    // The modal legend owns native Tab/Enter/Escape behavior. Do not let its
+    // keys fall through to global GO, workspace or project commands.
+    if (workspaceTab() === "control" && controlMode() === "perform" &&
+      document.querySelector("[data-video-perform-legend][open]")) return;
     if (
       event.key === "Escape" &&
       !event.defaultPrevented &&

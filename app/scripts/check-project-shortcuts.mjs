@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 import ts from "typescript";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -532,5 +533,43 @@ assert.doesNotMatch(appShortcutSource, /setAllBlackout/, "the unused all-blackou
 const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
 assert.match(appSource, /window\.addEventListener\("keydown", handleAppKeyDown\)/, "the tested controller remains mounted");
 assert.match(appSource, /handleControlKeyDown\(event\)/, "the mounted application handler delegates to the controller");
+
+// Use the mounted handler itself: skipping matrix shortcuts while a modal is
+// open must not expose global workspace, GO or New Project shortcuts underneath.
+const appTree = ts.createSourceFile("App.tsx", appSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+let mountedHandler;
+const findMountedHandler = (node) => {
+  if (ts.isVariableDeclaration(node) && node.name.getText(appTree) === "handleAppKeyDown") {
+    mountedHandler = node.initializer;
+  }
+  ts.forEachChild(node, findMountedHandler);
+};
+findMountedHandler(appTree);
+assert.ok(mountedHandler, "mounted App keyboard entry point exists");
+const mountedHandlerCode = ts.transpileModule(`const underTest = ${mountedHandler.getText(appTree)}; underTest;`, {
+  compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
+}).outputText;
+for (const [workspace, mode, legendOpen, expectedCalls] of [
+  ["control", "perform", true, 0],
+  ["control", "perform", false, 1],
+  ["control", "video", true, 1],
+  ["setup", "perform", true, 1],
+]) {
+  for (const [key, code, ctrlKey] of [["l", "KeyL", false], ["n", "KeyN", true], [" ", "Space", false]]) {
+    let calls = 0;
+    let prevented = false;
+    const handler = runInNewContext(mountedHandlerCode, {
+      workspaceTab: () => workspace,
+      controlMode: () => mode,
+      document: { querySelector: (selector) => legendOpen && selector === "[data-video-perform-legend][open]" ? {} : null },
+      paneWindow: null,
+      HTMLElement: class {},
+      handleControlKeyDown: () => { calls += 1; },
+    });
+    handler({ key, code, ctrlKey, defaultPrevented: false, preventDefault: () => { prevented = true; } });
+    assert.equal(calls, expectedCalls, `${workspace}/${mode} legend=${legendOpen}: ${code} global dispatch`);
+    assert.equal(prevented, false, "modal suppression preserves native dialog default actions");
+  }
+}
 
 console.log(`project/app shortcuts: ${matrixCases} matrix cases; App=30 reachable kinds; ProjectFile=3 reachable kinds; source manifest byte-exact`);

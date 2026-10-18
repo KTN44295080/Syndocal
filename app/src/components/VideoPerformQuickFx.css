@@ -4,23 +4,38 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  padding: 6px;
+  padding: 4px 6px;
   border: 1px solid var(--ui-border);
   background: #14191f;
 }
 
+/* One compact row: the title block is fixed so the chain scrolls beside it. The
+ * right edge of the strip stays free for the later FX browser. */
 .videoPerformQuickFxHeader {
   display: flex;
-  flex: 0 0 180px;
-  flex-direction: column;
-  justify-content: space-between;
+  flex: 0 0 260px;
+  align-items: center;
   min-width: 0;
-  gap: 4px;
+  gap: 8px;
 }
 
 .videoPerformQuickFxHeader > div {
-  display: grid;
-  gap: 2px;
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.videoPerformQuickFxHeader strong {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.videoPerformQuickFxHeader > button {
+  flex: 0 0 auto;
+  padding-inline: 8px;
+  white-space: nowrap;
 }
 
 .videoPerformQuickFxHeader span,
@@ -38,21 +53,23 @@
 .videoPerformQuickFxChain {
   display: flex;
   flex: 1 1 auto;
+  align-items: flex-start;
   min-width: 0;
   min-height: 0;
   gap: 8px;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .videoPerformQuickFxStage {
-  display: grid;
-  flex: 0 0 340px;
-  grid-template-rows: 44px minmax(0, 1fr);
-  min-width: 0;
-  gap: 3px;
-  padding: 0 6px 3px;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  height: 44px;
+  gap: 8px;
+  padding: 0 6px;
   border-left: 3px solid #68829a;
   background: #1a232d;
 }
@@ -63,11 +80,15 @@
 }
 
 .videoPerformQuickFxStageHeader {
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
+  display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+.videoPerformQuickFxStageHeader > strong {
+  max-width: 120px;
 }
 
 .videoPerformQuickFxNumber {
@@ -77,18 +98,22 @@
 
 .videoPerformQuickFxParameters {
   display: flex;
-  align-items: start;
-  gap: 12px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
 }
 
 .videoPerformQuickFxParameter {
-  display: grid;
-  flex: 1 1 0;
-  grid-template-rows: 18px 44px;
-  gap: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
   color: #d5e1ec;
+}
+
+.videoPerformQuickFxParameter > span {
+  max-width: 72px;
 }
 
 .videoPerformQuickFx button,
@@ -100,9 +125,9 @@
   font: inherit;
 }
 
-.videoPerformQuickFxParameter > input,
+.videoPerformQuickFxParameter > input[type="range"],
 .videoPerformQuickFxParameter > select {
-  width: 100%;
+  width: 96px;
   box-sizing: border-box;
 }
 
@@ -113,7 +138,7 @@
 }
 
 .videoPerformQuickFxPoint input {
-  width: 50%;
+  width: 56px;
   min-width: 44px;
   padding-inline: 2px;
   box-sizing: border-box;

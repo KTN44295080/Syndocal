@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { runInNewContext } from "node:vm";
 import ts from "typescript";
 
 const source = await readFile(new URL("../src/destructiveActions.ts", import.meta.url), "utf8");
@@ -52,5 +53,46 @@ assert.equal(actions.confirmTimelinePlacementRemoval(500, "Scale Cue 500", 32_00
   return true;
 }), true);
 assert.equal(placementRemovalInvocations, 1);
+
+// Exercise the actual App entry point: a saved/clean show must still require
+// consent before the existing dirty-state check or any replacement work starts.
+const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const appTree = ts.createSourceFile("App.tsx", appSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+let newProjectInitializer;
+const visit = (node) => {
+  if (ts.isVariableDeclaration(node) && node.name.getText(appTree) === "newProject") {
+    newProjectInitializer = node.initializer;
+  }
+  ts.forEachChild(node, visit);
+};
+visit(appTree);
+assert.ok(newProjectInitializer, "canonical New Project entry point exists");
+const newProjectCode = ts.transpileModule(`const underTest = ${newProjectInitializer.getText(appTree)}; underTest;`, {
+  compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
+}).outputText;
+for (const [workspace, mode, consent, expectedPrompts, expectedDiscardChecks] of [
+  ["control", "perform", false, 1, 0],
+  ["control", "perform", true, 1, 1],
+  ["control", "video", false, 0, 1],
+  ["setup", "perform", false, 0, 1],
+]) {
+  let prompts = 0;
+  let discardChecks = 0;
+  const sandbox = {
+    newProjectInFlight: false,
+    workspaceTab: () => workspace,
+    controlMode: () => mode,
+    window: { confirm: () => { prompts += 1; return consent; } },
+    translateUiText: (text) => text,
+    uiLocale: () => "en",
+    confirmDiscardProjectChanges: async () => { discardChecks += 1; return false; },
+    setMessage: () => {},
+    invoke: () => assert.fail("a canceled New request must never mutate the project"),
+  };
+  await runInNewContext(newProjectCode, sandbox)();
+  assert.equal(prompts, expectedPrompts, `${workspace}/${mode}: show confirmation is Perform-only`);
+  assert.equal(discardChecks, expectedDiscardChecks, `${workspace}/${mode}: declined show confirmation stops before project checks`);
+  assert.equal(sandbox.newProjectInFlight, false, "a declined request releases its in-flight guard");
+}
 
 console.log("destructive action helpers ok");

@@ -14,12 +14,13 @@
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
+  scrollbar-width: thin;
 }
 
 .videoPerformMatrixHead,
 .videoPerformMatrixRow {
   display: grid;
-  grid-template-columns: 300px repeat(32, 104px);
+  grid-template-columns: 336px repeat(32, 100px);
   width: max-content;
   min-width: 100%;
 }
@@ -28,7 +29,7 @@
   position: sticky;
   top: 0;
   z-index: 5;
-  height: 36px;
+  height: 44px;
   background: #242a2e;
 }
 
@@ -47,7 +48,32 @@
   position: sticky;
   left: 0;
   z-index: 6;
+  box-sizing: border-box;
+  gap: 6px;
+  padding: 0 6px 0 10px;
+  border-bottom: 0;
   background: #293135;
+  box-shadow: inset 0 -1px 0 #454c50;
+}
+
+.videoPerformMatrixCorner > strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.videoPerformMatrix .videoPerformMatrixCorner > button {
+  flex: 0 0 auto;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.videoPerformMatrix .videoPerformMatrixCorner > button:disabled {
+  color: #9aa7ad;
+  background: #232a2e;
+  border-style: dashed;
 }
 
 .videoPerformMatrix kbd {
@@ -62,7 +88,7 @@
 }
 
 .videoPerformMatrixRow {
-  min-height: 164px;
+  min-height: 100px;
   border-bottom: 2px solid #46535a;
 }
 
@@ -71,8 +97,8 @@
   left: 0;
   z-index: 3;
   display: grid;
-  grid-template-rows: 44px 62px 44px;
-  gap: 2px;
+  grid-template-rows: 44px 44px;
+  gap: 4px;
   padding: 4px 8px;
   border-right: 2px solid #66777e;
   background: #22292e;
@@ -85,9 +111,9 @@
   padding-left: 4px;
 }
 
-.videoPerformLayerHeading {
+.videoPerformLayerTop {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 76px;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 4px;
 }
@@ -128,16 +154,19 @@
   white-space: nowrap;
   text-align: left;
   font-weight: 700;
-  padding: 6px 8px;
+  padding: 6px;
 }
 
 .videoPerformLayerLive {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
+  align-items: center;
+  justify-content: flex-start;
   gap: 2px;
+  min-width: 0;
+  overflow: hidden;
   color: #c8d1d5;
   line-height: 18px;
+  white-space: nowrap;
 }
 
 .videoPerformLayerLive.live {
@@ -147,14 +176,15 @@
 
 .videoPerformLayerMix {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: 68px minmax(0, 1.2fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
 }
 
 .videoPerformMatrix .videoPerformLayerMix label {
-  display: grid;
-  grid-template-rows: 18px 44px;
-  gap: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 0;
   min-width: 0;
   color: #e2e9ec;
@@ -162,44 +192,44 @@
   line-height: 18px;
 }
 
-.videoPerformLayerOpacity > span {
-  display: flex;
-  justify-content: space-between;
+.videoPerformLayerOpacity > strong {
+  flex: 0 0 auto;
+  min-width: 4ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .videoPerformLayerMix input,
 .videoPerformLayerMix select {
-  width: 100%;
+  flex: 1 1 0;
+  min-width: 0;
   margin: 0;
   padding: 0 3px;
 }
 
-.videoPerformLayerButtons {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 4px;
-}
-
-.videoPerformMatrix .videoPerformLayerButtons button.active {
+.videoPerformMatrix .videoPerformLayerTop button.active {
   border: 2px solid #f9d080;
   background: #695127;
   font-weight: 700;
+}
+
+.videoPerformMatrix .videoPerformLayerTop > button:not(.videoPerformLayerName) {
+  padding: 0 6px;
 }
 
 .videoPerformMatrixCell {
   min-width: 0;
   padding: 4px 3px;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) 44px;
-  gap: 2px;
+  grid-template-rows: minmax(0, 1fr);
   border-right: 1px solid #353e43;
   background: #14191c;
 }
 
 .videoPerformMatrix .videoPerformClipTrigger {
   display: grid;
-  grid-template-rows: minmax(36px, 1fr) 20px 20px;
-  min-height: 108px;
+  grid-template-rows: minmax(48px, 1fr) 20px 20px;
+  min-height: 92px;
   padding: 0;
   overflow: hidden;
   background: #222a2e;
@@ -252,14 +282,6 @@
   top: 3px;
 }
 
-.videoPerformClipNumber {
-  position: absolute;
-  right: 4px;
-  top: 4px;
-  padding: 0 3px;
-  background: #000c;
-}
-
 .videoPerformClipTitle,
 .videoPerformClipState {
   display: block;
@@ -290,16 +312,6 @@
   background: #642e31;
   color: #ffe2df;
   font-weight: 700;
-}
-
-.videoPerformClipActions {
-  display: grid;
-  grid-template-columns: minmax(44px, 1.4fr) minmax(44px, 1fr);
-  gap: 2px;
-}
-
-.videoPerformMatrix .videoPerformClipActions button {
-  padding: 2px;
 }
 
 .videoPerformMatrixEmpty {

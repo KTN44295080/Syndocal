@@ -41,12 +41,12 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
   const unchecked = () => props.mediaLibrary.assets.filter(asset =>
     !props.mediaLibrary.availabilityById[asset.id] ||
     props.mediaLibrary.availabilityById[asset.id]?.kind === "available_unverified").length;
-  const errors = () => [props.liveMonitors.preview.error, props.liveMonitors.program.error,
+  const errors = () => [...new Set([props.clipGrid.previewError, props.clipGrid.firstRunError, props.liveMonitors.preview.error, props.liveMonitors.program.error,
     props.liveMonitors.previewTransportError,
     ...(props.layerList.isfRuntimeErrors ?? []).map(error => error.message),
     ...unhealthy().map(asset => `${asset.label}: ${props.mediaLibrary.availabilityById[asset.id]?.kind}`),
     ...props.mediaLibrary.lastImportReport?.entries.filter(entry => entry.status === "failed").map(entry => entry.message) ?? [],
-  ].filter(Boolean).join(" · ");
+  ].filter(Boolean))].join(" · ");
   return <section id="edit-domain-panel-perform" role="tabpanel" aria-labelledby="edit-domain-tab-perform"
     class="panel videoControlPanel videoPerformLayout" data-video-perform-layout aria-label="VJ performance desk">
     <header class="videoPerformDeskHeader">
@@ -64,6 +64,13 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
           <For each={[0,1,2,3]}>{beat => <i class={(props.performContext?.clock.beat_counter ?? 0) % 4 === beat ? "lit" : ""} />}</For>
         </span>
       </div>
+      <section class="videoPerformHealth" data-video-perform-region="health" aria-label="Media and monitor health">
+        <strong>Media health</strong><span title={errors() || undefined}><Show when={errors()} fallback={<><span>Assets</span>: <span data-no-localize>{props.mediaLibrary.assets.length}</span> · <span>Not verified</span>: <span data-no-localize>{unchecked()}</span></>}>{error => <span data-no-localize>{error()}</span>}</Show></span>
+        <Show when={!props.clipGrid.thumbnailsAuthorized}><button onClick={props.clipGrid.onRequestThumbnails}>Load Thumbnails</button></Show>
+        <Show when={props.liveMonitors.preview.status === "error" || props.liveMonitors.program.status === "error"}>
+          <button onClick={props.liveMonitors.onRetry}>Retry monitors</button>
+        </Show>
+      </section>
       <button data-video-perform-legend-toggle onClick={() => legend.showModal()}>Keyboard shortcuts</button>
     </header>
     <section class="videoPerformMonitors" aria-label="Preview and Program">
@@ -108,13 +115,6 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
       thumbnailsAuthorized={props.clipGrid.thumbnailsAuthorized} keyboardEnabled={keyboardEnabled()}
       onStop={layerId => props.clipGrid.onStop(layerId, props.clipGrid.fadeMs)} onTake={() => { if (props.clipSlotTake.enabled) return props.clipSlotTake.onTake(); }} />
     <VideoPerformQuickFx layer={props.clipSlotBank.layer} layerList={props.layerList} onOpenEditor={() => props.performContext?.onOpenEditor()} />
-    <section class="videoPerformHealth" data-video-perform-region="health" aria-label="Media and monitor health">
-      <strong>Media health</strong><span data-no-localize title={errors() || undefined}>{errors() || `${props.mediaLibrary.assets.length} assets · ${unchecked()} not verified`}</span>
-      <Show when={!props.clipGrid.thumbnailsAuthorized}><button onClick={props.clipGrid.onRequestThumbnails}>Load Thumbnails</button></Show>
-      <Show when={props.liveMonitors.preview.status === "error" || props.liveMonitors.program.status === "error"}>
-        <button onClick={props.liveMonitors.onRetry}>Retry monitors</button>
-      </Show>
-    </section>
     <dialog ref={legend} class="videoPerformLegend" data-video-perform-legend>
       <h2>Keyboard shortcuts</h2>
       <dl><dt>1–9, 0, Q–P, A–L, Z–C</dt><dd>Queue a clip in the selected layer</dd>
@@ -122,8 +122,10 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
         <dt>Space / Enter</dt><dd>Take the queued clip</dd>
         <dt data-no-localize>Ctrl + Shift + B</dt><dd>Blackout or recover, with confirmation</dd>
         <dt>?</dt><dd>Show keyboard shortcuts</dd></dl>
-      <p>Preview on a pad auditions its thumbnail. P stages the current layer in the Preview monitor.</p>
+      <p>Right-click or long-press a clip for its options. Inspect and Clip… in the matrix corner act on the selected clip; Inspect shows a thumbnail only.</p>
+      <p>The P button stages the current layer in Preview; the P key queues column 20.</p>
       <p>Shortcuts pause while editing a value, a dialog is open, or MIDI Learn is active.</p>
+      <p>Clip, Take, blend, transition and ISF stage MIDI targets are not supported by the current control model.</p>
       <button onClick={() => legend.close()}>Close</button>
     </dialog>
   </section>;

@@ -56,6 +56,11 @@ assert.equal(localization.translateUiText("Clipboard", "ja"), "クリップボ�
 assert.equal(localization.translateUiText("Timing", "ja"), "タイミング");
 assert.equal(localization.translateUiText("Lane", "ja"), "レーン");
 assert.equal(localization.translateUiText("Close", "ja"), "閉じる");
+// Perform layer state words stay distinct from the imperative Stop button.
+assert.equal(localization.translateUiText("Stopped", "ja"), "停止中");
+assert.equal(localization.translateUiText("Paused", "ja"), "一時停止中");
+assert.equal(localization.translateUiText("LIVE", "ja"), "LIVE");
+assert.equal(localization.translateUiText("Stop", "ja"), "停止");
 assert.equal(localization.translateUiText("  Save  ", "ja"), "  保存  ");
 assert.equal(localization.translateUiText("3 steps", "ja"), "3 手順");
 assert.equal(localization.translateUiText("Install v1.2.0", "ja"), "v1.2.0をインストール");
