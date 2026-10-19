@@ -2538,7 +2538,23 @@ export interface VideoLayerGroupSummary {
   label: string;
   composition_id: number;
   layer_ids: number[];
+  enabled: boolean;
+  opacity: number;
+  blend_mode: VideoBlendMode;
+  solo: boolean;
+  bypassed: boolean;
+  transform?: Transform2D | null;
 }
+
+export interface VideoCompositionLayerOrder {
+  composition_id: number;
+  layer_ids: number[];
+}
+
+/** One ticket and undo entry for both group policy and composition order. */
+export type VideoEffectCatalogUpdate = VideoEffectCatalog & {
+  composition_layer_orders?: VideoCompositionLayerOrder[];
+};
 
 export type VideoLayerTransitionTarget =
   | { kind: "layer"; layer_id: number }

@@ -5,6 +5,8 @@ import { outputDriveShortLabel } from "../outputDriveStatus";
 import { LiveVideoMonitorPanel } from "./LiveVideoMonitorPanel";
 import { LiveVideoOutputHealthReadout } from "./LiveVideoOutputHealthReadout";
 import { VideoStagePreviewButton } from "./VideoClipGridPanel";
+import { VideoGroupInspector } from "./VideoGroupInspector";
+import { patchVideoGroup } from "../videoLayerGroups";
 import { VideoPerformMatrix } from "./VideoPerformMatrix";
 import { VideoPerformQuickFx } from "./VideoPerformQuickFx";
 import { PaneIconButton, WorkspacePaneHeader } from "./WorkspacePaneHeader";
@@ -116,6 +118,8 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
   const commitLower = (ratio: number) => props.performContext?.layout ? props.performContext.layout.onLowerRatio(ratio) : setLocalLower(ratio);
   const [focused, setFocused] = createSignal<PaneFocus>(null);
   const [bottomCollapsed, setBottomCollapsed] = createSignal(false);
+  const [selectedGroupId, setSelectedGroupId] = createSignal<number | null>(null);
+  const selectedGroup = () => props.effectScopes.catalog.layer_groups.find(group => group.id === selectedGroupId());
   const [tab, setTab] = createSignal<InspectorTab>("fx");
   const toggleFocus = (pane: Exclude<PaneFocus, null>) => setFocused(focused() === pane ? null : pane);
   const showClipInspector = () => { setFocused(current => current === "matrix" ? null : current); setBottomCollapsed(false); setTab("clip"); };
@@ -151,6 +155,9 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
       />
       <div class="workspacePaneBody" id="video-perform-matrix-body">
         <VideoPerformMatrix bank={matrixBank} layerList={props.layerList}
+          groups={props.effectScopes.catalog.layer_groups} compositions={props.effectScopes.compositions} groupBusy={props.effectScopes.busy}
+          selectedGroupId={selectedGroupId()} onSelectGroup={id => { setSelectedGroupId(id); if (id !== null) setTab("fx"); }}
+          onPatchGroup={(id, patch) => props.effectScopes.onApplyCatalog(patchVideoGroup(props.effectScopes.catalog, id, patch))}
           effectEntries={props.performContext?.effectEntries} onAddEffect={props.performContext?.onAddEffect}
           runtimes={props.performContext?.runtimes ?? (props.clipSlotBank.runtime ? [props.clipSlotBank.runtime] : [])}
           availabilityById={props.mediaLibrary.availabilityById} previewLayerId={props.clipGrid.previewLayerId}
@@ -288,11 +295,11 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
           role="tabpanel" aria-labelledby={`video-perform-inspector-tab-${tab()}`} data-video-perform-inspector-panel={tab()}>
           <Switch>
             <Match when={tab() === "fx"}>
-              <VideoPerformQuickFx layer={props.clipSlotBank.layer} layerList={props.layerList}
+              <Show when={selectedGroup()} fallback={<VideoPerformQuickFx layer={props.clipSlotBank.layer} layerList={props.layerList}
                 locale={props.performContext?.locale} bpm={props.layerList.bpm}
                 projectEpoch={props.layerList.projectEpoch}
                 effectCatalog={props.effectScopes.catalog} onApplyEffectCatalog={props.effectScopes.onApplyCatalog} liveSession={props.layerList.liveSession} audition={props.layerList.audition}
-                onOpenEditor={() => props.performContext?.onOpenEditor()} />
+                onOpenEditor={() => props.performContext?.onOpenEditor()} />}>{group => <VideoGroupInspector group={group()} effects={props.effectScopes} />}</Show>
             </Match>
             <Match when={tab() === "clip"}>
               <div class="videoPerformInspectorClip" data-video-perform-clip-inspector>

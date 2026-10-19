@@ -326,6 +326,37 @@ const BLEND_MODES: [VideoBlendMode; 10] = [
 ];
 
 #[test]
+fn layer_group_gpu_readback_matches_cpu_for_all_blends_opacity_and_transform() {
+    let gpu = headless().expect("layer-group parity requires a real GPU adapter");
+    let size = (16, 12);
+    let mut buffers = new_buffers(&gpu, size);
+    for mode in BLEND_MODES {
+        for transform in [
+            None,
+            Some(Transform2D {
+                x: 0.125,
+                y: -0.08,
+                scale_x: 0.7,
+                scale_y: 0.85,
+                rotation_deg: 23.0,
+                ..Transform2D::default()
+            }),
+        ] {
+            let mut snapshot = crate::layer_group_composition_tests::scene(mode.clone(), transform);
+            for opacity in [0.01, 0.55, 1.0] {
+                snapshot.layer_groups[0].opacity = opacity;
+                let (composition, cpu) =
+                    crate::layer_group_composition_tests::parity_fixture(&snapshot);
+                let expected = apply_video_output_mapping(cpu, &composition.output_mapping).data;
+                let (actual, _) = render(&gpu, &mut buffers, &composition, size.0, size.1);
+                // Exactly two outer GPU blends (backdrop + isolated group).
+                assert_within_levels(&actual, &expected, composition.layers.len() as u8);
+            }
+        }
+    }
+}
+
+#[test]
 fn presenter_composition_matches_the_cpu_render_mapped_once() {
     let Some(gpu) = headless() else {
         return;

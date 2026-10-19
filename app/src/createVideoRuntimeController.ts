@@ -40,6 +40,7 @@ import type {
   VideoAudioMonitorStatus,
   VideoFrame,
   VideoEffectCatalog,
+  VideoEffectCatalogUpdate,
   VideoEffectCatalogAuthoritativeResult,
   VideoEffectCatalogTerminalEnvelope,
   VideoEffectPresetId,
@@ -187,7 +188,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     options.setMessage("Wait for the active FX Event pulse to finish.");
     return false;
   };
-  const commitVideoEffectCatalog = async (catalog: VideoEffectCatalog) => {
+  const commitVideoEffectCatalog = async (catalog: VideoEffectCatalogUpdate) => {
     if (!canMutateVideoIsf()) return null;
     const beforePreflight = options.getCurrentProjectAuthority();
     const { authority } = await options.prepareMediaAssetOperationStart(beforePreflight);
@@ -235,7 +236,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     await refreshVideoPreviewDiagnostics(true);
     return result;
   };
-  const applyVideoEffectCatalog = async (catalog: VideoEffectCatalog) => {
+  const applyVideoEffectCatalog = async (catalog: VideoEffectCatalogUpdate) => {
     try {
       return await commitVideoEffectCatalog(catalog);
     } catch (error) {

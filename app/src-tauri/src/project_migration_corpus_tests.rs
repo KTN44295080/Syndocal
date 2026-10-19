@@ -213,7 +213,7 @@ fn migration_corpus_version_rejection_precedes_migration() {
     let versions = [
         Value::Null,
         json!(0),
-        json!(2),
+        json!(3),
         json!(u32::MAX),
         json!(u64::MAX),
         json!("1"),
@@ -483,4 +483,42 @@ fn migration_corpus_embedded_profile_unicode_paths_are_not_reopened() {
             3
         );
     }
+}
+
+#[test]
+fn migration_corpus_v1_layer_groups_default_to_pass_through_and_save_v2() {
+    let mut input = sample();
+    input["version"] = json!(1);
+    let video = input["snapshot"]["video"].as_object_mut().unwrap();
+    let layer_id = video["layers"][0]["id"].clone();
+    video.insert(
+        "layer_groups".into(),
+        json!([{
+            "id": 1, "label": "Legacy group", "composition_id": 1, "layer_ids": [layer_id]
+        }]),
+    );
+    let output = round_trip(&input, "legacy group defaults");
+    assert_eq!(output["version"], 2);
+    let group = &output["snapshot"]["video"]["layer_groups"][0];
+    assert_eq!(group["enabled"], true);
+    assert_eq!(group["opacity"], 1.0);
+    assert_eq!(group["blend_mode"], "Normal");
+    assert_eq!(group["solo"], false);
+    assert_eq!(group["bypassed"], false);
+    assert!(group.get("transform").is_none());
+    let output = round_trip(&sample(), "legacy absent groups");
+    assert!(output["snapshot"]["video"].get("layer_groups").is_none());
+    for version in [0, 3, u32::MAX] {
+        let mut invalid = input.clone();
+        invalid["version"] = json!(version);
+        assert!(project_and_control_mappings_from_value(invalid).is_err());
+    }
+}
+
+#[test]
+fn migration_corpus_v1_phase1_sample_migrates_to_the_current_schema_unchanged() {
+    let current = round_trip(&sample(), "current Phase 1 sample");
+    let mut legacy = sample();
+    legacy["version"] = json!(1);
+    assert_eq!(round_trip(&legacy, "v1 Phase 1 sample"), current);
 }

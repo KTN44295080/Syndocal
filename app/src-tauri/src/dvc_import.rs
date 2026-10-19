@@ -389,7 +389,7 @@ fn import_bytes(bytes: &[u8], path_label: &str) -> Result<DvcImportOutcome, Stri
     );
 
     let project = ProjectFile {
-        version: 1,
+        version: crate::PROJECT_FILE_VERSION,
         app: "Syndocal".to_string(),
         operator_policy: None,
         custom_profiles: profiles

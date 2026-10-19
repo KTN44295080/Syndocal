@@ -35,8 +35,11 @@ mod gpu_display_composition_tests;
 mod gpu_surface;
 mod hap_decoder;
 mod isf_runtime;
-mod libav_decoder;
+mod layer_group_composition;
+#[cfg(test)]
+mod layer_group_composition_tests;
 mod layer_thumbnail_render;
+mod libav_decoder;
 mod live_source;
 mod show_spout_aspect_fit;
 mod video_render_cancellation;
@@ -416,6 +419,9 @@ pub enum VideoOutputDisplayRender {
 /// (`AxisAlignedSampling`) and decodes DXT with the CPU's integer
 /// arithmetic, so the two differ only where the GPU rounds a blend the
 /// other way: by one level in a channel per blend at most.
+/// Nontrivial layer groups are isolated with the shared CPU group policy
+/// before this seam. Their resulting RGBA image is one plain GPU layer;
+/// pass-through groups and foldable singleton groups allocate no intermediate.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VideoOutputGpuComposition {
     /// In composition order, bottom first.
@@ -2502,7 +2508,7 @@ fn gpu_composition_eligible(
     if snapshot
         .layer_groups
         .iter()
-        .filter(|group| group.composition_id == composition_id)
+        .filter(|group| group.composition_id == composition_id && group.enabled && !group.bypassed)
         .any(|group| {
             !idle(resolve_video_effect_chain(
                 snapshot,
@@ -4333,10 +4339,20 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .iter()
             .map(|layer| layer.layer_id)
             .collect::<Vec<_>>();
-        self.prepare_frames(snapshot, &layer_ids, width, height)?;
-        self.runtime
-            .compose_plan(&plan, width, height)
-            .map_err(VideoPreviewError::Runtime)
+        let mut faults = self.prepare_frames_with_effects(
+            snapshot,
+            &VideoClipRuntimeSnapshot::default(),
+            0,
+            &layer_ids,
+            width,
+            height,
+        )?;
+        let (frame, scope_faults) = self
+            .compose_scoped_plan_with_cancellation(snapshot, None, &plan, width, height, None)
+            .map_err(VideoPreviewError::Runtime)?;
+        faults.extend(scope_faults);
+        self.record_effect_faults(faults, snapshot);
+        Ok(frame)
     }
 
     /// Renders an explicit runtime input mix without changing the authored
@@ -5357,6 +5373,20 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         {
             return GpuCompositionAttempt::Prepared(faults);
         }
+        let Ok((grouped_layers, group_faults)) =
+            self.prepare_grouped_gpu_layers(snapshot, &plan.composition, &frames, (width, height))
+        else {
+            return GpuCompositionAttempt::Prepared(faults);
+        };
+        if !group_faults.is_empty()
+            || grouped_layers.iter().any(|layer| {
+                !gpu_composition_layer_plan(&layer.plan)
+                    || !gpu_composition_layer_bytes(&layer.frame, (width, height))
+                        .is_some_and(|bytes| bytes <= gpu.max_layer_bytes)
+            })
+        {
+            return GpuCompositionAttempt::Prepared(faults);
+        }
         // What the CPU path records for a fresh render with no effects.
         self.record_effect_faults(Vec::new(), snapshot);
         self.last_output_render_error = None;
@@ -5366,12 +5396,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             entry.key.project_render_epoch == epoch && entry.key.output_id != plan.output_id
         });
         GpuCompositionAttempt::Composition(VideoOutputGpuComposition {
-            layers: layers
-                .iter()
-                .cloned()
-                .zip(frames)
-                .map(|(plan, frame)| VideoOutputGpuLayer { plan, frame })
-                .collect(),
+            layers: grouped_layers,
             output_mapping: plan.mapping,
             output_mapping_identity: VideoOutputMappingIdentity::from_mapping(&plan.mapping),
             evidence: VideoOutputRenderEvidence {
@@ -5519,22 +5544,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     })
             })
             .collect::<Vec<_>>();
-        let mut active_groups = Vec::new();
-        for group in snapshot
-            .layer_groups
-            .iter()
-            .filter(|group| group.composition_id == plan.composition_id)
-        {
-            check_runtime_cancellation(cancellation)?;
-            let scope = VideoEffectScope::Group { group_id: group.id };
-            match resolve_video_effect_chain(snapshot, &scope) {
-                Ok(Some(chain)) if resolved_chain_executes(&chain) => {
-                    active_groups.push((group.layer_ids.clone(), chain));
-                }
-                Ok(_) => {}
-                Err(fault) => faults.push(*fault),
-            }
-        }
+        let active_groups = self.active_layer_groups(snapshot, plan, &mut faults);
 
         let fast_output = if !plan.blackout
             && plan.layers.len() == 1
@@ -5633,49 +5643,28 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             }
             let group = active_groups
                 .iter()
-                .find(|(member_ids, _)| member_ids.contains(&layer.layer_id));
-            let Some((member_ids, chain)) = group else {
+                .find(|active| active.group.layer_ids.contains(&layer.layer_id));
+            let Some(active) = group else {
                 blend_composition_layer_onto(&mut output, layer, &frames, width, height)?;
                 continue;
             };
-            let first_visible_member = plan
+            if plan
                 .layers
                 .iter()
-                .find(|candidate| member_ids.contains(&candidate.layer_id))
-                .map(|candidate| candidate.layer_id);
-            if first_visible_member != Some(layer.layer_id) {
+                .find(|candidate| active.group.layer_ids.contains(&candidate.layer_id))
+                .map(|candidate| candidate.layer_id)
+                != Some(layer.layer_id)
+            {
                 continue;
             }
-            let group_layers = plan
-                .layers
-                .iter()
-                .filter(|candidate| member_ids.contains(&candidate.layer_id))
-                .cloned()
-                .collect::<Vec<_>>();
-            let group_plan = CompositionPlan {
-                composition_id: plan.composition_id,
-                label: format!("{} Group", plan.label),
-                output_ids: Vec::new(),
-                master_opacity: plan.master_opacity,
-                blackout: plan.blackout,
-                layers: group_layers,
-            };
-            let group_frame = composite_frames_rgba8(&group_plan, &frames, width, height)?;
-            let (group_frame, group_faults) = self
-                .apply_resolved_effect_chain_to_frame_with_cancellation(
-                    chain,
-                    group_frame,
-                    None,
-                    cancellation,
-                )?;
-            faults.extend(group_faults);
-            for (destination, source) in output
-                .chunks_exact_mut(4)
-                .zip(group_frame.data.chunks_exact(4))
-            {
-                check_runtime_cancellation(cancellation)?;
-                blend_pixel(destination, source, 1.0, &VideoBlendMode::Normal);
-            }
+            faults.extend(self.blend_group_onto(
+                &mut output,
+                active,
+                plan,
+                &frames,
+                (width, height),
+                cancellation,
+            )?);
         }
 
         let mut frame = VideoFrame {
@@ -5718,71 +5707,41 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         cancellation: Option<&dyn VideoRenderCancellation>,
     ) -> Result<(Vec<u8>, Vec<VideoEffectStageFault>), VideoRuntimeError> {
         check_runtime_cancellation(cancellation)?;
-        let mut output = vec![0u8; width as usize * height as usize * 4];
         let mut faults = Vec::new();
-        let mut active_groups = Vec::new();
-        for group in snapshot
-            .layer_groups
-            .iter()
-            .filter(|group| group.composition_id == plan.composition_id)
-        {
-            check_runtime_cancellation(cancellation)?;
-            let scope = VideoEffectScope::Group { group_id: group.id };
-            match resolve_video_effect_chain(snapshot, &scope) {
-                Ok(Some(chain)) if resolved_chain_executes(&chain) => {
-                    active_groups.push((group.layer_ids.clone(), chain));
-                }
-                Ok(_) => {}
-                Err(fault) => faults.push(*fault),
-            }
+        let active_groups = self.active_layer_groups(snapshot, plan, &mut faults);
+        if active_groups.is_empty() {
+            return Ok((
+                composite_frames_rgba8(plan, frames, width, height)?.data,
+                faults,
+            ));
         }
+        let mut output = vec![0u8; width as usize * height as usize * 4];
         for layer in &plan.layers {
             check_runtime_cancellation(cancellation)?;
-            let group = active_groups
+            let active = active_groups
                 .iter()
-                .find(|(member_ids, _)| member_ids.contains(&layer.layer_id));
-            let Some((member_ids, chain)) = group else {
+                .find(|active| active.group.layer_ids.contains(&layer.layer_id));
+            let Some(active) = active else {
                 blend_composition_layer_onto(&mut output, layer, frames, width, height)?;
                 continue;
             };
-            let first_visible_member = plan
+            if plan
                 .layers
                 .iter()
-                .find(|candidate| member_ids.contains(&candidate.layer_id))
-                .map(|candidate| candidate.layer_id);
-            if first_visible_member != Some(layer.layer_id) {
+                .find(|candidate| active.group.layer_ids.contains(&candidate.layer_id))
+                .map(|candidate| candidate.layer_id)
+                != Some(layer.layer_id)
+            {
                 continue;
             }
-            let group_layers = plan
-                .layers
-                .iter()
-                .filter(|candidate| member_ids.contains(&candidate.layer_id))
-                .cloned()
-                .collect::<Vec<_>>();
-            let group_plan = CompositionPlan {
-                composition_id: plan.composition_id,
-                label: format!("{} Group", plan.label),
-                output_ids: Vec::new(),
-                master_opacity: plan.master_opacity,
-                blackout: plan.blackout,
-                layers: group_layers,
-            };
-            let group_frame = composite_frames_rgba8(&group_plan, frames, width, height)?;
-            let (group_frame, group_faults) = self
-                .apply_resolved_effect_chain_to_frame_with_cancellation(
-                    chain,
-                    group_frame,
-                    None,
-                    cancellation,
-                )?;
-            faults.extend(group_faults);
-            for (destination, source) in output
-                .chunks_exact_mut(4)
-                .zip(group_frame.data.chunks_exact(4))
-            {
-                check_runtime_cancellation(cancellation)?;
-                blend_pixel(destination, source, 1.0, &VideoBlendMode::Normal);
-            }
+            faults.extend(self.blend_group_onto(
+                &mut output,
+                active,
+                plan,
+                frames,
+                (width, height),
+                cancellation,
+            )?);
         }
         Ok((output, faults))
     }
@@ -5843,11 +5802,26 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         if layer_ids.is_empty() {
             return Ok(video_output_black_frame(width, height));
         }
-        self.prepare_frames(snapshot, &layer_ids, width, height)?;
-        let frame = self
-            .runtime
-            .compose_plan(&plan.composition, width, height)
+        let mut faults = self.prepare_frames_with_effects(
+            snapshot,
+            &VideoClipRuntimeSnapshot::default(),
+            0,
+            &layer_ids,
+            width,
+            height,
+        )?;
+        let (frame, scope_faults) = self
+            .compose_scoped_plan_with_cancellation(
+                snapshot,
+                None,
+                &plan.composition,
+                width,
+                height,
+                None,
+            )
             .map_err(VideoPreviewError::Runtime)?;
+        faults.extend(scope_faults);
+        self.record_effect_faults(faults, snapshot);
         Ok(apply_video_output_mapping(frame, &plan.mapping))
     }
 
@@ -8673,6 +8647,24 @@ fn build_composition_plan(
         .layer_ids
         .iter()
         .filter_map(|layer_id| snapshot.layers.iter().find(|layer| layer.id == *layer_id))
+        .collect::<Vec<_>>();
+    let groups = snapshot
+        .layer_groups
+        .iter()
+        .filter(|group| group.composition_id == composition.id)
+        .collect::<Vec<_>>();
+    let group_solo = groups
+        .iter()
+        .any(|group| group.enabled && !group.bypassed && group.solo);
+    let source_layers = source_layers
+        .into_iter()
+        .filter(|layer| {
+            let group = groups
+                .iter()
+                .find(|group| group.layer_ids.contains(&layer.id));
+            group.is_none_or(|group| group.enabled && (group.bypassed || group.opacity > 0.0))
+                && (!group_solo || group.is_some_and(|group| group.solo && !group.bypassed))
+        })
         .collect::<Vec<_>>();
     let solo_active = !snapshot.blackout
         && source_layers.iter().any(|layer| {
@@ -15366,6 +15358,7 @@ mod tests {
                 label: "Group".to_string(),
                 composition_id: 70,
                 layer_ids: vec![1, 2],
+                ..protocol::VideoLayerGroupSummary::default()
             });
         snapshot.effect_chains.push(c1_chain(
             11,
@@ -17400,6 +17393,7 @@ mod tests {
                 label: "Isolated".to_string(),
                 composition_id: 70,
                 layer_ids: vec![1, 2],
+                ..protocol::VideoLayerGroupSummary::default()
             });
         snapshot.effect_chains.push(c1_chain(
             17,
