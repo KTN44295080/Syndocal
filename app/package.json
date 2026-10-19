@@ -30,6 +30,7 @@
     "check:edit-video-fx": "node scripts/check-edit-video-fx.mjs",
     "check:video-generators": "node scripts/check-video-generators.mjs",
     "check:video-blend-modes": "node scripts/check-video-blend-modes.mjs",
+    "check:video-layer-groups": "node scripts/check-video-layer-groups.mjs",
     "check:timeline-output-preview": "node scripts/check-timeline-output-monitors.mjs && node scripts/check-timeline-output-preview-browser.mjs",
     "check:pane-window-lifecycle": "node scripts/check-pane-window-lifecycle.mjs",
     "check:frontend-command-routing": "node scripts/check-frontend-command-routing.mjs",

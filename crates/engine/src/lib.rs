@@ -5374,6 +5374,7 @@ define_engine_command! {
     /// validates scopes/projections and publishes all three central tables as
     /// one image, or restores its complete prior A state.
     ApplyVideoEffectCatalogPublished {
+        composition_layer_orders: Vec<protocol::VideoCompositionLayerOrder>,
         effect_chains: Vec<VideoEffectChainSummary>,
         effect_presets: Vec<VideoEffectPresetSummary>,
         layer_groups: Vec<VideoLayerGroupSummary>,
@@ -11196,10 +11197,28 @@ impl EngineHandle {
         layer_groups: Vec<VideoLayerGroupSummary>,
         transition_buses: Vec<VideoLayerTransitionBusSummary>,
     ) -> Result<(), String> {
+        self.apply_video_effect_catalog_with_layer_orders(
+            effect_chains,
+            effect_presets,
+            layer_groups,
+            transition_buses,
+            Vec::new(),
+        )
+    }
+
+    pub fn apply_video_effect_catalog_with_layer_orders(
+        &self,
+        effect_chains: Vec<VideoEffectChainSummary>,
+        effect_presets: Vec<VideoEffectPresetSummary>,
+        layer_groups: Vec<VideoLayerGroupSummary>,
+        transition_buses: Vec<VideoLayerTransitionBusSummary>,
+        composition_layer_orders: Vec<protocol::VideoCompositionLayerOrder>,
+    ) -> Result<(), String> {
         let deadline = Instant::now() + Duration::from_secs(2);
         let admission = ProjectSnapshotLoadAdmission::new();
         let (ack, receiver) = mpsc::sync_channel(1);
         self.send(EngineCommand::ApplyVideoEffectCatalogPublished {
+            composition_layer_orders,
             effect_chains,
             effect_presets,
             layer_groups,
@@ -30257,11 +30276,13 @@ impl EngineRuntime {
                 effect_presets,
                 layer_groups,
                 transition_buses,
+                composition_layer_orders,
                 expires_at,
                 admission,
                 ack,
             } => {
-                let rollback = PendingCommandRollback::RestoreVideoEffectCatalog {
+                let rollback = PendingCommandRollback::RestoreVideoLayersAndCompositions {
+                    video_compositions: self.video_compositions.clone(),
                     effect_chains: self.video_effect_chains.clone(),
                     effect_presets: self.video_effect_presets.clone(),
                     layer_groups: self.video_layer_groups.clone(),
@@ -30272,11 +30293,12 @@ impl EngineRuntime {
                     last_error: self.last_error.clone(),
                 };
                 let result = if admission.try_admit_before(expires_at) {
-                    self.apply_video_effect_catalog_state(
+                    self.apply_video_effect_catalog_state_and_layer_orders(
                         effect_chains,
                         effect_presets,
                         layer_groups,
                         transition_buses,
+                        &composition_layer_orders,
                     )
                 } else {
                     Err("Video effect catalog operation expired or was cancelled before engine admission".to_string())
@@ -50736,6 +50758,7 @@ impl EngineRuntime {
     /// Validate a complete authored catalog first, then install the central
     /// tables and the renderer's exact legacy Layer projection together.  The
     /// projection is never independently authored after C1.
+    #[cfg(test)]
     fn apply_video_effect_catalog_state(
         &mut self,
         effect_chains: Vec<VideoEffectChainSummary>,
@@ -50743,8 +50766,26 @@ impl EngineRuntime {
         layer_groups: Vec<VideoLayerGroupSummary>,
         transition_buses: Vec<VideoLayerTransitionBusSummary>,
     ) -> Result<(), String> {
+        self.apply_video_effect_catalog_state_and_layer_orders(
+            effect_chains,
+            effect_presets,
+            layer_groups,
+            transition_buses,
+            &[],
+        )
+    }
+
+    fn apply_video_effect_catalog_state_and_layer_orders(
+        &mut self,
+        effect_chains: Vec<VideoEffectChainSummary>,
+        effect_presets: Vec<VideoEffectPresetSummary>,
+        layer_groups: Vec<VideoLayerGroupSummary>,
+        transition_buses: Vec<VideoLayerTransitionBusSummary>,
+        composition_layer_orders: &[protocol::VideoCompositionLayerOrder],
+    ) -> Result<(), String> {
         let rendered = self.video_snapshot();
         let mut candidate = self.authored_video_snapshot_from_rendered(&rendered);
+        protocol::apply_video_composition_layer_orders(&mut candidate, composition_layer_orders)?;
         candidate.effect_chains = effect_chains;
         candidate.effect_presets = effect_presets;
         candidate.layer_groups = layer_groups;
@@ -50796,6 +50837,23 @@ impl EngineRuntime {
                     )
                 })?;
             install_validated_layer_effect_projection(layer, candidate_layer);
+        }
+        for order in composition_layer_orders {
+            if order.composition_id == 1 {
+                self.video_layers.sort_by_key(|layer| {
+                    order
+                        .layer_ids
+                        .iter()
+                        .position(|id| *id == layer.id)
+                        .unwrap_or(usize::MAX)
+                });
+            } else if let Some(composition) = self
+                .video_compositions
+                .iter_mut()
+                .find(|composition| composition.summary.id == order.composition_id)
+            {
+                composition.summary.layer_ids.clone_from(&order.layer_ids);
+            }
         }
         self.video_effect_chains = candidate.effect_chains;
         self.video_effect_presets = candidate.effect_presets;
@@ -76191,6 +76249,7 @@ mod tests {
             label: "Reserved C1 group".to_string(),
             composition_id: id,
             layer_ids: vec![id],
+            ..Default::default()
         }];
         snapshot.authored_video = Some(snapshot.video.clone());
         snapshot.video = VideoSnapshot::default();
@@ -76493,6 +76552,7 @@ mod tests {
                     label: "Allocator C1 group".to_string(),
                     composition_id: 1,
                     layer_ids: vec![1],
+                    ..Default::default()
                 }];
                 snapshot.video = video;
             }
@@ -78052,6 +78112,7 @@ mod tests {
                                     label: "Allocator C1 group".to_string(),
                                     composition_id: 1,
                                     layer_ids: vec![1],
+                                    ..Default::default()
                                 }],
                                 Vec::new(),
                             ),
@@ -78079,6 +78140,7 @@ mod tests {
                             _ => unreachable!("C1 allocator inventory domain"),
                         };
                     EngineCommand::ApplyVideoEffectCatalogPublished {
+                        composition_layer_orders: Vec::new(),
                         effect_chains,
                         effect_presets,
                         layer_groups,
@@ -90868,18 +90930,21 @@ mod tests {
             label: "Duplicate start group".to_string(),
             composition_id: 1,
             layer_ids: vec![layer_ids[0], layer_ids[1]],
+            ..Default::default()
         };
         let middle_group = VideoLayerGroupSummary {
             id: engine.allocate_video_layer_group_id(),
             label: "Duplicate middle group".to_string(),
             composition_id: custom_composition_id,
             layer_ids: vec![layer_ids[4], layer_ids[3], layer_ids[2]],
+            ..Default::default()
         };
         let end_group = VideoLayerGroupSummary {
             id: engine.allocate_video_layer_group_id(),
             label: "Duplicate end group".to_string(),
             composition_id: 1,
             layer_ids: vec![layer_ids[5], layer_ids[6]],
+            ..Default::default()
         };
         engine
             .apply_video_effect_catalog(
@@ -91098,6 +91163,93 @@ mod tests {
     }
 
     #[test]
+    fn layer_groups_catalog_order_and_controls_are_atomic() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        for id in 1..=3 {
+            add_runtime_test_video_layer(&mut runtime, id, VideoLayerState::default());
+        }
+        let group = VideoLayerGroupSummary {
+            id: VideoLayerGroupId(1),
+            label: "Moved group".into(),
+            composition_id: 1,
+            layer_ids: vec![3, 1],
+            opacity: 0.5,
+            blend_mode: VideoBlendMode::Screen,
+            solo: true,
+            transform: Some(protocol::Transform2D {
+                x: 0.25,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let order = protocol::VideoCompositionLayerOrder {
+            composition_id: 1,
+            layer_ids: vec![3, 1, 2],
+        };
+        runtime
+            .apply_video_effect_catalog_state_and_layer_orders(
+                Vec::new(),
+                Vec::new(),
+                vec![group.clone()],
+                Vec::new(),
+                &[order],
+            )
+            .unwrap();
+        let accepted = runtime.build_persistence_snapshot().authored_video.unwrap();
+        assert_eq!(accepted.layer_groups, vec![group.clone()]);
+        assert_eq!(accepted.compositions[0].layer_ids, vec![3, 1, 2]);
+        assert_eq!(
+            accepted
+                .layers
+                .iter()
+                .map(|layer| layer.id)
+                .collect::<Vec<_>>(),
+            vec![3, 1, 2]
+        );
+        for opacity in [f32::NAN, -0.1, 1.1] {
+            let mut invalid = group.clone();
+            invalid.opacity = opacity;
+            assert!(runtime
+                .apply_video_effect_catalog_state_and_layer_orders(
+                    Vec::new(),
+                    Vec::new(),
+                    vec![invalid],
+                    Vec::new(),
+                    &[protocol::VideoCompositionLayerOrder {
+                        composition_id: 1,
+                        layer_ids: vec![2, 3, 1]
+                    },],
+                )
+                .is_err());
+            assert_eq!(
+                runtime.build_persistence_snapshot().authored_video.as_ref(),
+                Some(&accepted)
+            );
+        }
+        for scale in [0.0, 0.0001, 100.5, f32::NAN] {
+            let mut invalid = group.clone();
+            invalid.transform.as_mut().unwrap().scale_x = scale;
+            assert!(
+                runtime
+                    .apply_video_effect_catalog_state(
+                        Vec::new(),
+                        Vec::new(),
+                        vec![invalid],
+                        Vec::new(),
+                    )
+                    .is_err()
+            );
+        }
+        assert_eq!(
+            runtime.build_persistence_snapshot().authored_video.as_ref(),
+            Some(&accepted)
+        );
+    }
+
+    #[test]
     fn video_effect_chain_c1_lifecycle_removals_prune_all_dangling_scopes() {
         let mut runtime = EngineRuntime::new(DmxOutputConfig {
             enabled: false,
@@ -91195,6 +91347,7 @@ mod tests {
                     label: "C1 lifecycle group".to_string(),
                     composition_id: 2,
                     layer_ids: vec![1],
+                    ..Default::default()
                 }],
                 Vec::new(),
             )
@@ -91284,6 +91437,7 @@ mod tests {
                     label: "Reused layer lifecycle group".to_string(),
                     composition_id: 1,
                     layer_ids: vec![1],
+                    ..Default::default()
                 }],
                 Vec::new(),
             )
@@ -91706,6 +91860,7 @@ mod tests {
         runtime.fail_next_pending_publication = true;
         let (ack, receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::ApplyVideoEffectCatalogPublished {
+            composition_layer_orders: Vec::new(),
             effect_chains: vec![reordered.clone()],
             effect_presets: Vec::new(),
             layer_groups: Vec::new(),
@@ -92398,6 +92553,7 @@ mod tests {
         assert_video_effect_c1_published_command_is_barrier_and_rollback_isolated(
             runtime,
             EngineCommand::ApplyVideoEffectCatalogPublished {
+                composition_layer_orders: Vec::new(),
                 effect_chains: chains,
                 effect_presets: Vec::new(),
                 layer_groups: Vec::new(),
@@ -136993,6 +137149,7 @@ mod tests {
         ];
         let (ack, receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::ApplyVideoEffectCatalogPublished {
+            composition_layer_orders: Vec::new(),
             effect_chains: effect_chains.clone(),
             effect_presets: Vec::new(),
             layer_groups: Vec::new(),
@@ -137091,6 +137248,7 @@ mod tests {
         runtime.fail_next_pending_publication = true;
         let (ack, receiver) = mpsc::sync_channel(1);
         runtime.apply_command(EngineCommand::ApplyVideoEffectCatalogPublished {
+            composition_layer_orders: Vec::new(),
             effect_chains: replacement_chains,
             effect_presets: Vec::new(),
             layer_groups: Vec::new(),

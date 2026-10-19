@@ -584,7 +584,7 @@ const OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID: &str =
     "syndocal.query.output.display.add.authority.v1";
 #[cfg(target_os = "windows")]
 const DESKTOP_ESCAPE_SHORTCUT_EVENT: &str = "desktop-window-forward-escape";
-const PROJECT_FILE_VERSION: u32 = 1;
+const PROJECT_FILE_VERSION: u32 = 2;
 /// Largest integer represented exactly by JavaScript's JSON number model.
 /// Runtime generation is a frontend ordering fence, so approximate values are
 /// forbidden even though Rust can count further.
@@ -3858,6 +3858,8 @@ struct VideoClipSlotAuthoritativeReceiptRecord {
 /// those tables before persistence/history preflight and engine publication.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct VideoEffectCatalogApplyRequest {
+    #[serde(default)]
+    composition_layer_orders: Vec<protocol::VideoCompositionLayerOrder>,
     effect_chains: Vec<VideoEffectChainSummary>,
     effect_presets: Vec<VideoEffectPresetSummary>,
     layer_groups: Vec<VideoLayerGroupSummary>,
@@ -9166,6 +9168,10 @@ fn video_effect_catalog_candidate_snapshot(
         .authored_video
         .clone()
         .unwrap_or_else(|| snapshot.video.clone());
+    protocol::apply_video_composition_layer_orders(
+        &mut authored_video,
+        &request.composition_layer_orders,
+    )?;
     authored_video.effect_chains = request.effect_chains.clone();
     authored_video.effect_presets = request.effect_presets.clone();
     authored_video.layer_groups = request.layer_groups.clone();
@@ -12406,14 +12412,13 @@ fn commit_authoritative_video_effect_catalog(
             state
                 .video_effect_catalog_authoritative_publish_attempts
                 .fetch_add(1, Ordering::AcqRel);
-            state
-                .engine
-                .apply_video_effect_catalog_with_transition_buses(
-                    catalog.effect_chains.clone(),
-                    catalog.effect_presets.clone(),
-                    catalog.layer_groups.clone(),
-                    catalog.transition_buses.clone(),
-                )
+            state.engine.apply_video_effect_catalog_with_layer_orders(
+                catalog.effect_chains.clone(),
+                catalog.effect_presets.clone(),
+                catalog.layer_groups.clone(),
+                catalog.transition_buses.clone(),
+                normalized_request.composition_layer_orders.clone(),
+            )
         },
     )?;
     Ok(VideoEffectCatalogAuthoritativeResult {
@@ -28621,7 +28626,7 @@ fn project_file_for_save_from_parts(
         group.color = snapshot.group_colors.get(&group.id).cloned();
     }
     ProjectFile {
-        version: 1,
+        version: PROJECT_FILE_VERSION,
         app: APP_NAME.to_string(),
         operator_policy: ancillary.operator_policy.clone(),
         custom_profiles,
@@ -42961,6 +42966,7 @@ fn legacy_video_effect_catalog_request(
     video: &protocol::VideoSnapshot,
 ) -> VideoEffectCatalogApplyRequest {
     VideoEffectCatalogApplyRequest {
+        composition_layer_orders: Vec::new(),
         effect_chains: video.effect_chains.clone(),
         effect_presets: video.effect_presets.clone(),
         layer_groups: video.layer_groups.clone(),
@@ -68328,6 +68334,11 @@ fn normalize_user_template_file(
     template.label = template.label.trim().to_string();
     if template.label.is_empty() || template.label.chars().count() > 80 {
         return Err("User template label must contain 1 to 80 characters".to_string());
+    }
+    // Schema 1 differs from 2 only by optional layer-group image controls, which
+    // serde defaults to pass-through; the template file itself is never rewritten.
+    if template.project.version == 1 {
+        template.project.version = PROJECT_FILE_VERSION;
     }
     // Templates are reusable creation aids, not credential carriers.
     template.project.operator_policy = None;
@@ -118155,6 +118166,31 @@ f 1 2 3
     }
 
     #[test]
+    fn user_template_schema_one_projects_load_and_other_versions_are_rejected() {
+        let template = |project_version| {
+            let mut project = empty_project_file();
+            project.version = project_version;
+            UserTemplateFile {
+                version: USER_TEMPLATE_VERSION,
+                app: APP_NAME.to_string(),
+                label: "Legacy".to_string(),
+                project,
+                midi_mappings: Vec::new(),
+                osc_mappings: Vec::new(),
+                dmx_mappings: Vec::new(),
+                dj_track_triggers: Vec::new(),
+            }
+        };
+        let legacy = normalize_user_template_file(template(1)).unwrap();
+        assert_eq!(legacy.project.version, PROJECT_FILE_VERSION);
+        for version in [0, PROJECT_FILE_VERSION + 1] {
+            assert!(normalize_user_template_file(template(version))
+                .unwrap_err()
+                .contains("Unsupported project version"));
+        }
+    }
+
+    #[test]
     fn control_mapping_validation_normalizes_external_midi_files() {
         let mappings = validate_midi_control_mappings(vec![
             MidiControlMapping {
@@ -121086,7 +121122,7 @@ f 1 2 3
     #[test]
     fn project_file_serializes_snapshot_as_pretty_json() {
         let project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: APP_NAME.to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -121117,7 +121153,7 @@ f 1 2 3
         let json = serde_json::to_string_pretty(&project).unwrap();
         let parsed: ProjectFile = serde_json::from_str(&json).unwrap();
 
-        assert!(json.contains("\"version\": 1"));
+        assert!(json.contains(&format!("\"version\": {PROJECT_FILE_VERSION}")));
         assert!(!json.contains("\"operator_policy\""));
         assert_eq!(parsed.app, APP_NAME);
         assert!(parsed.operator_policy.is_none());
@@ -121957,7 +121993,7 @@ f 1 2 3
         future_project["version"] = Value::from(u64::from(PROJECT_FILE_VERSION) + 1);
         assert!(project_and_control_mappings_from_value(future_project)
             .unwrap_err()
-            .contains("Unsupported project version 2"));
+            .contains("Unsupported project version 3"));
 
         let mut future_spatial = serde_json::to_value(project).unwrap();
         future_spatial["future_spatial_contract_probe"] = json!({
@@ -122557,7 +122593,7 @@ f 1 2 3
     #[test]
     fn project_file_validation_rejects_wrong_version_or_app() {
         let mut project = ProjectFile {
-            version: 2,
+            version: PROJECT_FILE_VERSION + 1,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -122569,7 +122605,7 @@ f 1 2 3
             .unwrap_err()
             .contains("Unsupported project version"));
 
-        project.version = 1;
+        project.version = PROJECT_FILE_VERSION;
         validate_project_file(&project).unwrap();
 
         project.app = "Other".to_string();
@@ -122587,7 +122623,7 @@ f 1 2 3
         );
 
         let mut project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -123016,7 +123052,7 @@ f 1 2 3
 
     fn project_with_valid_video_graph() -> ProjectFile {
         ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -123299,7 +123335,7 @@ f 1 2 3
         fixture.mode_name = "4ch".to_string();
         fixture.controls = project_custom_profile().dmx_modes[0].controls.clone();
         let project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: vec![project_custom_profile()],
@@ -123333,7 +123369,7 @@ f 1 2 3
         fixture.profile_name = "Imported Spot".to_string();
         fixture.mode_name = "Standard".to_string();
         let project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -123350,7 +123386,7 @@ f 1 2 3
     #[test]
     fn project_file_validation_rejects_missing_custom_fixture_profile_refs() {
         let mut project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -123572,7 +123608,7 @@ f 1 2 3
     #[test]
     fn project_file_validation_checks_node_graphs() {
         let mut project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -123749,7 +123785,7 @@ f 1 2 3
         fixture.geometries = vec![project_geometry("Body", None)];
         fixture.controls[0].geometry = Some("Beam".to_string());
         let project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -123774,7 +123810,7 @@ f 1 2 3
         ];
         fixture.controls[0].geometry = Some("Body".to_string());
         let project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -123796,7 +123832,7 @@ f 1 2 3
         profile.geometries = vec![project_geometry("Body", None)];
         profile.dmx_modes[0].controls[0].geometry = Some("Beam".to_string());
         let project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: vec![profile],
@@ -123992,7 +124028,7 @@ f 1 2 3
     #[test]
     fn project_file_validation_rejects_invalid_fixture_patches() {
         let mut project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -124033,7 +124069,7 @@ f 1 2 3
     #[test]
     fn project_file_validation_rejects_invalid_fixture_attribute_values() {
         let mut project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -124159,7 +124195,7 @@ f 1 2 3
         });
         fixture.controls[0].functions = vec![function];
         let project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -124178,7 +124214,7 @@ f 1 2 3
     #[test]
     fn project_file_validation_rejects_broken_lighting_references() {
         let mut project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -124302,7 +124338,7 @@ f 1 2 3
     #[test]
     fn project_file_validation_rejects_invalid_effect_body() {
         let mut project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -124366,7 +124402,7 @@ f 1 2 3
     #[test]
     fn legacy_project_effect_without_optional_effect_bodies_is_byte_identical() {
         let project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -124468,7 +124504,7 @@ f 1 2 3
         let mut unsupported = project_fixture(3, "Dimmer Only", 0, 40);
         unsupported.group_ids = vec!["front".to_string()];
         let mut project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -124527,7 +124563,7 @@ f 1 2 3
             color_mapping: None,
         };
         let mut project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -125950,7 +125986,7 @@ f 1 2 3
     #[test]
     fn project_file_validation_rejects_duplicate_timeline_key_times() {
         let mut project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
@@ -126081,7 +126117,7 @@ f 1 2 3
     #[test]
     fn project_file_validation_checks_dmx_output_routes() {
         let mut project = ProjectFile {
-            version: 1,
+            version: PROJECT_FILE_VERSION,
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),

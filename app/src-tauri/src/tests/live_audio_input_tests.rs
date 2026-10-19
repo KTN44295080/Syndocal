@@ -2955,6 +2955,7 @@ mod live_audio_input_tests {
         event_value: f32,
     ) -> VideoEffectCatalogApplyRequest {
         VideoEffectCatalogApplyRequest {
+            composition_layer_orders: Vec::new(),
             effect_chains: vec![c1_catalog_chain(
                 harness,
                 VideoEffectScope::Layer { layer_id },
@@ -3601,6 +3602,7 @@ mod live_audio_input_tests {
         let expected_candidate = video_effect_catalog_candidate_snapshot(
             before_snapshot,
             &VideoEffectCatalogApplyRequest {
+                composition_layer_orders: Vec::new(),
                 effect_chains: applied.catalog.effect_chains.clone(),
                 effect_presets: applied.catalog.effect_presets.clone(),
                 layer_groups: applied.catalog.layer_groups.clone(),
@@ -8341,6 +8343,7 @@ mod live_audio_input_tests {
             .id;
         let group_id = protocol::VideoLayerGroupId(0);
         let request = VideoEffectCatalogApplyRequest {
+            composition_layer_orders: Vec::new(),
             effect_chains: vec![
                 c1_catalog_chain(
                     &harness,
@@ -8394,6 +8397,7 @@ mod live_audio_input_tests {
                 label: "C1 group".to_string(),
                 composition_id,
                 layer_ids: vec![layer_id],
+                ..Default::default()
             }],
             transition_buses: Vec::new(),
         };
@@ -8440,6 +8444,189 @@ mod live_audio_input_tests {
         assert_eq!(persisted.effect_chains, result.catalog.effect_chains);
         assert_eq!(persisted.effect_presets, result.catalog.effect_presets);
         assert_eq!(persisted.layer_groups, result.catalog.layer_groups);
+    }
+
+    #[test]
+    fn video_effect_catalog_layer_groups_are_ticketed_undoable_and_reorder_atomically() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let (layer_id, _, _, _) = seed_video_clip_slot_layer(&harness);
+        let (second_id, _, _, _) = seed_video_clip_slot_layer(&harness);
+        c1_stabilize_fixture_authority(&harness);
+        let video = || {
+            harness
+                .state
+                .engine
+                .persistence_snapshot()
+                .unwrap()
+                .authored_video
+                .unwrap()
+        };
+        let before = video();
+        let mut order = before
+            .compositions
+            .iter()
+            .find(|composition| composition.id == 1)
+            .unwrap()
+            .layer_ids
+            .clone();
+        order.reverse();
+        let mut request = VideoEffectCatalogApplyRequest {
+            composition_layer_orders: vec![protocol::VideoCompositionLayerOrder {
+                composition_id: 1,
+                layer_ids: order.clone(),
+            }],
+            effect_chains: before.effect_chains.clone(),
+            effect_presets: before.effect_presets.clone(),
+            transition_buses: before.transition_buses.clone(),
+            layer_groups: vec![VideoLayerGroupSummary {
+                id: protocol::VideoLayerGroupId(0),
+                label: "Group".into(),
+                composition_id: 1,
+                layer_ids: vec![second_id],
+                opacity: 0.5,
+                blend_mode: VideoBlendMode::Screen,
+                solo: true,
+                transform: Some(protocol::Transform2D {
+                    x: 0.25,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+        };
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        let created = apply_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            request.clone(),
+            84_025,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .unwrap();
+        let created_image = video();
+        request.layer_groups = created.catalog.layer_groups;
+        request.layer_groups[0].label = "Renamed".into();
+        request.layer_groups[0].layer_ids = vec![layer_id];
+        request.layer_groups[0].bypassed = true;
+        request.composition_layer_orders.clear();
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        apply_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            request.clone(),
+            84_026,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .unwrap();
+        let grouped = video();
+        assert_eq!(grouped.compositions[0].layer_ids, order);
+        assert_eq!(grouped.layer_groups[0].label, "Renamed");
+        assert!(grouped.layer_groups[0].bypassed);
+        request.layer_groups.clear();
+        let (epoch, revision, hash) = b3_authority_arguments(&harness);
+        apply_video_effect_catalog_authoritative_command_impl(
+            &harness.state,
+            request,
+            84_027,
+            epoch,
+            revision,
+            hash,
+            MEDIA_ASSET_A6_OWNER.to_string(),
+            None,
+        )
+        .unwrap();
+        let ungrouped = video();
+        assert!(ungrouped.layer_groups.is_empty());
+        for (undo, expected) in [
+            (true, &grouped),
+            (true, &created_image),
+            (true, &before),
+            (false, &created_image),
+            (false, &grouped),
+            (false, &ungrouped),
+        ] {
+            let status = root_scene_block_history_status(&harness);
+            let state = &harness.state;
+            let _external = lock_project_external_command_admission(state).unwrap();
+            let mut coordinator = lock_project_coordinator(state).unwrap();
+            navigate_project_history_with_coordinator(
+                state,
+                &mut coordinator,
+                undo,
+                Some(status.project_epoch),
+                if undo {
+                    status.undo_entry_id
+                } else {
+                    status.redo_entry_id
+                },
+                if undo {
+                    Some(status.checkpoint_hash)
+                } else {
+                    status.redo_checkpoint_hash
+                },
+                |state, prepared, coordinator| {
+                    replace_prepared_project_snapshot_with_coordinator_and_platform(
+                        state,
+                        prepared,
+                        coordinator,
+                        project_replacement_plan!(
+                            ProjectReplacementCoordinatorEffect::RevisionMutation,
+                            false,
+                            no_project_replacement_validation,
+                            no_project_replacement_capture,
+                            None
+                        ),
+                        &RootSceneBlockHistoryPlatform,
+                    )
+                    .map(|(result, (), _)| result)
+                },
+            )
+            .unwrap();
+            drop(coordinator);
+            let actual = video();
+            assert_eq!(
+                actual.layer_groups, expected.layer_groups,
+                "undo={undo} groups"
+            );
+            assert_eq!(
+                actual.compositions, expected.compositions,
+                "undo={undo} compositions"
+            );
+            assert_eq!(
+                actual
+                    .layers
+                    .iter()
+                    .map(|layer| layer.id)
+                    .collect::<Vec<_>>(),
+                expected
+                    .layers
+                    .iter()
+                    .map(|layer| layer.id)
+                    .collect::<Vec<_>>(),
+                "undo={undo} layer order"
+            );
+            assert_eq!(actual.layers, expected.layers, "undo={undo} layers");
+            assert_eq!(
+                actual.effect_chains, expected.effect_chains,
+                "undo={undo} chains"
+            );
+            assert_eq!(actual.outputs, expected.outputs, "undo={undo} outputs");
+            // auto_vj carries runtime-only counters; compare the authored catalog and order.
+            assert_eq!(
+                actual.effect_presets, expected.effect_presets,
+                "undo={undo} presets"
+            );
+            assert_eq!(
+                actual.transition_buses, expected.transition_buses,
+                "undo={undo} buses"
+            );
+        }
+        b3_assert_authority_matches_persistence(&harness);
     }
 
     #[test]
@@ -8993,6 +9180,7 @@ mod live_audio_input_tests {
         assert_eq!(harness.mutation_baseline().revision, baseline.revision);
 
         let request = VideoEffectCatalogApplyRequest {
+            composition_layer_orders: Vec::new(),
             effect_chains: vec![
                 c1_catalog_chain(
                     &harness,
@@ -9114,6 +9302,7 @@ mod live_audio_input_tests {
         apply_video_effect_catalog_authoritative_command_impl(
             &harness.state,
             VideoEffectCatalogApplyRequest {
+                composition_layer_orders: Vec::new(),
                 effect_chains: Vec::new(),
                 effect_presets: Vec::new(),
                 layer_groups: Vec::new(),
@@ -9580,6 +9769,7 @@ mod live_audio_input_tests {
             layer_id: second_layer_id,
         };
         let request = VideoEffectCatalogApplyRequest {
+            composition_layer_orders: Vec::new(),
             effect_chains: vec![c1_catalog_chain(
                 &harness,
                 VideoEffectScope::Transition {

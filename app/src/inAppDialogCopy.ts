@@ -162,7 +162,7 @@ export const removeFxPresetDialog = (label: string): ConfirmDialogOptions => ({
 
 export const removeLayerGroupDialog = (label: string): ConfirmDialogOptions => ({
   title: `Remove layer group "${label}"?`,
-  message: "The group and its Group FX chain are removed.",
+  message: "The group, its FX and transitions that require it are removed. Its layers remain in the composition.",
   confirmLabel: "Remove",
   tone: "danger",
 });

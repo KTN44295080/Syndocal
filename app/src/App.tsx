@@ -5048,7 +5048,7 @@ export default function App() {
             stages: [{ enabled: true, label: "Viewport Gain", effect: { kind: "isf", effect: structuredClone(c1FixtureEffect) } }],
           },
         }],
-        layer_groups: [{ id: 6_401, label: "Viewport Group", composition_id: composition.id, layer_ids: [layers[0].id] }],
+        layer_groups: [{ enabled: true, opacity: 1, blend_mode: "Normal", solo: false, bypassed: false, transform: null, id: 6_401, label: "Viewport Group", composition_id: composition.id, layer_ids: [layers[0].id] }],
         transition_buses: [{
           id: 6_601,
           label: "Viewport A/B",
@@ -29004,6 +29004,19 @@ export default function App() {
                 asset={selectedMediaLibraryAsset()}
                 availabilityById={mediaAssetAvailabilityById()}
                 layerFx={videoLayerListProps}
+                groupEffects={{
+                  get catalog() { return videoEffectCatalog(); },
+                  get compositions() { return snapshot().video.compositions; },
+                  get outputs() { return snapshot().video.outputs; },
+                  get transitionRuntime() { return videoTransitionRuntime(); },
+                  get busy() { return isfEventPulseBusy(); },
+                  onApplyCatalog: applyVideoEffectCatalog,
+                  onImportIsf: importVideoEffectScopeIsf,
+                  onApplyPreset: applyVideoEffectPreset,
+                  onRemoveChain: removeVideoEffectChain,
+                  onLaunchTransition: launchVideoLayerTransitionBus,
+                  onReleaseTransition: releaseVideoLayerTransitionBus,
+                }}
               />
             ) : workspaceTab() === "control" && controlMode() === "live" ? (
               <TimelineSourceShelf

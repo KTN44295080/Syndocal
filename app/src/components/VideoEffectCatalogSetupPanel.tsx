@@ -1,6 +1,7 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { CompositionSummary, VideoEffectCatalog } from "../types";
 import { confirmDialog } from "../inAppDialog";
+import { defaultVideoGroupMix, removeVideoGroup } from "../videoLayerGroups";
 import { removeFxPresetDialog, removeLayerGroupDialog } from "../inAppDialogCopy";
 
 interface VideoEffectCatalogSetupPanelProps {
@@ -33,6 +34,7 @@ export function VideoEffectCatalogSetupPanel(props: VideoEffectCatalogSetupPanel
     return props.onApply({
       ...props.catalog,
       layer_groups: [...props.catalog.layer_groups, {
+        ...defaultVideoGroupMix,
         id: 0,
         label,
         composition_id: selectedComposition.id,
@@ -69,11 +71,7 @@ export function VideoEffectCatalogSetupPanel(props: VideoEffectCatalogSetupPanel
   };
   const removeGroup = async (groupId: number, label: string) => {
     if (!await confirmDialog(removeLayerGroupDialog(label))) return;
-    return props.onApply({
-      ...props.catalog,
-      layer_groups: props.catalog.layer_groups.filter((entry) => entry.id !== groupId),
-      effect_chains: props.catalog.effect_chains.filter((entry) => entry.scope.scope !== "group" || entry.scope.group_id !== groupId),
-    });
+    return props.onApply(removeVideoGroup(props.catalog, groupId));
   };
 
   return (

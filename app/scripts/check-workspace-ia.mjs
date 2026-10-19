@@ -141,7 +141,7 @@ let currentStep = "startup";
 try {
   await mkdir(evidenceDir, { recursive: true });
   const reservation = createTcpServer();
-  await new Promise((done, reject) => { reservation.once("error", reject); reservation.listen(0, "127.0.0.1", done); });
+  await new Promise((done, reject) => { reservation.once("error", reject); reservation.listen(Number(process.env.SYNDOCAL_IA_PORT ?? 0), "127.0.0.1", done); });
   const vitePort = reservation.address().port;
   await new Promise(done => reservation.close(done));
   server = await createServer({ root: appRoot, cacheDir: resolve(evidenceDir, "ia-vite-cache"), server: { host: "127.0.0.1", port: vitePort, strictPort: true }, clearScreen: false });
@@ -151,8 +151,9 @@ try {
   await server.transformRequest("/src/App.tsx");
   const origin = server.resolvedUrls.local[0];
   profile = await mkdtemp(join(tmpdir(), "syndocal-ia-check-"));
-  browser = spawn(browserPath, ["--headless=new", "--disable-gpu", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--no-first-run", "--no-default-browser-check", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
-  const port = await waitFor(async () => Number((await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]), "owned browser debugger");
+  browser = spawn(browserPath, ["--headless=new", "--disable-gpu", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--no-first-run", "--no-default-browser-check", `--remote-debugging-port=${process.env.SYNDOCAL_CDP_PORT ?? 0}`, `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
+  const port = process.env.SYNDOCAL_CDP_PORT ? Number(process.env.SYNDOCAL_CDP_PORT) : await waitFor(async () => Number((await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]), "owned browser debugger");
+  await waitFor(async () => (await fetch(`http://127.0.0.1:${port}/json/version`)).ok, "owned browser ready");
   const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   let target = targets.find(x => x.type === "page");
   const connect = async () => { cdp = new Cdp(); await cdp.connect(target.webSocketDebuggerUrl); await cdp.send("Page.enable"); await cdp.send("Runtime.enable"); await cdp.send("Page.bringToFront"); };

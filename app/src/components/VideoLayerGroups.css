@@ -1,0 +1,11 @@
+.videoLayerGroupsPanel, .videoGroupInspector { display: grid; gap: 12px; min-width: 0; padding: 12px; color: var(--theme-text); background: var(--theme-panel); font-family: var(--theme-font-ui); font-size: 14px; }
+.videoLayerGroupsPanel h3 { margin: 0; font-family: var(--theme-font-ui); font-size: 14px; font-weight: 600; }
+.videoLayerGroupsPanel label, .videoGroupInspector label { display: grid; gap: 5px; min-width: 0; font-size: 14px; }
+.videoLayerGroupsPanel fieldset, .videoGroupInspector fieldset { display: grid; gap: 10px; min-width: 0; border: 1px solid var(--theme-line); padding: 10px; }
+.videoLayerGroupsPanel input, .videoLayerGroupsPanel select, .videoLayerGroupsPanel button, .videoGroupInspector input, .videoGroupInspector select, .videoGroupInspector button { min-height: 44px; min-width: 0; font-size: 14px; font-family: var(--theme-font-ui); }
+.videoLayerGroupsPanel .buttonRow { flex-wrap: wrap; }
+.videoGroupRange, .videoGroupInspectorMix, .videoGroupTransformFields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.videoGroupManagementRow { display: grid; gap: 6px; padding-block: 8px; border-block-end: 1px solid var(--theme-line); }
+.videoGroupInspector .checkbox { display: flex; align-items: center; gap: 8px; }
+.videoGroupLearnLimit { color: var(--theme-muted); font-size: 13px; margin: 0; }
+.videoPerformInspectorBody > .videoGroupInspector { height: 100%; box-sizing: border-box; overflow: auto; align-content: start; }
