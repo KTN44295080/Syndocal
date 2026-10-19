@@ -6,10 +6,14 @@ import "./VideoFxParameterEditor.css";
 import { VideoFxPointPad } from "./VideoFxPointPad";
 import { translateUiText } from "../uiLocalization";
 import type { FxLiveSession } from "../createFxLiveSession";
+import { controlMappingTargetData, type ControlMappingTarget } from "../controlMappingLearn";
 
 interface VideoFxParameterEditorProps {
   projectEpoch?: number;
   layerId: number;
+  /** Stable effect-stage id. With it, Float/Long/Bool/Event controls are MIDI-learnable
+   * (never while auditioning, when the controls edit a Preview-only draft). */
+  stageId?: number | null;
   liveSession?: FxLiveSession;
   /** Overrides the live Undo, for example with a Preview audition's own history. */
   history?: { canUndo: () => boolean; undo: () => unknown | Promise<unknown> };
@@ -57,6 +61,17 @@ export function VideoFxParameterEditor(props: VideoFxParameterEditorProps) {
     const next = [...control.value] as FxValue; next[component] = value;
     void props.onSetControl(control.name, boundedFxValue(control, next));
   };
+  const mapTarget = (control: VideoIsfControlSummary): ControlMappingTarget | null =>
+    props.stageId === null || props.stageId === undefined || props.auditioning
+      || !(control.kind === "Float" || control.kind === "Long" || control.kind === "Bool" || control.kind === "Event")
+      ? null
+      : {
+        action: "VideoIsfParam",
+        label: `Layer ${props.layerId} ${fxControlLabel(control, props.stage.source)}`,
+        layer_id: props.layerId,
+        isf_stage_id: props.stageId,
+        attribute: control.name,
+      };
   const colorHex = (control: VideoIsfControlSummary) => `#${control.value.slice(0, 3).map((value) =>
     Math.round(Math.max(0, Math.min(1, value)) * 255).toString(16).padStart(2, "0")).join("")}`;
   const recall = () => {
@@ -95,15 +110,15 @@ export function VideoFxParameterEditor(props: VideoFxParameterEditorProps) {
             <output>{fxControlValueText(control, props.stage)}</output>
           </div>
           <Switch>
-            <Match when={control.kind === "Event"}><button type="button" disabled={disabled() || props.auditioning} title={props.auditioning ? "Event controls fire on Program, so they are off during an audition." : undefined} aria-label={fxControlLabel(control, props.stage.source)} onClick={() => void props.onTriggerEvent(control.name)}>Trigger</button></Match>
-            <Match when={control.kind === "Bool"}><button type="button" disabled={disabled()} aria-label={fxControlLabel(control, props.stage.source)} aria-pressed={control.value[0] >= 0.5} onClick={() => setComponent(control, 0, control.value[0] >= 0.5 ? 0 : 1)}>{control.value[0] >= 0.5 ? "On" : "Off"}</button></Match>
+            <Match when={control.kind === "Event"}><button type="button" disabled={disabled() || props.auditioning} {...controlMappingTargetData(mapTarget(control))} title={props.auditioning ? "Event controls fire on Program, so they are off during an audition." : undefined} aria-label={fxControlLabel(control, props.stage.source)} onClick={() => void props.onTriggerEvent(control.name)}>Trigger</button></Match>
+            <Match when={control.kind === "Bool"}><button type="button" disabled={disabled()} {...controlMappingTargetData(mapTarget(control))} aria-label={fxControlLabel(control, props.stage.source)} aria-pressed={control.value[0] >= 0.5} onClick={() => setComponent(control, 0, control.value[0] >= 0.5 ? 0 : 1)}>{control.value[0] >= 0.5 ? "On" : "Off"}</button></Match>
             <Match when={control.kind === "Color"}>
               <div class="videoFxColorPicker"><input type="color" disabled={disabled()} aria-label={fxControlLabel(control, props.stage.source)} value={colorHex(control)} onChange={(event) => {
                 const hex = event.currentTarget.value;
                 void props.onSetControl(control.name, boundedFxValue(control, [parseInt(hex.slice(1, 3), 16) / 255, parseInt(hex.slice(3, 5), 16) / 255, parseInt(hex.slice(5, 7), 16) / 255, control.value[3]]));
               }} /><label><span>Alpha</span><input type="range" min={control.minimum[3]} max={control.maximum[3]} step="any" value={control.value[3]} disabled={disabled()} aria-label="Alpha" onChange={(event) => setComponent(control, 3, Number(event.currentTarget.value))} /></label></div>
             </Match>
-            <Match when={control.kind === "Long" && control.values.length > 0}><select disabled={disabled()} aria-label={fxControlLabel(control, props.stage.source)} value={control.value[0]} onChange={(event) => setComponent(control, 0, Number(event.currentTarget.value))}><For each={control.values}>{(value, index) => <option value={value}>{control.labels[index()] ?? value}</option>}</For></select></Match>
+            <Match when={control.kind === "Long" && control.values.length > 0}><select disabled={disabled()} {...controlMappingTargetData(mapTarget(control))} aria-label={fxControlLabel(control, props.stage.source)} value={control.value[0]} onChange={(event) => setComponent(control, 0, Number(event.currentTarget.value))}><For each={control.values}>{(value, index) => <option value={value}>{control.labels[index()] ?? value}</option>}</For></select></Match>
             <Match when={control.kind === "Point2d"}>
               <div class="videoFxPointPicker" role="group" aria-label={fxControlLabel(control, props.stage.source)}>
                 <VideoFxPointPad control={control} label={fxControlLabel(control, props.stage.source)} disabled={disabled()}
@@ -111,7 +126,7 @@ export function VideoFxParameterEditor(props: VideoFxParameterEditorProps) {
                 <For each={[0, 1]}>{(component) => <label><span>{component === 0 ? "X" : "Y"}</span><input type="range" min={control.minimum[component]} max={control.maximum[component]} step="any" value={control.value[component]} disabled={disabled()} aria-label={`${fxControlLabel(control, props.stage.source)} ${component === 0 ? "X" : "Y"}`} onChange={(event) => setComponent(control, component, Number(event.currentTarget.value))} /><input type="number" min={control.minimum[component]} max={control.maximum[component]} step="0.01" value={control.value[component]} disabled={disabled()} aria-label={`${fxControlLabel(control, props.stage.source)} ${component === 0 ? "X" : "Y"}`} onChange={(event) => setComponent(control, component, Number(event.currentTarget.value))} /></label>}</For>
               </div>
             </Match>
-            <Match when={control.kind === "Float" || control.kind === "Long"}><div class="videoFxScalarPicker"><input type="range" min={control.minimum[0]} max={control.maximum[0]} step={control.kind === "Long" ? 1 : "any"} value={control.value[0]} aria-valuetext={fxControlValueText(control, props.stage)} disabled={disabled() || Boolean(control.tempo_sync)} aria-label={fxControlLabel(control, props.stage.source)} onChange={(event) => setComponent(control, 0, Number(event.currentTarget.value))} /><input type="number" min={Number((control.minimum[0] * fxDisplayScale(control, props.stage)).toFixed(3))} max={Number((control.maximum[0] * fxDisplayScale(control, props.stage)).toFixed(3))} step={control.kind === "Long" ? 1 : fxDisplayScale(control, props.stage) === 1 ? 0.01 : 1} value={Number((control.value[0] * fxDisplayScale(control, props.stage)).toFixed(3))} disabled={disabled() || Boolean(control.tempo_sync)} aria-label={fxControlLabel(control, props.stage.source)} onChange={(event) => setComponent(control, 0, Number(event.currentTarget.value) / fxDisplayScale(control, props.stage))} /></div></Match>
+            <Match when={control.kind === "Float" || control.kind === "Long"}><div class="videoFxScalarPicker"><input type="range" {...controlMappingTargetData(mapTarget(control))} min={control.minimum[0]} max={control.maximum[0]} step={control.kind === "Long" ? 1 : "any"} value={control.value[0]} aria-valuetext={fxControlValueText(control, props.stage)} disabled={disabled() || Boolean(control.tempo_sync)} aria-label={fxControlLabel(control, props.stage.source)} onChange={(event) => setComponent(control, 0, Number(event.currentTarget.value))} /><input type="number" min={Number((control.minimum[0] * fxDisplayScale(control, props.stage)).toFixed(3))} max={Number((control.maximum[0] * fxDisplayScale(control, props.stage)).toFixed(3))} step={control.kind === "Long" ? 1 : fxDisplayScale(control, props.stage) === 1 ? 0.01 : 1} value={Number((control.value[0] * fxDisplayScale(control, props.stage)).toFixed(3))} disabled={disabled() || Boolean(control.tempo_sync)} aria-label={fxControlLabel(control, props.stage.source)} onChange={(event) => setComponent(control, 0, Number(event.currentTarget.value) / fxDisplayScale(control, props.stage))} /></div></Match>
           </Switch>
           <Show when={fxIsTimeControl(control, props.stage)}>
             <div class="videoFxTempoSync" data-fx-tempo-sync={control.tempo_sync ? control.tempo_sync.unit : "hz"} data-fx-tempo-control={control.name}>

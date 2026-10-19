@@ -1255,6 +1255,8 @@ fn dvc_midi_mapping(
         video_param: None,
         cue_point_index: None,
         duration_ms: None,
+        clip_slot_id: None,
+        isf_stage_id: None,
         feedback: None,
         low: 0.0,
         high: 1.0,
@@ -10408,6 +10410,8 @@ mod tests {
                 }),
                 low: 0.0,
                 high: 1.0,
+                clip_slot_id: None,
+                isf_stage_id: None,
             }
         );
         assert!(matches!(

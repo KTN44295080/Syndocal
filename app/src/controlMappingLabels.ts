@@ -58,5 +58,13 @@ export const controlMappingTargetLabel = (mapping: DmxControlMapping | MidiContr
     case "AllBlackout": return "All blackout";
     case "VideoBlackout": return "Video blackout";
     case "ClearFixtureFlags": return `Clear fixture ${normalizeFixtureFlagClearKind(mapping.attribute)}`;
+    case "VideoClipSlotTrigger": return `Video Layer ${mapping.layer_id} clip slot ${"clip_slot_id" in mapping ? mapping.clip_slot_id : "?"}`;
+    case "VideoTake": return "Video Take";
+    case "VideoLayerStop": return `Video Layer ${mapping.layer_id} stop`;
+    case "VideoLayerBlendMode": return `Video Layer ${mapping.layer_id} blend`;
+    case "VideoTransitionKind": return "Video transition type";
+    case "VideoTransitionTime": return "Video transition time";
+    case "VideoIsfStageEnabled": return `Video Layer ${mapping.layer_id} FX stage ${"isf_stage_id" in mapping ? mapping.isf_stage_id : "?"} enabled`;
+    case "VideoIsfParam": return `Video Layer ${mapping.layer_id} FX stage ${"isf_stage_id" in mapping ? mapping.isf_stage_id : "?"} ${mapping.attribute ?? "control"}`;
   }
 };

@@ -1,4 +1,5 @@
 import type { FaderValueMap } from "./createFaderValueController";
+import { performRoutedInputFromPayload, type PerformRoutedInput } from "./controlMappingPerform";
 
 export interface MidiFaderConnection {
   schema_version: 1;
@@ -15,10 +16,14 @@ export function midiFaderConnection(value: unknown): MidiFaderConnection {
 }
 
 /** Native events project accepted input, not proof of physical output.
- * Exact connection and sequence fences reject late/reordered input. */
+ * Exact connection and sequence fences reject late/reordered input. Fader
+ * values and renderer-routed Perform inputs share one connection and one
+ * sequence, as the native worker numbers them in a single series. */
 export function createMidiFaderInput(options: {
   projectEpoch: () => number;
   apply: (values: FaderValueMap) => void;
+  /** Runs an accepted Perform input through the renderer's own commands. */
+  applyRouted?: (input: PerformRoutedInput) => void;
 }) {
   let connection: MidiFaderConnection | null = null;
   let sequence = 0;
@@ -44,5 +49,17 @@ export function createMidiFaderInput(options: {
     options.apply(incoming);
     return true;
   };
-  return { setConnection, accept };
+  const acceptRouted = (payload: unknown): boolean => {
+    if (!connection || !options.applyRouted || !payload || typeof payload !== "object") return false;
+    const v = payload as Record<string, unknown>;
+    if (v.schema_version !== 1 || v.project_epoch !== connection.project_epoch
+      || v.project_epoch !== options.projectEpoch() || v.input_session !== connection.input_session
+      || !positive(v.sequence) || v.sequence <= sequence) return false;
+    const input = performRoutedInputFromPayload(v.input);
+    if (!input) return false;
+    sequence = v.sequence;
+    options.applyRouted(input);
+    return true;
+  };
+  return { setConnection, accept, acceptRouted };
 }

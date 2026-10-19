@@ -4,6 +4,8 @@ import type { VideoEffectCatalog, VideoIsfControlSummary, VideoIsfEffectStageSum
 import { cloneFxStage, fxControlValueText, replaceFxStage } from "../fxParameterModel";
 import { moveFxStageTo } from "../fxAuditionModel";
 import { createFxStageReorder } from "../createFxStageReorder";
+import { controlMappingTargetData } from "../controlMappingLearn";
+import { isfStageIdForIndex } from "../performControlDispatcher";
 import { VideoFxParameterEditor } from "./VideoFxParameterEditor";
 import { VideoFxLiveSafety } from "./VideoFxLiveSafety";
 import { VideoFxAuditionBar } from "./VideoFxAuditionBar";
@@ -31,6 +33,8 @@ interface QuickStage {
   index: number;
   label: string;
   enabled: boolean;
+  /** Stable effect-stage id from the layer's catalog chain; MIDI targets use it, never the index. */
+  stageId: number | null;
   stage: VideoIsfEffectStageSummary;
   controls: (VideoIsfControlSummary & { id: string })[];
 }
@@ -64,6 +68,7 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
         index,
         label: stage.label,
         enabled: stage.enabled,
+        stageId: isfStageIdForIndex(props.effectCatalog, layer.id, index),
         stage,
         // The shader's declared order supplies its primary operator controls.
         controls: stage.controls.map((control) => ({ ...control, id: control.name })),
@@ -121,8 +126,7 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
         </button>
       </header>
       <div class="videoPerformQuickFxBody" data-fx-empty={stages.length === 0}>
-        <div class="videoPerformQuickFxChain" role="list" aria-label="Selected layer effect chain"
-          title="ISF stage MIDI Learn is unavailable in the existing control model.">
+        <div class="videoPerformQuickFxChain" role="list" aria-label="Selected layer effect chain">
           <Show when={stages.length > 0} fallback={
             <p class="emptyState">{props.layer ? "No layer FX. Add effects in the full editor." : "Select a layer for Quick FX."}</p>
           }>
@@ -142,6 +146,9 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
                   <button type="button" class="videoPerformQuickFxSwitch" data-perform-fx-bypass aria-pressed={stage.enabled}
                     aria-label={`${stage.label} FX enabled for ${props.layer?.label ?? "Video layer"} (layer ${stage.layerId})`}
                     classList={{ active: stage.enabled }} disabled={busy()}
+                    {...controlMappingTargetData(!audition() && stage.stageId !== null
+                      ? { action: "VideoIsfStageEnabled", label: `${props.layer?.label ?? "Layer"} FX ${stage.index + 1}`, layer_id: stage.layerId, isf_stage_id: stage.stageId }
+                      : null)}
                     onClick={() => void setEnabled(stage.layerId, stage.index, !stage.enabled)}>
                     <span class="videoPerformQuickFxKnob" aria-hidden="true" />
                     <span>{stage.enabled ? "On" : "Off"}</span>
@@ -174,7 +181,7 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
             {(stage) => (
               <VideoFxParameterEditor stage={stage().stage} identity={stage().id} busy={busy()} locale={props.locale} bpm={props.bpm}
                 projectEpoch={props.projectEpoch} layerId={stage().layerId} liveSession={props.liveSession} history={history()}
-                auditioning={Boolean(audition())}
+                auditioning={Boolean(audition())} stageId={stage().stageId}
                 effectCatalog={props.effectCatalog} onApplyEffectCatalog={props.onApplyEffectCatalog}
                 onSetStage={(replacement) => {
                   const effect = shownEffect();

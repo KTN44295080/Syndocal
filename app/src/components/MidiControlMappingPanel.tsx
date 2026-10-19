@@ -20,6 +20,7 @@ import type {
 } from "../types";
 import { formatMidiFeedbackMessage, type MidiFeedbackOutputStatus } from "../midiLearnFeedback";
 import { midiContinuousActions } from "../controlMappingLearn";
+import { beatDivisionLabel, isPerformRoutedAction } from "../controlMappingPerform";
 
 interface MidiControlMappingPanelProps {
   snapshot: EngineSnapshot;
@@ -543,10 +544,14 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
           {(mapping, index) => (
             <div class="timelineItem">
               <strong>
-                <span>{midiInputKind(mapping.message)}</span>
-                <Show when={mapping.message !== "PitchBend"}>{" "}<span data-no-localize>{mapping.number}</span></Show>
+                <Show when={mapping.message === "BeatDivision"} fallback={<>
+                  <span>{midiInputKind(mapping.message)}</span>
+                  <Show when={mapping.message !== "PitchBend"}>{" "}<span data-no-localize>{mapping.number}</span></Show>
+                </>}>
+                  <span>Beat division</span>{" "}<span>{beatDivisionLabel(mapping.number)}</span>
+                </Show>
               </strong>
-              <span>{mapping.channel === null || mapping.channel === undefined ? "Any ch" : `Ch ${mapping.channel + 1}`} / {props.mappingTargetLabel(mapping)}</span>
+              <span>{mapping.message === "BeatDivision" ? "" : `${mapping.channel === null || mapping.channel === undefined ? "Any ch" : `Ch ${mapping.channel + 1}`} / `}{props.mappingTargetLabel(mapping)}</span>
               <Show when={(mapping.message === "ControlChange" || mapping.message === "RelativeControlChange") && midiContinuousActions.has(mapping.action)}>
                 <label class="checkbox mappingRelativeToggle" title="Turn on for endless knobs (DAW mode V-Pots) that send up/down steps instead of a position">
                   <input
@@ -572,6 +577,8 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
                   </span>
                 )}
               </Show>
+              {/* A beat division has no controller to echo to, and Perform state lives in the renderer. */}
+              <Show when={mapping.message !== "BeatDivision" && !isPerformRoutedAction(mapping.action)}>
               <details class="mappingFeedbackEditor">
                 <summary>{mapping.feedback ? "Edit feedback" : "Add feedback"}</summary>
                 <div class="mappingFeedbackEditorBody">
@@ -684,6 +691,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
                   </Show>
                 </div>
               </details>
+              </Show>
               <button onClick={() => props.onRemoveMapping(index())}>Remove</button>
             </div>
           )}

@@ -9,8 +9,8 @@ use protocol::{
     video_output_mapping_field_value, CueId, CueLiveDirection, EffectId, EngineSnapshot, FixtureId,
     LearnedMidiControl, MidiControlAction, MidiControlMapping, MidiControlMessage,
     MidiFeedbackMessage, MidiInputSummary, MidiOutputSummary, NodeGraphId,
-    OperatorSelectionContext, TimelineLoopScale, VideoLayerId, VideoLayerState, VideoOutputId,
-    VideoParam,
+    OperatorSelectionContext, RendererRoutedInput, TimelineLoopScale, VideoLayerId,
+    VideoLayerState, VideoOutputId, VideoParam,
 };
 use thiserror::Error;
 
@@ -435,6 +435,11 @@ pub enum MidiControlEvent {
     ClearFixtureFlags {
         kind: String,
     },
+    /// An accepted input for a Perform control whose commands the renderer
+    /// owns (clip slots, Take, transition and ISF state). The native worker
+    /// forwards it without issuing an engine command, so the renderer's
+    /// ticketed commands stay the only path to the runtime.
+    RendererRouted(RendererRoutedInput),
 }
 
 macro_rules! control_plane_variant_inventory {
@@ -475,6 +480,7 @@ control_plane_variant_inventory!(
     ProgramChange => MidiControlMessage::ProgramChange,
     PitchBend => MidiControlMessage::PitchBend,
     RelativeControlChange => MidiControlMessage::RelativeControlChange,
+    BeatDivision => MidiControlMessage::BeatDivision,
 );
 
 control_plane_variant_inventory!(
@@ -534,6 +540,14 @@ control_plane_variant_inventory!(
     VideoMaster => MidiControlAction::VideoMaster,
     VideoBlackout => MidiControlAction::VideoBlackout,
     ClearFixtureFlags => MidiControlAction::ClearFixtureFlags,
+    VideoClipSlotTrigger => MidiControlAction::VideoClipSlotTrigger,
+    VideoTake => MidiControlAction::VideoTake,
+    VideoLayerStop => MidiControlAction::VideoLayerStop,
+    VideoLayerBlendMode => MidiControlAction::VideoLayerBlendMode,
+    VideoTransitionKind => MidiControlAction::VideoTransitionKind,
+    VideoTransitionTime => MidiControlAction::VideoTransitionTime,
+    VideoIsfStageEnabled => MidiControlAction::VideoIsfStageEnabled,
+    VideoIsfParam => MidiControlAction::VideoIsfParam,
 );
 
 control_plane_variant_inventory!(
@@ -602,6 +616,7 @@ control_plane_variant_inventory!(
     AllBlackout => MidiControlEvent::AllBlackout(_),
     VideoBlackout => MidiControlEvent::VideoBlackout(_),
     ClearFixtureFlags => MidiControlEvent::ClearFixtureFlags { .. },
+    RendererRouted => MidiControlEvent::RendererRouted(_),
 );
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1176,6 +1191,16 @@ fn feedback_value_for_mapping(
         | MidiControlAction::TapBpm
         | MidiControlAction::ClearFixtureFlags
         | MidiControlAction::VideoOutputMappingPreset => None,
+        // Clip-slot, Take, transition and ISF state is owned by the renderer,
+        // so there is no engine snapshot to echo back to a controller.
+        MidiControlAction::VideoClipSlotTrigger
+        | MidiControlAction::VideoTake
+        | MidiControlAction::VideoLayerStop
+        | MidiControlAction::VideoLayerBlendMode
+        | MidiControlAction::VideoTransitionKind
+        | MidiControlAction::VideoTransitionTime
+        | MidiControlAction::VideoIsfStageEnabled
+        | MidiControlAction::VideoIsfParam => None,
         MidiControlAction::VideoParam => {
             let layer_id = mapping.layer_id?;
             let param = mapping.video_param.as_ref()?;
@@ -1451,6 +1476,8 @@ fn midi_feedback_message_from_spec(spec: &MidiFeedbackMessage) -> Option<Vec<u8>
         }
         MidiControlMessage::ProgramChange => Some(vec![0xc0 | channel, number]),
         MidiControlMessage::PitchBend => Some(vec![0xe0 | channel, 0, value]),
+        // A tempo source is not a controller message and has no wire form.
+        MidiControlMessage::BeatDivision => None,
     }
 }
 
@@ -1470,8 +1497,11 @@ fn midi_feedback_message(mapping: &MidiControlMapping, normalized: f32) -> Optio
                 (value14 >> 7) as u8,
             ])
         }
-        // Relative encoders and program changes have no absolute echo.
-        MidiControlMessage::ProgramChange | MidiControlMessage::RelativeControlChange => None,
+        // Relative encoders, program changes and tempo sources have no
+        // absolute echo.
+        MidiControlMessage::ProgramChange
+        | MidiControlMessage::RelativeControlChange
+        | MidiControlMessage::BeatDivision => None,
     }
 }
 
@@ -1757,6 +1787,10 @@ impl MtcQuarterFrameDecoder {
 }
 
 fn mapping_matches(mapping: &MidiControlMapping, message: &MidiMessage) -> bool {
+    // A beat division is fired by the tempo clock, never by a controller.
+    if mapping.message == MidiControlMessage::BeatDivision {
+        return false;
+    }
     let message_matches = mapping.message == message.message
         || (matches!(mapping.message, MidiControlMessage::RelativeControlChange)
             && matches!(message.message, MidiControlMessage::ControlChange))
@@ -2047,7 +2081,101 @@ fn event_from_mapping(
                     .to_string(),
             })
         }
+        MidiControlAction::VideoClipSlotTrigger => {
+            mapping.layer_id?;
+            mapping.clip_slot_id?;
+            is_mapping_trigger(mapping, message)
+                .then(|| renderer_routed_event(mapping, message, ranged_value, true, false))
+        }
+        MidiControlAction::VideoTake => is_mapping_trigger(mapping, message)
+            .then(|| renderer_routed_event(mapping, message, ranged_value, true, false)),
+        MidiControlAction::VideoLayerStop => {
+            mapping.layer_id?;
+            is_mapping_trigger(mapping, message)
+                .then(|| renderer_routed_event(mapping, message, ranged_value, true, false))
+        }
+        MidiControlAction::VideoLayerBlendMode => {
+            mapping.layer_id?;
+            Some(renderer_routed_event(
+                mapping,
+                message,
+                ranged_value,
+                midi_message_enabled(message),
+                false,
+            ))
+        }
+        MidiControlAction::VideoTransitionKind | MidiControlAction::VideoTransitionTime => {
+            Some(renderer_routed_event(
+                mapping,
+                message,
+                ranged_value,
+                midi_message_enabled(message),
+                false,
+            ))
+        }
+        MidiControlAction::VideoIsfStageEnabled => {
+            mapping.layer_id?;
+            mapping.isf_stage_id?;
+            if matches!(
+                mapping.message,
+                MidiControlMessage::NoteOn
+                    | MidiControlMessage::NoteOff
+                    | MidiControlMessage::ProgramChange
+            ) {
+                // A button flips the stage once per press.
+                is_mapping_trigger(mapping, message)
+                    .then(|| renderer_routed_event(mapping, message, ranged_value, true, true))
+            } else {
+                // A fader or switch level sets it.
+                Some(renderer_routed_event(
+                    mapping,
+                    message,
+                    ranged_value,
+                    midi_message_enabled(message),
+                    false,
+                ))
+            }
+        }
+        MidiControlAction::VideoIsfParam => {
+            mapping.layer_id?;
+            mapping.isf_stage_id?;
+            mapping.attribute.as_ref()?;
+            Some(renderer_routed_event(
+                mapping,
+                message,
+                ranged_value,
+                midi_message_enabled(message),
+                false,
+            ))
+        }
     }
+}
+
+/// The renderer-owned form of an accepted input. The identities are copied from
+/// the mapping unchanged; the renderer resolves them against the live project
+/// and drops an input whose layer, slot or stage no longer exists.
+fn renderer_routed_event(
+    mapping: &MidiControlMapping,
+    message: &MidiMessage,
+    ranged_value: f32,
+    active: bool,
+    toggle: bool,
+) -> MidiControlEvent {
+    MidiControlEvent::RendererRouted(RendererRoutedInput {
+        action: mapping.action.clone(),
+        layer_id: mapping.layer_id,
+        clip_slot_id: mapping.clip_slot_id,
+        isf_stage_id: mapping.isf_stage_id,
+        control: if mapping.action == MidiControlAction::VideoIsfParam {
+            mapping.attribute.clone()
+        } else {
+            None
+        },
+        position: message.normalized,
+        value: ranged_value,
+        active,
+        toggle,
+    })
 }
 
 fn is_positive_trigger(message: &MidiMessage) -> bool {
@@ -2195,6 +2323,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 65_535.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         }
     }
 
@@ -2579,6 +2709,8 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             feedback: None,
             low: 0.0,
             high: 1.0,
@@ -2604,10 +2736,200 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             feedback: None,
             low: 0.0,
             high: 1.0,
         }
+    }
+
+    fn perform_mapping(
+        action: MidiControlAction,
+        message: MidiControlMessage,
+        number: u8,
+    ) -> MidiControlMapping {
+        MidiControlMapping {
+            channel: Some(0),
+            message,
+            number,
+            action,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: None,
+            layer_id: Some(4),
+            video_param: None,
+            cue_point_index: None,
+            output_id: None,
+            duration_ms: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
+            feedback: None,
+            low: 0.0,
+            high: 1.0,
+        }
+    }
+
+    fn routed(event: &MidiControlEvent) -> &RendererRoutedInput {
+        match event {
+            MidiControlEvent::RendererRouted(input) => input,
+            other => panic!("expected a renderer-routed event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn perform_triggers_forward_stable_identities_on_a_press_only() {
+        let mut slot = perform_mapping(
+            MidiControlAction::VideoClipSlotTrigger,
+            MidiControlMessage::NoteOn,
+            36,
+        );
+        slot.clip_slot_id = Some(protocol::VideoClipSlotId(21));
+        let events = events_from_midi_message(&[0x90, 36, 100], std::slice::from_ref(&slot));
+        assert_eq!(events.len(), 1);
+        let input = routed(&events[0]);
+        assert_eq!(input.action, MidiControlAction::VideoClipSlotTrigger);
+        assert_eq!(input.layer_id, Some(4));
+        assert_eq!(input.clip_slot_id, Some(protocol::VideoClipSlotId(21)));
+        assert!(input.active);
+        // Note-off and a zero-velocity note-on are releases, not triggers.
+        assert!(events_from_midi_message(&[0x80, 36, 0], std::slice::from_ref(&slot)).is_empty());
+        assert!(events_from_midi_message(&[0x90, 36, 0], std::slice::from_ref(&slot)).is_empty());
+        // A mapping that lost its slot identity forwards nothing.
+        slot.clip_slot_id = None;
+        assert!(events_from_midi_message(&[0x90, 36, 100], &[slot]).is_empty());
+
+        let take = perform_mapping(MidiControlAction::VideoTake, MidiControlMessage::NoteOn, 40);
+        let take_events = events_from_midi_message(&[0x90, 40, 127], &[take]);
+        assert_eq!(routed(&take_events[0]).action, MidiControlAction::VideoTake);
+        assert_eq!(routed(&take_events[0]).layer_id, Some(4));
+
+        let stop = perform_mapping(
+            MidiControlAction::VideoLayerStop,
+            MidiControlMessage::NoteOn,
+            41,
+        );
+        let stop_events = events_from_midi_message(&[0x90, 41, 127], std::slice::from_ref(&stop));
+        assert_eq!(
+            routed(&stop_events[0]).action,
+            MidiControlAction::VideoLayerStop
+        );
+        let mut unbound_stop = stop;
+        unbound_stop.layer_id = None;
+        assert!(events_from_midi_message(&[0x90, 41, 127], &[unbound_stop]).is_empty());
+    }
+
+    #[test]
+    fn perform_selectors_and_parameters_forward_the_ranged_position() {
+        let blend = perform_mapping(
+            MidiControlAction::VideoLayerBlendMode,
+            MidiControlMessage::ControlChange,
+            20,
+        );
+        let events = events_from_midi_message(&[0xb0, 20, 127], std::slice::from_ref(&blend));
+        let input = routed(&events[0]);
+        assert_eq!(input.action, MidiControlAction::VideoLayerBlendMode);
+        assert_eq!(input.layer_id, Some(4));
+        assert_eq!(input.position, 1.0);
+        assert_eq!(input.value, 1.0);
+
+        let mut time = perform_mapping(
+            MidiControlAction::VideoTransitionTime,
+            MidiControlMessage::ControlChange,
+            21,
+        );
+        time.layer_id = None;
+        time.low = 0.5;
+        time.high = 8.5;
+        let time_events = events_from_midi_message(&[0xb0, 21, 127], &[time]);
+        assert_eq!(routed(&time_events[0]).value, 8.5);
+
+        let mut stage = perform_mapping(
+            MidiControlAction::VideoIsfStageEnabled,
+            MidiControlMessage::NoteOn,
+            50,
+        );
+        stage.isf_stage_id = Some(protocol::VideoEffectStageId(9));
+        // A note button flips the stage once per press and ignores the release.
+        let press = events_from_midi_message(&[0x90, 50, 90], std::slice::from_ref(&stage));
+        assert!(routed(&press[0]).toggle);
+        assert!(routed(&press[0]).active);
+        assert_eq!(
+            routed(&press[0]).isf_stage_id,
+            Some(protocol::VideoEffectStageId(9))
+        );
+        assert!(events_from_midi_message(&[0x80, 50, 0], std::slice::from_ref(&stage)).is_empty());
+        // A switch level sets the stage.
+        stage.message = MidiControlMessage::ControlChange;
+        let on = events_from_midi_message(&[0xb0, 50, 127], std::slice::from_ref(&stage));
+        assert!(routed(&on[0]).active && !routed(&on[0]).toggle);
+        let off = events_from_midi_message(&[0xb0, 50, 0], std::slice::from_ref(&stage));
+        assert!(!routed(&off[0]).active && !routed(&off[0]).toggle);
+
+        let mut param = perform_mapping(
+            MidiControlAction::VideoIsfParam,
+            MidiControlMessage::ControlChange,
+            22,
+        );
+        param.isf_stage_id = Some(protocol::VideoEffectStageId(9));
+        // Without the control name the mapping cannot name its target.
+        assert!(events_from_midi_message(&[0xb0, 22, 64], std::slice::from_ref(&param)).is_empty());
+        param.attribute = Some("amount".to_string());
+        let param_events = events_from_midi_message(&[0xb0, 22, 127], &[param]);
+        assert_eq!(routed(&param_events[0]).control.as_deref(), Some("amount"));
+        assert_eq!(routed(&param_events[0]).value, 1.0);
+    }
+
+    #[test]
+    fn beat_division_mappings_never_match_hardware_and_have_no_feedback() {
+        let mut beat = perform_mapping(
+            MidiControlAction::VideoTake,
+            MidiControlMessage::BeatDivision,
+            2,
+        );
+        beat.channel = None;
+        for message in [[0x90u8, 2, 127], [0xb0, 2, 127], [0x80, 2, 0], [0xc0, 2, 0]] {
+            assert!(
+                events_from_midi_message(&message, std::slice::from_ref(&beat)).is_empty(),
+                "a tempo source must not react to {message:?}"
+            );
+        }
+        assert_eq!(midi_feedback_message(&beat, 1.0), None);
+        let snapshot = EngineSnapshot::default();
+        assert!(build_feedback_messages(&snapshot, &[beat]).is_empty());
+    }
+
+    #[test]
+    fn renderer_routed_actions_have_no_engine_feedback_and_only_triggers_accept_a_beat() {
+        use MidiControlAction as A;
+        let routed_actions = [
+            A::VideoClipSlotTrigger,
+            A::VideoTake,
+            A::VideoLayerStop,
+            A::VideoLayerBlendMode,
+            A::VideoTransitionKind,
+            A::VideoTransitionTime,
+            A::VideoIsfStageEnabled,
+            A::VideoIsfParam,
+        ];
+        let snapshot = EngineSnapshot::default();
+        for action in &routed_actions {
+            assert!(action.is_renderer_routed(), "{action:?}");
+            let mapping = perform_mapping(action.clone(), MidiControlMessage::ControlChange, 1);
+            assert_eq!(feedback_value_for_mapping(&snapshot, &mapping, None), None);
+            assert!(
+                !midi_action_is_continuous(action),
+                "relative encoders cannot read renderer-owned state: {action:?}"
+            );
+        }
+        let beat_triggers = routed_actions
+            .iter()
+            .filter(|action| action.is_renderer_routed_trigger())
+            .count();
+        assert_eq!(beat_triggers, 4);
+        assert!(!A::SetBpm.is_renderer_routed());
+        assert!(!A::TriggerCue.is_renderer_routed_trigger());
     }
 
     fn flagged_fixture(
@@ -2844,6 +3166,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         assert_eq!(
             events_from_midi_message(&[0x90, 60, 127], &[mapping.clone()]),
@@ -2902,6 +3226,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let next = MidiControlMapping {
             channel: None,
@@ -2920,6 +3246,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let previous = MidiControlMapping {
             channel: None,
@@ -2938,6 +3266,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
 
         assert_eq!(
@@ -2974,6 +3304,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
 
         assert_eq!(
@@ -3005,6 +3337,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
 
         assert_eq!(
@@ -3039,6 +3373,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
 
         assert_eq!(
@@ -3066,6 +3402,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
 
         assert_eq!(
@@ -3094,6 +3432,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let bpm_sync_param = MidiControlMapping {
             channel: Some(2),
@@ -3112,6 +3452,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let hot_jump = MidiControlMapping {
             channel: None,
@@ -3130,6 +3472,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let cue_previous = MidiControlMapping {
             channel: None,
@@ -3148,6 +3492,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let cue_next = MidiControlMapping {
             channel: None,
@@ -3166,6 +3512,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let cue_add = MidiControlMapping {
             channel: None,
@@ -3184,6 +3532,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let cue_remove = MidiControlMapping {
             channel: None,
@@ -3202,6 +3552,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let layer_enabled = MidiControlMapping {
             channel: None,
@@ -3220,6 +3572,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let layer_solo = MidiControlMapping {
             channel: None,
@@ -3238,6 +3592,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let loop_toggle = MidiControlMapping {
             channel: None,
@@ -3256,6 +3612,8 @@ mod tests {
             feedback: None,
             low: 500.0,
             high: 2_000.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let layer_fade = MidiControlMapping {
             channel: Some(2),
@@ -3274,6 +3632,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
 
         assert_eq!(
@@ -3433,6 +3793,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let opacity = MidiControlMapping {
             channel: Some(0),
@@ -3451,6 +3813,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let fade = MidiControlMapping {
             channel: Some(0),
@@ -3469,6 +3833,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let mapping_field = MidiControlMapping {
             channel: Some(0),
@@ -3487,6 +3853,8 @@ mod tests {
             feedback: None,
             low: -1.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let stage_mapping_field = MidiControlMapping {
             channel: Some(0),
@@ -3505,6 +3873,8 @@ mod tests {
             feedback: None,
             low: -1000.0,
             high: 1000.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let mapping_preset = MidiControlMapping {
             channel: Some(0),
@@ -3523,6 +3893,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let blackout = MidiControlMapping {
             channel: Some(0),
@@ -3541,6 +3913,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
 
         assert_eq!(
@@ -3671,6 +4045,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
 
         assert_eq!(
@@ -3747,6 +4123,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
 
         assert_eq!(
@@ -3801,6 +4179,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let seek = MidiControlMapping {
             channel: Some(0),
@@ -3819,6 +4199,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 127_000.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let beat_previous = MidiControlMapping {
             channel: Some(0),
@@ -3837,6 +4219,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let beat_next = MidiControlMapping {
             channel: Some(0),
@@ -3855,6 +4239,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let set_bpm = MidiControlMapping {
             channel: Some(0),
@@ -3873,6 +4259,8 @@ mod tests {
             feedback: None,
             low: 20.0,
             high: 300.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let tap_bpm = MidiControlMapping {
             channel: Some(0),
@@ -3891,6 +4279,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let loop_toggle = MidiControlMapping {
             number: 26,
@@ -3975,6 +4365,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let pause = MidiControlMapping {
             channel: Some(0),
@@ -3993,6 +4385,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
 
         let master_events = events_from_midi_message(&[0xb0, 11, 64], &[master]);
@@ -4032,6 +4426,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
 
         let events = events_from_midi_message(&[0xb0, 10, 64], std::slice::from_ref(&mapping));
@@ -4075,6 +4471,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
 
         let events = events_from_midi_message(&[0xb0, 13, 64], std::slice::from_ref(&mapping));
@@ -4205,6 +4603,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let video_blackout = MidiControlMapping {
             channel: Some(0),
@@ -4223,6 +4623,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let all_blackout = MidiControlMapping {
             channel: Some(0),
@@ -4241,6 +4643,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let clear_fixture_flags = MidiControlMapping {
             channel: Some(0),
@@ -4259,6 +4663,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let mut clear_solo_flags = clear_fixture_flags.clone();
         clear_solo_flags.number = 34;
@@ -4321,6 +4727,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
 
         assert_eq!(
@@ -4348,6 +4756,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let cue_list_snapshot = EngineSnapshot {
             cue_lists: vec![protocol::CueListSummary {
@@ -4396,6 +4806,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         mapping.feedback = Some(protocol::MidiControlFeedback {
             off: Some(MidiFeedbackMessage {
@@ -4463,6 +4875,8 @@ mod tests {
                 feedback: None,
                 low: 0.0,
                 high: 1.0,
+                clip_slot_id: None,
+                isf_stage_id: None,
             },
             MidiControlMapping {
                 channel: Some(0),
@@ -4481,6 +4895,8 @@ mod tests {
                 feedback: None,
                 low: 0.0,
                 high: 1.0,
+                clip_slot_id: None,
+                isf_stage_id: None,
             },
             MidiControlMapping {
                 channel: Some(0),
@@ -4499,6 +4915,8 @@ mod tests {
                 feedback: None,
                 low: 20.0,
                 high: 300.0,
+                clip_slot_id: None,
+                isf_stage_id: None,
             },
             MidiControlMapping {
                 channel: Some(0),
@@ -4517,6 +4935,8 @@ mod tests {
                 feedback: None,
                 low: 0.0,
                 high: 1.0,
+                clip_slot_id: None,
+                isf_stage_id: None,
             },
         ];
 
@@ -4554,6 +4974,8 @@ mod tests {
                 feedback: None,
                 low: 0.0,
                 high: 1.0,
+                clip_slot_id: None,
+                isf_stage_id: None,
             },
             MidiControlMapping {
                 channel: Some(0),
@@ -4572,6 +4994,8 @@ mod tests {
                 feedback: None,
                 low: 0.0,
                 high: 1.0,
+                clip_slot_id: None,
+                isf_stage_id: None,
             },
             MidiControlMapping {
                 channel: Some(0),
@@ -4590,6 +5014,8 @@ mod tests {
                 feedback: None,
                 low: 0.0,
                 high: 1.0,
+                clip_slot_id: None,
+                isf_stage_id: None,
             },
         ];
 
@@ -4632,6 +5058,8 @@ mod tests {
                 feedback: None,
                 low: 0.0,
                 high: 1.0,
+                clip_slot_id: None,
+                isf_stage_id: None,
             },
             MidiControlMapping {
                 channel: Some(0),
@@ -4650,6 +5078,8 @@ mod tests {
                 feedback: None,
                 low: 0.0,
                 high: 120_000.0,
+                clip_slot_id: None,
+                isf_stage_id: None,
             },
         ];
 
@@ -4812,6 +5242,8 @@ mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let (sender, receiver) = mpsc::channel();
         let _input = connect_midi_control(input.index, vec![mapping], move |event| {

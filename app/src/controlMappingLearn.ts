@@ -10,11 +10,16 @@ import type {
   TouchControlBinding,
   VideoParam,
 } from "./types";
+import { isPerformRoutedAction, isPerformTriggerAction, type PerformRoutedAction } from "./controlMappingPerform";
 
 export type ControlLearnMode = "midi" | "osc" | "dmx";
 
+/** Actions both MIDI and OSC/DMX mappings can carry. */
+type SharedControlAction = MidiControlAction & OscControlAction;
+
 export interface ControlMappingTarget {
-  action: MidiControlAction & OscControlAction;
+  /** Perform actions are MIDI-only (see `midi_only`). */
+  action: SharedControlAction | PerformRoutedAction;
   label: string;
   /** MIDI behavior may differ from one-shot OSC actions, e.g. a scene pad. */
   midi_action?: MidiControlAction;
@@ -27,9 +32,30 @@ export interface ControlMappingTarget {
   video_param?: VideoParam | null;
   cue_point_index?: number | null;
   duration_ms?: number | null;
+  /** Stable clip-slot id (`VideoClipSlotTrigger`); never a column index. */
+  clip_slot_id?: number | null;
+  /** Stable effect-stage id (`VideoIsfStageEnabled` / `VideoIsfParam`). */
+  isf_stage_id?: number | null;
+  /** The renderer owns this control's state, so OSC and DMX cannot drive it. */
+  midi_only?: boolean;
   low?: number;
   high?: number;
 }
+
+/** A target OSC and DMX mappings can carry. */
+type SharedControlMappingTarget = ControlMappingTarget & { action: SharedControlAction };
+
+/** The targets a Learn transport can bind: Perform controls are MIDI-only. */
+export const controlMappingTargetsForMode = (
+  mode: ControlLearnMode,
+  targets: readonly ControlMappingTarget[],
+): ControlMappingTarget[] => mode === "midi"
+  ? [...targets]
+  : targets.filter((target) => !target.midi_only && !isPerformRoutedAction(target.action));
+
+const sharedTargets = (targets: readonly ControlMappingTarget[]): SharedControlMappingTarget[] =>
+  targets.filter((target): target is SharedControlMappingTarget =>
+    !target.midi_only && !isPerformRoutedAction(target.action));
 
 type ControlMappingDataAttributes = {
   "data-control-map-target"?: string;
@@ -45,11 +71,13 @@ const rangeForTarget = (target: ControlMappingTarget): [number, number] => {
   return [0, 1];
 };
 
-const normalizedTarget = (target: ControlMappingTarget): ControlMappingTarget => {
+const normalizedTarget = <Target extends ControlMappingTarget>(target: Target): Target => {
   const [defaultLow, defaultHigh] = rangeForTarget(target);
   return {
     ...target,
     label: target.label.trim() || target.action,
+    // The renderer owns Perform state, so only MIDI can bind it.
+    ...(isPerformRoutedAction(target.action) ? { midi_only: true } : {}),
     low: finiteOr(target.low, defaultLow),
     high: finiteOr(target.high, defaultHigh),
   };
@@ -101,9 +129,11 @@ export const controlMappingTargetKey = (target: ControlMappingTarget) => JSON.st
   video_param: target.video_param ?? null,
   cue_point_index: target.cue_point_index ?? null,
   duration_ms: target.duration_ms ?? null,
+  clip_slot_id: target.clip_slot_id ?? null,
+  isf_stage_id: target.isf_stage_id ?? null,
 });
 
-const mappingFieldsForTarget = (target: ControlMappingTarget) => ({
+const mappingFieldsForTarget = (target: SharedControlMappingTarget) => ({
   action: target.action,
   fixture_id: target.fixture_id ?? null,
   attribute: target.attribute ?? null,
@@ -118,6 +148,22 @@ const mappingFieldsForTarget = (target: ControlMappingTarget) => ({
   high: target.high ?? rangeForTarget(target)[1],
 });
 
+/** The persisted fields of a MIDI mapping. Perform ids are written only when the
+ * target carries them, so every other mapping keeps its exact JSON shape. */
+const midiMappingFieldsForTarget = (target: ControlMappingTarget): Omit<MidiControlMapping,
+  "channel" | "message" | "number"> => {
+  const normalized = normalizedTarget(target);
+  const { action: _unusedAction, ...fields } = mappingFieldsForTarget(normalized as SharedControlMappingTarget);
+  return {
+    ...fields,
+    action: normalized.midi_action ?? normalized.action,
+    ...(normalized.clip_slot_id !== null && normalized.clip_slot_id !== undefined
+      ? { clip_slot_id: normalized.clip_slot_id } : {}),
+    ...(normalized.isf_stage_id !== null && normalized.isf_stage_id !== undefined
+      ? { isf_stage_id: normalized.isf_stage_id } : {}),
+  };
+};
+
 export const midiMappingsFromLearnedControl = (
   targets: readonly ControlMappingTarget[],
   learned: LearnedMidiControl,
@@ -125,8 +171,7 @@ export const midiMappingsFromLearnedControl = (
   channel: learned.channel,
   message: learned.message,
   number: learned.number,
-  ...mappingFieldsForTarget(normalizedTarget(target)),
-  action: target.midi_action ?? target.action,
+  ...midiMappingFieldsForTarget(target),
   ...((target.midi_action === "ToggleCue" || target.midi_action === "FlashCue")
       && (learned.message === "NoteOn" || learned.message === "ControlChange")
     ? { feedback: {
@@ -135,10 +180,41 @@ export const midiMappingsFromLearnedControl = (
       } } : {}),
 }));
 
+/** A tempo-driven mapping: the beat division fires the target without hardware.
+ * Only Perform trigger targets accept it (the native validator enforces this). */
+export const beatDivisionMappingsFromTargets = (
+  targets: readonly ControlMappingTarget[],
+  divisionNumber: number,
+): MidiControlMapping[] => targets
+  .filter((target) => isPerformTriggerAction(target.midi_action ?? target.action))
+  .map((target) => ({
+    channel: null,
+    message: "BeatDivision" as const,
+    number: divisionNumber,
+    ...midiMappingFieldsForTarget(target),
+  }));
+
+/** Whether a stored mapping drives the given Learn target. Compares the stable
+ * identity (action, layer, clip slot, effect stage, control), not the source. */
+export const midiMappingDrivesTarget = (mapping: MidiControlMapping, target: ControlMappingTarget): boolean => {
+  const fields = midiMappingFieldsForTarget(target);
+  return mapping.action === fields.action
+    && (mapping.fixture_id ?? null) === (fields.fixture_id ?? null)
+    && (mapping.attribute ?? null) === (fields.attribute ?? null)
+    && (mapping.group_id ?? null) === (fields.group_id ?? null)
+    && (mapping.cue_id ?? null) === (fields.cue_id ?? null)
+    && (mapping.layer_id ?? null) === (fields.layer_id ?? null)
+    && (mapping.output_id ?? null) === (fields.output_id ?? null)
+    && (mapping.video_param ?? null) === (fields.video_param ?? null)
+    && (mapping.cue_point_index ?? null) === (fields.cue_point_index ?? null)
+    && (mapping.clip_slot_id ?? null) === (fields.clip_slot_id ?? null)
+    && (mapping.isf_stage_id ?? null) === (fields.isf_stage_id ?? null);
+};
+
 export const oscMappingsFromLearnedControl = (
   targets: readonly ControlMappingTarget[],
   learned: LearnedOscControl,
-): OscControlMapping[] => targets.map((target) => ({
+): OscControlMapping[] => sharedTargets(targets).map((target) => ({
   address: learned.address.startsWith("/") ? learned.address : `/${learned.address}`,
   ...mappingFieldsForTarget(normalizedTarget(target)),
 }));
@@ -146,7 +222,7 @@ export const oscMappingsFromLearnedControl = (
 export const dmxMappingsFromLearnedControl = (
   targets: readonly ControlMappingTarget[],
   learned: LearnedDmxControl,
-): DmxControlMapping[] => targets
+): DmxControlMapping[] => sharedTargets(targets)
   .map((target) => ({
     universe: learned.universe,
     channel: learned.channel,
