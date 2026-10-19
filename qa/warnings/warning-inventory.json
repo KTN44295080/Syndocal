@@ -3958,6 +3958,26 @@
           ]
         },
         {
+          "package": "io",
+          "target": "build-script-build",
+          "targetKinds": [
+            "custom-build"
+          ],
+          "crateTypes": [
+            "bin"
+          ]
+        },
+        {
+          "package": "io",
+          "target": "show_clock_two_process",
+          "targetKinds": [
+            "test"
+          ],
+          "crateTypes": [
+            "bin"
+          ]
+        },
+        {
           "package": "protocol",
           "target": "protocol",
           "targetKinds": [
@@ -3970,6 +3990,16 @@
         {
           "package": "protocol",
           "target": "dj_link_v3_sender_contract",
+          "targetKinds": [
+            "test"
+          ],
+          "crateTypes": [
+            "bin"
+          ]
+        },
+        {
+          "package": "protocol",
+          "target": "dj_link_hostile_corpus",
           "targetKinds": [
             "test"
           ],
@@ -4578,8 +4608,8 @@
       ],
       "externalWarningAllows": [],
       "evidence": {
-        "commit": "d79cbce254fd767ac9da1542b610dcc77b05d233",
-        "capturedAt": "2026-09-09T05:09:02.143+09:00",
+        "commit": "9dddf6cd63e741b0fab6903aa5e58ae20b72d01b",
+        "capturedAt": "2026-10-19T19:51:42.225Z",
         "command": "cargo test --workspace --locked --no-run --message-format=json",
         "toolchain": {
           "cargo": "1.97.1 (c980f4866 2026-06-30)",
