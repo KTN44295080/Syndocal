@@ -936,5 +936,48 @@ assert.equal(fullBank.slice(0, 12).length, 12, "full clip bank keeps twelve visi
 assert.equal(fullBankPageCount, 2, "clip bank pager remains reachable for the next page");
 assert.equal(mediaAccess({ layers: fullBank.length, mixer: true, firstRunAvailable: false, firstRunBusy: false, firstRunError: null }).importEntryCount, 1, "full bank/page keeps one mixer import entry");
 
+// ---- Media health view and relink (competitive review item 5) ----
+{
+  const performDesk = await readSource(new URL("VideoPerformDesk.tsx", componentRoot));
+  const healthDialog = await readSource(new URL("MediaHealthDialog.tsx", componentRoot));
+  const relinkPlan = await readSource(new URL("../mediaRelinkPlan.ts", componentRoot));
+  const tauriCommands = await readSource(new URL("../tauriInvokeCommands.ts", componentRoot));
+  // Both entry points mount the same dialog bound to the same media library.
+  assert.match(controlPanel, /<MediaLibraryHealthDialog library=\{props\.mediaLibrary\}/, "Edit > Video library mounts the media health view");
+  assert.match(controlPanel, /data-media-health-open[\s\S]*?mediaHealthDialog\?\.showModal\(\)/, "the library opens the media health view");
+  assert.match(performDesk, /<MediaLibraryHealthDialog library=\{props\.mediaLibrary\}/, "the Perform desk mounts the media health view");
+  assert.match(performDesk, /<button type="button" data-media-health-open[^>]*onClick=\{\(\) => mediaHealthDialog\.showModal\(\)\}>Details<\/button>/, "the Perform health readout opens the media health view");
+  assert.ok(
+    performDesk.indexOf("data-media-health-open") < performDesk.indexOf("data-fx-problems-open"),
+    "the media health opener stays inside the header health region next to the readout",
+  );
+  assert.doesNotMatch(performDesk, /`\$\{asset\.label\}: \$\{props\.mediaLibrary\.availabilityById\[asset\.id\]\?\.kind\}`/, "the header no longer prints raw per-asset availability kinds");
+  // The view only reuses existing operations; it never mutates the project itself.
+  assert.doesNotMatch(healthDialog, /invoke|invokeCommand|setMessage/, "the media health view owns no IPC and no project mutation");
+  assert.match(healthDialog, /props\.onVerify\(rows\(\)\.map\(\(row\) => row\.assetId\)\)/, "Verify All reuses the existing verification callback for the listed files");
+  assert.match(healthDialog, /if \(relinked\) void props\.onVerify\(\[row\.assetId\]\)/, "a relinked asset is re-verified");
+  // Folder relink: read-only scan, then the single ticketed relink path per accepted match.
+  assert.match(tauriCommands, /"select_media_relink_folder"/, "the folder picker command is in the frontend invoke inventory");
+  const scanBody = sliceBetween(controller, "const scanMediaRelinkFolder = async", "const applyMediaRelinkRequests = async", "folder scan");
+  assert.ok(
+    scanBody.indexOf("preflightAndBeginMediaAssetOperation") < scanBody.indexOf('"select_media_relink_folder"'),
+    "the folder picker is opened inside a registered, project-fenced media operation",
+  );
+  assert.doesNotMatch(scanBody, /prepareFinalizeAndCommit|AdoptReplacement/, "the folder scan changes nothing");
+  const applyBody = sliceBetween(controller, "const applyMediaRelinkRequests = async", "const setVideoLayerIsfEffect = async", "folder apply");
+  assert.match(applyBody, /runMediaAssetRelink\(\s*request\.assetId,\s*request\.replacementPath,\s*"RequireContentMatch"/, "each folder match goes through the one ticketed relink with the content-match policy");
+  assert.doesNotMatch(applyBody, /AdoptReplacement/, "a batch never adopts different content");
+  assert.match(applyBody, /const inSameProject = \(\) => options\.getCurrentProjectAuthority\(\)\.project_epoch === startEpoch;[\s\S]*?if \(!inSameProject\(\)\) return null;/, "a replaced project voids the whole folder review before the next relink");
+  assert.match(applyBody, /\(asset\.source\.path \?\? ""\) !== request\.previousPath/, "only the asset the operator reviewed may be relinked");
+  assert.match(applyBody, /if \(staged\.committed\) terminalAuthority = staged\.terminalAuthority;[\s\S]*?result\.relinked\.push/, "a committed relink is recorded before any later step can fail");
+  assert.match(applyBody, /needs_explicit_adoption/,"different content is reported for an individual, confirmed relink");
+  assert.match(relinkPlan, /export function planFolderRelink/, "matching is a pure, testable plan");
+  assert.match(app, /const clearRelinkedAvailability = /, "relinked assets drop their stale availability");
+  assert.match(app, /onScanRelinkFolder: scanMediaLibraryRelinkFolder,\s*onApplyRelinkRequests: applyMediaLibraryRelinkRequests/, "App wires the folder relink into the media library");
+  assert.match(app, /setMediaAssetCheckedAtById\(\{\}\)/, "last-check times reset with project replacement");
+  assert.match(await readSource(new URL("MediaHealthDialog.css", componentRoot)), /\.mediaHealthDialog button \{ min-height: 44px; min-width: 44px;/, "media health buttons keep 44px targets");
+  assert.doesNotMatch(await readSource(new URL("MediaHealthDialog.css", componentRoot)), /#[0-9a-fA-F]{3,8}\b|rgba?\(/, "media health CSS uses theme tokens only");
+}
+
 console.log("VJ media-import access static contract ok: guarded empty states, populated normal/mixer exclusivity, accessible names, scoped overlay CSS, and full bank/page reachability verified");
 console.log("Limitation: this checker reads source and exercises policy fixtures; it does not mount components or establish browser/native rendered reachability.");

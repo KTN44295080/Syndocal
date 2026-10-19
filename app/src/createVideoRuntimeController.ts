@@ -15,6 +15,11 @@ import {
   prepareFinalizeAndCommitMediaAssets,
 } from "./mediaAssetAuthority";
 import type { ProjectAuthorityToken } from "./projectAuthority";
+import type {
+  MediaRelinkApplyRequest,
+  MediaRelinkApplyResult,
+  MediaRelinkFolderScan,
+} from "./mediaRelinkPlan";
 import {
   executeVideoClipLaunchOutputControl,
   executeVideoClipTakeOutputControl,
@@ -1337,6 +1342,134 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       return null;
     }
   };
+  /**
+   * Read-only: asks for a folder and lists its media files. The picker is
+   * registered as a media operation like the single-file Relink picker, so a
+   * project replacement during the dialog discards the result.
+   */
+  const scanMediaRelinkFolder = async (
+    setRelinkMessage: (message: string) => unknown = options.setMessage,
+  ): Promise<MediaRelinkFolderScan | null> => {
+    let sideEffectAuthority = options.getCurrentProjectAuthority();
+    try {
+      const preparedStart = await preflightAndBeginMediaAssetOperation(
+        sideEffectAuthority,
+        options.prepareMediaAssetOperationStart,
+        () => options.beginMediaAssetOperation("Choose relink folder", "picker"),
+      );
+      sideEffectAuthority = preparedStart.authority;
+      const pickerOperation = preparedStart.operation;
+      try {
+        const scan = await options.invoke<MediaRelinkFolderScan | null>("select_media_relink_folder");
+        if (!options.isProjectAuthorityCurrent(sideEffectAuthority)) return null;
+        if (!scan) {
+          setRelinkMessage("Folder relink canceled. No project changes were made.");
+          return null;
+        }
+        return scan;
+      } finally {
+        pickerOperation.release();
+      }
+    } catch (error) {
+      if (options.isProjectAuthorityCurrent(sideEffectAuthority)) setRelinkMessage(String(error));
+      return null;
+    }
+  };
+  /**
+   * Applies reviewed folder-relink proposals one asset at a time through the
+   * same ticketed relink operation as the single-file Relink, so each asset
+   * keeps its own undo step and the project is marked changed exactly as before.
+   * The policy is always RequireContentMatch: a file whose hash differs is never
+   * adopted in a batch; it is reported for an individual, explicitly confirmed
+   * relink.
+   */
+  const applyMediaRelinkRequests = async (
+    requests: readonly MediaRelinkApplyRequest[],
+    onProgress?: (completed: number, total: number) => void,
+  ): Promise<{ result: MediaRelinkApplyResult; terminalAuthority: ProjectAuthorityToken } | null> => {
+    const result: MediaRelinkApplyResult = { relinked: [], differentContent: [], failed: [], skipped: [] };
+    // Asset IDs are only stable within one project epoch. A replaced project
+    // voids the whole review; an unrelated edit in the same project does not.
+    const startEpoch = options.getCurrentProjectAuthority().project_epoch;
+    const inSameProject = () => options.getCurrentProjectAuthority().project_epoch === startEpoch;
+    let terminalAuthority = options.getCurrentProjectAuthority();
+    let index = 0;
+    for (; index < requests.length; index += 1) {
+      if (!inSameProject()) return null;
+      const request = requests[index];
+      const asset = options.snapshot().video.media_assets.find((candidate) => candidate.id === request.assetId);
+      if (!asset || (asset.source.kind !== "File" && asset.source.kind !== "StillImage")) {
+        result.failed.push({
+          assetId: request.assetId,
+          label: request.label,
+          message: `Media asset ${request.assetId} is not a relinkable local file.`,
+        });
+        onProgress?.(index + 1, requests.length);
+        continue;
+      }
+      if ((asset.source.path ?? "") !== request.previousPath) {
+        // Asset IDs can be reused by a replacement project; only the asset the
+        // operator actually reviewed may be relinked.
+        result.failed.push({
+          assetId: request.assetId,
+          label: request.label,
+          message: "This asset changed after the folder was reviewed. Choose the folder again.",
+        });
+        onProgress?.(index + 1, requests.length);
+        continue;
+      }
+      try {
+        const staged = await runMediaAssetRelink(
+          request.assetId,
+          request.replacementPath,
+          "RequireContentMatch",
+          `Relink ${asset.label}`,
+        );
+        // A committed relink stands even if a later step fails, so record it
+        // before anything else can throw.
+        if (staged.committed) terminalAuthority = staged.terminalAuthority;
+        const outcome = staged.outcome;
+        if (outcome?.kind === "relinked") result.relinked.push(request.assetId);
+        else if (outcome?.kind === "needs_explicit_adoption" || outcome?.kind === "hash_mismatch") {
+          result.differentContent.push({ assetId: request.assetId, label: request.label });
+        } else {
+          result.failed.push({
+            assetId: request.assetId,
+            label: request.label,
+            message: outcome ? mediaAssetRelinkOutcomeMessage(outcome) : "The relink did not return a result.",
+          });
+        }
+        onProgress?.(index + 1, requests.length);
+        if (staged.committed) {
+          try {
+            await options.refreshSnapshot();
+          } catch {
+            // The relink is committed; the next snapshot refresh converges the view.
+          }
+        }
+        if (!staged.applicationCurrent) {
+          // A later project image superseded this terminal result: stop issuing
+          // further relinks against it.
+          index += 1;
+          break;
+        }
+      } catch (error) {
+        if (!inSameProject()) return null;
+        result.failed.push({
+          assetId: request.assetId,
+          label: request.label,
+          message: error instanceof DOMException && error.name === "AbortError"
+            ? "Folder relink canceled."
+            : String(error),
+        });
+        index += 1;
+        break;
+      }
+    }
+    if (!inSameProject()) return null;
+    for (; index < requests.length; index += 1) result.skipped.push(requests[index].assetId);
+    return { result, terminalAuthority };
+  };
   const setVideoLayerIsfEffect = async (layerId: number, effect: VideoIsfEffectSummary | null, expectedAuthority?: ProjectAuthorityToken) => {
     if (!canMutateVideoIsf()) return;
     try {
@@ -1731,7 +1864,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     refreshAudioOutputDevices,
     startVideoOutputRecording, stopVideoOutputRecording, refreshVideoRecordingStatus,
     removeVideoLayer, duplicateVideoLayer, moveVideoLayer, setVideoLayerLabel,
-    refreshVideoLayerMetadata, relinkMediaAsset, importVideoLayerIsf, importVideoIsfToCatalog, addVideoLayerIsfEffect, applyBuiltinVideoIsfEffect, setVideoLayerIsfEffect,
+    refreshVideoLayerMetadata, relinkMediaAsset, scanMediaRelinkFolder, applyMediaRelinkRequests, importVideoLayerIsf, importVideoIsfToCatalog, addVideoLayerIsfEffect, applyBuiltinVideoIsfEffect, setVideoLayerIsfEffect,
     moveVideoLayerIsfEffect, removeVideoLayerIsfEffect, setVideoLayerIsfEffectEnabled,
     resetVideoLayerIsfEffect, setVideoLayerIsfControl, triggerVideoLayerIsfEvent,
     applyVideoEffectCatalog, importVideoEffectScopeIsf, applyVideoEffectPreset, removeVideoEffectChain,

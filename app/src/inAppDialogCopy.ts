@@ -104,6 +104,7 @@ export const adoptMediaReplacementDialog = (assetId: number | string, replacemen
   title: `Adopt replacement content for media asset ${assetId}?`,
   message: [
     replacementPath,
+    "This file's content differs from what the project recorded for this asset (the hash does not match).",
     "This changes the saved content identity and updates every reference to this asset.",
   ],
   confirmLabel: "Adopt replacement",

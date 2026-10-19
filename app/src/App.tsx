@@ -143,6 +143,11 @@ import {
   createVjFirstRunOperationLease,
   mediaAssetMappingPreflightProvenance,
 } from "./mediaAssetUiFences";
+import {
+  mediaRelinkApplySummary,
+  type MediaRelinkApplyRequest,
+  type MediaRelinkApplyResult,
+} from "./mediaRelinkPlan";
 import { TimelineCueEventsPanel } from "./components/TimelineCueEventsPanel";
 import { TimelineSourceShelf, type TimelineSourceContextMode } from "./components/TimelineSourceShelf";
 import { TimelineOutputPreview } from "./components/TimelineOutputPreview";
@@ -2553,6 +2558,10 @@ export default function App() {
     createSignal<MediaAssetActiveOperation[]>([]);
   const [mediaAssetAvailabilityById, setMediaAssetAvailabilityById] =
     createSignal<Record<number, MediaAssetAvailability>>({});
+  // Epoch milliseconds of each asset's last verification in this session. Like
+  // availability itself it is machine-local and never saved in the project.
+  const [mediaAssetCheckedAtById, setMediaAssetCheckedAtById] =
+    createSignal<Record<number, number>>({});
   const mediaAssetAvailabilityApplyFence = createMediaAssetAvailabilityApplyFence();
   const mediaAssetAvailabilityRowAuthority = createMediaAssetAvailabilityRowAuthority();
   const [lastMediaAssetImportReport, setLastMediaAssetImportReport] =
@@ -2772,6 +2781,7 @@ export default function App() {
     mediaLibraryStatusLease.reset();
     mediaAssetAvailabilityRowAuthority.reset();
     setMediaAssetAvailabilityById({});
+    setMediaAssetCheckedAtById({});
     setLastMediaAssetImportReport(null);
     setProjectDropState(null);
     resetVideoClipSlotRuntimeFence();
@@ -20897,6 +20907,8 @@ export default function App() {
     setVideoLayerLabel,
     refreshVideoLayerMetadata,
     relinkMediaAsset,
+    scanMediaRelinkFolder,
+    applyMediaRelinkRequests,
     importVideoLayerIsf,
     importVideoIsfToCatalog,
     addVideoLayerIsfEffect,
@@ -21735,6 +21747,12 @@ export default function App() {
         }
         return next;
       });
+      const checkedAtMs = Date.now();
+      setMediaAssetCheckedAtById((current) => {
+        const next = { ...current };
+        for (const availability of applicableAvailability) next[availability.asset_id] = checkedAtMs;
+        return next;
+      });
       const verified = applicableAvailability.filter((entry) => entry.kind === "available_verified").length;
       const attention = applicableAvailability.length - verified;
       if (statusIsCurrent()) {
@@ -21752,17 +21770,48 @@ export default function App() {
       mediaOperation?.release();
     }
   };
-  const relinkMediaLibraryAsset = async (assetId: MediaAssetId) => {
+  /** Drops stale availability for assets whose file was just relinked. */
+  const clearRelinkedAvailability = (assetIds: readonly MediaAssetId[], terminalAuthority: ProjectAuthorityToken) => {
+    // Asset IDs are stable within one project epoch; revisions advance with every edit.
+    if (projectMappingsAuthority().project_epoch !== terminalAuthority.project_epoch) return false;
+    const cleared = assetIds.filter((assetId) =>
+      mediaAssetAvailabilityRowAuthority.shouldClearAfterRelink(assetId, terminalAuthority));
+    if (cleared.length === 0) return true;
+    const clearedSet = new Set<number>(cleared);
+    setMediaAssetAvailabilityById((current) => Object.fromEntries(
+      Object.entries(current).filter(([id]) => !clearedSet.has(Number(id))),
+    ));
+    setMediaAssetCheckedAtById((current) => Object.fromEntries(
+      Object.entries(current).filter(([id]) => !clearedSet.has(Number(id))),
+    ));
+    return true;
+  };
+  /** Returns true when the asset was relinked, so a health view can re-verify it. */
+  const relinkMediaLibraryAsset = async (assetId: MediaAssetId): Promise<boolean> => {
     const statusLease = mediaLibraryStatusLease.begin();
     const result = await relinkMediaAsset(assetId, (message) => {
       if (mediaLibraryStatusLease.isCurrent(statusLease)) setMessage(message);
     });
-    if (result?.outcome.kind !== "relinked") return;
-    if (!isProjectAuthorityIdentityCurrent(result.terminalAuthority)) return;
-    if (!mediaAssetAvailabilityRowAuthority.shouldClearAfterRelink(assetId, result.terminalAuthority)) return;
-    setMediaAssetAvailabilityById((current) => Object.fromEntries(
-      Object.entries(current).filter(([id]) => Number(id) !== assetId),
-    ));
+    if (result?.outcome.kind !== "relinked") return false;
+    return clearRelinkedAvailability([assetId], result.terminalAuthority);
+  };
+  const scanMediaLibraryRelinkFolder = () => {
+    const statusLease = mediaLibraryStatusLease.begin();
+    return scanMediaRelinkFolder((message) => {
+      if (mediaLibraryStatusLease.isCurrent(statusLease)) setMessage(message);
+    });
+  };
+  /** Applies reviewed folder-relink proposals; returns the per-asset report. */
+  const applyMediaLibraryRelinkRequests = async (
+    requests: readonly MediaRelinkApplyRequest[],
+    onProgress?: (completed: number, total: number) => void,
+  ): Promise<MediaRelinkApplyResult | null> => {
+    const statusLease = mediaLibraryStatusLease.begin();
+    const applied = await applyMediaRelinkRequests(requests, onProgress);
+    if (!applied) return null;
+    if (!clearRelinkedAvailability(applied.result.relinked, applied.terminalAuthority)) return null;
+    if (mediaLibraryStatusLease.isCurrent(statusLease)) setMessage(mediaRelinkApplySummary(applied.result));
+    return applied.result;
   };
   const videoLayerHasMonitorableAudio = (layerId: number) => {
     const layer = snapshot().video.layers.find((candidate) => candidate.id === layerId);
@@ -28605,8 +28654,11 @@ export default function App() {
             get activeOperations() { return activeMediaAssetOperations(); },
             get lastImportReport() { return lastMediaAssetImportReport(); },
             backendAvailable: isTauriRuntime(),
+            get checkedAtById() { return mediaAssetCheckedAtById(); },
             onVerify: inspectMediaAssetIds,
             onRelink: relinkMediaLibraryAsset,
+            onScanRelinkFolder: scanMediaLibraryRelinkFolder,
+            onApplyRelinkRequests: applyMediaLibraryRelinkRequests,
             onPreviewStart: beginMediaAssetPreview,
             onPreviewFrame: loadMediaAssetPreviewFrame,
             onPreviewEnd: endMediaAssetPreview,

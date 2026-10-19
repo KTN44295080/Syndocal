@@ -324,6 +324,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "seek_video_clip_slot_authoritative",
   "seek_vj_preview",
   "select_gdtf_file",
+  "select_media_relink_folder",
   "select_normal_audio_output",
   "select_serial_dmx_machine_binding_v1",
   "select_standby_sync_directory",

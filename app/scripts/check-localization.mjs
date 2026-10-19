@@ -319,6 +319,22 @@ assert.equal(
   localization.translateUiText("Media asset 7 does not match the expected content hash.", "ja"),
   "メディア素材 7 は想定されたコンテンツハッシュと一致しません。",
 );
+// Media health view and folder relink.
+for (const [english, japanese] of [
+  ["Media health…", "メディア状態…"],
+  ["Relink missing from folder…", "見つからないファイルをフォルダーから再リンク…"],
+  ["Same name and size", "名前とサイズが一致"],
+  ["Same name, size differs", "名前は一致・サイズが異なる"],
+  ["Apply selected", "選択を適用"],
+  ["Choose relink folder", "再リンク用フォルダーを選択"],
+  ["Folder relink canceled. No project changes were made.", "フォルダー再リンクをキャンセルしました。プロジェクトは変更されていません。"],
+  ["Folder relink: 2 relinked, 1 have different content, 1 failed, 3 not attempted.", "フォルダー再リンク: 2件 再リンク、1件 内容が異なる、1件 失敗、3件 未実行。"],
+  ["Folder relink: nothing was applied.", "フォルダー再リンク: 何も適用されませんでした。"],
+  ["This file's content differs from what the project recorded for this asset (the hash does not match).", "このファイルの内容は、プロジェクトがこの素材として記録した内容と異なります（ハッシュが一致しません）。"],
+]) {
+  assert.equal(localization.translateUiText(english, "en"), english);
+  assert.equal(localization.translateUiText(english, "ja"), japanese);
+}
 assert.equal(localization.translateUiText("Clear Pending", "ja"), "クリア待ち");
 assert.equal(localization.translateUiText("Audio Reactive", "ja"), "オーディオリアクティブ");
 assert.equal(localization.translateUiText("Audio feature input level", "ja"), "音声特徴量の入力レベル");

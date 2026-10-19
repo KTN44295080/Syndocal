@@ -38,6 +38,7 @@ import { VideoEffectCatalogSetupPanel } from "./VideoEffectCatalogSetupPanel";
 import { VideoTransitionBusPanel } from "./VideoTransitionBusPanel";
 import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
 import { VideoPerformDesk, type VideoPerformContext } from "./VideoPerformDesk";
+import { MediaLibraryHealthDialog, type MediaHealthLibrary } from "./MediaHealthDialog";
 
 export interface VideoControlPanelProps {
   mixer: boolean;
@@ -86,7 +87,12 @@ export interface VideoControlPanelProps {
     lastImportReport: MediaAssetImportReport | null;
     backendAvailable: boolean;
     onVerify: (assetIds: MediaAssetId[]) => void | Promise<void>;
-    onRelink: (assetId: MediaAssetId) => void | Promise<void>;
+    /** Resolves true when the asset was relinked (so it can be re-verified). */
+    onRelink: (assetId: MediaAssetId) => boolean | void | Promise<boolean | void>;
+    /** Epoch milliseconds of each asset's last verification in this session. */
+    checkedAtById?: Record<number, number>;
+    onScanRelinkFolder?: MediaHealthLibrary["onScanRelinkFolder"];
+    onApplyRelinkRequests?: MediaHealthLibrary["onApplyRelinkRequests"];
     onPreviewStart: (assetId: MediaAssetId) => Promise<MediaAssetPreviewSessionTicket>;
     onPreviewFrame: (ticket: MediaAssetPreviewSessionTicket, positionMs: number) => Promise<string>;
     onPreviewEnd: (ticket: MediaAssetPreviewSessionTicket) => Promise<void>;
@@ -133,6 +139,7 @@ const mediaPreviewIdentity = (asset: MediaAssetSummary) =>
 
 export function VideoControlPanel(props: VideoControlPanelProps) {
   let effectBrowserDialog: HTMLDialogElement | undefined;
+  let mediaHealthDialog: HTMLDialogElement | undefined;
   // T6: Audio/AutoVJ/Reactive settings live behind collapsed drawers so the clip
   // bank dominates the pane. Open state persists per drawer in localStorage.
   const [audioInOpen, setAudioInOpen] = createSignal(loadMixerDrawerOpen("audio-in"));
@@ -255,6 +262,7 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
       data-workspace-pane={props.libraryOnly ? "upper" : undefined}
       data-video-media-library={props.libraryOnly ? "true" : undefined}
     >
+      <MediaLibraryHealthDialog library={props.mediaLibrary} ref={(element) => { mediaHealthDialog = element; }} />
       <Show when={props.mixer && props.performContext?.renderEffectBrowser}>
         <dialog ref={effectBrowserDialog} class="videoEditorEffectBrowser" data-video-editor-effect-browser aria-label="Effect browser">
           <header><strong>Effect browser</strong><button type="button" onClick={() => effectBrowserDialog?.close()}>Close</button></header>
@@ -376,6 +384,15 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
                 onClick={() => void props.mediaLibrary.onVerify(props.mediaLibrary.assets.map((asset) => asset.id))}
               >
                 Verify All
+              </button>
+              <button
+                type="button"
+                data-media-health-open
+                disabled={props.mediaLibrary.assets.length === 0}
+                title="See which media files are missing or changed, and fix them"
+                onClick={() => mediaHealthDialog?.showModal()}
+              >
+                Media health…
               </button>
             </div>
             <Show
