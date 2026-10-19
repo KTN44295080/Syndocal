@@ -75,6 +75,8 @@ export interface PerformControlDispatcherDeps {
   layers: () => readonly VideoLayerSummary[];
   effectCatalog: () => VideoEffectCatalog | undefined;
   clipRuntime: (layerId: number) => VideoClipLayerRuntimeSummary | null;
+  /** The identity of the open project. A queued command never runs on another one. */
+  projectEpoch: () => number;
   /** The selected layer's Take can run: a clip is queued or a transition is live. */
   takeEnabled: () => boolean;
   selectLayer: (layerId: number) => void;
@@ -89,6 +91,10 @@ export interface PerformControlDispatcherDeps {
   transitionLocked: () => boolean;
   setTransitionKind: (kind: VideoClipTakeKind) => void;
   setTransitionDurationMilliunits: (milliunits: number) => void;
+  /** Resolves true once no live FX command is running (a running one drops a second).
+   * Stage indices are resolved only after this, so a move or remove that was in
+   * flight cannot leave the command on the wrong stage. */
+  fxIdle: () => Promise<boolean>;
   setIsfStageEnabled: (layerId: number, index: number, enabled: boolean) => Promise<unknown> | unknown;
   setIsfControl: (
     layerId: number,
@@ -100,12 +106,23 @@ export interface PerformControlDispatcherDeps {
   report?: (message: string) => void;
 }
 
+/** Minimum spacing between two authoritative ISF parameter commits. Every commit
+ * is a project revision with its own history entry, so a controller's stream is
+ * thinned to this rate (newest value wins). */
+export const isfParamCommitSpacingMs = 200;
+
+const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
+
+type Task = () => Promise<unknown> | unknown;
+
 /** Discrete triggers run in arrival order on one lane (a pad press must reach the
  * runtime before the Take that follows it); a continuous control keeps only its
- * newest value while an earlier one is still in flight. */
+ * newest value while an earlier one is still in flight; a pulse is dropped while
+ * its previous pulse is running. */
 function createLanes() {
   const ordered = new Map<string, Promise<unknown>>();
-  const latest = new Map<string, { running: boolean; pending: (() => Promise<unknown> | unknown) | null }>();
+  const latest = new Map<string, { running: boolean; pending: Task | null; lastStart: number }>();
+  const pulsing = new Set<string>();
   return {
     ordered<T>(key: string, task: () => Promise<T> | T): Promise<T | undefined> {
       const previous = ordered.get(key) ?? Promise.resolve();
@@ -114,8 +131,9 @@ function createLanes() {
       ordered.set(key, run.then(() => undefined, () => undefined));
       return run.catch(() => undefined);
     },
-    latest(key: string, task: () => Promise<unknown> | unknown): Promise<unknown> {
-      const lane = latest.get(key) ?? { running: false, pending: null };
+    /** `onIdle` runs when the lane has nothing left in flight or pending. */
+    latest(key: string, task: Task, options: { spacingMs?: number; onIdle?: () => void } = {}): Promise<unknown> {
+      const lane = latest.get(key) ?? { running: false, pending: null, lastStart: 0 };
       latest.set(key, lane);
       if (lane.running) {
         lane.pending = task;
@@ -123,33 +141,58 @@ function createLanes() {
       }
       const run = async () => {
         lane.running = true;
-        let current: (() => Promise<unknown> | unknown) | null = task;
+        let current: Task | null = task;
         try {
           while (current) {
+            const wait = (options.spacingMs ?? 0) - (Date.now() - lane.lastStart);
+            if (wait > 0) {
+              await sleep(wait);
+              // The value that arrived while waiting is the one to apply.
+              current = lane.pending ?? current;
+            }
             lane.pending = null;
+            lane.lastStart = Date.now();
             try { await current(); } catch { /* the command reports its own failure */ }
             current = lane.pending;
           }
         } finally {
           lane.running = false;
+          options.onIdle?.();
         }
       };
       return run();
+    },
+    pulse(key: string, task: Task): Promise<unknown> {
+      if (pulsing.has(key)) return Promise.resolve();
+      pulsing.add(key);
+      return Promise.resolve().then(task).catch(() => undefined).finally(() => pulsing.delete(key));
     },
   };
 }
 
 export function createPerformControlDispatcher(deps: PerformControlDispatcherDeps) {
   const lanes = createLanes();
-  /** Layers this dispatcher queued whose runtime poll has not caught up yet,
-   * with the time of the queue. The window is short: it only bridges the
+  /** The newest value requested for each continuous lane while a command is in
+   * flight. A repeated or flipping input compares against this, not against the
+   * rendered state that still shows the value from before the command. */
+  const intents = new Map<string, unknown>();
+  /** Layers this dispatcher queued whose runtime poll has not caught up yet, with
+   * the time and project of the queue. The window is short: it only bridges the
    * poll, it never keeps a stale queue alive. */
-  const justQueued = new Map<number, number>();
+  const justQueued = new Map<number, { at: number; epoch: number }>();
   const queuedWindowMs = 1500;
   const queuedRecently = () => {
     const now = Date.now();
-    for (const [layerId, at] of justQueued) if (now - at > queuedWindowMs) justQueued.delete(layerId);
+    const epoch = deps.projectEpoch();
+    for (const [layerId, entry] of justQueued) {
+      if (now - entry.at > queuedWindowMs || entry.epoch !== epoch) justQueued.delete(layerId);
+    }
     return justQueued.size > 0;
+  };
+  /** A task captured now runs only while the same project is open. */
+  const inThisProject = (task: Task): Task => {
+    const epoch = deps.projectEpoch();
+    return () => (deps.projectEpoch() === epoch ? task() : undefined);
   };
 
   const layerById = (layerId: number | null | undefined) =>
@@ -167,6 +210,9 @@ export function createPerformControlDispatcher(deps: PerformControlDispatcherDep
     return stage ? { ok: true, layer, index, stage } : { ok: false, reason: "missing-stage" };
   };
 
+  const handled: PerformDispatchOutcome = { handled: true };
+  const unchanged: PerformDispatchOutcome = { handled: false, reason: "unchanged" };
+
   const dispatch = (input: PerformRoutedInput): Promise<PerformDispatchOutcome> => {
     switch (input.action) {
       case "VideoClipSlotTrigger": {
@@ -176,80 +222,117 @@ export function createPerformControlDispatcher(deps: PerformControlDispatcherDep
         if (slotId === null || slotId === undefined || !layer.clip_slots?.some((slot) => slot.id === slotId)) {
           return Promise.resolve({ handled: false, reason: "missing-slot" });
         }
-        // Same steps as pressing the pad: select the layer and clip, then queue it.
-        deps.selectLayer(layer.id);
-        deps.selectSlot(slotId);
-        return lanes.ordered("launch", async () => {
+        const epoch = deps.projectEpoch();
+        return lanes.ordered("launch", inThisProject(async () => {
+          // Same steps as pressing the pad: select the layer and clip, then queue it.
+          // Selecting here, in order, keeps a following Take on this layer.
+          deps.selectLayer(layer.id);
+          deps.selectSlot(slotId);
           const result = await deps.queueSlot(layer.id, slotId);
-          if (result) justQueued.set(layer.id, Date.now());
-        }).then(() => ({ handled: true as const }));
+          if (result) justQueued.set(layer.id, { at: Date.now(), epoch });
+        })).then(() => handled);
       }
       case "VideoTake": {
+        const epoch = deps.projectEpoch();
         return lanes.ordered<PerformDispatchOutcome>("launch", async () => {
+          if (deps.projectEpoch() !== epoch) return { handled: false, reason: "unsupported" };
           if (!deps.takeEnabled() && !queuedRecently()) {
-            deps.report?.("Take ignored: no clip is queued.");
+            // A beat fires every division; only a controller press deserves a message.
+            if (input.source !== "beat") deps.report?.("Take ignored: no clip is queued.");
             return { handled: false, reason: "nothing-queued" };
           }
           justQueued.clear();
           await deps.take();
-          return { handled: true };
+          return handled;
         }).then((outcome) => outcome ?? { handled: false, reason: "unsupported" });
       }
       case "VideoLayerStop": {
         const layer = layerById(input.layer_id);
         if (!layer) return Promise.resolve({ handled: false, reason: "missing-layer" });
         justQueued.delete(layer.id);
-        return lanes.ordered("launch", () => deps.stopLayer(layer.id)).then(() => ({ handled: true as const }));
+        return lanes.ordered("launch", inThisProject(() => deps.stopLayer(layer.id))).then(() => handled);
       }
       case "VideoLayerBlendMode": {
         const layer = layerById(input.layer_id);
         if (!layer) return Promise.resolve({ handled: false, reason: "missing-layer" });
         const mode = performBlendModes[selectorIndex(input.value, performBlendModes.length)];
-        if (layer.blend_mode === mode) return Promise.resolve({ handled: false, reason: "unchanged" });
-        return lanes.latest(`blend:${layer.id}`, () => deps.setBlendMode(layer.id, mode))
-          .then(() => ({ handled: true as const }));
+        const key = `blend:${layer.id}`;
+        if ((intents.has(key) ? intents.get(key) : layer.blend_mode) === mode) return Promise.resolve(unchanged);
+        intents.set(key, mode);
+        return lanes.latest(key, inThisProject(() => deps.setBlendMode(layer.id, mode)), { onIdle: () => intents.delete(key) })
+          .then(() => handled);
       }
       case "VideoTransitionKind": {
         if (deps.transitionLocked()) return Promise.resolve({ handled: false, reason: "transition-running" });
         const kind = performTransitionKinds[selectorIndex(input.value, performTransitionKinds.length)];
-        if (deps.transitionKind() === kind) return Promise.resolve({ handled: false, reason: "unchanged" });
+        if (deps.transitionKind() === kind) return Promise.resolve(unchanged);
         deps.setTransitionKind(kind);
-        return Promise.resolve({ handled: true });
+        return Promise.resolve(handled);
       }
       case "VideoTransitionTime": {
         if (deps.transitionLocked()) return Promise.resolve({ handled: false, reason: "transition-running" });
         // The mapping range is in the displayed unit (seconds, beats or bars);
         // the stored value is thousandths of it.
         const milliunits = Math.max(1, Math.min(600_000, Math.round(input.value * 1000)));
-        if (deps.transitionDurationMilliunits() === milliunits) return Promise.resolve({ handled: false, reason: "unchanged" });
+        if (deps.transitionDurationMilliunits() === milliunits) return Promise.resolve(unchanged);
         deps.setTransitionDurationMilliunits(milliunits);
-        return Promise.resolve({ handled: true });
+        return Promise.resolve(handled);
       }
       case "VideoIsfStageEnabled": {
         const resolved = resolveStage(input);
         if (!resolved.ok) return Promise.resolve({ handled: false, reason: resolved.reason });
-        const enabled = input.toggle ? !resolved.stage.enabled : input.active;
-        if (resolved.stage.enabled === enabled) return Promise.resolve({ handled: false, reason: "unchanged" });
-        return lanes.latest(`stage:${resolved.layer.id}:${resolved.index}`, () =>
-          deps.setIsfStageEnabled(resolved.layer.id, resolved.index, enabled)).then(() => ({ handled: true as const }));
+        const stageId = input.isf_stage_id as number;
+        const key = `stage:${resolved.layer.id}:${stageId}`;
+        // A press flips what the last press asked for, so two presses inside one
+        // command round trip still alternate.
+        const base = intents.has(key) ? intents.get(key) === true : resolved.stage.enabled;
+        const enabled = input.toggle ? !base : input.active;
+        if (base === enabled) return Promise.resolve(unchanged);
+        intents.set(key, enabled);
+        const layerId = resolved.layer.id;
+        return lanes.latest(key, inThisProject(async () => {
+          if (!(await deps.fxIdle())) {
+            deps.report?.("Effect stage change skipped: another effect command is still running.");
+            return;
+          }
+          // Resolve the index now, after any move or remove has settled.
+          const fresh = resolveStage(input);
+          if (fresh.ok) await deps.setIsfStageEnabled(layerId, fresh.index, enabled);
+        }), { onIdle: () => intents.delete(key) }).then(() => handled);
       }
       case "VideoIsfParam": {
         const resolved = resolveStage(input);
         if (!resolved.ok) return Promise.resolve({ handled: false, reason: resolved.reason });
         const control = resolved.stage.controls.find((candidate) => candidate.name === input.control);
         if (!control || !isfControlIsMappable(control)) return Promise.resolve({ handled: false, reason: "missing-control" });
-        const { layer, index } = resolved;
+        const stageId = input.isf_stage_id as number;
+        const layerId = resolved.layer.id;
+        const name = control.name;
         if (control.kind === "Event") {
-          if (!input.active) return Promise.resolve({ handled: false, reason: "unchanged" });
-          return lanes.ordered(`isf-event:${layer.id}:${index}:${control.name}`, () =>
-            deps.triggerIsfEvent(layer.id, index, control.name)).then(() => ({ handled: true as const }));
+          if (!input.active) return Promise.resolve(unchanged);
+          // A pulse already running owns the next one; a fader's stream is one pulse.
+          return lanes.pulse(`isf-event:${layerId}:${stageId}:${name}`, inThisProject(async () => {
+            if (!(await deps.fxIdle())) return;
+            const fresh = resolveStage(input);
+            if (fresh.ok) await deps.triggerIsfEvent(layerId, fresh.index, name);
+          })).then(() => handled);
         }
         const next = isfControlValueAt(control, input.value);
         if (next === null) return Promise.resolve({ handled: false, reason: "unsupported" });
-        if (Math.abs(control.value[0] - next) < 1e-6) return Promise.resolve({ handled: false, reason: "unchanged" });
-        const value: [number, number, number, number] = [next, control.value[1], control.value[2], control.value[3]];
-        return lanes.latest(`isf:${layer.id}:${index}:${control.name}`, () =>
-          deps.setIsfControl(layer.id, index, control.name, value)).then(() => ({ handled: true as const }));
+        const key = `isf:${layerId}:${stageId}:${name}`;
+        const base = intents.has(key) ? Number(intents.get(key)) : control.value[0];
+        if (Math.abs(base - next) < 1e-6) return Promise.resolve(unchanged);
+        intents.set(key, next);
+        return lanes.latest(key, inThisProject(async () => {
+          if (!(await deps.fxIdle())) {
+            deps.report?.("Effect parameter change skipped: another effect command is still running.");
+            return;
+          }
+          const fresh = resolveStage(input);
+          const current = fresh.ok ? fresh.stage.controls.find((candidate) => candidate.name === name) : undefined;
+          if (!fresh.ok || !current) return;
+          await deps.setIsfControl(layerId, fresh.index, name, [next, current.value[1], current.value[2], current.value[3]]);
+        }), { spacingMs: isfParamCommitSpacingMs, onIdle: () => intents.delete(key) }).then(() => handled);
       }
     }
   };

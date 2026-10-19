@@ -18510,7 +18510,12 @@ export default function App() {
     }
   };
   const [controlAssignRequest, setControlAssignRequest] = createSignal<ControlAssignRequest | null>(null);
-  const closeControlAssignMenu = () => setControlAssignRequest(null);
+  const closeControlAssignMenu = (restoreFocus = false) => {
+    const element = controlAssignRequest()?.element;
+    setControlAssignRequest(null);
+    // Escape or Close hands the keyboard back to the control it was opened on.
+    if (restoreFocus && element?.isConnected) element.focus({ preventScroll: true });
+  };
   // Leaving Learn closes the source menu with it.
   createEffect(() => { if (controlLearnMode() === null) setControlAssignRequest(null); });
   const controlAssignments = (): ControlAssignment[] => {
@@ -18533,8 +18538,11 @@ export default function App() {
     select: selectControlLearnElement,
     message: setMessage,
     assign: (request) => {
-      // Source choice is a MIDI feature: OSC and DMX bind controllers only.
-      if (request.mode === "midi") setControlAssignRequest(request);
+      // Source choice is a MIDI feature: OSC and DMX bind controllers only, and
+      // keep their own context menus.
+      if (request.mode !== "midi") return false;
+      setControlAssignRequest(request);
+      return true;
     },
     learn: (mode, targets) => {
       if (mode === "midi") return learnMidiControlForTargets(targets);
@@ -21839,17 +21847,10 @@ export default function App() {
   };
   // Perform MIDI targets and beat-division triggers run the same functions the
   // on-screen pad, Take button, selects and FX controls call.
-  const runLiveFxCommand = async (layerId: number, action: () => Promise<unknown> | unknown) => {
-    // A live FX command drops itself while another is in flight; wait a moment
-    // so a controller's newest value is not lost to a running edit.
-    for (let attempt = 0; attempt < 25 && fxLiveSession.busy(); attempt++) {
-      await new Promise<void>((done) => window.setTimeout(done, 40));
-    }
-    await fxLiveSession.run(layerId, async () => { await action(); });
-  };
   const performDispatcher = createPerformControlDispatcher({
     layers: () => snapshot().video.layers,
     effectCatalog: videoEffectCatalog,
+    projectEpoch: () => captureProjectAuthorityIdentity().project_epoch,
     clipRuntime: (layerId) => videoClipRuntime().layers.find((runtime) => runtime.layer_id === layerId) ?? null,
     takeEnabled: () => {
       const runtime = selectedVideoClipSlotRuntime();
@@ -21868,10 +21869,18 @@ export default function App() {
     setTransitionDurationMilliunits: (value) => setVideoClipTakeDurationMilliunits(
       Math.max(1, Math.min(600_000, Math.round(value || 1))),
     ),
+    // A live FX command drops itself while another is in flight (moves and
+    // removals included), so a queued controller command waits for it first.
+    fxIdle: async () => {
+      for (let attempt = 0; attempt < 25 && fxLiveSession.busy(); attempt++) {
+        await new Promise<void>((done) => window.setTimeout(done, 40));
+      }
+      return !fxLiveSession.busy();
+    },
     setIsfStageEnabled: (layerId, index, enabled) =>
-      runLiveFxCommand(layerId, () => setVideoLayerIsfEffectEnabled(layerId, index, enabled)),
+      fxLiveSession.run(layerId, () => setVideoLayerIsfEffectEnabled(layerId, index, enabled)),
     setIsfControl: (layerId, index, name, value) =>
-      runLiveFxCommand(layerId, () => setVideoLayerIsfControl(layerId, index, name, value)),
+      fxLiveSession.run(layerId, () => setVideoLayerIsfControl(layerId, index, name, value)),
     triggerIsfEvent: triggerVideoLayerIsfEvent,
     report: setMessage,
   });
@@ -21886,7 +21895,9 @@ export default function App() {
   createEffect(() => {
     const clock = snapshot().clock;
     if (paneWindow) return;
-    beatTriggers.observe(clock);
+    // The scheduler reads the mapping list and Learn state; those are not
+    // reasons to re-observe the clock.
+    untrack(() => beatTriggers.observe(clock));
   });
   onMount(() => {
     if (paneWindow) return;
@@ -27453,7 +27464,7 @@ export default function App() {
               closeControlAssignMenu();
               void removeMidiAssignments([assignment.mapping as MidiControlMapping], label);
             }}
-            onDismiss={closeControlAssignMenu}
+            onDismiss={(restoreFocus) => closeControlAssignMenu(restoreFocus)}
           />
         )}
       </Show>
@@ -29912,8 +29923,8 @@ export default function App() {
             onStartControlLearn={() => { setWorkspaceTab("touch"); setControlLearnMode("midi"); }}
             onLearn={learnMidiControl}
             onAddMapping={addMidiMapping}
-            onConnectControl={connectMidiControl}
-            onDisconnectControl={disconnectMidiControl}
+            onConnectControl={async () => { await connectMidiControl(); }}
+            onDisconnectControl={async () => { await disconnectMidiControl(); }}
             onLoadMappings={loadMidiMappings}
             onSaveMappings={saveMidiMappings}
             onRemoveMapping={removeMidiMapping}

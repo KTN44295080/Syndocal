@@ -54,7 +54,8 @@ assert.match(appSource, /midiFaderInput\.acceptRouted\(payload\)/);
 assert.match(appSource, /routePerformInput = \(input\) => \{ void performDispatcher\.dispatch\(input\); \}/);
 assert.match(appSource, /beatTriggers\.observe\(clock\)/);
 assert.match(appSource, /window\.setInterval\(\(\) => beatTriggers\.advance\(\), 25\)/);
-assert.match(appSource, /if \(paneWindow\) return;\s*beatTriggers\.observe/, "only the main window runs the beat clock");
+assert.match(appSource, /if \(paneWindow\) return;[\s\S]{0,260}untrack\(\(\) => beatTriggers\.observe\(clock\)\)/, "only the main window runs the beat clock, and it does not re-observe on mapping edits");
+assert.match(appSource, /const timer = window\.setInterval\(\(\) => beatTriggers\.advance\(\), 25\);/);
 const mainSource = readFileSync(resolve(here, "../src-tauri/src/main.rs"), "utf8");
 assert.match(mainSource, /MidiControlEvent::RendererRouted\(input\) => \{[\s\S]*?midi_renderer_routed::EVENT[\s\S]*?return;\s*\}/, "the native worker forwards routed input and issues no engine command");
 
@@ -91,18 +92,20 @@ assert.equal(fired[0].clip_slot_id, 101);
 assert.equal(fired[1].toggle, true, "a beat flips an effect stage");
 assert.equal(fired[0].toggle, false);
 assert.equal(scheduler.tick(1.4), 0);
-assert.equal(scheduler.tick(3.95), 0, "a gap over two beats is a resync");
-assert.equal(scheduler.tick(4.05), 3, "bar boundary fires the 1 bar Take as well as the 1 beat triggers");
-assert.equal(scheduler.tick(4.0), 0, "small clock jitter backwards is ignored");
-assert.equal(scheduler.tick(4.06), 0, "and does not re-fire the boundary");
+assert.equal(scheduler.tick(7.95), 0, "a gap over four beats is a resync");
+assert.equal(scheduler.tick(8.05), 3, "bar boundary fires the 1 bar Take as well as the 1 beat triggers");
+assert.equal(scheduler.tick(8.0), 0, "small clock jitter backwards is ignored");
+assert.equal(scheduler.tick(8.06), 0, "and does not re-fire the boundary");
 suspended = true;
-assert.equal(scheduler.tick(5.1), 0, "Learn suspends beat triggers");
+assert.equal(scheduler.tick(9.1), 0, "Learn suspends beat triggers");
 suspended = false;
-assert.equal(scheduler.tick(5.2), 0, "the suspended boundary is not replayed");
+assert.equal(scheduler.tick(9.2), 0, "the suspended boundary is not replayed");
 scheduler.reset();
-assert.equal(scheduler.tick(6.1), 0, "reset reseeds");
+assert.equal(scheduler.tick(10.1), 0, "reset reseeds");
 mappings = [];
-assert.equal(scheduler.tick(7.1), 0);
+assert.equal(scheduler.tick(11.1), 0);
+assert.ok(perform.beatDivisionCrossed(1.0, 4.9, 1), "a four beat advance still counts as playing on");
+assert.ok(!perform.beatDivisionCrossed(1.0, 5.1, 1), "more than four beats is a restart or seek");
 
 // A boundary that queues a clip and takes it queues first, whatever order the mappings were made in.
 {
@@ -136,6 +139,16 @@ assert.equal(scheduler.tick(7.1), 0);
   timed.observe(clock(8, 0.99));
   for (clockMs = 525; clockMs <= 650; clockMs += 25) timed.advance();
   assert.equal(extrapolated.length, 2, "beat 9 fires once");
+  // A snapshot that repeats the clock it already had carries no news: the anchor stays put.
+  const repeated = [];
+  clockMs = 0;
+  const repeatScheduler = perform.createBeatTriggerScheduler({ mappings: () => live, dispatch: () => repeated.push(Math.round(clockMs)), now: () => clockMs });
+  repeatScheduler.observe(clock(10, 0));
+  clockMs = 400;
+  assert.equal(repeatScheduler.observe(clock(10, 0)), 0);
+  clockMs = 500;
+  repeatScheduler.advance();
+  assert.deepEqual(repeated, [500], "the boundary at 500 ms fires because the repeated clock did not re-anchor");
   // A stalled poll stops extrapolating after the limit.
   const stalled = [];
   clockMs = 1000;
@@ -213,14 +226,24 @@ let kind = "Cut";
 let milliunits = 1000;
 let queueResult = { ok: true };
 const pending = [];
+let projectEpoch = 1;
+let fxHold = false;
+const fxPending = [];
+const controlTimes = [];
+let idleGate = Promise.resolve(true);
+let queueHold = false;
+const queuePending = [];
+const heldFx = async () => { if (fxHold) await new Promise((done) => fxPending.push(done)); };
 const deps = {
   layers: () => layers,
   effectCatalog: () => catalog,
   clipRuntime: () => null,
+  projectEpoch: () => projectEpoch,
+  fxIdle: () => idleGate,
   takeEnabled: () => takeEnabled,
   selectLayer: (id) => log.push(["selectLayer", id]),
   selectSlot: (id) => log.push(["selectSlot", id]),
-  queueSlot: async (layerId, slotId) => { log.push(["queue", layerId, slotId]); return queueResult; },
+  queueSlot: async (layerId, slotId) => { log.push(["queue", layerId, slotId]); if (queueHold) await new Promise((done) => queuePending.push(done)); return queueResult; },
   take: async () => { log.push(["take"]); return true; },
   stopLayer: async (id) => { log.push(["stop", id]); },
   setBlendMode: (id, mode) => new Promise((done) => { log.push(["blend", id, mode]); pending.push(done); }),
@@ -229,9 +252,9 @@ const deps = {
   transitionLocked: () => locked,
   setTransitionKind: (next) => { log.push(["kind", next]); kind = next; },
   setTransitionDurationMilliunits: (next) => { log.push(["time", next]); milliunits = next; },
-  setIsfStageEnabled: async (layerId, index, enabled) => { log.push(["stageEnabled", layerId, index, enabled]); },
-  setIsfControl: async (layerId, index, name, value) => { log.push(["control", layerId, index, name, value]); },
-  triggerIsfEvent: async (layerId, index, name) => { log.push(["event", layerId, index, name]); },
+  setIsfStageEnabled: async (layerId, index, enabled) => { log.push(["stageEnabled", layerId, index, enabled]); await heldFx(); },
+  setIsfControl: async (layerId, index, name, value) => { controlTimes.push(Date.now()); log.push(["control", layerId, index, name, value]); await heldFx(); },
+  triggerIsfEvent: async (layerId, index, name) => { log.push(["event", layerId, index, name]); await heldFx(); },
   report: (message) => log.push(["report", message]),
 };
 const dispatcher = dispatcherModule.createPerformControlDispatcher(deps);
@@ -339,6 +362,132 @@ assert.deepEqual(take(), [["control", 1, 1, "depth", [2, 0, 0, 0]]], "stage 2 of
 assert.equal(dispatcherModule.isfControlValueAt(gain, 2), 2, "positions clamp");
 assert.equal(dispatcherModule.isfControlValueAt(tint, 0.5), null);
 
+// A controller's newest value wins even while the rendered state still shows the old one.
+{
+  const sweep = dispatcherModule.createPerformControlDispatcher(deps);
+  const first = sweep.dispatch(act("VideoLayerBlendMode", { layer_id: 1, value: 0.15 }));
+  await drain();
+  const back = sweep.dispatch(act("VideoLayerBlendMode", { layer_id: 1, value: 0 }));
+  await drain();
+  assert.deepEqual(take(), [["blend", 1, "Add"]], "Add is in flight");
+  pending.shift()();
+  await drain();
+  assert.deepEqual(take(), [["blend", 1, "Normal"]], "Add and back to Normal ends on Normal although the layer still renders Normal");
+  pending.shift()();
+  await Promise.all([first, back]);
+  assert.deepEqual(await sweep.dispatch(act("VideoLayerBlendMode", { layer_id: 1, value: 0 })), { handled: false, reason: "unchanged" }, "the lane forgets its intent once idle");
+}
+
+// Two presses of a stage toggle inside one command round trip still alternate.
+{
+  const presses = dispatcherModule.createPerformControlDispatcher(deps);
+  fxHold = true;
+  const press = () => presses.dispatch(act("VideoIsfStageEnabled", { layer_id: 1, isf_stage_id: 901, toggle: true }));
+  const one = press();
+  await drain();
+  const two = press();
+  await drain();
+  assert.deepEqual(take(), [["stageEnabled", 1, 1, true]], "the first press enables the disabled stage");
+  fxPending.shift()();
+  await drain();
+  assert.deepEqual(take(), [["stageEnabled", 1, 1, false]], "the second press, made before the first finished, flips it back");
+  fxPending.shift()();
+  await Promise.all([one, two]);
+  fxHold = false;
+}
+
+// The stage index is resolved after the live FX queue is idle, so a move that was running cannot misdirect it.
+{
+  const gated = dispatcherModule.createPerformControlDispatcher(deps);
+  let open;
+  idleGate = new Promise((done) => { open = done; });
+  const call = gated.dispatch(act("VideoIsfStageEnabled", { layer_id: 1, isf_stage_id: 901, active: true }));
+  await drain();
+  assert.deepEqual(take(), [], "nothing runs while an effect command is in flight");
+  const savedLayers = layers;
+  const savedCatalog = catalog;
+  catalog = { ...catalog, effect_chains: [{ ...catalog.effect_chains[0], stages: [{ id: 901 }, { id: 900 }] }] };
+  layers = [layer(1, [101, 102], { isf_effect: { ...makeStage("Stage B", [control("depth", "Float")], false), stack: [makeStage("Stage A", [gain, pick, flag, pulse, tint])] } }), layer(2, [201])];
+  open(true);
+  await call;
+  assert.deepEqual(take(), [["stageEnabled", 1, 0, true]], "stage 901 moved to index 0 while waiting and is addressed there");
+  layers = savedLayers;
+  catalog = savedCatalog;
+  idleGate = Promise.resolve(false);
+  const skipped = await gated.dispatch(act("VideoIsfStageEnabled", { layer_id: 1, isf_stage_id: 900, active: false }));
+  assert.deepEqual(skipped, { handled: true });
+  assert.deepEqual(take().map((entry) => entry[0]), ["report"], "a command that never found the FX queue idle is reported, not applied");
+  idleGate = Promise.resolve(true);
+}
+
+// A pulse already running owns the next one; a controller stream is a single pulse.
+{
+  const pulses = dispatcherModule.createPerformControlDispatcher(deps);
+  fxHold = true;
+  const first = pulses.dispatch(act("VideoIsfParam", { layer_id: 1, isf_stage_id: 900, control: "flash", active: true }));
+  await drain();
+  const dropped = pulses.dispatch(act("VideoIsfParam", { layer_id: 1, isf_stage_id: 900, control: "flash", active: true }));
+  await drain();
+  assert.deepEqual(take(), [["event", 1, 0, "flash"]]);
+  fxPending.shift()();
+  await Promise.all([first, dropped]);
+  fxHold = false;
+  await pulses.dispatch(act("VideoIsfParam", { layer_id: 1, isf_stage_id: 900, control: "flash", active: true }));
+  assert.deepEqual(take(), [["event", 1, 0, "flash"]], "the next pulse runs once the first has finished");
+}
+
+// Authoritative ISF commits are thinned to the spacing, newest value last.
+{
+  const thinned = dispatcherModule.createPerformControlDispatcher(deps);
+  controlTimes.length = 0;
+  const calls = [0.1, 0.2, 0.3, 0.4].map((position) => thinned.dispatch(act("VideoIsfParam", { layer_id: 1, isf_stage_id: 900, control: "gain", value: position })));
+  await Promise.all(calls);
+  assert.equal(controlTimes.length, 2, "four quick values become the first and the newest");
+  assert.ok(controlTimes[1] - controlTimes[0] >= dispatcherModule.isfParamCommitSpacingMs - 20, "the second commit waited out the spacing: " + (controlTimes[1] - controlTimes[0]));
+  assert.deepEqual(take().map((entry) => entry[4][0]), [0.2, 0.8], "the first value goes out at once; the last arrival replaces the ones in between");
+}
+
+// Queued commands never run on another project, and a Take needs a queue from this project.
+{
+  const switching = dispatcherModule.createPerformControlDispatcher(deps);
+  queueHold = true;
+  const padOne = switching.dispatch(act("VideoClipSlotTrigger", { layer_id: 1, clip_slot_id: 101 }));
+  await drain();
+  const padTwo = switching.dispatch(act("VideoClipSlotTrigger", { layer_id: 1, clip_slot_id: 102 }));
+  const takeNow = switching.dispatch(act("VideoTake"));
+  projectEpoch = 2;
+  queueHold = false;
+  queuePending.shift()();
+  const results = await Promise.all([padOne, padTwo, takeNow]);
+  assert.deepEqual(take().filter((entry) => ["queue", "take", "selectLayer"].includes(entry[0])), [["selectLayer", 1], ["queue", 1, 101]], "only the command already running finished; the queued pad and Take were dropped");
+  assert.deepEqual(results[2], { handled: false, reason: "unsupported" });
+  projectEpoch = 1;
+}
+
+// Selection happens in order with each command, so a Take acts on the layer of the pad before it.
+{
+  const ordering = dispatcherModule.createPerformControlDispatcher(deps);
+  queueHold = true;
+  const padA = ordering.dispatch(act("VideoClipSlotTrigger", { layer_id: 1, clip_slot_id: 101 }));
+  const padB = ordering.dispatch(act("VideoClipSlotTrigger", { layer_id: 2, clip_slot_id: 201 }));
+  await drain();
+  assert.deepEqual(take(), [["selectLayer", 1], ["selectSlot", 101], ["queue", 1, 101]], "the second pad has not selected yet");
+  queueHold = false;
+  queuePending.shift()();
+  await Promise.all([padA, padB]);
+  assert.deepEqual(take(), [["selectLayer", 2], ["selectSlot", 201], ["queue", 2, 201]]);
+}
+
+// A beat that fires Take with nothing queued stays quiet; a controller press explains itself.
+{
+  const quiet = dispatcherModule.createPerformControlDispatcher(deps);
+  takeEnabled = false;
+  assert.deepEqual(await quiet.dispatch(act("VideoTake", { source: "beat" })), { handled: false, reason: "nothing-queued" });
+  assert.deepEqual(take(), []);
+  await quiet.dispatch(act("VideoTake"));
+  assert.deepEqual(take(), [["report", "Take ignored: no clip is queued."]]);
+}
+
 // ---------------------------------------------------------------- learn model
 const slotTarget = { action: "VideoClipSlotTrigger", label: "Layer 1 clip 2", layer_id: 1, clip_slot_id: 102 };
 const stageTarget = { action: "VideoIsfStageEnabled", label: "Layer 1 FX 1", layer_id: 1, isf_stage_id: 900 };
@@ -388,6 +537,9 @@ const matrix = read("components/VideoPerformMatrix.tsx");
 const desk = read("components/VideoPerformDesk.tsx");
 const quickFx = read("components/VideoPerformQuickFx.tsx");
 const editor = read("components/VideoFxParameterEditor.tsx");
+const mappingPanel = read("components/MidiControlMappingPanel.tsx");
+assert.match(mappingPanel, /<Show when=\{mapping\.message !== "BeatDivision" && !isPerformRoutedAction\(mapping\.action\)\}>\s*<details class="mappingFeedbackEditor">/, "tempo sources and renderer-owned targets offer no controller feedback");
+assert.match(desk, /disabled=\{Boolean\(props\.clipSlotBank\.runtime\?\.transition\) && !props\.performContext\?\.controlLearnActive\}/, "transition controls stay reachable for Learn");
 assert.match(matrix, /data-video-clip-slot-pad-index=\{cell\.index\} \{\.\.\.controlMappingTargetData\(cell\.slot \? \{ action: "VideoClipSlotTrigger"[\s\S]{0,160}clip_slot_id: cell\.slot\.id \} : null\)\}/, "every occupied pad targets its stable slot id");
 assert.match(matrix, /data-video-layer-stop=\{layer\(\)\.id\} \{\.\.\.controlMappingTargetData\(\{ action: "VideoLayerStop"/);
 assert.match(matrix, /data-video-layer-blend=\{layer\(\)\.id\} \{\.\.\.controlMappingTargetData\(\{ action: "VideoLayerBlendMode"/);

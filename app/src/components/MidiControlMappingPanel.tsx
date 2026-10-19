@@ -20,7 +20,7 @@ import type {
 } from "../types";
 import { formatMidiFeedbackMessage, type MidiFeedbackOutputStatus } from "../midiLearnFeedback";
 import { midiContinuousActions } from "../controlMappingLearn";
-import { beatDivisionLabel } from "../controlMappingPerform";
+import { beatDivisionLabel, isPerformRoutedAction } from "../controlMappingPerform";
 
 interface MidiControlMappingPanelProps {
   snapshot: EngineSnapshot;
@@ -577,6 +577,8 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
                   </span>
                 )}
               </Show>
+              {/* A beat division has no controller to echo to, and Perform state lives in the renderer. */}
+              <Show when={mapping.message !== "BeatDivision" && !isPerformRoutedAction(mapping.action)}>
               <details class="mappingFeedbackEditor">
                 <summary>{mapping.feedback ? "Edit feedback" : "Add feedback"}</summary>
                 <div class="mappingFeedbackEditorBody">
@@ -689,6 +691,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
                   </Show>
                 </div>
               </details>
+              </Show>
               <button onClick={() => props.onRemoveMapping(index())}>Remove</button>
             </div>
           )}

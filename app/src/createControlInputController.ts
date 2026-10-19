@@ -532,19 +532,29 @@ export function createControlInputController(options: ControlInputControllerOpti
    * The native input worker is fenced to the exact saved list, so a connected
    * worker is re-seated on the new one; the renderer then keeps receiving
    * routed Perform input. */
-  const editMidiMappingsAndReseat = async (
+  let midiMappingEditQueue: Promise<unknown> = Promise.resolve();
+  const editMidiMappingsAndReseat = (
     edit: (current: MidiControlMapping[]) => MidiControlMapping[],
     message: string,
   ): Promise<boolean> => {
-    if (midiLearnInFlight) return false;
-    const wasConnected = options.midiControlConnected();
-    options.setMidiMappings(edit);
-    if (wasConnected) {
-      if (options.midiMappings().length > 0) await connectMidiControl();
-      else await disconnectMidiControl();
-    }
-    options.setMessage(message);
-    return true;
+    // One edit at a time: each re-seat flushes and reconnects against the list it saw.
+    const run = async (): Promise<boolean> => {
+      if (midiLearnInFlight) return false;
+      const wasConnected = options.midiControlConnected();
+      options.setMidiMappings(edit);
+      let reseated = true;
+      if (wasConnected) {
+        reseated = options.midiMappings().length > 0
+          ? await connectMidiControl()
+          : await disconnectMidiControl();
+      }
+      // A failed re-seat has already said why; do not overwrite it with success.
+      if (reseated) options.setMessage(message);
+      return reseated;
+    };
+    const next = midiMappingEditQueue.then(run, run);
+    midiMappingEditQueue = next.catch(() => false);
+    return next;
   };
 
   /** Fire the target on a tempo division instead of a controller message. */
@@ -590,42 +600,48 @@ export function createControlInputController(options: ControlInputControllerOpti
     } catch (error) { options.setMessage(String(error)); }
   };
 
-  const connectMidiControl = async () => {
+  /** Resolves true only when the input is connected on the current project. */
+  const connectMidiControl = async (): Promise<boolean> => {
     const inputIndex = options.selectedMidiInput();
-    if (inputIndex === null) return reportMessage("No MIDI input selected.");
-    if (options.midiMappings().length === 0) return reportMessage("Add at least one MIDI mapping first.");
+    if (inputIndex === null) { reportMessage("No MIDI input selected."); return false; }
+    if (options.midiMappings().length === 0) { reportMessage("Add at least one MIDI mapping first."); return false; }
     let authority: ProjectAuthorityToken | null = null;
     try {
       await flushForInputAction();
       const capturedAuthority = options.captureProjectAuthorityIdentity();
       authority = capturedAuthority;
       const mappings = options.midiMappings();
-      if (mappings.length === 0) return reportMessage("Add at least one MIDI mapping first.");
+      if (mappings.length === 0) { reportMessage("Add at least one MIDI mapping first."); return false; }
       options.setMidiControlConnected(false);
       await connectInput( {
         inputIndex,
         mappings,
         expectedEpoch: capturedAuthority.project_epoch,
       });
-      if (!options.isProjectAuthorityIdentityCurrent(capturedAuthority)) return;
+      if (!options.isProjectAuthorityIdentityCurrent(capturedAuthority)) return false;
       options.setMidiControlConnected(true);
       options.setMessage(`MIDI control connected with ${mappings.length} mapping(s).`);
+      return true;
     } catch (error) {
-      if (authority !== null && !options.isProjectAuthorityIdentityCurrent(authority)) return;
+      if (authority !== null && !options.isProjectAuthorityIdentityCurrent(authority)) return false;
       options.setMidiControlConnected(false);
       options.setMessage(String(error));
+      return false;
     }
   };
-  const disconnectMidiControl = async () => {
+  /** Resolves true only when the input was disconnected on the current project. */
+  const disconnectMidiControl = async (): Promise<boolean> => {
     const authority = options.captureProjectAuthorityIdentity();
     try {
       await options.invoke("disconnect_midi_control", { expectedEpoch: authority.project_epoch });
-      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return false;
       options.setMidiControlConnected(false);
       options.setMessage("MIDI control disconnected.");
+      return true;
     } catch (error) {
-      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return false;
       options.setMessage(String(error));
+      return false;
     }
   };
   const connectMidiFeedback = async () => {

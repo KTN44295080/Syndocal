@@ -30621,15 +30621,23 @@ fn connect_midi_control(
             // renderer's ticketed commands. Forward the accepted input under the
             // same project/callback fences; no engine command is issued here.
             MidiControlEvent::RendererRouted(input) => {
-                let sequence = ui_sequence + 1;
-                let forwarded = run_if_installed_project_callback_epoch(
+                // Admission only decides whether this input may be forwarded. The
+                // emit itself runs after the guard is released, like the fader
+                // projection, so a slow webview can never hold project admission;
+                // the renderer re-checks the project epoch and connection session.
+                let permitted = run_if_installed_project_callback_epoch(
                     &project_external_command_admission_for_worker,
                     &callback_epoch_for_worker,
                     captured_callback_epoch,
                     &project_transaction_active_for_worker,
                     &callback_installed_for_worker,
-                    || {
-                        app.emit(
+                    || true,
+                )
+                .unwrap_or(false);
+                if permitted {
+                    let sequence = ui_sequence + 1;
+                    let forwarded = app
+                        .emit(
                             midi_renderer_routed::EVENT,
                             midi_renderer_routed::Input {
                                 connection: ui_connection,
@@ -30637,12 +30645,10 @@ fn connect_midi_control(
                                 input,
                             },
                         )
-                        .is_ok()
-                    },
-                )
-                .unwrap_or(false);
-                if forwarded {
-                    ui_sequence = sequence;
+                        .is_ok();
+                    if forwarded {
+                        ui_sequence = sequence;
+                    }
                 }
                 return;
             }

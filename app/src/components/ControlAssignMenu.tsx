@@ -22,7 +22,8 @@ export interface ControlAssignMenuProps {
   onLearn: () => void;
   onBeat: (division: number) => void;
   onRemove: (assignment: ControlAssignment) => void;
-  onDismiss: () => void;
+  /** `restoreFocus` is true when the keyboard closed the menu (Escape or Close). */
+  onDismiss: (restoreFocus?: boolean) => void;
 }
 
 /** Source choice for one control in Learn mode: the ordinary MIDI Learn or a
@@ -48,7 +49,7 @@ export function ControlAssignMenu(props: ControlAssignMenuProps) {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      props.onDismiss();
+      props.onDismiss(true);
     };
     const arrows = (event: KeyboardEvent) => {
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -107,7 +108,7 @@ export function ControlAssignMenu(props: ControlAssignMenuProps) {
           </ul>
         </Show>
       </div>
-      <button type="button" role="menuitem" class="controlAssignMenuClose" onClick={() => props.onDismiss()}>Close</button>
+      <button type="button" role="menuitem" class="controlAssignMenuClose" onClick={() => props.onDismiss(true)}>Close</button>
     </div>
   );
 }

@@ -177,7 +177,7 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
               <div class="videoPerformTransitionRow">
                 <label><span class="videoPerformFieldLabel">Transition</span><select data-video-perform-transition-kind value={props.clipSlotBank.transitionKind}
                   {...controlMappingTargetData({ action: "VideoTransitionKind", label: "Transition type" })}
-                  disabled={Boolean(props.clipSlotBank.runtime?.transition)} onInput={event => props.clipSlotBank.onSetTransitionKind(event.currentTarget.value as typeof props.clipSlotBank.transitionKind)}>
+                  disabled={Boolean(props.clipSlotBank.runtime?.transition) && !props.performContext?.controlLearnActive} onInput={event => props.clipSlotBank.onSetTransitionKind(event.currentTarget.value as typeof props.clipSlotBank.transitionKind)}>
                   <For each={["Cut", "Crossfade", "Dip", "Wipe", "Luma", "Displacement", "Blur", "Glitch", "Custom"]}>{kind => <option value={kind}>{kind}</option>}</For>
                 </select></label>
                 <label class="videoPerformDuration"><span class="videoPerformFieldLabel">Time</span><input type="number" data-video-perform-transition-duration min="0.001" max="600" step="0.001"

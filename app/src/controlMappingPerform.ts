@@ -63,13 +63,17 @@ export const beatDivisions = [
 export const beatDivisionLabel = (number: number): string =>
   beatDivisions.find((division) => division.number === number)?.label ?? `Beat ${number}`;
 
+/** The largest advance of the beat position that still counts as playing on: a
+ * longer one is a clock restart, a seek or a pause, and fires nothing. */
+export const beatResyncGapBeats = 4;
+
 /** A beat boundary crossed while the beat position moved from `previous` to
  * `next`: at most one, so a stall or a coarse update never produces a burst.
- * A jump backwards or a gap over two beats (clock reset, tap, pause) is a
- * resynchronization and fires nothing. */
+ * A jump backwards or a gap over `beatResyncGapBeats` (clock reset, tap, pause)
+ * is a resynchronization and fires nothing. */
 export const beatDivisionCrossed = (previous: number, next: number, beats: number): boolean => {
   if (![previous, next, beats].every(Number.isFinite) || beats <= 0) return false;
-  if (next <= previous || next - previous > 2) return false;
+  if (next <= previous || next - previous > beatResyncGapBeats) return false;
   return Math.floor(next / beats) > Math.floor(previous / beats);
 };
 
@@ -89,6 +93,8 @@ export interface PerformRoutedInput {
   active: boolean;
   /** A press that flips the target instead of setting it to `active`. */
   toggle?: boolean;
+  /** Set for a tempo trigger; a controller press omits it. */
+  source?: "beat";
 }
 
 const positiveInteger = (value: unknown): value is number =>
@@ -139,6 +145,7 @@ export function performRoutedInputFromBeatMapping(mapping: MidiControlMapping): 
     active: true,
     // A beat flips a stage once per boundary.
     toggle: action === "VideoIsfStageEnabled",
+    source: "beat",
   };
 }
 
@@ -169,14 +176,21 @@ export function createBeatTriggerScheduler(options: {
   const now = options.now ?? (() => performance.now());
   let previous: number | null = null;
   let anchor: { position: number; at: number; perMs: number } | null = null;
+  let lastClock: string | null = null;
   return {
-    /** Takes the clock of a newly applied snapshot. */
+    /** Takes the clock of a newly applied snapshot. A snapshot that repeats the
+     * clock it already had (the UI rewrites the object for unrelated state)
+     * carries no news and must not move the extrapolation anchor forward. */
     observe(clock: BeatClockObservation | null | undefined): number {
       if (!clock || !Number.isFinite(clock.beat_counter) || !Number.isFinite(clock.beat_phase)) {
         anchor = null;
         previous = null;
+        lastClock = null;
         return 0;
       }
+      const signature = `${clock.beat_counter}:${clock.beat_phase}:${clock.bpm}`;
+      if (signature === lastClock && anchor) return 0;
+      lastClock = signature;
       const bpm = Number.isFinite(clock.bpm) && clock.bpm > 0 && clock.bpm <= 1000 ? clock.bpm : 0;
       anchor = { position: clock.beat_counter + clock.beat_phase, at: now(), perMs: bpm / 60_000 };
       return this.tick(anchor.position);
@@ -212,7 +226,7 @@ export function createBeatTriggerScheduler(options: {
       for (const input of due) options.dispatch(input);
       return due.length;
     },
-    reset() { previous = null; anchor = null; },
+    reset() { previous = null; anchor = null; lastClock = null; },
   };
 }
 
