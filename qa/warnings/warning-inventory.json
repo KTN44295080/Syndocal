@@ -4744,6 +4744,16 @@
           ]
         },
         {
+          "package": "io",
+          "target": "build-script-build",
+          "targetKinds": [
+            "custom-build"
+          ],
+          "crateTypes": [
+            "bin"
+          ]
+        },
+        {
           "package": "protocol",
           "target": "protocol",
           "targetKinds": [
@@ -6406,8 +6416,8 @@
       ],
       "externalWarningAllows": [],
       "evidence": {
-        "commit": "e87ad9c9629bc25b847d9197216dd8aa20181dd8",
-        "capturedAt": "2026-08-20T08:22:11.152Z",
+        "commit": "15c323ef9ff48dd5a487132c068c36d083c3a105",
+        "capturedAt": "2026-10-19T19:51:46.844Z",
         "command": "cargo check -p syndocal --no-default-features --features spout --all-targets --locked --message-format=json",
         "toolchain": {
           "cargo": "1.97.1 (c980f4866 2026-06-30)",
