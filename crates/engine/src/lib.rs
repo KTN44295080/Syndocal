@@ -15,6 +15,7 @@ mod control_plane;
 mod managed_network_dmx_retirement;
 mod network_dmx_routes;
 mod output_ownership_retirement;
+mod output_activation_readiness;
 mod fixture_repatch;
 pub use fixture_repatch::FixturePatchChange;
 pub use managed_network_dmx_retirement::ManagedDmxRetirementScope;

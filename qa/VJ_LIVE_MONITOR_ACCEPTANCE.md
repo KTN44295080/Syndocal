@@ -1,6 +1,6 @@
 # VJ Live Monitor Acceptance
 
-Updated: 2026-07-14
+Updated: 2026-10-20
 
 ## Implemented contract
 
@@ -8,9 +8,9 @@ Control > VJ Desk now exposes two continuously refreshed buses instead of a manu
 
 - `PREVIEW` renders the layer staged with its `P` button.
 - `PROGRAM` renders the currently selected video output, including its composition routing, opacity, blackout and projection mapping.
-- The UI requests 320x180 JPEG frames at a 10 fps Program / 5 fps Preview budget through one serialized request loop. It never permits overlapping monitor requests.
+- Smooth requests 320x180 JPEG frames at 30 fps Program and 30 fps staged/active Preview (15 fps passive Preview). Balanced uses 15/15 fps; Low CPU retains 10/5 fps. Each bus has one independent request/decode operation in flight. JPEG is decoded with `createImageBitmap` onto canvas. Monitor-only backpressure protects real output; the persisted quality preference and measurements are documented in [Task 17 acceptance](MONITOR_OUTPUT_FPS_2026-10-19.md).
 - The loop stops outside VJ Desk and while the document is hidden. Target changes invalidate stale responses. Backend contention returns an immediate `busy` packet; the UI retains the last good frame and counts busy drops.
-- Each successful frame reports sequence, PTS, render time and JPEG encode time in a fixed 40-byte `SYLV` v1 header. Tauri returns the packet as a raw `ArrayBuffer`, avoiding the former JSON number-array and frontend PNG/data-URL path.
+- Each successful frame reports sequence, PTS, render time and JPEG encode time in the existing fixed 40-byte `SYLV` v2 header. Tauri returns the packet as a raw `ArrayBuffer`, avoiding JSON number arrays and frontend PNG/data URLs. Footers explicitly label monitor fps; active output readouts separately report successful native presents/SDK sends and estimated missed target slots.
 - The backend clamps requests to 640x360 / 230,400 pixels, JPEG quality 40-90 and Program decode budget 1-2. Renderer locks are released before JPEG encoding.
 
 The Preview bus now has an ephemeral transport that is separate from project and Program state:

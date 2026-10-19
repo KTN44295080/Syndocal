@@ -1953,7 +1953,7 @@ function installOperatorVjMockInPage() {
     packet[1] = 0x59;
     packet[2] = 0x4c;
     packet[3] = 0x56;
-    packet[4] = 1;
+    packet[4] = 2;
     packet[5] = 1;
     packet[6] = kind === "preview" ? 1 : 0;
     return packet;
@@ -2104,6 +2104,12 @@ function installOperatorVjMockInPage() {
         output_decode_previews: [],
       };
     }
+    if (command === "get_live_video_output_health") return [1, 3].map((outputId) => ({
+      outputId, kind: "display", deliveredFps: 30,
+      frameTimeP50Ms: 1_000 / 30, frameTimeP95Ms: 1_000 / 30, frameTimeP99Ms: 1_000 / 30,
+      droppedFrames: 0, targetFps: 30, deliveredFrames: 300, sampleCount: 120,
+      measurementBoundary: "present", lastFrameAgeMs: 5,
+    }));
     if (command === "get_live_video_monitor_frame") return monitorPacket(args.monitorKind);
     throw new Error("Unexpected Operator VJ viewport invoke: " + command);
   };
@@ -17400,7 +17406,17 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
       return selected && detailLabel === 'Stream Fill' && programLabel === 'Stream Fill' && monitorSynced;
     })()`,
     "Operator VJ output rail/detail/Program monitor synchronization",
-  );
+  ).catch(async (error) => {
+    const state = await client.evaluate(`(() => ({
+      selected: document.querySelector('.videoOutputRailButton[data-video-output-id="3"]')?.getAttribute('aria-current'),
+      detailLabel: document.querySelector('[data-video-output-detail-id="3"] > div:first-child > strong')?.textContent,
+      programLabel: document.querySelector('[data-live-video-monitor="program"] header span')?.textContent,
+      programStatus: document.querySelector('[data-live-video-monitor="program"] footer')?.textContent,
+      monitorRequests: window.__syndocalOperatorVjMock?.calls?.filter(call => call.command === 'get_live_video_monitor_frame').slice(-10),
+      healthRequests: window.__syndocalOperatorVjMock?.calls?.filter(call => call.command === 'get_live_video_output_health').length,
+    }))()`);
+    throw new Error(error.message + " Diagnostic state: " + JSON.stringify(state));
+  });
   const outputSelected = await readOperatorVjState(client);
   const outputLayout = await measureOperatorVjLayout(client, 7);
   const outerContainment = await measure(client, `operator-vj-${locale}-${viewport.width}x${viewport.height}`);

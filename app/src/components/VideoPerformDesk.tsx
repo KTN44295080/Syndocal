@@ -2,6 +2,7 @@ import { createMemo, createSignal, For, Match, mergeProps, Show, Switch, onClean
 import type { VideoClipLayerRuntimeSummary } from "../types";
 import type { VideoControlPanelProps } from "./VideoControlPanel";
 import { LiveVideoMonitorPanel } from "./LiveVideoMonitorPanel";
+import { LiveVideoOutputHealthReadout } from "./LiveVideoOutputHealthReadout";
 import { VideoStagePreviewButton } from "./VideoClipGridPanel";
 import { VideoPerformMatrix } from "./VideoPerformMatrix";
 import { VideoPerformQuickFx } from "./VideoPerformQuickFx";
@@ -156,6 +157,7 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
           title="Output"
           titleId="video-perform-output-title"
           context={<span data-no-localize>{outputContext()}</span>}
+          tools={<LiveVideoOutputHealthReadout outputs={props.liveMonitors.outputHealth} error={props.liveMonitors.outputHealthError} />}
           actions={<>
             <PaneIconButton kind="collapse" active={bottomCollapsed()} controls="video-perform-output-body"
               onToggle={() => setBottomCollapsed(!bottomCollapsed())} data={{ "data-video-perform-collapse": "output" }} />

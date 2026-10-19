@@ -24,6 +24,10 @@ mod seek_projection_tests;
 mod catch_up_tests;
 
 #[cfg(all(feature = "libav", test))]
+#[path = "libav_loop_wrap_tests.rs"]
+mod loop_wrap_tests;
+
+#[cfg(all(feature = "libav", test))]
 #[path = "libav_parallel_decode_tests.rs"]
 mod parallel_decode_tests;
 
@@ -148,6 +152,9 @@ struct LibavDecodeJob {
     path: PathBuf,
     signature: StillImageSignature,
     seek_before_decode: bool,
+    /// The open session was rewound in place for this request. A seek that
+    /// cannot rewind it must re-open the file, whatever the target position.
+    rewound: bool,
     /// The frame a continuation falls back on if the clip ends before the
     /// requested time: the latest frame this session decoded.
     terminal: Option<Arc<VideoFrame>>,
@@ -217,6 +224,10 @@ struct LibavDecodeSession {
     /// The frame after the cached one, decoded ahead: the frame the next
     /// continuation returns if its time is not past this frame's.
     next_frame: Option<Arc<VideoFrame>>,
+    /// The open session was rewound for a backward jump (a loop wrap): the next
+    /// decode must seek and flush even when the target is the clip start. It is
+    /// taken (cleared) by the decode that performs that seek.
+    rewind_pending: bool,
 }
 
 #[cfg(feature = "libav")]
@@ -613,6 +624,7 @@ impl LibavFrameDecoder {
         }
 
         let mut terminal = None;
+        let mut rewound = false;
         if decision == LibavSessionDecision::Continue {
             self.session_counters.sequential_continues =
                 self.session_counters.sequential_continues.saturating_add(1);
@@ -641,6 +653,25 @@ impl LibavFrameDecoder {
             } else {
                 terminal = cached_entry_index.map(|index| Arc::clone(&self.entries[index].frame));
             }
+        } else if let Some(index) = session_index
+            .filter(|&index| session_matches && self.sessions[index].last_request_ms.is_some())
+        {
+            // A backward or far jump on the same open media (every loop wrap)
+            // rewinds the demuxer and flushes the decoder in place. Re-probing
+            // the file and recreating the hardware decoder stalled the output
+            // loop for ~100ms per wrap; other inputs' look-aheads stay running.
+            self.session_counters.resets = self.session_counters.resets.saturating_add(1);
+            self.entries.retain(|entry| {
+                !render_input_cache_owner_matches(key, request.layer_id, entry.key, entry.layer_id)
+            });
+            let session = &mut self.sessions[index];
+            session.last_request_ms = None;
+            session.eof_sent = false;
+            session.decoder_drained = false;
+            session.next_frame = None;
+            session.rewind_pending = true;
+            rewound = true;
+            self.touch_input(key, request.layer_id);
         } else {
             if session_index.is_some() {
                 self.session_counters.resets = self.session_counters.resets.saturating_add(1);
@@ -669,6 +700,7 @@ impl LibavFrameDecoder {
             path,
             signature,
             seek_before_decode: decision == LibavSessionDecision::Reopen,
+            rewound,
             terminal,
         })
     }
@@ -893,6 +925,7 @@ impl LibavFrameDecoder {
             path,
             signature,
             seek_before_decode,
+            rewound,
             ..
         } = job;
         let frame = match primary_decode {
@@ -900,7 +933,7 @@ impl LibavFrameDecoder {
             Err(ref error)
                 if !matches!(error, VideoDecodeError::HardwareDecode { .. })
                     && seek_before_decode
-                    && request.position_ms > 0 =>
+                    && (request.position_ms > 0 || rewound) =>
             {
                 let mut fallback_session = match open_libav_session(
                     key,
@@ -1204,6 +1237,7 @@ fn open_libav_session(
         eof_sent: false,
         decoder_drained: false,
         next_frame: None,
+        rewind_pending: false,
     })
 }
 
@@ -1330,6 +1364,31 @@ fn decode_libav_session_frame(
     hardware_frames: &mut u64,
 ) -> Result<VideoFrame, VideoDecodeError> {
     let hardware = session.hardware;
+    // A rewound session must really be rewound: if the container cannot seek
+    // (raw elementary streams, image sequences, unseekable inputs) it would keep
+    // serving the old position or an already-drained decoder. Fail explicitly,
+    // unclassified, so `finish_decode` re-opens the file as it did before the
+    // in-place rewind existed, hardware or not.
+    let mut seek_before_decode = seek_before_decode;
+    if std::mem::take(&mut session.rewind_pending) {
+        // Consumed here so a failed rewind cannot leave the flag set.
+        let target_us = request
+            .position_ms
+            .saturating_mul(1_000)
+            .min(i64::MAX as u64) as i64;
+        #[cfg(test)]
+        let forced_failure = FORCE_REWIND_SEEK_FAILURE.with(Cell::get);
+        #[cfg(not(test))]
+        let forced_failure = false;
+        if forced_failure || session.input.seek(target_us, ..).is_err() {
+            return Err(decode_message(
+                request,
+                "rewinding the open session failed; re-opening the media",
+            ));
+        }
+        session.decoder.flush();
+        seek_before_decode = false;
+    }
     decode_libav_session_frame_inner(
         request,
         session,
@@ -1645,6 +1704,12 @@ fn decode_message(request: &VideoFrameRequest, message: impl Into<String>) -> Vi
         label: request.label.clone(),
         message: message.into(),
     }
+}
+
+#[cfg(all(test, feature = "libav"))]
+thread_local! {
+    /// Test-only injected failure of the in-place rewind seek.
+    static FORCE_REWIND_SEEK_FAILURE: Cell<bool> = const { Cell::new(false) };
 }
 
 #[cfg(test)]
@@ -1990,7 +2055,8 @@ mod tests {
             "repeated frame requests should create the scaler only once"
         );
         assert_eq!(decoder.sessions.len(), 1);
-        assert_eq!(decoder.session_counters.opens, 2);
+        // The backward jump (loop wrap) rewinds the open session in place.
+        assert_eq!(decoder.session_counters.opens, 1);
         assert_eq!(decoder.session_counters.resets, 1);
         assert!(decoder.session_counters.sequential_continues > 0);
         assert!(decoder.session_counters.frame_reuses >= 6);
@@ -2454,7 +2520,7 @@ mod tests {
             &fresh.decode_frame(&request).unwrap().unwrap(),
             "large forward jump",
         );
-        assert_eq!(sequential.session_counters.opens, 2);
+        assert_eq!(sequential.session_counters.opens, 1);
         assert_eq!(sequential.session_counters.resets, 1);
 
         request.position_ms = 100;
@@ -2465,7 +2531,7 @@ mod tests {
             &fresh.decode_frame(&request).unwrap().unwrap(),
             "backward reset",
         );
-        assert_eq!(sequential.session_counters.opens, 3);
+        assert_eq!(sequential.session_counters.opens, 1);
         assert_eq!(sequential.session_counters.resets, 2);
 
         let mut through_eof = LibavFrameDecoder::software_for_tests();

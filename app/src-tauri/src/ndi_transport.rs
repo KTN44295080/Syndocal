@@ -954,6 +954,9 @@ impl NdiOutputWorker {
                     );
                 }
             }
+            let readiness = activation.wait_until_ready(&worker_stop, Duration::from_secs(30));
+            let startup_ready = matches!(readiness, Ok(true));
+            let startup_error = readiness.err();
             let mut renderer = video::VideoPreviewRenderer::with_frame_provider(
                 video::VideoRuntimeConfig::default(),
                 video::DecoderBackedFrameProvider::new(
@@ -963,11 +966,14 @@ impl NdiOutputWorker {
                 )
                 .with_prefetch(0, 33),
             );
-            let target_interval = Duration::from_nanos(1_000_000_000 / 60);
-            let mut worker_error = None;
+            let mut output_health =
+                crate::live_video_output_health::OutputHealthWriter::register(output_id, "ndi");
+            let mut output_pacer = crate::video_output_pacer::VideoOutputPacer::new(
+                Duration::from_nanos(1_000_000_000 / 60),
+            );
+            let mut worker_error = startup_error;
             let mut failure_lease = None;
-            while !worker_stop.load(Ordering::Acquire) {
-                let started = Instant::now();
+            while startup_ready && !worker_stop.load(Ordering::Acquire) {
                 let presentation_sample = engine.video_presentation_sample();
                 let snapshot = &presentation_sample.snapshot;
                 let ownership = engine.output_ownership_status();
@@ -1202,7 +1208,9 @@ impl NdiOutputWorker {
                                                 frame_rate_d: 1,
                                                 rgba: frame.data,
                                             })
-                                            .map_err(|error| error.to_string())
+                                            .map_err(|error| error.to_string())?;
+                                        output_health.delivered();
+                                        Ok(())
                                     },
                                 );
                                 match send_result {
@@ -1399,9 +1407,7 @@ impl NdiOutputWorker {
                     eprintln!("NDI output '{endpoint_name}' stopped: {error}");
                     break;
                 }
-                if let Some(remaining) = target_interval.checked_sub(started.elapsed()) {
-                    std::thread::sleep(remaining);
-                }
+                output_pacer.wait_after_frame();
             }
             let teardown_lease = if let Some(lease) = failure_lease.take() {
                 lease

@@ -93,6 +93,8 @@ mod video_generator_commands;
 mod video_monitor_snapshot;
 use video_monitor_snapshot::capture_video_monitor_snapshot;
 mod live_video_monitor_packet;
+mod live_video_output_health;
+mod video_output_pacer;
 use live_video_monitor_packet::*;
 mod video_recording_lifecycle;
 mod video_recording_runtime;
@@ -80676,6 +80678,11 @@ fn vj_preview_frame_is_current(
         && rendered.generation == current.generation
 }
 
+#[tauri::command]
+fn get_live_video_output_health() -> Vec<live_video_output_health::LiveVideoOutputHealth> {
+    live_video_output_health::snapshots()
+}
+
 /// Returns one bounded Preview or Program monitor frame as a raw ArrayBuffer.
 ///
 /// The fixed 40-byte little-endian header is: magic[4], version/status/kind/pixel_format,
@@ -84329,6 +84336,8 @@ fn start_native_video_live_output(
         video::VideoRuntimeConfig::default(),
         video::DecoderBackedFrameProvider::new(decoder).with_prefetch(0, 33),
     );
+    let mut output_health =
+        live_video_output_health::OutputHealthWriter::register(output_id, "display");
     let mut initial_follow_last_valid = None;
     let mut first_validation_identity = None;
     let mut first_validation_boundary = None;
@@ -84410,7 +84419,9 @@ fn start_native_video_live_output(
                     || {
                         present_native_display_payload(presenter, &first_frame).map_err(|error| {
                             format!("Native Display output first frame failed: {error:?}")
-                        })
+                        })?;
+                        output_health.delivered();
+                        Ok(())
                     },
                 )
                 .map_err(|error| match error {
@@ -84483,7 +84494,12 @@ fn start_native_video_live_output(
                     return Ok(());
                 }
             }
-            let target_interval = Duration::from_nanos(1_000_000_000 / 60);
+            // The creation-thread first present precedes the shared start gate;
+            // missed-slot accounting begins with the paced render loop.
+            output_health.restart_cadence();
+            let mut output_pacer = video_output_pacer::VideoOutputPacer::new(
+                Duration::from_nanos(1_000_000_000 / 60),
+            );
             while !worker_stop.load(Ordering::Acquire) {
                 let frame_started = Instant::now();
                 let (width, height) = match window.inner_size() {
@@ -84577,7 +84593,9 @@ fn start_native_video_live_output(
                                                 format!(
                                                     "Native Display output present failed: {error:?}"
                                                 )
-                                            })
+                                            })?;
+                                        output_health.delivered();
+                                        Ok(())
                                     },
                                 ) {
                                     Ok(()) => {
@@ -84701,9 +84719,7 @@ fn start_native_video_live_output(
                         )),
                     );
                 }
-                if let Some(remaining) = target_interval.checked_sub(frame_started.elapsed()) {
-                    std::thread::sleep(remaining);
-                }
+                output_pacer.wait_after_frame();
             }
             Ok(())
         })
@@ -135515,6 +135531,7 @@ fn main() {
             set_vj_preview_speed,
             clear_vj_preview,
             get_live_video_monitor_frame,
+            get_live_video_output_health,
             get_debug_video_output_test_pattern,
             get_video_output_window_observation_v1,
             get_video_output_window_statuses,

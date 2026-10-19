@@ -3,6 +3,10 @@
 #[path = "spout_output_timing.rs"]
 mod spout_output_timing;
 
+#[cfg(test)]
+#[path = "spout_receiver_cadence_tests.rs"]
+mod receiver_cadence_tests;
+
 use std::{
     collections::HashMap,
     sync::{
@@ -909,6 +913,25 @@ impl SpoutRouteWorker {
                     return result;
                 }
             }
+            // Publication precedes Arm's Ready transition. Rendering before
+            // that transition would mistake its own startup fence for a fault.
+            let readiness_error = match activation.wait_until_ready(&worker_stop, Duration::from_secs(30)) {
+                Ok(true) => None,
+                Ok(false) => Some(None),
+                Err(error) => Some(Some(error)),
+            };
+            if let Some(error) = readiness_error {
+                if let Some(error) = error.as_ref() {
+                    eprintln!("Spout output startup stopped: {error}");
+                }
+                let result = finish_spout_output_worker(
+                    &engine, sender, &worker_teardown_lease, None, error,
+                );
+                if let Err(error) = &result {
+                    record_spout_worker_failure(&worker_failure, error.clone());
+                }
+                return result;
+            }
             // The strict show route is not established by construction or by
             // engine publication.  Both workers wait until both creation
             // leases were published, then each sends one cached opaque-black
@@ -1469,11 +1492,15 @@ where
     >,
 {
     let (teardown_lease_slot, render_failure_lease) = lease_slots;
-    let target_interval = Duration::from_nanos(1_000_000_000 / 60);
+    let mut output_pacer = crate::video_output_pacer::VideoOutputPacer::new(
+        Duration::from_nanos(1_000_000_000 / 60),
+    );
     let mut worker_error = None;
     let mut failure_lease = None;
     let mut follow_output_state = TimelineFollowOutputState::default();
     let mut timing = spout_output_timing::SpoutOutputTiming::from_env(output_id, sender_name);
+    let mut output_health =
+        crate::live_video_output_health::OutputHealthWriter::register(output_id, "spout");
     while !worker_stop.load(Ordering::Acquire) {
         let started = Instant::now();
         if timing.as_ref().is_some_and(|timing| timing.expired(started)) {
@@ -1500,9 +1527,7 @@ where
                 break;
             }
             if !show_control.pair_publication_complete() {
-                if let Some(remaining) = target_interval.checked_sub(started.elapsed()) {
-                    std::thread::sleep(remaining);
-                }
+                output_pacer.wait_after_frame();
                 continue;
             }
             match show_control.presentation_is_keepalive_black() {
@@ -1515,6 +1540,9 @@ where
                         &mut sender,
                         show_control,
                     );
+                    if keepalive_result.is_ok() {
+                        output_health.delivered();
+                    }
                     if let (Some(timing), Some(start)) = (timing.as_mut(), send_started) {
                         timing.sent(start.elapsed(), keepalive_result.is_ok(), true);
                     }
@@ -1524,9 +1552,7 @@ where
                             OutputPresentationRevalidationError::SafetyChanged(_)
                                 | OutputPresentationRevalidationError::PresentationChanged(_)
                         ) {
-                            if let Some(remaining) = target_interval.checked_sub(started.elapsed()) {
-                                std::thread::sleep(remaining);
-                            }
+                            output_pacer.wait_after_frame();
                             continue;
                         }
                         let error = error.to_string();
@@ -1541,9 +1567,7 @@ where
                         eprintln!("Spout output '{sender_name}' stopped: {error}");
                         break;
                     }
-                    if let Some(remaining) = target_interval.checked_sub(started.elapsed()) {
-                        std::thread::sleep(remaining);
-                    }
+                    output_pacer.wait_after_frame();
                     continue;
                 }
                 Ok(false) => {}
@@ -1678,14 +1702,16 @@ where
                             || {
                                 if let Some(show_control) = show_control.as_ref() {
                                     if show_control.presentation_is_keepalive_black()? {
-                                        return send_authorized_show_spout_black(
+                                        send_authorized_show_spout_black(
                                             &engine,
                                             &authority,
                                             &mut sender,
                                             sender_name,
                                             show_control,
                                             "Spout physical keepalive send",
-                                        );
+                                        )?;
+                                        output_health.delivered();
+                                        return Ok(());
                                     }
                                     ensure_strict_show_spout_sender_name(
                                         &sender,
@@ -1696,6 +1722,7 @@ where
                                 }
                                 revalidate_final_sdk_authority(&engine, &authority)?;
                                 sender.send_image(&frame.data, frame.width, frame.height)?;
+                                output_health.delivered();
                                 if show_control.is_some() {
                                     ensure_strict_show_spout_sender_name(
                                         &sender,
@@ -1871,9 +1898,7 @@ where
             eprintln!("Spout output '{sender_name}' stopped: {error}");
             break;
         }
-        if let Some(remaining) = target_interval.checked_sub(started.elapsed()) {
-            std::thread::sleep(remaining);
-        }
+        output_pacer.wait_after_frame();
     }
 
     let finish = finish_spout_output_worker(

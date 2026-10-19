@@ -47,8 +47,10 @@ fn catch_up_real_gpu_two_outputs_350ms_cadence_preserves_sessions_and_seek_parit
             assert!(maximum <= 3 && mean <= 0.5, "layer {layer} position {position}: max={maximum}, mean={mean}");
         }
         let diagnostics = gpu.session_diagnostics();
-        let expected_opens = if position == 3_300 { 4 } else if position == 100 { 6 } else { 2 };
-        assert_eq!(diagnostics.opens, expected_opens, "{diagnostics:?}");
+        // Far and backward jumps rewind each open session in place: no re-open.
+        let expected_resets = if position == 3_300 { 2 } else if position == 100 { 4 } else { 0 };
+        assert_eq!(diagnostics.opens, 2, "{diagnostics:?}");
+        assert_eq!(diagnostics.resets, expected_resets, "{diagnostics:?}");
         assert_eq!(diagnostics.hardware_sessions, 2);
         assert_eq!(diagnostics.hardware_errors, 0);
     }
@@ -57,4 +59,39 @@ fn catch_up_real_gpu_two_outputs_350ms_cadence_preserves_sessions_and_seek_parit
     assert!(diagnostics.sequential_continues >= 10);
     assert!(diagnostics.hardware_frames >= 16);
     eprintln!("Real GPU two-output catch-up and seek parity: {diagnostics:?}");
+}
+
+#[test]
+#[ignore = "requires Windows D3D11VA and SYNDOCAL_GPU_TEST_VIDEO (>4 seconds)"]
+fn real_gpu_loop_wraps_rewind_the_hardware_session_in_place_fifty_times() {
+    let path = std::env::var("SYNDOCAL_GPU_TEST_VIDEO").expect("set original H264/HEVC video path");
+    ffmpeg::init().unwrap();
+    assert!(ffmpeg::format::input(&path).unwrap().duration() > 4_000_000);
+    let mut gpu = LibavFrameDecoder::new();
+    let mut request = VideoFrameRequest {
+        layer_id: 903, label: "Hardware loop wrap".into(),
+        source: protocol::VideoSourceSummary {
+            kind: VideoSourceKind::File, path: Some(path), name: None,
+            codec: Some("h264".into()), metadata: None,
+        }, position_ms: 0, width: 320, height: 128,
+    };
+    let expected = LibavFrameDecoder::software_for_tests().decode_frame(&request).unwrap().unwrap();
+    for wrap in 0..50_u64 {
+        // Alternate wraps before and after the end of the played range.
+        let end = if wrap % 2 == 0 { 1_000 } else { 300 };
+        for position in (0..=end).step_by(33) {
+            request.position_ms = position;
+            let frame = gpu.decode_frame(&request).unwrap().unwrap();
+            if position == 0 {
+                assert_eq!((frame.width, frame.height, frame.pts_ms), (expected.width, expected.height, expected.pts_ms), "wrap {wrap}");
+                let maximum = frame.data.iter().zip(&expected.data).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+                assert!(maximum <= 3, "wrap {wrap}: max channel delta {maximum}");
+            }
+        }
+    }
+    let diagnostics = gpu.session_diagnostics();
+    assert_eq!(diagnostics.opens, 1, "{diagnostics:?}");
+    assert_eq!(diagnostics.resets, 49, "{diagnostics:?}");
+    assert_eq!((diagnostics.errors, diagnostics.hardware_errors), (0, 0), "{diagnostics:?}");
+    assert_eq!(diagnostics.hardware_sessions, 1);
 }

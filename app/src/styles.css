@@ -5797,6 +5797,29 @@ progress {
   border-top-color: var(--theme-program);
 }
 
+.liveVideoMonitorViewport canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.liveVideoMonitorViewport canvas[hidden] { display: none; }
+.liveVideoMonitorProtection { color: var(--theme-queued); }
+.liveVideoOutputHealth {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: nowrap;
+  color: var(--theme-text);
+}
+.liveVideoOutputHealthItem { display: inline-flex; align-items: center; gap: 4px; }
+.liveVideoOutputHealthItem.stale, .liveVideoOutputHealthWarning { color: var(--theme-error); }
+.liveVideoOutputHealthMissed.idle { opacity: 0.6; }
+.liveVideoOutputHealthMissed.warning { color: var(--theme-queued); font-weight: 700; }
+.videoPerformPaneOutput .workspacePaneTools { min-width: 0; overflow: hidden; }
+
 .liveVideoMonitor > header,
 .liveVideoMonitor > footer {
   display: flex;

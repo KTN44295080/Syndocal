@@ -350,6 +350,7 @@ createRoot((cleanup) => {
   vj = createLiveVideoMonitorController({
     backendAvailable: () => true, active: () => true, layerCount: () => 1,
     previewLayerId: () => null, programOutputId: () => 70, width: 2, height: 1,
+    presentation: "image",
     invoke(command, args) { return new Promise((resolve) => vjRequests.push({ command, args, resolve })); },
   });
 });

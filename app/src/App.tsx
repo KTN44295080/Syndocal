@@ -728,6 +728,8 @@ import {
   prepareFinalizeAndCommitMediaAssets,
 } from "./mediaAssetAuthority";
 import { createLiveVideoMonitorController } from "./createLiveVideoMonitorController";
+import { createLiveVideoOutputHealthController } from "./createLiveVideoOutputHealthController";
+import { loadLiveVideoMonitorQuality, saveLiveVideoMonitorQuality, liveVideoMonitorQualityStorageKey } from "./liveVideoMonitorPolicy";
 import { createAppKeyboardController } from "./createAppKeyboardController";
 import { createStageMapController } from "./createStageMapController";
 import { appStatusFromMessage } from "./statusModel";
@@ -2031,6 +2033,7 @@ export default function App() {
   const [uiScale, setUiScale] = createSignal<UiScale>(loadUiScale());
   const [uiLocale, setUiLocale] = createSignal<UiLocale>(loadUiLocale());
   const [uiTheme, setUiTheme] = createSignal<UiTheme>(loadUiTheme());
+  const [monitorQuality, setMonitorQuality] = createSignal(loadLiveVideoMonitorQuality());
   const [setupSubTab, setSetupSubTab] = createSignal<SetupSubTab>(initialWorkspaceLayout.setup_sub_tab);
   const [controlMode, setControlMode] = createSignal<ControlMode>(initialWorkspaceLayout.control_mode);
   const activeTopSplitRatio = () =>
@@ -5448,6 +5451,7 @@ export default function App() {
     applyUiTheme(theme);
     saveUiTheme(theme);
   });
+  createEffect(() => saveLiveVideoMonitorQuality(monitorQuality()));
   // Same-origin pane webviews receive preference changes without reopening.
   // Re-read storage so an older queued event cannot replace a newer preference.
   const syncUiPreferences = (event: StorageEvent) => {
@@ -5455,6 +5459,7 @@ export default function App() {
     if (event.key === null || event.key === uiThemeStorageKey) setUiTheme(loadUiTheme());
     if (event.key === null || event.key === uiScaleStorageKey) setUiScale(loadUiScale());
     if (event.key === null || event.key === uiLocaleStorageKey) setUiLocale(loadUiLocale());
+    if (event.key === null || event.key === liveVideoMonitorQualityStorageKey) setMonitorQuality(loadLiveVideoMonitorQuality());
   };
   window.addEventListener("storage", syncUiPreferences);
   onCleanup(() => window.removeEventListener("storage", syncUiPreferences));
@@ -21501,13 +21506,18 @@ export default function App() {
     const intervalId = window.setInterval(() => void readVjPreviewTransport(), 250);
     onCleanup(() => window.clearInterval(intervalId));
   });
+  const liveVideoOutputHealth = createLiveVideoOutputHealthController({ invoke, backendAvailable: () => isTauriRuntime() });
   const liveVideoMonitors = createLiveVideoMonitorController({
     invoke,
     backendAvailable: () => isTauriRuntime(),
     active: () => ((workspaceTab() === "control" && controlMode() === "mixer") || (workspaceTab() === "touch" && (controlMode() === "both" || controlMode() === "perform"))),
     layerCount: () => snapshot().video.layers.length,
     previewLayerId: videoPreviewLayerId,
+    previewTransportGeneration: () => vjPreviewTransport().generation,
     programOutputId: selectedVideoOutputId,
+    quality: monitorQuality,
+    outputHealth: liveVideoOutputHealth.outputs,
+    outputHealthError: liveVideoOutputHealth.error,
   });
   const liveVideoPreviewLabel = createMemo(() =>
     snapshot().video.layers.find((layer) => layer.id === videoPreviewLayerId())?.label ?? null,
@@ -27128,6 +27138,7 @@ export default function App() {
         uiScale={uiScale()}
         uiLocale={uiLocale()}
         uiTheme={uiTheme()}
+        monitorQuality={monitorQuality()}
         canBack={snapshot().cues.length > 0}
         canGo={snapshot().cues.length > 0}
         canPauseFade={Boolean(snapshot().active_fade)}
@@ -27202,6 +27213,7 @@ export default function App() {
         onInstallUpdate={() => void installAvailableApplicationUpdate()}
         onUiLocale={setUiLocale}
         onUiTheme={setUiTheme}
+        onMonitorQuality={setMonitorQuality}
         onUndo={() => void undoProject()}
         onRedo={() => void redoProject()}
         onUiScale={(scale) => setUiScale(scale)}
@@ -28448,6 +28460,8 @@ export default function App() {
             windowState: videoOutputWindowState,
           }}
           liveMonitors={{
+            get outputHealth() { return liveVideoOutputHealth.outputs(); },
+            get outputHealthError() { return liveVideoOutputHealth.error(); },
             get preview() { return liveVideoMonitors.preview(); },
             get program() { return liveVideoMonitors.program(); },
             get previewLabel() { return liveVideoPreviewLabel(); },

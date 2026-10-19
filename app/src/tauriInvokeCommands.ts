@@ -148,6 +148,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "get_fixture_profile_health",
   "get_live_audio_input_capabilities",
   "get_live_video_monitor_frame",
+  "get_live_video_output_health",
   "get_media_asset_operation_terminal_result",
   "get_media_asset_preview_frame",
   "get_media_asset_thumbnail",

@@ -25,6 +25,18 @@ export const djLinkMachineBlockReasonText = (reason: string): string => ({
 }[reason] ?? "DJ Link is blocked until its machine authority can be verified.");
 
 const japaneseText: Record<string, string> = {
+  "Monitor quality": "モニター品質",
+  "Balanced": "バランス",
+  "Low CPU": "CPU負荷を抑える",
+  "Protecting output": "出力を優先中",
+  "Monitor rate reduced to protect real output": "本番出力を守るためモニターの更新頻度を下げています",
+  "Real output health": "本番出力の状態",
+  "Output health unavailable": "出力状態を取得できません",
+  "Missed": "欠落",
+  "Missed (10 s)": "直近10秒の欠落",
+  "Estimated missed output intervals": "目標の更新間隔に間に合わなかった回数の推定値",
+  "Display presents completed; drops estimate missed output intervals. Physical scanout is not measured.": "Displayの描画完了を計測。欠落は目標の更新間隔に間に合わなかった回数の推定値です。実際の画面表示は未計測です。",
+  "Sender accepted frames; drops estimate missed output intervals. Receiver delivery is not measured.": "送信処理が受け付けたフレームを計測。欠落は目標の更新間隔に間に合わなかった回数の推定値です。受信側への到達は未計測です。",
   "Effect problems": "エフェクトの問題",
   "Try on Preview": "プレビューで試す",
   "Edit a copy of this chain on Preview only. Program stays unchanged until you take it.": "このFXのコピーをプレビューだけで編集します。「本番へ反映」するまで本番映像は変わりません。",
@@ -4264,6 +4276,8 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [/^Missed output intervals in the last 10 s: (\d+); total since output start: (\d+)$/,
+    (recent, total) => `直近10秒に間に合わなかった更新間隔：${recent}回（出力開始からの累計：${total}回）`],
   [/^Publication sequence re-synchronised: stored request (\d+) was retired; request (\d+) is next\. No project data was changed\. Save again if a save was in progress\.$/,
     (stale, next) => `保存要求の番号を同期し直しました。古い要求 ${stale} を破棄し、次は ${next} です。プロジェクトのデータは変更していません。保存中だった場合はもう一度保存してください。`],
   [/^Last refused: (.+)\. Refused packets are ignored; a rising count means another device is sending ShowClock traffic or packets arrive late\.$/,

@@ -20,6 +20,7 @@ import { controlDomainModes, editDomainModes, setupAreaForSubTab, setupAreas, se
 import type { ControlDomain, ControlMode, SetupSubTab, WorkspaceTab } from "../uiModes";
 import { translateUiText, type UiLocale } from "../uiLocalization";
 import { uiThemeOptions, type UiTheme } from "../uiTheme";
+import { liveVideoMonitorQualityOptions, type LiveVideoMonitorQuality } from "../liveVideoMonitorPolicy";
 import { summarizeShowClockForShell } from "../showClockShell";
 import { TopbarPulseMeter } from "./TopbarPulseMeter";
 import { TopbarBpmControl } from "./TopbarBpmControl";
@@ -73,6 +74,7 @@ type WorkspaceChromeProps = {
   uiScale: 90 | 100 | 110;
   uiLocale: UiLocale;
   uiTheme: UiTheme;
+  monitorQuality: LiveVideoMonitorQuality;
   canBack: boolean;
   canGo: boolean;
   canPauseFade: boolean;
@@ -124,6 +126,7 @@ type WorkspaceChromeProps = {
   onUiLocale: (locale: UiLocale) => void;
   onUiScale: (scale: 90 | 100 | 110) => void;
   onUiTheme: (theme: UiTheme) => void;
+  onMonitorQuality: (quality: LiveVideoMonitorQuality) => void;
   onResetWorkspaceLayout: () => void;
   onLoadSample: () => void;
   onRunSmoke: () => void;
@@ -494,6 +497,16 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
                     </button>
                   )}
                 </For>
+              </div>
+              <div class="appProjectMenuLabel" role="separator"><span>Monitor quality</span></div>
+              <div class="uiScaleMenu" role="group" aria-label="Monitor quality">
+                <For each={liveVideoMonitorQualityOptions}>{(option) => <button
+                  type="button"
+                  data-monitor-quality={option.id}
+                  aria-pressed={props.monitorQuality === option.id}
+                  class={props.monitorQuality === option.id ? "active" : ""}
+                  onClick={() => props.onMonitorQuality(option.id)}
+                >{option.label}</button>}</For>
               </div>
               <div class="appProjectMenuLabel" role="separator">
                 <span>Workspace Layout</span>

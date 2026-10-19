@@ -1,12 +1,15 @@
-import { createSignal, Show } from "solid-js";
+import { createEffect, createSignal, Show } from "solid-js";
 import type { LiveVideoMonitorBusState, LiveVideoMonitorStatus } from "../createLiveVideoMonitorController";
 import type { VjPreviewTransportSummary } from "../types";
+import type { LiveVideoOutputHealth } from "../liveVideoMonitorPolicy";
 
 export interface LiveVideoMonitorPanelProps {
   preview: LiveVideoMonitorBusState;
   program: LiveVideoMonitorBusState;
   previewLabel: string | null;
   programLabel: string | null;
+  outputHealth?: readonly LiveVideoOutputHealth[];
+  outputHealthError?: string | null;
   previewTransport: VjPreviewTransportSummary;
   previewTransportBusy: boolean;
   previewTransportError: string | null;
@@ -42,8 +45,7 @@ const fallbackLabel = (kind: "preview" | "program", status: LiveVideoMonitorStat
 
 const timingLabel = (state: LiveVideoMonitorBusState) => {
   if (state.status !== "live") return null;
-  const processingMs = state.renderMs + state.encodeMs;
-  return `${state.fps.toFixed(1)} fps · ${processingMs.toFixed(1)} ms`;
+  return `${state.fps.toFixed(1)}fps`;
 };
 
 interface BusProps {
@@ -54,6 +56,17 @@ interface BusProps {
 
 function LiveVideoMonitorBus(props: BusProps) {
   const title = () => props.kind === "preview" ? "PREVIEW" : "PROGRAM";
+  let canvas: HTMLCanvasElement | undefined;
+  createEffect(() => {
+    const frame = props.state.frame;
+    if (!canvas || !frame) return;
+    if (canvas.width !== frame.width) canvas.width = frame.width;
+    if (canvas.height !== frame.height) canvas.height = frame.height;
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) return;
+    if ("data" in frame) context.putImageData(frame, 0, 0);
+    else context.drawImage(frame, 0, 0);
+  });
   return (
     <section
       class={`liveVideoMonitor liveVideoMonitor-${props.kind}`}
@@ -70,26 +83,27 @@ function LiveVideoMonitorBus(props: BusProps) {
         </Show>
       </header>
       <div class="liveVideoMonitorViewport">
+        <canvas ref={canvas} hidden={!props.state.frame} aria-label={props.kind === "preview" ? "Live preview monitor" : "Live program monitor"} />
         <Show
-          when={props.state.frameUrl}
+          when={props.state.frameUrl || props.state.frame}
           fallback={<span>{fallbackLabel(props.kind, props.state.status)}</span>}
         >
-          {(url) => (
+          <Show when={props.state.frameUrl}>{(url) => (
             <img
               src={url()}
               alt={props.kind === "preview" ? "Live preview monitor" : "Live program monitor"}
               draggable={false}
             />
-          )}
+          )}</Show>
         </Show>
       </div>
       <footer>
         <span class={`liveVideoMonitorStatus ${props.state.status}`}>{liveVideoMonitorStatusLabel(props.kind, props.state.status)}</span>
         <Show when={timingLabel(props.state)}>
-          {(timing) => <span class="tabularNums" data-no-localize>{timing()}</span>}
+          {(timing) => <span class="tabularNums" title={`${(props.state.renderMs + props.state.encodeMs).toFixed(1)}ms · ${props.state.busyDrops} busy`}><span>Monitor</span> <span data-no-localize>{timing()}</span></span>}
         </Show>
-        <Show when={props.state.busyDrops > 0}>
-          <span class="tabularNums" data-no-localize>{props.state.busyDrops} busy</span>
+        <Show when={props.state.throttled}>
+          <span class="liveVideoMonitorProtection" title="Monitor rate reduced to protect real output">Protecting output</span>
         </Show>
       </footer>
       <Show when={props.state.error}>
