@@ -504,6 +504,40 @@ export type ProjectPublicationStatusCommandV1 = ProjectPublicationCommandV1
 export type ProjectPublicationAdoptionCommandV1 = "adopt_project_publication_owner_v1";
 export type ProjectPublicationMissingResolutionCommandV1 = "resolve_missing_project_publication_v1";
 
+/** A stored publication request the journal can never accept was retired and
+ * the renderer's next request id was re-synchronised with the journal. */
+export interface ProjectPublicationSequenceResyncV1 {
+  staleRequestId: number;
+  expectedRequestId: number;
+  /** `settled`: already reserved and acknowledged; `unreserved`: above the
+   * journal's next id; `rejected`: the journal refused the dispatch itself. */
+  reason: "settled" | "unreserved" | "rejected";
+}
+
+// Pinned to the backend text by check-project-publication-e4.mjs. The backend
+// raises this only after proving that no pending or terminal receipt matches
+// the request and that the origin has no unresolved request, and it changes
+// nothing before raising it.
+const sequenceMismatchPattern = /Project publication request sequence must be (\d+), received (\d+)(?!\d)/;
+
+// The journal has no record of this origin (reset or restored): its first id is 1.
+const freshOriginPattern = /A new project publication origin must begin with request ID 1(?!\d)/;
+
+export const projectPublicationSequenceMismatchFromError = (
+  error: unknown,
+): { expectedRequestId: number; receivedRequestId: number | null } | null => {
+  const text = String(error);
+  const match = sequenceMismatchPattern.exec(text);
+  if (match) {
+    const expectedRequestId = Number(match[1]);
+    const receivedRequestId = Number(match[2]);
+    return isSafePositiveInteger(expectedRequestId) && isSafePositiveInteger(receivedRequestId)
+      ? { expectedRequestId, receivedRequestId }
+      : null;
+  }
+  return freshOriginPattern.test(text) ? { expectedRequestId: 1, receivedRequestId: null } : null;
+};
+
 export interface ProjectPublicationControllerV1Options {
   invokeStatus: (
     command: ProjectPublicationStatusCommandV1,
@@ -536,6 +570,8 @@ export interface ProjectPublicationControllerV1Options {
     intent: ProjectPublicationIntentV1,
     requestedSurface: ProjectPublicationSurfaceV1,
   ) => void;
+  /** Reported once each time a stale stored request is retired. */
+  onSequenceResynchronised?: (event: ProjectPublicationSequenceResyncV1) => void;
 }
 
 const publicationCommandForSurface = (surface: ProjectPublicationSurfaceV1): ProjectPublicationCommandV1 => {
@@ -717,6 +753,33 @@ export const createProjectPublicationControllerV1 = (
       }
       return recordStatus(status, intent.request);
     }
+    if (reply.kind === "stale") {
+      const stale = hasExactKeys(reply, ["kind", "schemaVersion", "request", "expectedRequestId", "reason"])
+        ? projectPublicationRequestFromUnknown(reply.request)
+        : null;
+      const expectedRequestId = reply.expectedRequestId;
+      const reason = reply.reason;
+      if (!stale || !projectPublicationRequestMatches(stale, intent.request)
+        || !isSafePositiveInteger(expectedRequestId)
+        || (reason !== "settled" && reason !== "unreserved")
+        || (reason === "settled"
+          ? expectedRequestId <= intent.request.requestId
+          : expectedRequestId >= intent.request.requestId)) {
+        throw new Error("Backend returned mismatched stale-publication evidence; the request was retained.");
+      }
+      // The journal proved this id can never be reserved and holds nothing for
+      // this origin, so the stored intent has no effect to recover. Retire it
+      // and continue from the journal's own next id; never dispatch it.
+      if (!discardStaleProjectPublicationIntent(intent.request, expectedRequestId)) {
+        throw new Error("The stale publication request changed before it could be retired.");
+      }
+      options.onSequenceResynchronised?.({
+        staleRequestId: intent.request.requestId,
+        expectedRequestId,
+        reason,
+      });
+      return null;
+    }
     const acknowledged = projectPublicationRequestFromUnknown(reply.request);
     if (reply.kind !== "acknowledged"
       || !hasExactKeys(reply, ["kind", "schemaVersion", "request", "shapeHash"])
@@ -733,11 +796,37 @@ export const createProjectPublicationControllerV1 = (
     return null;
   };
 
+  // The backend validates the origin sequence before it reserves or writes
+  // anything, so a rejected dispatch has no effect to recover. Browser storage
+  // can fall behind the journal (a crash or forced exit inside the storage
+  // flush window) or ahead of it; without this the same request id would be
+  // refused on every later autosave and Save. Retire exactly that request and
+  // take the id the journal named.
+  const retireRejectedSequence = (
+    intent: ProjectPublicationIntentV1,
+    error: unknown,
+  ): boolean => {
+    const mismatch = projectPublicationSequenceMismatchFromError(error);
+    if (!mismatch
+      || (mismatch.receivedRequestId !== null && mismatch.receivedRequestId !== intent.request.requestId)
+      || mismatch.expectedRequestId === intent.request.requestId
+      || !discardStaleProjectPublicationIntent(intent.request, mismatch.expectedRequestId)) {
+      return false;
+    }
+    options.onSequenceResynchronised?.({
+      staleRequestId: intent.request.requestId,
+      expectedRequestId: mismatch.expectedRequestId,
+      reason: "rejected",
+    });
+    return true;
+  };
+
   const publishFresh = async (
     surface: ProjectPublicationSurfaceV1,
     requestedReason: string | null,
     requestedPolicy: ProjectPublicationTargetPolicyV1,
     deferTerminalAcknowledgement: boolean,
+    resynchronised = false,
   ): Promise<ProjectPublicationStatusV1> => {
     const command = publicationCommandForSurface(surface);
     options.ensureMutationAllowed(command);
@@ -749,7 +838,16 @@ export const createProjectPublicationControllerV1 = (
       targetPolicy: requestedPolicy,
     });
     if (!intent) throw new Error("Unable to durably record the project publication request before it was sent.");
-    const status = await invokeParsed(command, intent.request);
+    let status: ProjectPublicationStatusV1 | null;
+    try {
+      status = await invokeParsed(command, intent.request);
+    } catch (error) {
+      // One re-synchronisation per call: a second refusal is a real fault.
+      if (!resynchronised && retireRejectedSequence(intent, error)) {
+        return publishFresh(surface, requestedReason, requestedPolicy, deferTerminalAcknowledgement, true);
+      }
+      throw error;
+    }
     if (!status) throw new Error("Backend did not return the project publication receipt.");
     await settleObserved(status, deferTerminalAcknowledgement);
     return status;
@@ -817,10 +915,18 @@ export const createProjectPublicationControllerV1 = (
           "A different durable project publication request is unresolved. Query/recover or explicitly abandon it before starting another action.",
         );
       }
-      const resumed = await invokeParsed(
-        publicationCommandForSurface(existing.request.surface),
-        existing.request,
-      );
+      let resumed: ProjectPublicationStatusV1 | null;
+      try {
+        resumed = await invokeParsed(
+          publicationCommandForSurface(existing.request.surface),
+          existing.request,
+        );
+      } catch (error) {
+        if (retireRejectedSequence(existing, error)) {
+          return publishFresh(surface, requestedReason, requestedPolicy, deferTerminalAcknowledgement, true);
+        }
+        throw error;
+      }
       if (!resumed) throw new Error("Backend did not return the resumed project publication receipt.");
       await settleObserved(resumed, deferTerminalAcknowledgement);
       return resumed;
@@ -1008,6 +1114,26 @@ export const adoptProjectPublicationIntentOwner = (
     ...envelope,
     intent: { version: 1, request: adoptedCanonical },
   });
+};
+
+/**
+ * Retire an unresolved request that the journal proved can never be reserved
+ * and make `expectedRequestId` the next id. Only the exact stored intent can
+ * be retired, and never while a terminal acknowledgement is queued.
+ */
+export const discardStaleProjectPublicationIntent = (
+  request: ProjectPublicationRequestV1,
+  expectedRequestId: number,
+): boolean => {
+  const envelope = readEnvelope();
+  if (!envelope
+    || envelope.acknowledgement
+    || !envelope.intent
+    || !projectPublicationRequestMatches(envelope.intent.request, request)
+    || !isSafePositiveInteger(expectedRequestId)
+    || expectedRequestId >= maxSafePublicationNumber
+    || expectedRequestId === request.requestId) return false;
+  return writeEnvelope({ ...envelope, intent: null, next_request_id: expectedRequestId });
 };
 
 /** Move the active request to the durable ACK queue after local application. */

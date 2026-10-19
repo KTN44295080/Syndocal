@@ -18,7 +18,10 @@ export interface LiveVideoMonitorPanelProps {
   onRetry: () => void;
 }
 
-const statusLabel = (kind: "preview" | "program", status: LiveVideoMonitorStatus) => {
+/** The readable (translatable) phrase for a monitor status code. Shared by every
+ * surface that reports a monitor so no raw code such as `desktop-required`
+ * reaches an operator. */
+export const liveVideoMonitorStatusLabel = (kind: "preview" | "program", status: LiveVideoMonitorStatus) => {
   switch (status) {
     case "desktop-required": return "Desktop required";
     case "paused": return "Paused";
@@ -81,7 +84,7 @@ function LiveVideoMonitorBus(props: BusProps) {
         </Show>
       </div>
       <footer>
-        <span class={`liveVideoMonitorStatus ${props.state.status}`}>{statusLabel(props.kind, props.state.status)}</span>
+        <span class={`liveVideoMonitorStatus ${props.state.status}`}>{liveVideoMonitorStatusLabel(props.kind, props.state.status)}</span>
         <Show when={timingLabel(props.state)}>
           {(timing) => <span class="tabularNums" data-no-localize>{timing()}</span>}
         </Show>

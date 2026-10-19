@@ -10072,6 +10072,36 @@ async function measure(client, label) {
       visibleEditVideoImportEntryCount: visibleCount(
         '[data-edit-video-import-disclosure] > summary'
       ),
+      // Edit > Video mounts the full Video Control surface (UI-H1-REACHABILITY-001,
+      // 36f9d1a3): its Media Library is a closed disclosure rail and Import Media is
+      // the mixer's own disclosure, not the retired library-only projection.
+      visibleVideoControlPanelMixerCount: visibleCount('.videoControlPanelMixer'),
+      videoMediaLibraryRailCount: document.querySelectorAll('[data-media-library-rail]').length,
+      videoMediaLibraryRailOpenCount: document.querySelectorAll('[data-media-library-rail][open]').length,
+      videoMediaLibraryRailSummaryAssetCount: (() => {
+        const summary = document.querySelector('[data-media-library-rail] > summary span');
+        const match = (summary?.textContent || '').match(/^(\\d+) asset\\(s\\)$/);
+        return match ? Number(match[1]) : -1;
+      })(),
+      videoMediaLibraryRailItemDomCount: document.querySelectorAll(
+        '[data-media-library-rail] .videoMediaLibraryItem'
+      ).length,
+      videoMediaLibraryRailEmptyStateDomCount: [...document.querySelectorAll(
+        '[data-media-library-rail] .videoMediaLibrarySurface > .emptyState'
+      )].filter((node) => (
+        (node.textContent || '').replace(/\\s+/g, ' ').trim() ===
+        'No Media Library assets. Import files to build the catalog.'
+      )).length,
+      videoMediaLibraryRailVerifyAllDomCount: [...document.querySelectorAll(
+        '[data-media-library-rail] .videoMediaLibraryActions button'
+      )].filter((button) => (button.textContent || '').trim() === 'Verify All').length,
+      videoMediaLibraryRailVerifyAllDisabled: Boolean([...document.querySelectorAll(
+        '[data-media-library-rail] .videoMediaLibraryActions button'
+      )].find((button) => (button.textContent || '').trim() === 'Verify All')?.disabled),
+      visibleVideoImportEntryCount: visibleCount('[data-vj-media-import-disclosure] > summary'),
+      videoImportDisclosureCount: document.querySelectorAll('[data-vj-media-import-disclosure]').length,
+      videoImportDisclosureOpenCount: document.querySelectorAll('[data-vj-media-import-disclosure][open]').length,
+      videoImportSurfaceCount: document.querySelectorAll('[data-vj-media-source-surface="mixer"]').length,
       visibleEditVideoPreviewCount: visibleCount('[data-edit-video-preview]'),
       visibleEditVideoInspectorCount: visibleCount('[data-edit-video-inspector]'),
       editVideoImportDisclosureCount: document.querySelectorAll('[data-edit-video-import-disclosure]').length,
@@ -12897,40 +12927,52 @@ function hasExpectedControlModeSurface(result) {
     );
   }
   if (mixerSurface) {
-    // Video is the source-preparation domain. The dense live mixer remains
-    // available through its dedicated operator paths, but must not replace the
-    // authored Media Library plus contextual Thumbnail/Properties layout here.
+    // Edit > Video hosts the full Video Control surface since
+    // UI-H1-REACHABILITY-001 (36f9d1a3 removed the library-only projection so
+    // Preview/Program, the clip grid and Take, layers, outputs and Import Media
+    // are reachable) and the Task 15 Edit/Control split kept it. The assertions
+    // that described the retired Media-Library-only layout were re-targeted to
+    // the same invariants on the current surface: one exclusive upper owner, a
+    // truthful Media Library, an operational library/import entry, a closed
+    // import disclosure, and the dense mixer present exactly once (never
+    // duplicated, never hidden behind the removed projection).
     const videoDomainChecks = {
       exclusiveUpperOwner:
         result.visibleEditDomainUpperPanelCount === 0 &&
         result.visibleLiveControlPanelCount === 0 &&
         result.visibleVideoControlPanelCount === 1 &&
-        result.visibleVideoMediaLibraryCount === 1,
+        result.visibleVideoControlPanelMixerCount === 1 &&
+        result.visibleEditVideoPreviewCount === 1 &&
+        result.visibleEditVideoInspectorCount === 1,
       truthfulLibraryContent:
+        result.videoMediaLibraryRailCount === 1 &&
+        result.videoMediaLibraryRailSummaryAssetCount === result.videoMediaLibraryRailItemDomCount &&
         (
-          result.visibleVideoMediaLibraryItemCount > 0 &&
-          result.visibleVideoMediaLibraryEmptyStateCount === 0
-        ) || (
-          result.visibleVideoMediaLibraryItemCount === 0 &&
-          result.visibleVideoMediaLibraryEmptyStateCount === 1 &&
-          result.videoMediaLibraryVerifyAllDisabled
+          (
+            result.videoMediaLibraryRailItemDomCount > 0 &&
+            result.videoMediaLibraryRailEmptyStateDomCount === 0
+          ) || (
+            result.videoMediaLibraryRailItemDomCount === 0 &&
+            result.videoMediaLibraryRailEmptyStateDomCount === 1 &&
+            result.videoMediaLibraryRailVerifyAllDisabled
+          )
         ),
       operationalLibraryEntry:
-        result.visibleVideoMediaLibraryVerifyAllCount === 1 &&
-        result.visibleEditVideoImportEntryCount === 1,
+        result.videoMediaLibraryRailVerifyAllDomCount === 1 &&
+        result.visibleVideoImportEntryCount === 1,
       contextualLowerPanes: hasExpectedPersistentWorkspaceBand(result),
       closedImportDisclosure:
-        result.editVideoImportDisclosureCount === 1 &&
-        result.editVideoImportDisclosureOpenCount === 0 &&
-        result.editVideoImportSurfaceCount === 1,
-      noDefaultDenseMixer:
-        result.visibleVideoMixerTopPaneCount === 0 &&
-        result.visibleVideoMixerContextPaneCount === 0 &&
-        result.visibleVideoMixerGridDividerCount === 0 &&
-        result.visibleVideoMonitorPanelCount === 0 &&
-        result.visibleVideoMasterControlCount === 0 &&
-        result.visibleVideoOutputControlListCount === 0 &&
-        result.visibleVideoLayerListCount === 0,
+        result.videoImportDisclosureCount === 1 &&
+        result.videoImportDisclosureOpenCount === 0 &&
+        result.videoImportSurfaceCount === 1,
+      denseMixerPresentOnce:
+        result.visibleVideoMixerTopPaneCount === 1 &&
+        result.visibleVideoMixerContextPaneCount === 1 &&
+        result.visibleVideoMixerGridDividerCount === 1 &&
+        result.visibleVideoMonitorPanelCount === 1 &&
+        result.visibleVideoMasterControlCount === 1 &&
+        result.visibleVideoOutputControlListCount === 1 &&
+        result.visibleVideoLayerListCount === 1,
       noLegacyPanels:
         result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
         result.visibleVideoMixerDiagnosticsCount === 0 &&
@@ -18398,10 +18440,10 @@ async function runTouchViewport(client, viewport) {
       writeFileSync(join(screenshotDir, `touch-${domain}-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
     }
   }
-  await clickVisibleSelector(client, '.controlBothHeaderActions button:first-child');
+  await clickVisibleSelector(client, '[data-workspace-pane-header] [data-control-both-open="lighting"]');
   assert.equal(await client.evaluate(`document.querySelector('[data-control-domain="lighting"]')?.getAttribute('aria-selected')`), "true");
   await clickVisibleSelector(client, '[data-control-domain="both"]');
-  await clickVisibleSelector(client, '.controlBothHeaderActions button:nth-child(2)');
+  await clickVisibleSelector(client, '[data-workspace-pane-header] [data-control-both-open="video"]');
   assert.equal(await client.evaluate(`document.querySelector('[data-control-domain="video"]')?.getAttribute('aria-selected')`), "true");
   return lighting;
 }
@@ -40047,13 +40089,14 @@ async function main() {
               },
               mixer: result.controlModeFailedChecks ?? [],
               library: [
-                result.visibleVideoMediaLibraryItemCount,
-                result.visibleVideoMediaLibraryEmptyStateCount,
-                result.visibleVideoMediaLibraryVerifyAllCount,
-                result.videoMediaLibraryVerifyAllDisabled,
-                result.visibleEditVideoImportEntryCount,
-                result.visibleVideoMediaLibraryAnyEmptyStateCount,
-                result.videoMediaLibraryEmptyStateTexts,
+                result.videoMediaLibraryRailCount,
+                result.videoMediaLibraryRailSummaryAssetCount,
+                result.videoMediaLibraryRailItemDomCount,
+                result.videoMediaLibraryRailEmptyStateDomCount,
+                result.videoMediaLibraryRailVerifyAllDomCount,
+                result.videoMediaLibraryRailVerifyAllDisabled,
+                result.visibleVideoImportEntryCount,
+                result.videoImportDisclosureOpenCount,
               ],
               sharedGrid: result.videoMixerSharedGrid ?? null,
               mixerMetrics: [

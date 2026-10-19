@@ -54,7 +54,7 @@ fn missing_publication_abandon_ack_and_next_sequence_survive_reply_loss() {
 }
 
 #[test]
-fn missing_publication_rejects_unknown_old_shape_gaps_and_unresolved_origin_without_mutation() {
+fn missing_publication_rejects_unknown_old_shape_and_unresolved_origin_without_mutation() {
     let mut durable = resolve_journal(&empty(), &request(1)).unwrap().1.unwrap();
     let preserved = durable.clone();
     assert!(resolve_journal(&durable, &request(2)).is_err());
@@ -64,11 +64,40 @@ fn missing_publication_rejects_unknown_old_shape_gaps_and_unresolved_origin_with
     let shape = project_publication_shape_hash_v1(&request(1)).unwrap();
     acknowledge_project_publication_receipt_in_state_v1(&mut durable, &request(1), &shape).unwrap();
     assert!(resolve_journal(&durable, &conflict).is_err());
-    assert!(resolve_journal(&durable, &request(3)).is_err());
-    assert!(resolve_journal(&empty(), &request(2)).is_err());
+    // A gap above the next sequence, or an id at/below the high-water mark with
+    // nothing unresolved, can never be reserved: the answer is a `stale` proof
+    // that carries the journal's next sequence and changes nothing.
+    let stale = |durable: &PersistedProjectRecoveryAuthorityState, id: u64| match resolve_journal(durable, &request(id)).unwrap() {
+        (MissingPublicationResolutionV1::Stale { request: echoed, expected_request_id, reason, .. }, write) => {
+            assert!(write.is_none(), "a stale proof must not mutate the journal");
+            assert_eq!(echoed, request(id));
+            (expected_request_id, reason)
+        }
+        other => panic!("expected a stale proof, got {other:?}"),
+    };
+    assert_eq!(stale(&durable, 3), (2, MissingPublicationStaleReasonV1::Unreserved));
+    assert_eq!(stale(&empty(), 2), (1, MissingPublicationStaleReasonV1::Unreserved));
     durable.publication_journal.origins[0].high_water_request_id = 3;
     durable.publication_journal.origins[0].acknowledged_request_id = 3;
-    assert!(resolve_journal(&durable, &request(1)).is_err());
+    assert_eq!(stale(&durable, 1), (4, MissingPublicationStaleReasonV1::Settled));
+    assert_eq!(stale(&durable, 2), (4, MissingPublicationStaleReasonV1::Settled));
+    assert_eq!(stale(&durable, 5), (4, MissingPublicationStaleReasonV1::Unreserved));
+    let wire = serde_json::to_value(resolve_journal(&durable, &request(1)).unwrap().0).unwrap();
+    assert_eq!(wire["kind"], "stale");
+    assert_eq!(wire["schemaVersion"], 1);
+    assert_eq!(wire["expectedRequestId"], 4);
+    assert_eq!(wire["reason"], "settled");
+    assert_eq!(wire["request"], serde_json::to_value(&request(1)).unwrap());
+    // An origin whose acknowledged id lags its high-water mark is not provably
+    // settled: the intent is kept for recovery instead of being retired.
+    let mut lagging = durable.clone();
+    lagging.publication_journal.origins[0].acknowledged_request_id = 1;
+    assert!(resolve_journal(&lagging, &request(2)).unwrap_err().contains("lags"));
+    // The exact next sequence is still the only id that may be abandoned.
+    assert!(matches!(
+        resolve_journal(&durable, &request(4)).unwrap().0,
+        MissingPublicationResolutionV1::Terminal { .. }
+    ));
     let mut pending = empty();
     pending.publication_journal.origins.push(PersistedProjectPublicationOriginV1 {
         origin_id: request(1).origin_id, high_water_request_id: 1, acknowledged_request_id: 0, acknowledged_shape_hash: None,

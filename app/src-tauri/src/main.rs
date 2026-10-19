@@ -79315,6 +79315,52 @@ fn arm_show_clock_output(
     state.arm_output(request)
 }
 
+/// Entering the Standby machine role ends this machine's managed exact
+/// `Lighting + Video` lease.  The managed fail-stop and exact release must run
+/// while the role is still the Both role that the lease was issued for: the
+/// DMX retirement step only accepts the Failed/Standby fence of a local Both
+/// failure.  Applying Standby first left the lease armed with a role the
+/// fail-stop could no longer retire, so the later window-destroyed boundary
+/// stayed Faulted and the exit gate kept a window-less process alive.
+///
+/// `retire_managed_output` runs before any lifecycle or transition lock is
+/// taken, because the fail-stop joins its worker and performs DMX/native I/O.
+///
+/// Standby only ever denies output, so it is never withheld: if the managed
+/// release cannot complete (its authority stays Faulted and retained) the
+/// Standby role is still applied and the failure is reported next to it.
+fn apply_standby_role_after_managed_boundary<T>(
+    retire_managed_output: impl FnOnce() -> Result<(), String>,
+    apply_role: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let managed = retire_managed_output();
+    let applied = apply_role()?;
+    match managed {
+        Ok(()) => Ok(applied),
+        Err(error) => Err(format!(
+            "Standby was applied, but the managed output lease could not be released: {error}"
+        )),
+    }
+}
+
+fn apply_standby_output_ownership_role_command(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    role: MachineOutputRole,
+) -> Result<OutputOwnershipStatus, String> {
+    apply_standby_role_after_managed_boundary(
+        || {
+            output_lease_keepalive_integration::execute_current_boundary(
+                app,
+                state,
+                output_lease::output_lease_keepalive::OutputLeaseKeepaliveBoundary::Standby,
+                "Managed output lease entering Standby role",
+            )
+        },
+        || apply_output_ownership_role(app, state, role),
+    )
+}
+
 // Both role commands only ever apply Standby. They run off the UI thread
 // because a Standby transition retires native video output windows and waits
 // for them to close.
@@ -79331,7 +79377,7 @@ async fn set_output_ownership_role(
     }
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        apply_output_ownership_role(&app, &state, role)
+        apply_standby_output_ownership_role_command(&app, &state, role)
     })
     .await
     .map_err(|error| format!("Output role worker failed: {error}"))?
@@ -79350,7 +79396,7 @@ async fn arm_output_ownership_role(
                     .to_string(),
             );
         }
-        apply_output_ownership_role(&app, &state, preferred_role)
+        apply_standby_output_ownership_role_command(&app, &state, preferred_role)
     })
     .await
     .map_err(|error| format!("Output role worker failed: {error}"))?
@@ -97003,6 +97049,78 @@ pub(crate) mod tests {
             "Display output admission must read only the published video-output projection"
         );
         assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn standby_role_retires_the_managed_lease_before_the_role_changes() {
+        use std::cell::RefCell;
+        let order = RefCell::new(Vec::new());
+        let applied = apply_standby_role_after_managed_boundary(
+            || {
+                order.borrow_mut().push("managed boundary");
+                Ok(())
+            },
+            || {
+                order.borrow_mut().push("apply Standby");
+                Ok(7)
+            },
+        );
+        assert_eq!(applied, Ok(7));
+        assert_eq!(*order.borrow(), ["managed boundary", "apply Standby"]);
+
+        // Standby only denies output, so a managed release that cannot finish
+        // (retained Faulted authority) never withholds it: the role is still
+        // applied and the operator sees the release failure.
+        let applied_after_failure = RefCell::new(false);
+        let reported = apply_standby_role_after_managed_boundary(
+            || Err("Managed output authority is already Faulted and remains retained".to_string()),
+            || {
+                *applied_after_failure.borrow_mut() = true;
+                Ok(())
+            },
+        );
+        assert!(*applied_after_failure.borrow());
+        let message = reported.unwrap_err();
+        assert!(message.starts_with("Standby was applied, but"), "{message}");
+        assert!(message.contains("remains retained"), "{message}");
+
+        // A Standby that cannot be applied is reported as that failure.
+        let apply_failed: Result<(), String> = apply_standby_role_after_managed_boundary(
+            || Ok(()),
+            || Err("Output ownership transition lock was poisoned".to_string()),
+        );
+        assert_eq!(apply_failed, Err("Output ownership transition lock was poisoned".to_string()));
+    }
+
+    #[test]
+    fn every_machine_role_standby_entry_point_uses_the_managed_boundary() {
+        let source = include_str!("main.rs");
+        let command_source = |name: &str| {
+            let start = source
+                .find(name)
+                .unwrap_or_else(|| panic!("missing {name}"));
+            let end = source[start..]
+                .find("\n#[tauri::command]")
+                .map(|offset| start + offset)
+                .unwrap_or(source.len());
+            &source[start..end]
+        };
+        for command in [
+            "async fn set_output_ownership_role(",
+            "async fn arm_output_ownership_role(",
+        ] {
+            let body = command_source(command);
+            assert!(
+                body.contains("apply_standby_output_ownership_role_command("),
+                "{command} must retire the managed lease through the Standby boundary"
+            );
+            assert!(
+                !body.contains("apply_output_ownership_role("),
+                "{command} must not apply Standby without the managed boundary"
+            );
+        }
+        let helper = command_source("fn apply_standby_output_ownership_role_command(");
+        assert!(helper.contains("OutputLeaseKeepaliveBoundary::Standby"));
     }
 
     #[test]

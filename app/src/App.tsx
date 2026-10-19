@@ -128,6 +128,7 @@ import { StagePreview2D } from "./components/StagePreview2D";
 import { EditVideoInspector } from "./components/EditVideoInspector";
 import { VideoControlPanel } from "./components/VideoControlPanel";
 import { ControlBothPanel } from "./components/ControlBothPanel";
+import { liveVideoMonitorStatusLabel } from "./components/LiveVideoMonitorPanel";
 import { VideoClipSlotInspectorPanel } from "./components/VideoClipSlotInspectorPanel";
 import { defaultAutoVjSnapshot } from "./components/AutoVjStrip";
 import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
@@ -15997,6 +15998,12 @@ export default function App() {
         `The previous ${description} request was abandoned. Choose ${requestedSurface.replaceAll("_", " ")} again to start a new request.`,
       );
     },
+    // Browser storage can lag the durable journal after a crash or forced exit.
+    // The stale stored request is retired (it can never be reserved) and the
+    // journal's own next id is adopted; nothing in the project is touched.
+    onSequenceResynchronised: (event) => setMessage(
+      `Publication sequence re-synchronised: stored request ${event.staleRequestId} was retired; request ${event.expectedRequestId} is next. No project data was changed. Save again if a save was in progress.`,
+    ),
   });
 
   const startProjectPublication = (
@@ -27465,8 +27472,8 @@ export default function App() {
         <Show when={workspaceTab() === "touch" && controlMode() === "both"}>
           <ControlBothPanel
             activeCueId={snapshot().active_cue_id ?? null}
-            activeCueLabel={activeCue()?.label ?? "None"}
-            nextCueLabel={nextCue()?.label ?? "No cue"}
+            activeCueLabel={activeCue()?.label ?? null}
+            nextCueLabel={nextCue()?.label ?? null}
             cueCount={snapshot().cues.length}
             timelinePlaying={snapshot().timeline.playing}
             timecode={formatShowTimecode(snapshot().timeline.position_ms)}
@@ -27479,9 +27486,9 @@ export default function App() {
             enabledVideoOutputCount={enabledVideoOutputCount()}
             videoOutputCount={snapshot().video.outputs.length}
             previewLabel={liveVideoPreviewLabel()}
-            previewStatus={liveVideoMonitors.preview().status}
+            previewStatus={liveVideoMonitorStatusLabel("preview", liveVideoMonitors.preview().status)}
             programLabel={liveVideoProgramLabel()}
-            programStatus={liveVideoMonitors.program().status}
+            programStatus={liveVideoMonitorStatusLabel("program", liveVideoMonitors.program().status)}
             clipCount={snapshot().video.layers.length}
             selectedClipLabel={selectedVideoClipSlotLayer()?.label ?? null}
             recordingLabel={videoRecordingStatus().active ? "Recording" : videoRecordingStatus().state ?? "Idle"}

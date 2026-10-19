@@ -2340,21 +2340,12 @@ h3 {
   overflow: hidden;
 }
 
-.controlBothHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.controlBothHeader > div:first-child,
 .controlBothCardHeader > div {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
 
-.controlBothHeaderActions,
 .controlBothActionRow {
   display: flex;
   align-items: center;
@@ -40405,6 +40396,15 @@ button.timelineExternalSourceCard:active,
   display: flex;
   align-items: center;
   gap: 8px;
+  white-space: normal;
+}
+
+/* The global 100%-wide input rule must not stretch the checkbox: it left the
+   label text wider than the Bank popup and made the list scroll sideways. */
+.timelineFollowEditor .toggleRow input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 0;
 }
 
 .timelineFollowEditor .timelineFollowHoldHint {

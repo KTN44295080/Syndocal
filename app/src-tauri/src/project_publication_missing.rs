@@ -1,5 +1,12 @@
 //! Retire an exact, never-reserved request from a retired renderer without
 //! dispatching it or touching any project, backup, target or staging file.
+//!
+//! A request whose sequence cannot be the origin's next one can never be
+//! reserved again. When the journal holds no unresolved entry for the origin,
+//! that is a proof, not a guess: every id up to the high-water mark was
+//! reserved and acknowledged, and ids above it were never reserved, so the
+//! renderer's stored intent is dead. The reply is `stale`, carries the
+//! sequence the journal will accept, and changes nothing in the journal.
 use super::*;
 
 #[derive(Debug, Serialize)]
@@ -17,6 +24,24 @@ pub(super) enum MissingPublicationResolutionV1 {
         #[serde(rename = "shapeHash")]
         shape_hash: String,
     },
+    Stale {
+        #[serde(rename = "schemaVersion")]
+        schema_version: u32,
+        request: ProjectPublicationRequestV1,
+        #[serde(rename = "expectedRequestId")]
+        expected_request_id: u64,
+        reason: MissingPublicationStaleReasonV1,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum MissingPublicationStaleReasonV1 {
+    /// The id is at or below the origin's high-water mark with nothing
+    /// unresolved: it was reserved earlier and already acknowledged.
+    Settled,
+    /// The id is above the next sequence: this journal never reserved it.
+    Unreserved,
 }
 
 pub(super) fn resolve_for_window(
@@ -95,7 +120,24 @@ fn resolve_journal(
         None => 1,
     };
     if request.request_id != expected {
-        return Err(format!("Missing publication resolution cannot prove this request was never reserved: expected {expected}, received {}. Keep the durable intent for recovery.", request.request_id));
+        // No pending or terminal entry exists for this origin (checked above),
+        // so the intent cannot be recovered and cannot be dispatched: report
+        // the sequence the journal accepts and leave the journal untouched.
+        // "Everything up to the high-water mark was acknowledged" is relied on
+        // here, but the journal validator only enforces ack <= high water, so
+        // check it: an origin whose acknowledged id lags its high-water mark
+        // is not provably settled and keeps the durable intent for recovery.
+        if origin.is_some_and(|origin| origin.acknowledged_request_id != origin.high_water_request_id) {
+            return Err(format!("Missing publication resolution found an origin whose acknowledged id lags its reserved id; keep the durable intent for recovery (expected {expected}, received {}).", request.request_id));
+        }
+        let reason = if request.request_id < expected {
+            MissingPublicationStaleReasonV1::Settled
+        } else {
+            MissingPublicationStaleReasonV1::Unreserved
+        };
+        return Ok((MissingPublicationResolutionV1::Stale {
+            schema_version: 1, request: request.clone(), expected_request_id: expected, reason,
+        }, None));
     }
     if journal.pending.len().saturating_add(journal.terminals.len()) >= MAX_PROJECT_PUBLICATION_TERMINALS {
         return Err("Missing publication resolution receipt capacity is full; settle existing receipts first".into());

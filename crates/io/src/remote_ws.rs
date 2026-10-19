@@ -101,10 +101,20 @@ const REMOTE_PAGE_HTML: &str = r##"<!doctype html>
     .cuePadHeader{display:grid;grid-template-columns:1fr auto auto auto auto;gap:8px;align-items:center}.compact{display:inline-flex;gap:6px;align-items:center}.compact input{min-height:0;width:auto}.cuePadGrid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.cuePad{display:grid;grid-template-columns:24px minmax(0,1fr);grid-template-rows:auto auto;gap:2px 8px;min-height:58px;text-align:left}.cuePad span{grid-row:1 / span 2;display:grid;width:24px;height:24px;place-items:center;border-radius:4px;background:#151b22;color:#91a0b2;font-weight:700}.cuePad strong,.cuePad small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cuePad.active{border-color:#74d99f;background:#173122}.cuePad.next{border-color:#5f9ddc}
     .sceneToolbar{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:end}.sceneSelectorGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:8px;max-height:260px;overflow:auto}.sceneButton{display:grid;grid-template-columns:28px minmax(0,1fr);grid-template-rows:auto auto auto auto;gap:2px 8px;min-height:72px;text-align:left}.sceneButton b{grid-row:1/span 4;display:grid;width:28px;height:28px;place-items:center;border-radius:5px;background:#151b22;color:#91a0b2;font-size:12px}.sceneButton strong,.sceneButton span,.sceneButton small,.sceneButton em{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sceneButton span,.sceneButton small{color:#91a0b2;font-size:11px}.sceneButton em{width:max-content;border:1px solid rgba(116,217,159,.58);border-radius:999px;background:rgba(116,217,159,.13);padding:1px 7px;color:#a8ff99;font-size:11px;font-style:normal;font-weight:700;text-transform:uppercase}.sceneButton.active{border-color:#74d99f;background:#173122}.sceneButton.next{border-color:#5f9ddc}.sceneButton.firstMatch{border-color:#74d99f;box-shadow:inset 0 0 0 1px rgba(116,217,159,.42)}
     .remoteTouchHeader{display:flex;align-items:center;justify-content:space-between;gap:8px}.remoteTouchPages{display:flex;gap:6px;overflow:auto}.remoteTouchPages button{min-width:72px;min-height:48px}.remoteTouchPages button.active{border-color:#f2c14e;background:#342719}.remoteTouchSurface{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:repeat(8,minmax(48px,1fr));gap:4px;min-height:384px;border:1px solid #323b48;background:#0d1116;padding:4px;overflow:hidden}.remoteTouchControl{display:grid;min-width:0;min-height:48px;place-items:stretch;border:1px solid #323b48;border-radius:3px;background:#171d25;overflow:hidden}.remoteTouchControl>button,.remoteTouchControl>label,.remoteTouchControl>div,.remoteTouchControl>strong{min-width:0;min-height:48px}.remoteTouchLabel,.remoteTouchImage,.remoteTouchUnsupported{display:grid;place-items:center;padding:6px;text-align:center}.remoteTouchButton{width:100%;height:100%;min-height:48px;font-weight:800}.remoteTouchButton.primary{font-size:19px}.remoteTouchFader{display:grid;grid-template-rows:auto minmax(48px,1fr) auto;place-items:center;gap:3px;padding:5px;color:#aab6c6;font-size:11px;text-align:center}.remoteTouchFader input{width:100%;min-height:48px;padding:0}.remoteTouchColor{display:grid;grid-template-rows:auto minmax(48px,1fr);place-items:stretch;gap:4px;padding:5px;color:#aab6c6;font-size:11px;text-align:center}.remoteTouchColor input{width:100%;height:100%;min-width:48px;min-height:48px;padding:3px}
+    .remoteDialogBackdrop{position:fixed;inset:0;z-index:50;display:grid;place-items:center;padding:14px;background:rgba(5,8,12,.74)}.remoteDialogBackdrop[hidden]{display:none}.remoteDialog [hidden]{display:none}
+    .remoteDialog{width:min(420px,100%);display:grid;gap:12px;border:1px solid #3d4654;border-radius:10px;background:#171d25;padding:16px;box-shadow:0 18px 48px rgba(0,0,0,.55)}.remoteDialog h2{font-size:17px}.remoteDialog p{margin:0;color:#c5d0de;line-height:1.4;overflow-wrap:anywhere}.remoteDialogActions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.remoteDialogActions button{min-height:48px}.remoteDialogActions button.danger{background:#7a1f24;border-color:#c04a50}.remoteDialog :focus-visible{outline:3px solid #f2c14e;outline-offset:2px}
     @media (max-width:640px){main{padding:10px}.grid,.triple,.summary,.liveGrid,.videoDeckControls,.effectDeckControls,.loopGrid,.sceneToolbar{grid-template-columns:1fr}.deckSlider{grid-template-columns:58px minmax(0,1fr) 48px}.cuePadHeader{grid-template-columns:1fr auto}.cuePadGrid{grid-template-columns:repeat(2,1fr)}header{align-items:flex-start;gap:8px;flex-direction:column}}
   </style>
 </head>
 <body>
+<div id="remoteDialog" class="remoteDialogBackdrop" hidden>
+  <div id="remoteDialogBox" class="remoteDialog" role="alertdialog" aria-modal="true" aria-labelledby="remoteDialogTitle" aria-describedby="remoteDialogMessage">
+    <h2 id="remoteDialogTitle"></h2>
+    <p id="remoteDialogMessage"></p>
+    <label id="remoteDialogField" hidden><span id="remoteDialogFieldLabel"></span><input id="remoteDialogInput" type="text" autocomplete="off" maxlength="16"></label>
+    <div class="remoteDialogActions"><button id="remoteDialogCancel" type="button"></button><button id="remoteDialogConfirm" type="button" class="primary"></button></div>
+  </div>
+</div>
 <main>
   <header><h1>Syndocal Remote</h1><span id="status" class="status bad">Disconnected</span></header>
   <section class="summary">
@@ -2146,15 +2156,18 @@ function applyRemotePositionFavorite(fixture_id,favorite_id){
   if(!fixture||!favorite)return;
   setRemotePanTiltValues(fixture,favorite.pan,favorite.tilt);
 }
-function addRemotePositionFavorite(fixture_id){
+async function addRemotePositionFavorite(fixture_id){
   const fixture=remoteFixtureById(fixture_id);
   const position=remotePositionControls(fixture);
   if(!fixture||!position)return;
+  // The position is captured when Store is pressed, not when the name is confirmed.
+  const pan=remoteDmxClamp(position.panValue);
+  const tilt=remoteDmxClamp(position.tiltValue);
   const fallback=`P${remotePositionFavorites.length+1}`;
-  const prompted=window.prompt("Position label",fallback);
+  const prompted=await remoteAskDialog({title:"Store position",message:"",inputLabel:"Position label",inputValue:fallback,confirmLabel:"Store",cancelLabel:"Cancel"});
   if(prompted===null)return;
   const label=String(prompted||fallback).trim().slice(0,16)||fallback;
-  const favorite={id:`${Date.now()}-${position.panValue}-${position.tiltValue}`,label,pan:remoteDmxClamp(position.panValue),tilt:remoteDmxClamp(position.tiltValue)};
+  const favorite={id:`${Date.now()}-${pan}-${tilt}`,label,pan,tilt};
   remotePositionFavorites=[
     favorite,
     ...remotePositionFavorites.filter(candidate=>!remotePositionFavoriteMatches({panValue:favorite.pan,tiltValue:favorite.tilt},candidate))
@@ -2386,7 +2399,71 @@ function sendCue(){const cue_id=selectedNumber("cueId");if(cue_id!==null)send({t
 function setRemoteEffectEnabled(effect_id,enabled){send({type:"setEffectEnabled",effect_id,enabled})}
 function setRemoteNodeGraphEnabled(graph_id,enabled){send({type:"setNodeGraphEnabled",graph_id,enabled})}
 function moveRemoteEffect(effect_id,delta){send({type:"moveEffect",effect_id,delta})}
-function removeRemoteEffect(effect_id,label){if(window.confirm(`Remove ${label}?`))send({type:"removeEffect",effect_id})}
+// In-page confirmation. The browser's built-in modal dialogs are never
+// used on this page: they block the page script, look different on every phone
+// and are suppressed by some embedded browsers.
+let remoteDialogState=null;
+function remoteDialogFocusable(){
+  return Array.from(document.getElementById("remoteDialogBox").querySelectorAll("button,input")).filter(element=>!element.disabled&&!element.closest("[hidden]"));
+}
+function remoteDialogClose(result){
+  const state=remoteDialogState;
+  if(!state)return;
+  remoteDialogState=null;
+  document.removeEventListener("keydown",remoteDialogKeyDown,true);
+  document.getElementById("remoteDialog").hidden=true;
+  document.querySelector("main").inert=false;
+  state.resolve(state.input?(result?document.getElementById("remoteDialogInput").value:null):Boolean(result));
+  if(state.restoreFocus&&state.restoreFocus.isConnected)state.restoreFocus.focus();
+}
+function remoteDialogKeyDown(event){
+  if(!remoteDialogState)return;
+  if(event.key==="Escape"){event.preventDefault();remoteDialogClose(false);return}
+  // The Enter that commits an IME composition must not confirm the dialog.
+  if(event.key==="Enter"&&!event.isComposing&&event.target&&event.target.id==="remoteDialogInput"){event.preventDefault();remoteDialogClose(true);return}
+  if(event.key!=="Tab")return;
+  const focusable=remoteDialogFocusable();
+  if(!focusable.length)return;
+  const first=focusable[0];
+  const last=focusable[focusable.length-1];
+  if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus()}
+  else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus()}
+  else if(!focusable.includes(document.activeElement)){event.preventDefault();first.focus()}
+}
+function remoteAskDialog(options){
+  if(remoteDialogState)remoteDialogClose(false);
+  const backdrop=document.getElementById("remoteDialog");
+  const input=document.getElementById("remoteDialogInput");
+  const cancelButton=document.getElementById("remoteDialogCancel");
+  const confirmButton=document.getElementById("remoteDialogConfirm");
+  const hasInput=typeof options.inputLabel==="string";
+  document.getElementById("remoteDialogBox").setAttribute("role",hasInput?"dialog":"alertdialog");
+  document.getElementById("remoteDialogTitle").textContent=options.title;
+  document.getElementById("remoteDialogMessage").textContent=options.message||"";
+  document.getElementById("remoteDialogMessage").hidden=!options.message;
+  document.getElementById("remoteDialogField").hidden=!hasInput;
+  document.getElementById("remoteDialogFieldLabel").textContent=hasInput?options.inputLabel:"";
+  input.value=hasInput?String(options.inputValue||""):"";
+  cancelButton.textContent=options.cancelLabel||"Cancel";
+  confirmButton.textContent=options.confirmLabel||"OK";
+  confirmButton.className=options.danger?"danger":"primary";
+  cancelButton.onclick=()=>remoteDialogClose(false);
+  confirmButton.onclick=()=>remoteDialogClose(true);
+  return new Promise(resolve=>{
+    remoteDialogState={resolve,input:hasInput,restoreFocus:document.activeElement};
+    // Document level, so Escape and Tab still work when focus fell back to the body.
+    document.addEventListener("keydown",remoteDialogKeyDown,true);
+    document.querySelector("main").inert=true;
+    backdrop.hidden=false;
+    // A destructive question starts on Cancel so one stray tap cannot confirm it.
+    (hasInput?input:options.danger?cancelButton:confirmButton).focus();
+    if(hasInput)input.select();
+  });
+}
+function removeRemoteEffect(effect_id,label){
+  remoteAskDialog({title:"Remove effect?",message:`${label} will be removed from the show.`,confirmLabel:"Remove",cancelLabel:"Keep",danger:true})
+    .then(confirmed=>{if(confirmed)send({type:"removeEffect",effect_id})});
+}
 function syncExternalVideoTransportsRemote(){
   send({type:"syncExternalVideoTransports"},false);
 }
@@ -8267,6 +8344,95 @@ mod tests {
             event_from_text(r#"{"type":"getExternalVideoTransportStatus"}"#),
             Err(RemoteParseError::UnknownType)
         );
+    }
+
+    /// Offsets of every use of a browser modal dialog (`confirm`, `alert`,
+    /// `prompt`) in `page`: bare or global-qualified calls and references, and
+    /// indexed forms such as `window["prompt"]`. Member calls on other objects
+    /// and longer identifiers are not dialogs.
+    fn browser_dialog_uses(page: &str) -> Vec<usize> {
+        const GLOBALS: [&str; 5] = ["window", "globalThis", "self", "top", "parent"];
+        let bytes = page.as_bytes();
+        let is_identifier = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$';
+        let mut found = Vec::new();
+        for name in ["confirm", "alert", "prompt"] {
+            for (start, _) in page.match_indices(name) {
+                let end = start + name.len();
+                if bytes.get(end).is_some_and(|byte| is_identifier(*byte)) {
+                    continue;
+                }
+                let next = page[end..].trim_start().chars().next();
+                if start > 0 && bytes[start - 1] == b'.' {
+                    let owner_end = start - 1;
+                    let owner_start = page[..owner_end]
+                        .rfind(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'))
+                        .map_or(0, |index| index + 1);
+                    if GLOBALS.contains(&&page[owner_start..owner_end]) {
+                        found.push(start);
+                    }
+                    continue;
+                }
+                if start > 0 && is_identifier(bytes[start - 1]) {
+                    continue;
+                }
+                let quoted_index = start > 1
+                    && matches!(bytes[start - 1], b'"' | b'\'' | b'`')
+                    && page[..start - 1].trim_end().ends_with('[')
+                    && bytes.get(end) == Some(&bytes[start - 1]);
+                if next == Some('(') || quoted_index {
+                    found.push(start);
+                }
+            }
+        }
+        found.sort_unstable();
+        found
+    }
+
+    /// The remote page runs in a phone or tablet browser. The browser's modal
+    /// dialogs are never used there: every question is an in-page dialog.
+    #[test]
+    fn remote_page_asks_questions_in_page_never_with_browser_dialogs() {
+        // The detector itself.
+        for hit in [
+            "if(window.confirm(`x`))go()",
+            "confirm('x')",
+            "alert (1)",
+            "const ask=window.prompt;",
+            "globalThis.alert('x')",
+            "window[\"prompt\"]('x')",
+            "self . confirm('x')",
+        ] {
+            assert!(!browser_dialog_uses(hit).is_empty(), "must flag: {hit}");
+        }
+        for miss in [
+            "remoteAskDialog({title:'x'})",
+            "options.confirm(1); other.alert(2)",
+            "confirmButton.onclick=()=>1",
+            "// the confirm/alert/prompt dialogs
+const confirmed=true;",
+            "function removeRemoteEffect(effect_id,label){}",
+        ] {
+            assert!(browser_dialog_uses(miss).is_empty(), "must not flag: {miss}");
+        }
+
+        let uses = browser_dialog_uses(REMOTE_PAGE_HTML);
+        assert!(
+            uses.is_empty(),
+            "the remote page must not use browser dialogs: {:?}",
+            uses.iter()
+                .map(|start| &REMOTE_PAGE_HTML[start.saturating_sub(40)..(start + 40).min(REMOTE_PAGE_HTML.len())])
+                .collect::<Vec<_>>()
+        );
+
+        // The in-page replacements exist and own every question.
+        let page = REMOTE_PAGE_HTML;
+        assert!(page.contains("id=\"remoteDialog\""));
+        assert!(page.contains("role=\"alertdialog\""));
+        assert!(page.contains("function remoteAskDialog("));
+        assert!(page.contains("remoteAskDialog({title:\"Remove effect?\""));
+        assert!(page.contains("danger:true"));
+        assert!(page.contains("inputLabel:\"Position label\""));
+        assert!(page.contains("event.key===\"Escape\""));
     }
 
     #[test]

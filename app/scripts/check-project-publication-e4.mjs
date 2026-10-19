@@ -264,6 +264,7 @@ try {
       onPending: (status) => calls.push(["pending", status.state]),
       onMissing: (intent) => calls.push(["missing", intent.request.requestId]),
       onAbandoned: (intent, surface) => calls.push(["abandoned", intent.request.requestId, surface]),
+      onSequenceResynchronised: (event) => calls.push(["resync", event]),
     });
     return { controller, calls };
   };
@@ -994,6 +995,216 @@ try {
   assert.deepEqual(publication.loadProjectPublicationAcknowledgement(), oldAck.request);
   assert.equal(lostAck.calls.some(call => call[0] === "capture-seed" || call[0] === "apply-terminal"), false);
 
+
+  // Browser storage can fall behind (or ahead of) the durable journal after a
+  // crash or forced exit. A stored request the journal can never reserve is
+  // retired and the journal's own next id is adopted; it is never dispatched,
+  // never accepted out of order, and never left failing on every autosave.
+  const storageKey = "syndocal.projectPublication.v1";
+  const seedStored = (requestId, ownerId, { acknowledgement = null, intent = true } = {}) => {
+    publication.clearProjectPublicationStorageForTests();
+    const created = publication.beginProjectPublicationIntent({ ...seed, ownerId });
+    const envelope = JSON.parse(storage.get(storageKey));
+    envelope.intent = intent ? { version: 1, request: { ...created.request, requestId } } : null;
+    envelope.next_request_id = requestId + 1;
+    envelope.acknowledgement = acknowledgement;
+    storage.set(storageKey, JSON.stringify(envelope));
+    return envelope.intent?.request ?? { ...created.request, requestId };
+  };
+  const resyncEvents = (calls) => calls.filter((call) => call[0] === "resync").map((call) => call[1]);
+
+  for (const stale of [
+    { reason: "settled", expectedRequestId: 92 },
+    { reason: "unreserved", expectedRequestId: 3 },
+  ]) {
+    for (const entry of ["start", "recover"]) {
+      const old = seedStored(85, retiredOwnerId);
+      const resolved = createControllerHarness({
+        currentOwnerId: adoptedOwnerId,
+        invokeStatus: async (command, request) => {
+          if (command === "get_project_publication_receipt_v1") return null;
+          assert.equal(command, "save_project_backup_v1");
+          assert.equal(request.requestId, stale.expectedRequestId, "the next request takes the journal's id");
+          assert.equal(request.ownerId, adoptedOwnerId);
+          return backupSuccessStatus(request);
+        },
+        resolveMissing: async (request) => ({ schemaVersion: 1, kind: "stale", request, ...stale }),
+      });
+      if (entry === "start") {
+        const saved = await resolved.controller.start("backup", "autosave");
+        assert.equal(saved.state, "succeeded");
+        assert.equal(saved.request.requestId, stale.expectedRequestId);
+        assert.equal(publication.loadProjectPublicationIntent(), null);
+        assert.equal(JSON.parse(storage.get(storageKey)).next_request_id, stale.expectedRequestId + 1);
+        assert.equal(resolved.calls.filter((call) => call[0] === "capture-seed").length, 1);
+      } else {
+        await resolved.controller.recover();
+        assert.equal(publication.loadProjectPublicationIntent(), null);
+        assert.equal(JSON.parse(storage.get(storageKey)).next_request_id, stale.expectedRequestId);
+        assert.equal(resolved.calls.some((call) => call[0] === "capture-seed" || call[0] === "invoke" && call[1] !== "get_project_publication_receipt_v1"), false,
+          "recovery retires the stale intent without publishing anything");
+      }
+      assert.deepEqual(resyncEvents(resolved.calls), [
+        { staleRequestId: old.requestId, expectedRequestId: stale.expectedRequestId, reason: stale.reason },
+      ]);
+      assert.equal(resolved.calls.some((call) => call[0] === "adopt-owner" || call[0] === "native-ack" && call[1] === old.requestId), false,
+        "a retired request is neither adopted nor acknowledged");
+    }
+  }
+
+  for (const [label, badReply] of [
+    ["settled but not above the stored id", (request) => ({ schemaVersion: 1, kind: "stale", request, reason: "settled", expectedRequestId: 3 })],
+    ["unreserved but not below the stored id", (request) => ({ schemaVersion: 1, kind: "stale", request, reason: "unreserved", expectedRequestId: 92 })],
+    ["same id", (request) => ({ schemaVersion: 1, kind: "stale", request, reason: "settled", expectedRequestId: 85 })],
+    ["unknown reason", (request) => ({ schemaVersion: 1, kind: "stale", request, reason: "gone", expectedRequestId: 92 })],
+    ["extra key", (request) => ({ schemaVersion: 1, kind: "stale", request, reason: "settled", expectedRequestId: 92, note: "x" })],
+    ["another request", (request) => ({ schemaVersion: 1, kind: "stale", request: { ...request, requestId: 86 }, reason: "settled", expectedRequestId: 92 })],
+    ["fractional id", (request) => ({ schemaVersion: 1, kind: "stale", request, reason: "settled", expectedRequestId: 92.5 })],
+  ]) {
+    seedStored(85, retiredOwnerId);
+    const before = storage.get(storageKey);
+    const invalid = createControllerHarness({
+      currentOwnerId: adoptedOwnerId,
+      invokeStatus: async () => null,
+      resolveMissing: async (request) => badReply(request),
+    });
+    await assert.rejects(() => invalid.controller.recover(), /evidence|resolution/, label);
+    assert.equal(storage.get(storageKey), before, `${label}: malformed stale evidence leaves the stored request untouched`);
+    assert.deepEqual(resyncEvents(invalid.calls), []);
+  }
+
+  // A queued terminal acknowledgement is never overwritten by a stale retirement.
+  {
+    const old = seedStored(85, retiredOwnerId);
+    assert.equal(publication.discardStaleProjectPublicationIntent({ ...old, requestId: 84 }, 92), false, "only the exact stored request");
+    assert.equal(publication.discardStaleProjectPublicationIntent(old, 85), false, "the expected id must differ");
+    assert.equal(publication.discardStaleProjectPublicationIntent(old, 0), false);
+    assert.equal(publication.discardStaleProjectPublicationIntent(old, Number.MAX_SAFE_INTEGER), false);
+    assert.equal(publication.queueProjectPublicationAcknowledgement(old), true);
+    const queued = storage.get(storageKey);
+    assert.equal(publication.discardStaleProjectPublicationIntent(old, 92), false);
+    assert.equal(storage.get(storageKey), queued);
+  }
+
+  // The same renderer's own request is rejected by the journal before it
+  // reserves anything: retire it once and continue from the journal's id.
+  const sequenceError = (expected, received) =>
+    new Error(`Project publication request sequence must be ${expected}, received ${received}`);
+  for (const [label, withIntent, surface] of [
+    ["stored intent resumed", true, "backup"],
+    ["no stored intent, counter behind", false, "backup"],
+  ]) {
+    const stored = seedStored(85, seed.ownerId, { intent: withIntent });
+    let dispatches = 0;
+    const requested = withIntent ? stored.requestId : 86 - 1 + 1;
+    const rejecting = createControllerHarness({
+      invokeStatus: async (command, request) => {
+        if (command === "get_project_publication_receipt_v1") return null;
+        dispatches += 1;
+        if (dispatches === 1) {
+          assert.equal(request.requestId, withIntent ? 85 : 86);
+          throw sequenceError(92, request.requestId);
+        }
+        assert.equal(request.requestId, 92);
+        return backupSuccessStatus(request);
+      },
+    });
+    const saved = await rejecting.controller.start(surface, "autosave");
+    assert.equal(saved.state, "succeeded", label);
+    assert.equal(dispatches, 2, `${label}: exactly one re-dispatch`);
+    assert.equal(publication.loadProjectPublicationIntent(), null, label);
+    assert.equal(resyncEvents(rejecting.calls).length, 1, label);
+    assert.equal(resyncEvents(rejecting.calls)[0].reason, "rejected");
+    assert.equal(resyncEvents(rejecting.calls)[0].expectedRequestId, 92);
+    assert.ok(requested > 0);
+  }
+
+  // A second refusal is a real fault: one re-synchronisation per call, no loop.
+  {
+    seedStored(85, seed.ownerId, { intent: false });
+    let dispatches = 0;
+    const faulty = createControllerHarness({
+      invokeStatus: async (command, request) => {
+        if (command === "get_project_publication_receipt_v1") return null;
+        dispatches += 1;
+        throw sequenceError(92 + dispatches, request.requestId);
+      },
+    });
+    await assert.rejects(() => faulty.controller.start("backup", "autosave"), /sequence must be/);
+    assert.equal(dispatches, 2, "one retry only");
+    assert.equal(resyncEvents(faulty.calls).length, 1);
+  }
+
+  // A refusal about a different id, or any other error, never retires a request.
+  for (const failure of [
+    sequenceError(92, 7),
+    new Error("Project publication origin already has an unresolved request; query and acknowledge or abandon it before beginning the next request"),
+    new Error("Project publication origin capacity is full"),
+  ]) {
+    const old = seedStored(85, seed.ownerId);
+    const before = storage.get(storageKey);
+    const refused = createControllerHarness({
+      invokeStatus: async (command) => {
+        if (command === "get_project_publication_receipt_v1") return null;
+        throw failure;
+      },
+    });
+    await assert.rejects(() => refused.controller.start("backup", "autosave"), (error) => error === failure);
+    assert.equal(storage.get(storageKey), before, "the stored request is kept for recovery");
+    assert.deepEqual(resyncEvents(refused.calls), []);
+    assert.deepEqual(publication.loadProjectPublicationIntent().request, old);
+  }
+
+  assert.deepEqual(publication.projectPublicationSequenceMismatchFromError(sequenceError(92, 85)), { expectedRequestId: 92, receivedRequestId: 85 });
+  assert.deepEqual(
+    publication.projectPublicationSequenceMismatchFromError("A new project publication origin must begin with request ID 1"),
+    { expectedRequestId: 1, receivedRequestId: null },
+    "a reset journal names id 1",
+  );
+
+  // A reset or restored journal has no record of the origin: its only valid id is 1.
+  {
+    seedStored(85, seed.ownerId, { intent: false });
+    let dispatches = 0;
+    const reset = createControllerHarness({
+      invokeStatus: async (command, request) => {
+        if (command === "get_project_publication_receipt_v1") return null;
+        dispatches += 1;
+        if (dispatches === 1) throw new Error("A new project publication origin must begin with request ID 1");
+        assert.equal(request.requestId, 1);
+        return backupSuccessStatus(request);
+      },
+    });
+    const saved = await reset.controller.start("backup", "autosave");
+    assert.equal(saved.request.requestId, 1);
+    assert.equal(dispatches, 2);
+    assert.deepEqual(resyncEvents(reset.calls).map((event) => [event.staleRequestId, event.expectedRequestId]), [[86, 1]]);
+  }
+  {
+    // Already at id 1: that refusal cannot be a sequence problem, so nothing is retired.
+    seedStored(1, seed.ownerId);
+    const before = storage.get(storageKey);
+    const sameId = createControllerHarness({
+      invokeStatus: async (command) => {
+        if (command === "get_project_publication_receipt_v1") return null;
+        throw new Error("A new project publication origin must begin with request ID 1");
+      },
+    });
+    await assert.rejects(() => sameId.controller.start("backup", "autosave"), /must begin with request ID 1/);
+    assert.equal(storage.get(storageKey), before);
+    assert.deepEqual(resyncEvents(sameId.calls), []);
+  }
+  assert.deepEqual(publication.projectPublicationSequenceMismatchFromError("Error: Project publication request sequence must be 3, received 2."), { expectedRequestId: 3, receivedRequestId: 2 });
+  for (const text of [
+    "Project publication request sequence is exhausted; create a new renderer origin",
+    "Project publication request sequence must be 0, received 5",
+    "Project publication request sequence must be 9007199254740993, received 5",
+    "Project publication request sequence must be x, received 5",
+    "sequence must be 3, received 2",
+  ]) {
+    assert.equal(publication.projectPublicationSequenceMismatchFromError(text), null, text);
+  }
+
   publication.clearProjectPublicationStorageForTests();
   storage.set("syndocal.projectPublication.v1", JSON.stringify({
     version: 1,
@@ -1044,6 +1255,19 @@ const [appSource, storageSource, typesSource, mainSource, invokeSource, manifest
   readFile(new URL("../src/tauriInvokeCommands.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/tauri-invoke-manifest.json", import.meta.url), "utf8"),
 ]);
+// Sequence re-synchronisation is pinned to the exact backend contract: the
+// begin path refuses an out-of-order id with this text before it reserves or
+// writes anything, and the missing-publication resolver answers "stale" only
+// after it has proved that the origin holds no unresolved request.
+assert.match(mainSource, /"Project publication request sequence must be \{expected\}, received \{\}"/,
+  "the renderer re-synchronisation parses this exact backend refusal");
+const missingSource = await readFile(new URL("../src-tauri/src/project_publication_missing.rs", import.meta.url), "utf8");
+assert.match(missingSource, /found an unresolved request for this origin[\s\S]*?MissingPublicationResolutionV1::Stale/,
+  "the stale proof must follow the unresolved-origin check");
+assert.doesNotMatch(missingSource, /cannot prove this request was never reserved/,
+  "the permanent 'keep the durable intent' refusal for out-of-order ids is retired");
+assert.match(appSource, /onSequenceResynchronised: \(event\) => setMessage\(/,
+  "App must tell the operator when a stale stored request was retired");
 const manifest = JSON.parse(manifestSource);
 const handlerBlock = mainSource.slice(
   mainSource.indexOf("tauri::generate_handler!"),
@@ -1094,7 +1318,7 @@ assert.match(
 );
 assert.match(appSource, /await projectPublicationController\.recover\(\)/, "startup recovery must enter the same production controller");
 const controllerOffset = storageSource.indexOf("export const createProjectPublicationControllerV1");
-const controllerBlock = storageSource.slice(controllerOffset, controllerOffset + 15_000);
+const controllerBlock = storageSource.slice(controllerOffset, controllerOffset + 20_000);
 assert.ok(controllerOffset >= 0, "shared production V1 publication controller must exist");
 assert.ok(
   controllerBlock.slice(controllerBlock.indexOf("const start = async")).indexOf("const queried = await queryExisting(existing)")

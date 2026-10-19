@@ -1141,7 +1141,7 @@ const measureBoth = (client) => evaluate(client, `(() => {
     cardCount: cards.length,
     monitorCount: monitors.length,
     masterCount: masters.length,
-    headerActionCount: panel?.querySelectorAll('.controlBothHeaderActions button').length ?? 0,
+    headerActionCount: panel?.querySelectorAll('[data-workspace-pane-header] [data-control-both-open]').length ?? 0,
     cueActionCount: panel?.querySelectorAll('[aria-label="Cue actions"] button').length ?? 0,
     blackoutButtons: [...(panel?.querySelectorAll('.controlBothBlackoutRow button') ?? [])].map((button) => ({
       label: button.getAttribute('aria-label'),

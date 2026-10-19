@@ -523,6 +523,7 @@ const japaneseText: Record<string, string> = {
   "External control fenced": "外部操作は停止中",
   "Layer transport & capture": "レイヤーの再生とキャプチャ",
   PLAYING: "再生中",
+  STOPPED: "停止中",
   "Normal WASAPI is selected.": "通常のWASAPIを選択中です。",
   "Audio capture backend unavailable.": "音声入力のバックエンドを利用できません。",
   "Local-only mode: connections are restricted to this computer.": "ローカル専用モード：このPCからの接続だけを受け付けます。",
@@ -4263,6 +4264,8 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [/^Publication sequence re-synchronised: stored request (\d+) was retired; request (\d+) is next\. No project data was changed\. Save again if a save was in progress\.$/,
+    (stale, next) => `保存要求の番号を同期し直しました。古い要求 ${stale} を破棄し、次は ${next} です。プロジェクトのデータは変更していません。保存中だった場合はもう一度保存してください。`],
   [/^Last refused: (.+)\. Refused packets are ignored; a rising count means another device is sending ShowClock traffic or packets arrive late\.$/,
     (reason) => `最後に拒否した理由：${reason}。拒否したパケットは使いません。増え続ける場合は、別の機器がShowClockの通信を送っているか、パケットが遅れて届いています。`],
   [/^(\d+) mapped fixtures?$/, (count) => `${count}台`],

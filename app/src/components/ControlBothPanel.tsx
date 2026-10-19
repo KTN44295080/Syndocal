@@ -1,9 +1,11 @@
 import { Show } from "solid-js";
+import { WorkspacePaneHeader } from "./WorkspacePaneHeader";
 
 export interface ControlBothPanelProps {
   activeCueId: number | null;
-  activeCueLabel: string;
-  nextCueLabel: string;
+  /** `null` when no cue is active; the panel supplies the localised words. */
+  activeCueLabel: string | null;
+  nextCueLabel: string | null;
   cueCount: number;
   timelinePlaying: boolean;
   timecode: string;
@@ -16,6 +18,7 @@ export interface ControlBothPanelProps {
   enabledVideoOutputCount: number;
   videoOutputCount: number;
   previewLabel: string | null;
+  /** Already a readable, translatable status phrase (never a status code). */
   previewStatus: string;
   programLabel: string | null;
   programStatus: string;
@@ -44,18 +47,16 @@ export function ControlBothPanel(props: ControlBothPanelProps) {
       aria-labelledby="control-domain-both"
       class="panel controlBothPanel controlPanel"
       data-workspace-pane="upper"
-      aria-label="Lighting and Video control overview"
     >
-      <header class="panelHeader controlBothHeader">
-        <div>
-          <h2>Both</h2>
-          <span>Lighting + Video</span>
-        </div>
-        <div class="controlBothHeaderActions">
-          <button type="button" onClick={props.onOpenLighting}>Open Lighting</button>
-          <button type="button" onClick={props.onOpenVideo}>Open Video</button>
-        </div>
-      </header>
+      <WorkspacePaneHeader
+        title="Both"
+        titleId="control-both-title"
+        context="Lighting + Video"
+        tools={<>
+          <button type="button" data-control-both-open="lighting" onClick={props.onOpenLighting}>Open Lighting</button>
+          <button type="button" data-control-both-open="video" onClick={props.onOpenVideo}>Open Video</button>
+        </>}
+      />
 
       <div class="controlBothGrid">
         <section class="controlBothDomainCard controlBothLightingCard" aria-label="Lighting live controls">
@@ -64,16 +65,22 @@ export function ControlBothPanel(props: ControlBothPanelProps) {
               <span class="uiMicroLabel">LIGHTING</span>
               <strong>Live cue</strong>
             </div>
-            <span class="controlBothTransportState">{props.timelinePlaying ? "PLAYING" : "STOPPED"}</span>
+            <span class="controlBothTransportState" data-both-transport={props.timelinePlaying ? "playing" : "stopped"}>
+              {props.timelinePlaying ? "PLAYING" : "STOPPED"}
+            </span>
           </header>
           <dl class="controlBothCueReadout">
             <div>
               <dt>Current</dt>
-              <dd data-no-localize>{props.activeCueLabel}</dd>
+              <dd data-both-current-cue>
+                <Show when={props.activeCueLabel} fallback="None">{(label) => <span data-no-localize>{label()}</span>}</Show>
+              </dd>
             </div>
             <div>
               <dt>Next</dt>
-              <dd data-no-localize>{props.nextCueLabel}</dd>
+              <dd data-both-next-cue>
+                <Show when={props.nextCueLabel} fallback="No cue">{(label) => <span data-no-localize>{label()}</span>}</Show>
+              </dd>
             </div>
           </dl>
           <div class="controlBothActionRow" aria-label="Cue actions">
@@ -127,12 +134,16 @@ export function ControlBothPanel(props: ControlBothPanelProps) {
           <div class="controlBothMonitorReadout">
             <div data-both-monitor="preview">
               <span>PREVIEW</span>
-              <strong data-no-localize>{props.previewLabel ?? "No clip staged"}</strong>
+              <strong>
+                <Show when={props.previewLabel} fallback="No clip staged">{(label) => <span data-no-localize>{label()}</span>}</Show>
+              </strong>
               <small>{props.previewStatus}</small>
             </div>
             <div data-both-monitor="program">
               <span>PROGRAM</span>
-              <strong data-no-localize>{props.programLabel ?? "No output selected"}</strong>
+              <strong>
+                <Show when={props.programLabel} fallback="No output selected">{(label) => <span data-no-localize>{label()}</span>}</Show>
+              </strong>
               <small>{props.programStatus}</small>
             </div>
           </div>
@@ -151,7 +162,12 @@ export function ControlBothPanel(props: ControlBothPanelProps) {
           </label>
           <div class="controlBothVideoTruth" data-both-video-truth>
             <div><span>Clip Grid</span><strong>{props.clipCount} clip(s)</strong></div>
-            <div><span>Selected</span><strong data-no-localize>{props.selectedClipLabel ?? "None"}</strong></div>
+            <div>
+              <span>Selected</span>
+              <strong>
+                <Show when={props.selectedClipLabel} fallback="None">{(label) => <span data-no-localize>{label()}</span>}</Show>
+              </strong>
+            </div>
             <div><span>Recording</span><strong>{props.recordingLabel}</strong></div>
           </div>
           <div class="controlBothActionRow controlBothBlackoutRow" aria-label="Video blackout actions">

@@ -1,6 +1,10 @@
 // Guard: the WebView2 browser dialogs ("tauri.localhost says...") must never be
 // used. Every question goes through the in-app dialog service (src/inAppDialog.ts).
 // The scan is syntax-aware (TypeScript AST), so comments and strings are ignored.
+// The remote-control web page embedded in crates/io/src/remote_ws.rs runs in the
+// remote device's own browser and is held to the same rule: its script is
+// AST-scanned, and the whole page is also scanned as text, because it builds
+// inline event handlers inside template strings that an AST scan cannot see.
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
@@ -39,6 +43,34 @@ export function findBrowserDialogs(text, fileName = "source.tsx") {
   return findings;
 }
 
+const remoteCall = /(?<![\w$.])(?:(?:window|globalThis|self|top|parent)\s*\.\s*)?(?:confirm|alert|prompt)\s*\(/g;
+const remoteIndexed = /\[\s*["'`](?:confirm|alert|prompt)["'`]\s*\]/g;
+
+/** Returns one finding per browser-dialog use anywhere in the remote page HTML. */
+export function findRemotePageBrowserDialogs(html) {
+  const findings = [];
+  const lineOf = (offset) => html.slice(0, offset).split("\n").length;
+  for (const pattern of [remoteCall, remoteIndexed]) {
+    for (const match of html.matchAll(pattern)) findings.push({ line: lineOf(match.index), what: match[0] });
+  }
+  for (const script of html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)) {
+    const before = html.slice(0, script.index + script[0].indexOf(">") + 1).split("\n").length - 1;
+    for (const finding of findBrowserDialogs(script[1], "remote-page.js")) {
+      findings.push({ line: before + finding.line, what: finding.what });
+    }
+  }
+  return findings;
+}
+
+function remotePageHtml(rust) {
+  const open = rust.indexOf('const REMOTE_PAGE_HTML: &str = r##"');
+  assert.ok(open >= 0, "REMOTE_PAGE_HTML must stay a raw string in crates/io/src/remote_ws.rs");
+  const start = open + 'const REMOTE_PAGE_HTML: &str = r##"'.length;
+  const end = rust.indexOf('"##;', start);
+  assert.ok(end > start, "REMOTE_PAGE_HTML must be terminated");
+  return rust.slice(start, end);
+}
+
 async function collect(directory, files = []) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
@@ -58,6 +90,13 @@ function selfTest() {
   assert.equal(hit('// window.confirm("x")\nconst text = "confirm(x)";'), 0, "comments and strings are ignored");
   assert.equal(hit("await confirmDialog({ title: 'x', message: 'y' });"), 0, "the in-app service is allowed");
   assert.equal(hit("const confirmed = options.confirm(1); other.alert(2);"), 0, "member calls on other objects are allowed");
+  const remoteHit = (text) => findRemotePageBrowserDialogs(text).length;
+  assert.ok(remoteHit('<script>if(window.confirm("x"))go()</script>') >= 1);
+  assert.ok(remoteHit("<script>const html=`<button onclick=\"confirm('x')\">`</script>") >= 1, "inline handlers in templates");
+  assert.ok(remoteHit('<button onclick="window.prompt(1)">') >= 1);
+  assert.ok(remoteHit('<script>window["alert"]("x")</script>') >= 1);
+  assert.equal(remoteHit("<script>remoteAskDialog({title:'x'});options.confirm(1);const confirmed=1;</script>"), 0);
+  assert.equal(remoteHit("<script>// confirm/alert/prompt are not used\nconfirmButton.onclick=()=>1</script>"), 0);
   console.log("check-no-browser-dialogs self-test ok");
 }
 
@@ -76,4 +115,11 @@ assert.deepEqual(
   [],
   `browser dialogs are forbidden; use confirmDialog/alertDialog from src/inAppDialog.ts:\n${offenders.join("\n")}`,
 );
-console.log(`no browser dialogs in ${files.length} source files`);
+const remotePath = fileURLToPath(new URL("../../crates/io/src/remote_ws.rs", import.meta.url));
+const remoteFindings = findRemotePageBrowserDialogs(remotePageHtml(await readFile(remotePath, "utf8")));
+assert.deepEqual(
+  remoteFindings,
+  [],
+  `the embedded remote page must use its in-page dialog, not browser dialogs:\n${remoteFindings.map((finding) => `remote_ws.rs page line ${finding.line} ${finding.what}`).join("\n")}`,
+);
+console.log(`no browser dialogs in ${files.length} source files and the embedded remote page`);
