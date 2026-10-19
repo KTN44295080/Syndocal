@@ -92,6 +92,7 @@ type VideoClipSlotRuntimeInvokeCommand =
   | "seek_video_clip_slot_authoritative";
 
 interface VideoRuntimeControllerOptions {
+  onIsfImportRejected?: (message: string) => void;
   setVideoBlackout: (enabled: boolean) => Promise<void>;
   setVideoMasterOpacity: (opacity: number) => Promise<void>;
   invoke: Invoke;
@@ -303,9 +304,12 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   const invokeLegacyVideoEffectAuthoritative = async <T,>(
     command: LegacyVideoEffectInvokeCommand,
     commandArgs: Record<string, unknown>,
+    expectedAuthority?: ProjectAuthorityToken,
   ): Promise<{ value: T | null; recovered: boolean } | null> => {
     const beforePreflight = options.getCurrentProjectAuthority();
+    if (expectedAuthority && !sameProjectAuthority(expectedAuthority, beforePreflight)) return null;
     const { authority } = await options.prepareMediaAssetOperationStart(beforePreflight);
+    if (expectedAuthority && !sameProjectAuthority(expectedAuthority, authority)) return null;
     const requestId = nextVideoEffectCatalogRequestId();
     try {
       const value = await options.invoke<T>(command, {
@@ -1333,10 +1337,10 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       return null;
     }
   };
-  const setVideoLayerIsfEffect = async (layerId: number, effect: VideoIsfEffectSummary | null) => {
+  const setVideoLayerIsfEffect = async (layerId: number, effect: VideoIsfEffectSummary | null, expectedAuthority?: ProjectAuthorityToken) => {
     if (!canMutateVideoIsf()) return;
     try {
-      const result = await invokeLegacyVideoEffectAuthoritative<unknown>("set_video_layer_isf_effect", { layerId, effect });
+      const result = await invokeLegacyVideoEffectAuthoritative<unknown>("set_video_layer_isf_effect", { layerId, effect }, expectedAuthority);
       if (!result) return;
       options.setMessage(effect ? `${effect.enabled ? "Applied" : "Bypassed"} ISF ${effect.label} on layer ${layerId}.` : `Cleared ISF on layer ${layerId}.`);
       await options.refreshSnapshot();
@@ -1347,6 +1351,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   };
   const importVideoLayerIsf = async (layerId: number) => {
     if (!canMutateVideoIsf()) return;
+    const importAuthority = options.getCurrentProjectAuthority();
     try {
       const authority = options.getCurrentProjectAuthority();
       const effect = await options.invoke<VideoIsfEffectSummary | null>("select_video_isf_file");
@@ -1364,8 +1369,38 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       await options.refreshSnapshot();
       await refreshVideoPreviewDiagnostics(false);
     } catch (error) {
+      if (sameProjectAuthority(importAuthority, options.getCurrentProjectAuthority())) options.onIsfImportRejected?.(String(error));
       options.setMessage(`ISF import failed: ${String(error)}`);
     }
+  };
+  /** Import into the project's existing preset catalog without touching a live
+   * layer. Applying a card is a separate, explicitly scoped operator action. */
+  const importVideoIsfToCatalog = async () => {
+    if (!canMutateVideoIsf()) return;
+    const authority = options.getCurrentProjectAuthority();
+    try {
+      const effect = await options.invoke<VideoIsfEffectSummary | null>("select_video_isf_file");
+      if (!effect || !sameProjectAuthority(authority, options.getCurrentProjectAuthority())) return;
+      const catalog = currentVideoEffectCatalog();
+      if (catalog.effect_presets.some(preset => preset.payload.stages.some(stage => stage.effect.kind === "isf" && stage.effect.effect.source === effect.source))) return;
+      catalog.effect_presets.push({ id: 0, label: effect.label, payload: { bypassed: false,
+        stages: [{ enabled: true, label: effect.label, effect: { kind: "isf", effect } }] } });
+      await applyVideoEffectCatalog(catalog);
+    } catch (error) {
+      if (sameProjectAuthority(authority, options.getCurrentProjectAuthority())) {
+        options.onIsfImportRejected?.(String(error));
+        options.setMessage(`ISF import failed: ${String(error)}`);
+      }
+    }
+  };
+  const addVideoLayerIsfEffect = async (layerId: number, effect: VideoIsfEffectSummary) => {
+    if (!canMutateVideoIsf()) return;
+    try {
+      const result = await invokeLegacyVideoEffectAuthoritative<VideoIsfEffectSummary>("add_video_layer_isf_effect", { layerId, effect });
+      if (!result) return;
+      await options.refreshSnapshot();
+      await refreshVideoPreviewDiagnostics(false);
+    } catch (error) { options.setMessage(`ISF update failed: ${String(error)}`); }
   };
   const applyBuiltinVideoIsfEffect = async (layerId: number, presetId: string) => {
     if (!canMutateVideoIsf()) return;
@@ -1696,7 +1731,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     refreshAudioOutputDevices,
     startVideoOutputRecording, stopVideoOutputRecording, refreshVideoRecordingStatus,
     removeVideoLayer, duplicateVideoLayer, moveVideoLayer, setVideoLayerLabel,
-    refreshVideoLayerMetadata, relinkMediaAsset, importVideoLayerIsf, applyBuiltinVideoIsfEffect, setVideoLayerIsfEffect,
+    refreshVideoLayerMetadata, relinkMediaAsset, importVideoLayerIsf, importVideoIsfToCatalog, addVideoLayerIsfEffect, applyBuiltinVideoIsfEffect, setVideoLayerIsfEffect,
     moveVideoLayerIsfEffect, removeVideoLayerIsfEffect, setVideoLayerIsfEffectEnabled,
     resetVideoLayerIsfEffect, setVideoLayerIsfControl, triggerVideoLayerIsfEvent,
     applyVideoEffectCatalog, importVideoEffectScopeIsf, applyVideoEffectPreset, removeVideoEffectChain,

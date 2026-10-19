@@ -70,9 +70,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 582;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 584;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "0fe35bd4bce4bae581e5b148f9975d466fa75af149e470d29b67209f729b0f6b";
+    "ea565d7fbdf3f5836db4a1da899c3b98d8ad0186c614559b6b27a4de8f78035f";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -322,6 +322,7 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "get_application_update_configuration"
             | "get_asio_output_capabilities"
             | "get_asio_output_status"
+            | "get_builtin_video_isf_effect"
             | "get_control_plane_canonical_registry"
             | "get_control_plane_operation_registry"
             | "get_control_plane_query_capabilities"
@@ -573,6 +574,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "set_timeline_transport_playing_runtime_v1"
             | "set_video_layer_audio_monitor_volume"
             | "set_video_master_opacity"
+            | "set_vj_preview_effect"
             | "set_vj_preview_playing"
             | "set_vj_preview_speed"
             | "stage_vj_preview_layer"
@@ -2595,11 +2597,11 @@ mod tests {
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
             31
         );
-        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 113);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 114);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 11);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 8);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 177);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 178);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 29);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 28);
@@ -2688,8 +2690,10 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        // Generator create/update each add one Tauri and one frontend source.
-        const FRONTEND_INVOKE_COUNT: usize = 502;
+        // Generator create/update each add one Tauri and one frontend source;
+        // Preview effect audition and the read-only built-in effect description
+        // add two more of each.
+        const FRONTEND_INVOKE_COUNT: usize = 504;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 210);
         assert_eq!(
             registry.operations.len(),
@@ -2699,7 +2703,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1695);
+        assert_eq!(registry.operations.len(), 1699);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -3097,15 +3101,15 @@ mod tests {
         const ENGINE_COUNT: usize = 285;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 210;
-        const FRONTEND_COUNT: usize = 502;
+        const FRONTEND_COUNT: usize = 504;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1695);
-        assert_eq!(SOURCE_TOTAL, 1728);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1699);
+        assert_eq!(SOURCE_TOTAL, 1732);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 76);
 
@@ -3531,7 +3535,7 @@ mod tests {
         // their two frontend aliases do not create external operations.
         // RequestPlaybackLayerSnapshot is the Standby generation's internal
         // playback-layer read, not an external operation.
-        assert_eq!(unclassified.len(), 1145);
+        assert_eq!(unclassified.len(), 1147);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -4295,11 +4299,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both native and frontend sources for generator create/update.
-        assert_eq!(legacy.operations.len(), 1695);
+        assert_eq!(legacy.operations.len(), 1699);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1695);
+        assert_eq!(operations.len(), 1699);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

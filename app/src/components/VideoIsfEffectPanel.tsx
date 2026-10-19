@@ -1,12 +1,24 @@
-import { createEffect, createMemo, createSignal, For, Show, type Accessor } from "solid-js";
+import { createEffect, createMemo, createSignal, For, on, Show, type Accessor } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import type {
+  VideoEffectCatalog,
   VideoIsfControlSummary,
   VideoIsfEffectStageSummary,
   VideoIsfEffectSummary,
   VideoIsfStageError,
 } from "../types";
+import { replaceFxStage } from "../fxParameterModel";
+import { VideoFxParameterEditor } from "./VideoFxParameterEditor";
+import { VideoFxLiveSafety } from "./VideoFxLiveSafety";
+import type { FxLiveSession } from "../createFxLiveSession";
+import { explainFxRejection } from "../fxRejectionExplanation";
 
 interface VideoIsfEffectPanelProps {
+  projectEpoch?: number;
+  locale?: string;
+  effectCatalog?: VideoEffectCatalog;
+  onApplyEffectCatalog?: (catalog: VideoEffectCatalog) => unknown | Promise<unknown>;
+  liveSession?: FxLiveSession;
   layerId: number;
   layerLabel?: string;
   compact?: boolean;
@@ -50,9 +62,6 @@ const effectStages = (effect?: VideoIsfEffectSummary | null): VideoIsfEffectStag
   return [effect, ...(effect.stack ?? [])];
 };
 
-const componentCount = (control: VideoIsfControlSummary) =>
-  control.kind === "Color" ? 4 : control.kind === "Point2d" ? 2 : 1;
-
 const runtimeErrorLabel = (error: VideoIsfStageError) =>
   error.stage_index === null || error.stage_index === undefined
     ? error.message
@@ -62,13 +71,27 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
   let panelElement: HTMLElement | undefined;
   const [advancedOpen, setAdvancedOpen] = createSignal(false);
   const [selectedStageIndex, setSelectedStageIndex] = createSignal(0);
+  const [removeConfirmation, setRemoveConfirmation] = createSignal<number | "all" | null>(null);
+  const effectSignature = createMemo(() => JSON.stringify([props.projectEpoch, props.layerId, props.effect]));
+  createEffect(on(effectSignature, () => setRemoveConfirmation(null), { defer: true }));
   const advancedId = `video-isf-advanced-${props.layerId}`;
-  const stages = createMemo(() => effectStages(props.effect));
+  const [stageStore, setStageStore] = createStore<VideoIsfEffectStageSummary[]>([]);
+  createEffect(() => setStageStore(reconcile(effectStages(props.effect), { key: null })));
+  const stages = () => stageStore;
   const selectedStage = createMemo(() => stages()[selectedStageIndex()] ?? stages()[0]);
   const activeStageCount = createMemo(() => stages().filter((stage) => stage.enabled).length);
   const layerDescription = () => `${props.layerLabel ?? "Video layer"} (layer ${props.layerId})`;
   const stackFull = () => stages().length >= MAX_STACK_STAGES;
   const runtimeErrorText = () => (props.runtimeErrors ?? []).map(runtimeErrorLabel).join("; ");
+  const RuntimeErrors = () => <For each={props.runtimeErrors ?? []}>{(error) => {
+    const explanation = () => explainFxRejection(error.message, props.locale ?? "en");
+    return <div class="inlineError" role="alert" data-fx-runtime-explanation>
+      <strong data-no-localize>{explanation().title}</strong>
+      <p data-no-localize>{explanation().detail} {explanation().action}</p>
+      <Show when={error.stage_index != null}><span>FX</span> <span data-no-localize>{(error.stage_index ?? 0) + 1} · {error.stage_label}</span></Show>
+      <details><summary>Technical details</summary><pre data-no-localize>{error.message}</pre></details>
+    </div>;
+  }}</For>;
   const eventPulseBusy = () => typeof props.eventPulseBusy === "function"
     ? props.eventPulseBusy()
     : Boolean(props.eventPulseBusy);
@@ -81,25 +104,6 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
       setSelectedStageIndex(count - 1);
     }
   });
-
-  const setControlComponent = (
-    control: VideoIsfControlSummary,
-    index: number,
-    next: number,
-  ) => {
-    const value = [...control.value] as [number, number, number, number];
-    value[index] = next;
-    void props.onSetControl(
-      props.layerId,
-      selectedStageIndex(),
-      control.name,
-      value,
-    );
-  };
-
-  const triggerEvent = (control: VideoIsfControlSummary) => {
-    void props.onTriggerEvent(props.layerId, selectedStageIndex(), control.name);
-  };
 
   const restoreActionFocus = (stageIndex: number | null, action: string) => {
     window.requestAnimationFrame(() => {
@@ -253,7 +257,7 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
               class="danger"
               aria-label={`Remove FX ${index() + 1}`}
               disabled={eventPulseBusy()}
-              onClick={() => removeStage(index())}
+              onClick={() => setRemoveConfirmation(index())}
             >
               Remove
             </button>
@@ -274,65 +278,14 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
           <Show when={stage().description}>
             {(description) => <p class="fieldHint">{description()}</p>}
           </Show>
-          <For each={stage().controls}>
-            {(control) => (
-              <div
-                class="videoIsfControl"
-                data-video-isf-control-kind={control.kind}
-                data-video-isf-control-name={control.name}
-              >
-                <span data-no-localize>{control.name}</span>
-                <Show
-                  when={control.kind !== "Event"}
-                  fallback={
-                    <button
-                      data-video-isf-action="trigger-event"
-                      aria-label={`Trigger ${control.name} for ${layerDescription()}`}
-                      disabled={eventPulseBusy()}
-                      onClick={() => triggerEvent(control)}
-                    >
-                      Trigger
-                    </button>
-                  }
-                >
-                  <Show
-                    when={control.kind !== "Bool"}
-                    fallback={
-                      <label class="checkbox">
-                        <input
-                          type="checkbox"
-                          checked={control.value[0] >= 0.5}
-                          aria-label={`${control.name} for ${stage().label} FX on ${layerDescription()}`}
-                          disabled={eventPulseBusy()}
-                          onChange={(event) =>
-                            setControlComponent(control, 0, event.currentTarget.checked ? 1 : 0)
-                          }
-                        />
-                        {control.value[0] >= 0.5 ? "On" : "Off"}
-                      </label>
-                    }
-                  >
-                    <For each={Array.from({ length: componentCount(control) }, (_, index) => index)}>
-                      {(index) => (
-                        <input
-                          type="number"
-                          min={control.minimum[index]}
-                          max={control.maximum[index]}
-                          step={control.kind === "Long" ? 1 : 0.01}
-                          value={control.value[index]}
-                          aria-label={`${control.name} component ${index + 1} for ${layerDescription()}`}
-                          disabled={eventPulseBusy()}
-                          onChange={(event) =>
-                            setControlComponent(control, index, Number(event.currentTarget.value))
-                          }
-                        />
-                      )}
-                    </For>
-                  </Show>
-                </Show>
-              </div>
-            )}
-          </For>
+          <VideoFxParameterEditor stage={stage()} identity={`${props.layerId}:${selectedStageIndex()}`} busy={eventPulseBusy()} locale={props.locale}
+            projectEpoch={props.projectEpoch} layerId={props.layerId} liveSession={props.liveSession}
+            effectCatalog={props.effectCatalog} onApplyEffectCatalog={props.onApplyEffectCatalog}
+            onSetStage={(replacement) => {
+              if (props.effect) return props.onSetEffect(props.layerId, replaceFxStage(props.effect, selectedStageIndex(), replacement));
+            }}
+            onSetControl={(name, value) => props.onSetControl(props.layerId, selectedStageIndex(), name, value)}
+            onTriggerEvent={(name) => props.onTriggerEvent(props.layerId, selectedStageIndex(), name)} />
           <Show when={stage().controls.length === 0}>
             <p class="emptyHint">This shader has no operator controls.</p>
           </Show>
@@ -347,13 +300,21 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
         <BuiltInEffectSelect />
       </Show>
       <Show when={runtimeErrorText()}>
-        {(runtimeError) => (
-          <p class="inlineError" role={props.compact ? undefined : "alert"}>
-            {runtimeError()}
-          </p>
-        )}
+        <RuntimeErrors />
       </Show>
+      <VideoFxLiveSafety session={props.liveSession} layerId={props.layerId} />
       <StackRows />
+      <Show when={removeConfirmation() !== null}>
+        <div class="buttonRow" role="group" aria-label="Confirm FX removal">
+          <span>{removeConfirmation() === "all" ? "Remove all FX from this layer?" : "Remove this FX from the layer?"}</span>
+          <button type="button" class="danger" disabled={eventPulseBusy()} onClick={() => {
+            const target = removeConfirmation(); setRemoveConfirmation(null);
+            if (target === "all") void props.onSetEffect(props.layerId, null);
+            else if (target !== null) removeStage(target);
+          }}>Confirm remove</button>
+          <button type="button" onClick={() => setRemoveConfirmation(null)}>Cancel</button>
+        </div>
+      </Show>
       <SelectedStageEditor />
       <div class="buttonRow videoIsfStackActions">
         <button
@@ -364,7 +325,7 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
           Add ISF
         </button>
         <Show when={stages().length > 0}>
-          <button class="danger" disabled={eventPulseBusy()} onClick={() => void props.onSetEffect(props.layerId, null)}>Clear stack</button>
+          <button class="danger" disabled={eventPulseBusy()} onClick={() => setRemoveConfirmation("all")}>Clear stack</button>
         </Show>
         <span>{stages().length}/{MAX_STACK_STAGES} FX</span>
       </div>

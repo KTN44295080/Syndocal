@@ -166,6 +166,8 @@ const matrixFocusSource = `
  import { createSignal } from 'solid-js';
  import { render } from 'solid-js/web';
  import { VideoPerformMatrix } from '/src/components/VideoPerformMatrix.tsx';
+ import { VideoEffectBrowser } from '/src/components/VideoEffectBrowser.tsx';
+ import { buildFxCatalog } from '/src/fxCatalogModel.ts';
  import { viewportFixtureData } from '/src/viewportFixtureData.ts';
  import '/src/theme.css';import '/src/styles.css';
  const initial=viewportFixtureData.vjBankLayers.slice(0,3).map((layer,i)=>({...structuredClone(layer),clip_slots:[101,102].map(id=>({id:i*100+id,media_asset_id:id,launch_quantization:'Immediate'}))}));
@@ -173,16 +175,16 @@ const matrixFocusSource = `
  const [selectedLayer,setSelectedLayer]=createSignal(1),[selected,setSelected]=createSignal(101);
  const [runtime,setRuntime]=createSignal({layer_id:1,active_slot_id:101,queued_slot_id:null,pending_launch:null,transition:null,playhead_ms:0,playing:true});
  const [previewLayerId,setPreviewLayerId]=createSignal(null);
- const queueCalls=[],takes=[],inspectCalls=[],moreCalls=[];
+ const queueCalls=[],takes=[],inspectCalls=[],moreCalls=[],effectAdds=[];
  Object.assign(window,{__matrixFocus:{
  refresh:()=>setRuntime({...runtime(),playhead_ms:runtime().playhead_ms+250}),
  queue:()=>setRuntime({...runtime(),active_slot_id:null,queued_slot_id:101}),
  replaceLayer:()=>setLayers(layers().map(l=>({...l,label:l.id===1?'Updated matrix layer':l.label,clip_slots:l.clip_slots.map(s=>({...s}))}))),
- setPreviewLayerId,setRuntime,queueCalls,takes,inspectCalls,moreCalls,
+ setPreviewLayerId,setRuntime,queueCalls,takes,inspectCalls,moreCalls,effectAdds,
  }});
  const bank={mode:'control',get layers(){return layers()},get layer(){return layers().find(l=>l.id===selectedLayer())},get runtime(){return runtime()},assets:[101,102].map(id=>({id,label:'Focus asset '+id,source:initial[0].source})),thumbnails:{},get selectedSlotId(){return selected()},onSelectLayer:setSelectedLayer,onSelect:setSelected,onQueue:id=>queueCalls.push([selectedLayer(),id]),onPreview:id=>inspectCalls.push(id),onMore:(id,trigger)=>moreCalls.push({layer:selectedLayer(),slot:id,selected:selected(),anchor:trigger.matches('[data-video-perform-cell-index]')?'cell':trigger.hasAttribute('data-video-perform-clip-options')?'corner':'other'}),onImport:()=>{},onCancelQueue:()=>{},onSetQuantization:()=>{},transitionKind:'Cut',transitionDurationUnit:'Milliseconds',transitionDurationMilliunits:750,onSetTransitionKind:()=>{},onSetTransitionDurationUnit:()=>{},onSetTransitionDurationMilliunits:()=>{}};
  const list={get layers(){return layers()},onSetLayerState:(id,state)=>setLayers(layers().map(l=>l.id===id?{...l,state}:l)),onSetBlendMode:(id,blend_mode)=>setLayers(layers().map(l=>l.id===id?{...l,blend_mode}:l))};
- render(()=><div style={{height:'680px',width:'1300px'}}><VideoPerformMatrix bank={bank} layerList={list} runtimes={[runtime()]} availabilityById={{}} previewLayerId={previewLayerId()} thumbnailsAuthorized={false} onStop={()=>{}} keyboardEnabled={true} onTake={()=>takes.push(true)}/></div>,document.getElementById('root'));
+ render(()=><><div style={{height:'680px',width:'1300px'}}><VideoPerformMatrix bank={bank} layerList={list} effectEntries={buildFxCatalog()} onAddEffect={(entry,id)=>effectAdds.push([entry.id,id])} runtimes={[runtime()]} availabilityById={{}} previewLayerId={previewLayerId()} thumbnailsAuthorized={false} onStop={()=>{}} keyboardEnabled={true} onTake={()=>takes.push(true)}/></div><section data-video-perform-pane="inspector" style={{height:'300px',width:'600px'}}><VideoEffectBrowser entries={buildFxCatalog()} layer={layers()[1]} onAdd={(entry,id)=>effectAdds.push([entry.id,id])}/></section></>,document.getElementById('root'));
 `;
 
 const quickFxFocusPath = "/src/__perform-quick-fx-focus-fixture.tsx";
@@ -400,10 +402,47 @@ try {
       assert.deepEqual(await tabState(), { selected: ['clip'], panel: 'clip', clip: true, clipDialog: false, browser: false, fx: false }, label+': Clip tab embeds the Clip Inspector (no dialog)');
       assert.equal((await inspect(root+' [data-video-clip-slot-inspector-embedded] > header')).failure, null, label+': embedded Clip Inspector header is visible (the body scrolls inside the pane)');
       await clickTab('browser');
-      assert.deepEqual(await tabState(), { selected: ['browser'], panel: 'browser', clip: false, clipDialog: false, browser: true, fx: false }, label+': Browser tab is the Task 12 placeholder container');
-      assert.ok((await cdp.evaluate('document.querySelector("[data-video-perform-effect-browser]").innerText')).length > 20, label+': Browser tab explains itself');
+      assert.deepEqual(await tabState(), { selected: ['browser'], panel: 'browser', clip: false, clipDialog: false, browser: true, fx: false }, label+': Browser tab mounts the FX catalog');
+      const browserState = await cdp.evaluate(`(()=>{const cards=[...document.querySelectorAll('[data-fx-catalog-card]')],target=document.querySelector('[data-fx-add-target]'),card=cards[0],b=card.getBoundingClientRect(),pane=document.querySelector('[data-video-perform-inspector-panel]').getBoundingClientRect();return {cards:cards.length,target:target.textContent,live:!!document.querySelector('[data-fx-live-warning]'),visibleCardPixels:Math.min(b.bottom,pane.bottom)-Math.max(b.top,pane.top),textSize:parseFloat(getComputedStyle(card).fontSize),outer:[document.documentElement.scrollWidth,document.documentElement.scrollHeight]}})()`);
+      assert.ok(browserState.cards >= 14, label+': all built-ins are cards');
+      assert.equal(await cdp.evaluate("document.querySelectorAll('[data-fx-catalog-audition]').length"), browserState.cards, label+': every card offers the Preview-only Try beside the LIVE Add');
+      assert.match(browserState.target, /1/); assert.ok(browserState.target.length > 14, label+': explicit layer add target');
+      assert.equal(browserState.live, true, label+': explicit LIVE boundary');
+      // The task's Browser viewports show >=44px of the first card. The
+      // additional 720px regression case may show a partial card; scroll its
+      // real Add control into view and verify the complete 44px target below.
+      assert.ok(browserState.visibleCardPixels >= (height >= 768 ? 44 : 1), label+': card visible before internal scrolling '+JSON.stringify(browserState));
+      assert.ok(browserState.textSize >= 14, label+': readable catalog text');
+      assert.deepEqual(browserState.outer, [width,height], label+': browser never creates document scroll');
+      const search = '[data-fx-catalog-search]';
+      assert.equal((await inspect(search)).failure, null, label+': search fully visible');
+      await cdp.evaluate(`(()=>{const e=document.querySelector('${search}');e.focus();e.value='monochrome';e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await waitFor(()=>cdp.evaluate("document.querySelectorAll('[data-fx-catalog-card]').length===1"),label+': name search filters cards');
+      assert.equal(await cdp.evaluate("document.querySelector('[data-fx-catalog-card]').dataset.fxCatalogCard"),'builtin:monochrome');
+      await cdp.evaluate(`(()=>{const e=document.querySelector('${search}');e.value='';e.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-fx-filter-toggle]').click();})()`);
+      await cdp.evaluate("document.querySelector('[data-fx-category=Colour]').click()");
+      assert.ok(await cdp.evaluate("[...document.querySelectorAll('[data-fx-catalog-card]')].every(e=>['builtin:invert','builtin:monochrome','builtin:colorize'].includes(e.dataset.fxCatalogCard))"),label+': category chips filter');
+      await cdp.evaluate("document.querySelector('[data-fx-filter-toggle]').click();document.querySelector('[data-fx-category=All]').click();document.querySelector('[data-fx-catalog-search]').focus()");
+      await cdp.key('Tab','Tab',9);
+      assert.equal(await cdp.evaluate("document.activeElement.hasAttribute('data-fx-filter-toggle')"),true,label+': filter keyboard reachable');
+      await cdp.key('Tab','Tab',9);
+      assert.equal(await cdp.evaluate("document.activeElement.hasAttribute('data-fx-catalog-card')"),true,label+': card keyboard reachable');
+      await cdp.evaluate("document.querySelector('[data-fx-catalog-add]').scrollIntoView({block:'nearest'})");
+      const addTarget = await inspect('[data-fx-catalog-add]');
+      assert.equal(addTarget.failure,null,label+': complete Add target is reachable by internal scrolling');
+      assert.ok(addTarget.height>=44 && addTarget.width>=44,label+': Add keeps its 44px target');
+      for (const theme of ['tally','cobalt']) {
+        await cdp.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.querySelector('[data-effect-browser]').scrollTop=0`);
+        await writeFile(join(evidenceDir, `${label}-browser-${theme}.png`), Buffer.from((await cdp.capture({format:'png',captureBeyondViewport:false})).data,'base64'));
+      }
+      await cdp.evaluate("document.documentElement.dataset.theme='tally'");
       await clickTab('fx');
       assert.deepEqual(await tabState(), { selected: ['fx'], panel: 'fx', clip: false, clipDialog: false, browser: false, fx: true }, label+': FX tab returns');
+      await cdp.evaluate("document.querySelector('[data-video-perform-inspector-tab=fx]').focus()");
+      await cdp.key('ArrowRight','ArrowRight',39);
+      assert.equal((await tabState()).panel,'clip',label+': Inspector arrow key selects Clip without matrix interception');
+      assert.equal(await cdp.evaluate("document.activeElement.dataset.videoPerformInspectorTab"),'clip');
+      await clickTab('fx');
       // Clip… (corner) and right-click open the options in the Clip tab, never a popover.
       await cdp.evaluate('document.querySelector('+JSON.stringify(selectors.clipOptions)+').click()');
       assert.deepEqual(await tabState(), { selected: ['clip'], panel: 'clip', clip: true, clipDialog: false, browser: false, fx: false }, label+': Clip… opens the Inspector Clip tab');
@@ -441,8 +480,10 @@ try {
       assert.equal(await cdp.evaluate('document.activeElement?.closest("[data-video-perform-layout]") !== null'), true, label+': divider keyboard focus stays in the desk');
       // ---- Collapse and maximise from the pane header icons (session state, panes stay mounted). ----
       const paneState = () => cdp.evaluate('(()=>{const r=(n)=>{const e=document.querySelector("[data-video-perform-pane=\\""+n+"\\"]");const b=e.getBoundingClientRect();return {w:Math.round(b.width),h:Math.round(b.height)}};const l=document.querySelector("[data-video-perform-layout]");return {matrix:r("matrix"),output:r("output"),inspector:r("inspector"),focus:l.dataset.performFocus??null,collapsed:l.dataset.performBottomCollapsed??null,takeMounted:!!document.querySelector("[data-video-perform-take]")}})()');
+      let lastPane, stablePaneSamples = 0;
+      await waitFor(async () => { const state=await paneState(),text=JSON.stringify(state);stablePaneSamples=text===lastPane?stablePaneSamples+1:0;lastPane=text;return stablePaneSamples>=3; },label+': divider ResizeObserver settles before reference geometry');
       const normal = await paneState();
-      const restored = async (message) => { await waitFor(async () => JSON.stringify(await paneState()) === JSON.stringify(normal), message); };
+      const restored = async (message) => { await waitFor(async () => JSON.stringify(await paneState()) === JSON.stringify(normal), message+' expected='+JSON.stringify(normal)); };
       await cdp.evaluate('document.querySelector("[data-video-perform-maximise=matrix]").click()');
       let state = await paneState();
       assert.ok(state.focus === 'matrix' && state.output.h === 0 && state.inspector.h === 0 && state.matrix.h > normal.matrix.h + 100 && state.takeMounted, label+': maximising the matrix hides the bottom band '+JSON.stringify(state));
@@ -619,6 +660,25 @@ try {
   await cdp.evaluate('document.querySelector('+JSON.stringify('[data-video-layer-opacity="2"]')+').focus()');
   await cdp.key('1','Digit1',49);await cdp.key('ArrowRight','ArrowRight',39);
   assert.equal(await cdp.evaluate('window.__matrixFocus.queueCalls.length'),2,currentCase+': editable controls do not trigger clips');
+  await cdp.evaluate("document.querySelector('[data-fx-catalog-card]').focus()");
+  await cdp.key('Enter','Enter',13);
+  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.effectAdds'),[['builtin:invert',2]],currentCase+': catalog Enter adds the exact effect to layer 2');
+  assert.equal(await cdp.evaluate('window.__matrixFocus.takes.length'),2,currentCase+': catalog Enter never Takes a queued clip');
+  // Dragging a card onto a layer row adds to that exact row after a visible LIVE confirmation; declining adds nothing.
+  const dropOnRow = (layer, payload) => cdp.evaluate(`(()=>{const row=document.querySelector('[data-video-perform-row="${layer}"]');const dt=new DataTransfer();dt.setData('application/x-syndocal-fx',${JSON.stringify(payload)});const over=new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:dt});row.dispatchEvent(over);row.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:dt}));return over.defaultPrevented})()`);
+  cdp.acceptDialogs = false; cdp.dialogs.length = 0;
+  assert.equal(await dropOnRow(3, 'builtin:mirror'), true, currentCase+': a layer row accepts effect drops');
+  assert.equal(cdp.dialogs.length, 1, currentCase+': a row drop asks for confirmation naming its destination');
+  assert.match(cdp.dialogs[0].message, /Layer 3/, currentCase+': confirmation names the destination layer');
+  assert.match(cdp.dialogs[0].message, /LIVE/, currentCase+': confirmation states the LIVE consequence');
+  assert.equal((await cdp.evaluate('window.__matrixFocus.effectAdds')).length, 1, currentCase+': declined drop adds nothing');
+  cdp.acceptDialogs = true;
+  await dropOnRow(3, 'builtin:mirror');
+  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.effectAdds'), [['builtin:invert',2],['builtin:mirror',3]], currentCase+': accepted drop adds the exact card to the dropped row');
+  await dropOnRow(3, 'builtin:unknown-or-untrusted-source');
+  assert.equal((await cdp.evaluate('window.__matrixFocus.effectAdds')).length, 2, currentCase+': an unknown drag payload adds nothing');
+  await cdp.evaluate("window.__catalogFocus=document.querySelector('[data-fx-catalog-search]');window.__catalogFocus.focus();window.__matrixFocus.replaceLayer();true");
+  assert.equal(await cdp.evaluate("document.activeElement===window.__catalogFocus && window.__catalogFocus.isConnected"),true,currentCase+': browser search focus survives layer polling');
   assert.deepEqual(cdp.errors,[],currentCase+': console errors/warnings');
   focusResults.push({label:currentCase,focusRetainedAcross:'playhead,queue,same-ID layer/slots',queueCalls:await cdp.evaluate('window.__matrixFocus.queueCalls'),takes:2,consoleErrors:cdp.errors});
   console.log('PASS '+currentCase);
@@ -638,7 +698,9 @@ try {
   await cdp.evaluate('window.__quickFxFocus.replace(0.65,false);true');
   assert.deepEqual(await fxState(fxParameter),{connected:true,sameElement:true,focused:true,value:'0.65',pressed:null},currentCase+': same-ID authored layer/stage/control replacement retains focused parameter and updates value');
   assert.ok(await cdp.evaluate('document.body.innerText.includes("Updated FX layer")'),currentCase+': layer replacement remains reactive');
-  await cdp.evaluate('window.__fxOriginal.value="0.8";window.__fxOriginal.dispatchEvent(new Event("input",{bubbles:true}));true');
+  // Parameter publication is a completed gesture, avoiding dropped trailing
+  // samples and one project transaction per pointer movement.
+  await cdp.evaluate('window.__fxOriginal.value="0.8";window.__fxOriginal.dispatchEvent(new Event("change",{bubbles:true}));true');
   assert.deepEqual(await cdp.evaluate('window.__quickFxFocus.calls.at(-1)'),['control',1,0,'gain',[0.8,0,0,0]],currentCase+': refreshed parameter routes exact scoped command');
   assert.equal((await fxState(fxParameter)).focused,true,currentCase+': focused parameter survives its own publication');
   await rememberFx(fxBypass);

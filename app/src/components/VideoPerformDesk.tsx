@@ -9,6 +9,9 @@ import { PaneIconButton, WorkspacePaneHeader } from "./WorkspacePaneHeader";
 import { WorkspaceSplitHandle } from "./WorkspaceSplitHandle";
 import { defaultWorkspaceLayout } from "../workspaceLayoutStorage";
 import { controlMappingTargetData } from "../controlMappingLearn";
+import { FX_DRAG_MIME, readFxDragPayload, type FxCatalogEntry, type FxImportRejection } from "../fxCatalogModel";
+import { collectFxProblems } from "../fxRejectionExplanation";
+import { VideoFxProblemsDialog } from "./VideoFxProblemsDialog";
 
 /** Persisted pane ratios for the Perform workspace; the application owns them
  * (workspace layout storage) and the desk falls back to local ones without it. */
@@ -27,7 +30,11 @@ export interface VideoPerformContext {
   /** The existing Clip Inspector, rendered in-flow for the Inspector's Clip tab. */
   renderClipInspector?: () => JSX.Element;
   /** Task 12's effect browser plugs into the Inspector's Browser tab here. */
-  renderEffectBrowser?: () => JSX.Element;
+  renderEffectBrowser?: (onOpenFx?: () => void) => JSX.Element;
+  effectEntries?: FxCatalogEntry[];
+  isfImportRejections?: FxImportRejection[];
+  locale?: string;
+  onAddEffect?: (entry: FxCatalogEntry, layerId: number) => void | Promise<void>;
 }
 
 type InspectorTab = "fx" | "clip" | "browser";
@@ -70,9 +77,14 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
   const unchecked = () => props.mediaLibrary.assets.filter(asset =>
     !props.mediaLibrary.availabilityById[asset.id] ||
     props.mediaLibrary.availabilityById[asset.id]?.kind === "available_unverified").length;
+  let fxProblemsDialog!: HTMLDialogElement;
+  const fxProblems = createMemo(() => collectFxProblems({
+    layers: props.layerList.layers, runtimeErrors: props.layerList.isfRuntimeErrors ?? [],
+    importRejections: props.performContext?.isfImportRejections ?? [], locale: props.performContext?.locale,
+  }));
   const errors = () => [...new Set([props.clipGrid.previewError, props.clipGrid.firstRunError, props.liveMonitors.preview.error, props.liveMonitors.program.error,
     props.liveMonitors.previewTransportError,
-    ...(props.layerList.isfRuntimeErrors ?? []).map(error => error.message),
+    ...(fxProblems().length ? [fxProblems().length === 1 ? fxProblems()[0].explanation.title : (props.performContext?.locale === "ja" ? `エフェクトの問題 ${fxProblems().length}件` : `${fxProblems().length} effect problems`)] : []),
     ...unhealthy().map(asset => `${asset.label}: ${props.mediaLibrary.availabilityById[asset.id]?.kind}`),
     ...props.mediaLibrary.lastImportReport?.entries.filter(entry => entry.status === "failed").map(entry => entry.message) ?? [],
   ].filter(Boolean))].join(" · ");
@@ -106,6 +118,9 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
         tools={<>
           <section class="videoPerformHealth" data-video-perform-region="health" aria-label="Media and monitor health">
             <strong>Media health</strong><span title={errors() || undefined}><Show when={errors()} fallback={<><span>Assets</span>: <span data-no-localize>{props.mediaLibrary.assets.length}</span> · <span>Not verified</span>: <span data-no-localize>{unchecked()}</span></>}>{error => <span data-no-localize>{error()}</span>}</Show></span>
+            <Show when={fxProblems().length > 0}>
+              <button type="button" data-fx-problems-open onClick={() => fxProblemsDialog.showModal()}>Effect problems</button>
+            </Show>
             <Show when={!props.clipGrid.thumbnailsAuthorized}><button onClick={props.clipGrid.onRequestThumbnails}>Load Thumbnails</button></Show>
             <Show when={props.liveMonitors.preview.status === "error" || props.liveMonitors.program.status === "error"}>
               <button onClick={props.liveMonitors.onRetry}>Retry monitors</button>
@@ -118,6 +133,7 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
       />
       <div class="workspacePaneBody" id="video-perform-matrix-body">
         <VideoPerformMatrix bank={matrixBank} layerList={props.layerList}
+          effectEntries={props.performContext?.effectEntries} onAddEffect={props.performContext?.onAddEffect}
           runtimes={props.performContext?.runtimes ?? (props.clipSlotBank.runtime ? [props.clipSlotBank.runtime] : [])}
           availabilityById={props.mediaLibrary.availabilityById} previewLayerId={props.clipGrid.previewLayerId}
           thumbnailsAuthorized={props.clipGrid.thumbnailsAuthorized} keyboardEnabled={keyboardEnabled()}
@@ -213,6 +229,23 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
           tabs={<div class="workspacePaneTabs" role="tablist" aria-label="Inspector">
             <For each={inspectorTabs}>{item =>
               <button type="button" role="tab" id={`video-perform-inspector-tab-${item.id}`} data-video-perform-inspector-tab={item.id}
+                onDragOver={event => { if (item.id === "fx" && event.dataTransfer?.types.includes(FX_DRAG_MIME)) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }}
+                onDrop={event => {
+                  if (item.id !== "fx" || !event.dataTransfer) return;
+                  const entry = readFxDragPayload(event.dataTransfer, props.performContext?.effectEntries ?? []);
+                  const layer = props.clipSlotBank.layer;
+                  if (!entry || !layer) return;
+                  event.preventDefault(); setTab("fx");
+                  void props.performContext?.onAddEffect?.(entry, layer.id);
+                }}
+                onKeyDown={event => {
+                  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                  event.preventDefault(); event.stopPropagation();
+                  const index = inspectorTabs.findIndex(entry => entry.id === item.id);
+                  const next = event.key === "Home" ? 0 : event.key === "End" ? inspectorTabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + inspectorTabs.length) % inspectorTabs.length;
+                  setTab(inspectorTabs[next].id);
+                  document.getElementById(`video-perform-inspector-tab-${inspectorTabs[next].id}`)?.focus();
+                }}
                 aria-selected={tab() === item.id} aria-controls={`video-perform-inspector-panel-${item.id}`}
                 tabIndex={tab() === item.id ? 0 : -1} classList={{ active: tab() === item.id }}
                 onClick={() => setTab(item.id)}>{item.label}</button>}
@@ -229,7 +262,11 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
           role="tabpanel" aria-labelledby={`video-perform-inspector-tab-${tab()}`} data-video-perform-inspector-panel={tab()}>
           <Switch>
             <Match when={tab() === "fx"}>
-              <VideoPerformQuickFx layer={props.clipSlotBank.layer} layerList={props.layerList} onOpenEditor={() => props.performContext?.onOpenEditor()} />
+              <VideoPerformQuickFx layer={props.clipSlotBank.layer} layerList={props.layerList}
+                locale={props.performContext?.locale}
+                projectEpoch={props.layerList.projectEpoch}
+                effectCatalog={props.effectScopes.catalog} onApplyEffectCatalog={props.effectScopes.onApplyCatalog} liveSession={props.layerList.liveSession} audition={props.layerList.audition}
+                onOpenEditor={() => props.performContext?.onOpenEditor()} />
             </Match>
             <Match when={tab() === "clip"}>
               <div class="videoPerformInspectorClip" data-video-perform-clip-inspector>
@@ -238,7 +275,7 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
             </Match>
             <Match when={tab() === "browser"}>
               <div class="videoPerformInspectorBrowser" data-video-perform-effect-browser>
-                {props.performContext?.renderEffectBrowser?.() ?? <>
+                {props.performContext?.renderEffectBrowser?.(() => setTab("fx")) ?? <>
                   <strong>Effect browser</strong>
                   <p>Browse effects and add them to the selected layer from this tab. The browser is not available yet; use Full FX editor in the FX tab to add effects now.</p>
                 </>}
@@ -248,6 +285,7 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
         </div>
       </section>
     </div>
+    <VideoFxProblemsDialog ref={(element) => { fxProblemsDialog = element; }} problems={fxProblems()} locale={props.performContext?.locale} onClose={() => undefined} />
     <dialog ref={legend} class="videoPerformLegend" data-video-perform-legend>
       <h2>Keyboard shortcuts</h2>
       <dl><dt>1–9, 0, Q–P, A–L, Z–C</dt><dd>Queue a clip in the selected layer</dd>

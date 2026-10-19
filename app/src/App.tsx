@@ -523,6 +523,7 @@ import type {
   VideoRuntimeStatus,
   VideoSourceKind,
   VjFirstRunSetupResult,
+  VideoIsfEffectSummary,
   VjPreviewTransportSummary,
   ShowClockIpcStatus,
 } from "./types";
@@ -695,6 +696,11 @@ import {
   invokeTimelineSceneBlockCommand as dispatchTimelineSceneBlockCommand,
 } from "./timelineCommandDispatchers";
 import { createVideoRuntimeController } from "./createVideoRuntimeController";
+import { createFxLiveSession } from "./createFxLiveSession";
+import { createFxAuditionSession } from "./createFxAuditionSession";
+import { fxChainStages } from "./fxAuditionModel";
+import { buildFxCatalog, normalizeFxSource, type FxCatalogEntry, type FxImportRejection } from "./fxCatalogModel";
+import { VideoEffectBrowser } from "./components/VideoEffectBrowser";
 import { videoClipSlotDropTarget, videoClipSlotReorderedIds } from "./videoClipSlotBankModel";
 import {
   inspectMediaAssetAvailability,
@@ -1009,6 +1015,7 @@ const emptyVjPreviewTransport = (): VjPreviewTransportSummary => ({
   updated_at_ms: 0,
   generation: 0,
   source_name: null,
+  effect_audition: false,
 });
 
 const emptyAutoVjSnapshot = defaultAutoVjSnapshot();
@@ -11613,7 +11620,7 @@ export default function App() {
   };
 
   const [projectHistoryNavigationBusy, setProjectHistoryNavigationBusy] = createSignal(false);
-  const navigateProjectHistory = async (navigate: () => Promise<void>) => {
+  const navigateProjectHistory = async (navigate: () => Promise<void>, expectedAuthority?: ProjectAuthorityToken) => {
     if (projectHistoryNavigationBusy()) {
       setMessage("Undo / Redo の処理中です。");
       return;
@@ -11634,6 +11641,10 @@ export default function App() {
           setMessage("履歴の同期が完了していません。Undo / Redo は実行していません。");
           return;
         }
+      }
+      if (expectedAuthority && !isProjectAuthorityIdentityCurrent(expectedAuthority)) {
+        setMessage(translateUiText("FX comparison expired after another project edit.", uiLocale()));
+        return;
       }
       await navigate();
     } catch (error) {
@@ -20797,6 +20808,7 @@ export default function App() {
     refreshSnapshot: refreshTimelineEditingSnapshot,
   });
 
+  const [fxImportRejections, setFxImportRejections] = createSignal<(FxImportRejection & { epoch: number })[]>([]);
   const {
     addVideoLayer,
     importMediaFiles,
@@ -20837,6 +20849,8 @@ export default function App() {
     refreshVideoLayerMetadata,
     relinkMediaAsset,
     importVideoLayerIsf,
+    importVideoIsfToCatalog,
+    addVideoLayerIsfEffect,
     applyBuiltinVideoIsfEffect,
     setVideoLayerIsfEffect,
     moveVideoLayerIsfEffect,
@@ -20876,6 +20890,9 @@ export default function App() {
     setVideoMasterOpacity,
     setVideoBlackout,
   } = createVideoRuntimeController({
+    onIsfImportRejected: message => setFxImportRejections(current => [...current.slice(-15), {
+      label: uiLocale() === "ja" ? "読み込めないISF" : "Rejected ISF", message, epoch: captureProjectAuthorityIdentity().project_epoch,
+    }]),
     setVideoBlackout: targetBlackout.setVideoBlackout,
     setVideoMasterOpacity: setVideoMasterOpacityControl,
     invoke,
@@ -20941,6 +20958,63 @@ export default function App() {
       transition_buses: video.transition_buses ?? [],
     };
   };
+  const fxLiveSession = createFxLiveSession({
+    authority: captureProjectAuthorityIdentity,
+    layers: () => snapshot().video.layers,
+    setEffect: setVideoLayerIsfEffect,
+    undo: expected => navigateProjectHistory(performUndoProject, expected),
+  });
+  const fxRejections = () => fxImportRejections().filter(entry => entry.epoch === captureProjectAuthorityIdentity().project_epoch);
+  const fxBrowserEntries = createMemo(() => {
+    const catalog = videoEffectCatalog();
+    const chains = catalog.effect_chains.flatMap(chain => chain.stages.map(stage => stage.effect.kind.effect));
+    const presets = catalog.effect_presets.flatMap(preset => preset.payload.stages.map(stage => stage.effect.effect));
+    const layers = snapshot().video.layers.flatMap(layer => layer.isf_effect ? [layer.isf_effect] : []);
+    return buildFxCatalog({ imported: [...layers, ...chains, ...presets].flatMap(effect => [effect, ...(effect.stack ?? [])]),
+      rejections: fxRejections(), runtimeErrors: videoPreviewDiagnostics()?.isf_stage_errors ?? [], layers: snapshot().video.layers });
+  });
+  // Resolve the in-memory ID again: drag payloads never supply shader code or
+  // a hidden scope. Row drops must confirm their visible destination.
+  const resolveFxBrowserEntry = (entry: FxCatalogEntry, layerId: number) => {
+    const current = fxBrowserEntries().find(candidate => candidate.id === entry.id && !candidate.rejection);
+    const layer = snapshot().video.layers.find(candidate => candidate.id === layerId);
+    return current && layer ? current : null;
+  };
+  const importedFxCandidates = () => {
+    const catalog = videoEffectCatalog();
+    return [...snapshot().video.layers.flatMap(item => item.isf_effect ? [item.isf_effect] : []),
+      ...catalog.effect_chains.flatMap(chain => chain.stages.map(stage => stage.effect.kind.effect)),
+      ...catalog.effect_presets.flatMap(preset => preset.payload.stages.map(stage => stage.effect.effect))]
+      .flatMap(effect => [effect, ...(effect.stack ?? [])]);
+  };
+  const addFxBrowserEntry = async (entry: FxCatalogEntry, layerId: number) => {
+    const current = resolveFxBrowserEntry(entry, layerId);
+    if (!current) return;
+    await fxLiveSession.run(layerId, async () => {
+      if (current.builtinId) await applyBuiltinVideoIsfEffect(layerId, current.builtinId);
+      else {
+        const effect = importedFxCandidates().find(candidate => normalizeFxSource(candidate.source) === normalizeFxSource(current.source));
+        if (effect) await addVideoLayerIsfEffect(layerId, { ...effect, enabled: true, stack: [] });
+      }
+    });
+  };
+  // Audition builds the same chain in Preview only; nothing reaches Program until Take.
+  const auditionFxBrowserEntry = async (entry: FxCatalogEntry, layerId: number) => {
+    const current = resolveFxBrowserEntry(entry, layerId);
+    if (!current) return;
+    await fxAuditionSession.addToAudition(layerId, current.builtinId
+      ? fxAuditionSession.describeBuiltinStage(current.builtinId)
+      : async () => {
+        const effect = importedFxCandidates().find(candidate => normalizeFxSource(candidate.source) === normalizeFxSource(current.source));
+        return effect ? { ...fxChainStages(effect)[0], enabled: true } : null;
+      });
+  };
+  const renderFxBrowser = (onOpenFx?: () => void) => <div class="videoFxBrowserSurface">
+    <VideoEffectBrowser entries={fxBrowserEntries()} layer={selectedVideoClipSlotLayer()} locale={uiLocale()}
+      busy={fxLiveSession.busy() || isfEventPulseBusy()} onAdd={addFxBrowserEntry}
+      audition={onOpenFx ? fxAuditionSession : undefined} onAudition={onOpenFx ? auditionFxBrowserEntry : undefined}
+      onImport={importVideoIsfToCatalog} onOpenFx={onOpenFx} />
+  </div>;
 
   let videoOutputWindowStatusPoll: Promise<boolean> | null = null;
   let videoOutputWindowStatusPollGeneration = 0;
@@ -21069,6 +21143,7 @@ export default function App() {
     | "clear_vj_preview"
     | "set_vj_preview_playing"
     | "seek_vj_preview"
+    | "set_vj_preview_effect"
     | "set_vj_preview_speed";
   const runVjPreviewTransportCommand = async (
     command: VjPreviewTransportInvokeCommand,
@@ -21184,6 +21259,25 @@ export default function App() {
     clearVjFirstRunPreviewFailure(layerId);
     return true;
   };
+  const setVjPreviewEffect = async (layerId: number, active: boolean, effect: VideoIsfEffectSummary | null) => {
+    const args = { layerId, active, effect };
+    const options = { showError: false } as const;
+    // A P / seek command may hold the single transport slot for a moment.
+    const first = await runVjPreviewTransportCommand("set_vj_preview_effect", args, options);
+    if (first) return first;
+    await new Promise(done => window.setTimeout(done, 150));
+    return runVjPreviewTransportCommand("set_vj_preview_effect", args, options);
+  };
+  const fxAuditionSession = createFxAuditionSession({
+    layers: () => snapshot().video.layers,
+    transport: vjPreviewTransport,
+    stagePreview: (layerId, onFailure) => stageVjPreviewLayer(layerId, undefined, onFailure),
+    setPreviewEffect: setVjPreviewEffect,
+    describeBuiltin: async presetId => {
+      try { return await invoke<VideoIsfEffectSummary>("get_builtin_video_isf_effect", { presetId }); } catch { return null; }
+    },
+    commit: (layerId, effect) => fxLiveSession.run(layerId, () => setVideoLayerIsfEffect(layerId, effect)),
+  });
   const selectedVideoClipSlotLayer = createMemo(() => {
     const layerId = selectedVideoClipSlotLayerId();
     return snapshot().video.layers.find((layer) => layer.id === layerId)
@@ -26729,6 +26823,12 @@ export default function App() {
   };
 
   const videoLayerListProps: ComponentProps<typeof VideoControlPanel>["layerList"] = {
+    get locale() { return uiLocale(); },
+    get projectEpoch() { return captureProjectAuthorityIdentity().project_epoch; },
+    get effectCatalog() { return videoEffectCatalog(); },
+    onApplyEffectCatalog: applyVideoEffectCatalog,
+    liveSession: fxLiveSession,
+    audition: fxAuditionSession,
     get layers() { return snapshot().video.layers; },
     get isfRuntimeErrors() { return videoPreviewDiagnostics()?.isf_stage_errors ?? []; },
     isfEventPulseBusy,
@@ -26743,14 +26843,14 @@ export default function App() {
     onSetLayerTransform: setVideoLayerTransform,
     onSetLayerColor: setVideoLayerColor,
     onSetLayerFx: setVideoLayerFx,
-    onImportIsf: importVideoLayerIsf,
-    onApplyBuiltinIsf: applyBuiltinVideoIsfEffect,
-    onSetIsfEffect: setVideoLayerIsfEffect,
-    onMoveIsfEffect: moveVideoLayerIsfEffect,
-    onRemoveIsfEffect: removeVideoLayerIsfEffect,
-    onSetIsfEffectEnabled: setVideoLayerIsfEffectEnabled,
-    onResetIsfEffect: resetVideoLayerIsfEffect,
-    onSetIsfControl: setVideoLayerIsfControl,
+    onImportIsf: layerId => fxLiveSession.run(layerId, () => importVideoLayerIsf(layerId)),
+    onApplyBuiltinIsf: (layerId, presetId) => fxLiveSession.run(layerId, () => applyBuiltinVideoIsfEffect(layerId, presetId)),
+    onSetIsfEffect: (layerId, effect) => fxLiveSession.run(layerId, () => setVideoLayerIsfEffect(layerId, effect)),
+    onMoveIsfEffect: (layerId, index, delta) => fxLiveSession.run(layerId, () => moveVideoLayerIsfEffect(layerId, index, delta)),
+    onRemoveIsfEffect: (layerId, index) => fxLiveSession.run(layerId, () => removeVideoLayerIsfEffect(layerId, index)),
+    onSetIsfEffectEnabled: (layerId, index, enabled) => fxLiveSession.run(layerId, () => setVideoLayerIsfEffectEnabled(layerId, index, enabled)),
+    onResetIsfEffect: (layerId, index) => fxLiveSession.run(layerId, () => resetVideoLayerIsfEffect(layerId, index)),
+    onSetIsfControl: (layerId, index, name, value) => fxLiveSession.run(layerId, () => setVideoLayerIsfControl(layerId, index, name, value)),
     onTriggerIsfEvent: triggerVideoLayerIsfEvent,
     onAddCuePoint: addVideoCuePoint,
     onJumpCuePoint: jumpVideoCuePoint,
@@ -28228,6 +28328,11 @@ export default function App() {
               onLowerRatio: setPerformLowerSplitRatio,
             },
             renderClipInspector: () => renderVideoClipSlotInspector(true),
+            renderEffectBrowser: renderFxBrowser,
+            get effectEntries() { return fxBrowserEntries(); },
+            get isfImportRejections() { return fxRejections(); },
+            get locale() { return uiLocale(); },
+            onAddEffect: addFxBrowserEntry,
           }}
           invokeCommand={invoke}
           selectedMediaAssetId={selectedMediaLibraryAssetId()}

@@ -2159,7 +2159,7 @@ function readOperatorVjStateInPage() {
     layerOne: layerOne ? {
       label: (layerOne.querySelector(".videoIsfQuickStatus [data-no-localize]")?.textContent ?? "").trim(),
       statusText: (layerOne.querySelector(".videoIsfQuickStatus")?.textContent ?? "").trim().replace(/\s+/g, " "),
-      controlCount: layerOne.querySelectorAll(".videoIsfAdvanced .videoIsfControl").length,
+      controlCount: layerOne.querySelectorAll(".videoIsfAdvanced [data-video-isf-control-name]").length,
       bypassPressed: bypass?.getAttribute("aria-pressed") ?? "",
       bypassText: (bypass?.textContent ?? "").trim(),
       bypassActive: bypass?.classList.contains("active") ?? false,
@@ -2171,14 +2171,19 @@ function readOperatorVjStateInPage() {
       builtinDisabled: builtin?.disabled ?? null,
       addIsfDisabled: addIsf?.disabled ?? null,
       stackCountText: (layerOne.querySelector(".videoIsfStackActions > span")?.textContent ?? "").trim(),
-      controlRows: [...layerOne.querySelectorAll(".videoIsfAdvanced .videoIsfControl")]
+      controlRows: [...layerOne.querySelectorAll(".videoIsfAdvanced [data-video-isf-control-name]")]
         .map((row) => ({
           kind: row.getAttribute("data-video-isf-control-kind") ?? "",
           name: row.getAttribute("data-video-isf-control-name") ?? "",
-          controls: [...row.querySelectorAll("input, button")].map((control) => ({
+          resetDefaultPresent: Boolean(row.querySelector(".videoFxParameterFoot button")),
+          controls: [...row.querySelectorAll("input, select, button[aria-label]")].map((control) => ({
             tag: control.tagName.toLowerCase(),
-            type: control instanceof HTMLInputElement ? control.type : "button",
+            type: control instanceof HTMLInputElement ? control.type : control instanceof HTMLSelectElement ? "select" : "button",
             step: control instanceof HTMLInputElement ? control.step : "",
+            minimum: control instanceof HTMLInputElement ? control.min : "",
+            maximum: control instanceof HTMLInputElement ? control.max : "",
+            value: control instanceof HTMLInputElement || control instanceof HTMLSelectElement ? control.value : "",
+            pressed: control.getAttribute("aria-pressed"),
             ariaLabel: control.getAttribute("aria-label") ?? "",
           })),
         })),
@@ -2298,7 +2303,10 @@ function measureOperatorVjLayoutInPage(layerId) {
     `[data-video-isf-layer-id="${layerId}"] .videoIsfAdvanced input, ` +
     `[data-video-isf-layer-id="${layerId}"] .videoIsfAdvanced select, ` +
     `[data-video-isf-layer-id="${layerId}"] .videoIsfAdvanced button`,
-  )];
+  )]
+    // Content of a closed disclosure (the effect-preset drawer) is not rendered, so it
+    // has no rectangle to contain; opening it makes its controls scroll-reachable.
+    .filter((control) => !control.closest("details:not([open])"));
   const outputRailElement = document.querySelector(".videoOutputSelectorRail");
   const outputRail = rect(outputRailElement);
   const outputDetailElement = [...document.querySelectorAll("[data-video-output-detail-id]")]
@@ -17088,7 +17096,7 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
     `(() => {
       const root = document.querySelector('[data-video-isf-layer-id="1"]');
       return document.querySelectorAll('.videoIsfAdvanced').length === 1 &&
-        root?.querySelectorAll('.videoIsfAdvanced .videoIsfControl').length === 6 &&
+        root?.querySelectorAll('.videoIsfAdvanced [data-video-isf-control-name]').length === 6 &&
         root?.querySelectorAll('.videoIsfAdvanced .videoIsfStackRow').length === 8 &&
         root?.querySelector('[data-video-isf-action="advanced"]')?.getAttribute('aria-expanded') === 'true';
     })()`,
@@ -17109,7 +17117,7 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
 
   await clickVisibleSelector(
     client,
-    '[data-video-isf-layer-id="1"] [data-video-isf-action="trigger-event"]',
+    '[data-video-isf-layer-id="1"] [data-video-isf-control-name="pulse"] button',
   );
   await client.evaluate("document.querySelector('.appMenuButton')?.click()");
   await waitForClientCondition(
@@ -17119,7 +17127,7 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
       const undo = document.querySelector('[aria-keyshortcuts^="Control+Z"]');
       const redo = document.querySelector('[aria-keyshortcuts^="Control+Y"]');
       return root?.getAttribute('aria-busy') === 'true' &&
-        root.querySelector('[data-video-isf-action="trigger-event"]')?.disabled === true &&
+        root.querySelector('[data-video-isf-control-name="pulse"] button')?.disabled === true &&
         root.querySelector('[data-video-isf-stage-index="0"] [data-video-isf-action="move-down"]')?.disabled === true &&
         undo?.disabled === true && redo?.disabled === true &&
         window.__syndocalOperatorVjMock?.eventPulses?.[0]?.values?.join(',') === '1';
@@ -17137,7 +17145,7 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
       const root = document.querySelector('[data-video-isf-layer-id="1"]');
       const mock = window.__syndocalOperatorVjMock;
       return root?.getAttribute('aria-busy') === 'false' &&
-        root.querySelector('[data-video-isf-action="trigger-event"]')?.disabled === false &&
+        root.querySelector('[data-video-isf-control-name="pulse"] button')?.disabled === false &&
         document.querySelector('[aria-keyshortcuts^="Control+Z"]')?.disabled === false &&
         document.querySelector('[aria-keyshortcuts^="Control+Y"]')?.disabled === false &&
         mock?.eventPulses?.[0]?.values?.join(',') === '1,0' &&
@@ -17157,7 +17165,7 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
       const root = document.querySelector('[data-video-isf-layer-id="1"]');
       return root?.querySelector('.videoIsfStackRow.selected')?.getAttribute('data-video-isf-stage-index') === '1' &&
         root?.querySelector('.videoIsfSelectedEditor')?.getAttribute('data-video-isf-editor-stage') === '1' &&
-        root?.querySelectorAll('.videoIsfAdvanced .videoIsfControl').length === 1 &&
+        root?.querySelectorAll('.videoIsfAdvanced [data-video-isf-control-name]').length === 1 &&
         (root?.querySelector('.videoIsfQuickStatus [data-no-localize]')?.textContent || '').trim() === 'Monochrome' &&
         root?.querySelector('[data-video-isf-action="bypass"]')?.getAttribute('aria-pressed') === 'false';
     })()`,
@@ -17255,6 +17263,16 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
     client,
     '[data-video-isf-layer-id="1"] [data-video-isf-stage-index="1"] [data-video-isf-action="remove"]',
   );
+  // Task12 replaces one-click removal with an explicit confirmation. Opening
+  // it must leave the chain and authoritative mutation count intact.
+  await waitForClientCondition(client, `(() => {
+    const root = document.querySelector('[data-video-isf-layer-id="1"]');
+    return root?.querySelector('.buttonRow[role="group"] > button.danger') &&
+      root.querySelectorAll('.videoIsfStackRow').length === 8 &&
+      window.__syndocalOperatorVjMock?.calls.filter(call => call.command === 'remove_video_layer_isf_effect').length === 0;
+  })()`, "Operator VJ removal awaits explicit confirmation");
+  const removalPending = await readOperatorVjState(client);
+  await clickVisibleSelector(client, '[data-video-isf-layer-id="1"] .buttonRow[role="group"] > button.danger');
   await waitForClientCondition(
     client,
     `(() => {
@@ -17279,7 +17297,7 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
       const root = document.querySelector('[data-video-isf-layer-id="1"]');
       return root?.querySelector('.videoIsfStackRow.selected')?.getAttribute('data-video-isf-stage-index') === '0' &&
         root?.querySelector('.videoIsfSelectedEditor')?.getAttribute('data-video-isf-editor-stage') === '0' &&
-        root?.querySelectorAll('.videoIsfAdvanced .videoIsfControl').length === 6 &&
+        root?.querySelectorAll('.videoIsfAdvanced [data-video-isf-control-name]').length === 6 &&
         (root?.querySelector('.videoIsfQuickStatus [data-no-localize]')?.textContent || '').trim() === 'Threshold';
     })()`,
     "Operator VJ restored root stage editor",
@@ -17367,33 +17385,16 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
   const expectedTailBypassLabel = locale === "ja"
     ? "Threshold Pulse（レイヤー1）のMonochrome FX有効状態"
     : "Monochrome FX enabled for Threshold Pulse (layer 1)";
+  // Human widget labels replace technical component labels. Parent selectors
+  // and authoritative calls below still prove layer/stage/control scope.
   const expectedControlLabels = locale === "ja"
-    ? [
-        "Threshold Pulse（レイヤー1）のlevel 成分1",
-        "Threshold Pulse（レイヤー1）のThreshold FXのuseSourceAlpha",
-        "Threshold Pulse（レイヤー1）のtoneCount 成分1",
-        "Threshold Pulse（レイヤー1）のcenter 成分1",
-        "Threshold Pulse（レイヤー1）のcenter 成分2",
-        "Threshold Pulse（レイヤー1）のtint 成分1",
-        "Threshold Pulse（レイヤー1）のtint 成分2",
-        "Threshold Pulse（レイヤー1）のtint 成分3",
-        "Threshold Pulse（レイヤー1）のtint 成分4",
-        "Threshold Pulse（レイヤー1）のpulseをトリガー",
-      ]
-    : [
-        "level component 1 for Threshold Pulse (layer 1)",
-        "useSourceAlpha for Threshold FX on Threshold Pulse (layer 1)",
-        "toneCount component 1 for Threshold Pulse (layer 1)",
-        "center component 1 for Threshold Pulse (layer 1)",
-        "center component 2 for Threshold Pulse (layer 1)",
-        "tint component 1 for Threshold Pulse (layer 1)",
-        "tint component 2 for Threshold Pulse (layer 1)",
-        "tint component 3 for Threshold Pulse (layer 1)",
-        "tint component 4 for Threshold Pulse (layer 1)",
-        "Trigger pulse for Threshold Pulse (layer 1)",
-      ];
+    ? ["レベル", "レベル", "Use Source Alpha", "Tone Count", "Tone Count", "Center X", "Center X", "Center Y", "Center Y", "色付け", "不透明度", "Pulse"]
+    : ["Level", "Level", "Use Source Alpha", "Tone Count", "Tone Count", "Center X", "Center X", "Center Y", "Center Y", "Tint", "Alpha", "Pulse"];
   const expandedControlRows = expanded.layerOne?.controlRows ?? [];
   const expandedControlLabels = expandedControlRows.flatMap((row) => row.controls.map((control) => control.ariaLabel));
+  const controlsOfKind = (kind) => expandedControlRows.find((row) => row.kind === kind)?.controls ?? [];
+  const numericBounds = (controls, minimum, maximum, value) => controls.every((control) =>
+    Number(control.minimum) === minimum && Number(control.maximum) === maximum && Number(control.value) === value);
   const layoutPhases = [initialLayout, expandedLayout, terminalBankLayout, outputLayout];
   const checks = {
     fixtureAndLocale:
@@ -17420,11 +17421,23 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
       expanded.layerOne?.stackCountText === "8/8 FX" &&
       expandedControlRows.map((row) => row.kind).join(",") === "Float,Bool,Long,Point2d,Color,Event" &&
       expandedControlRows.map((row) => row.name).join(",") === "level,useSourceAlpha,toneCount,center,tint,pulse" &&
-      expandedControlRows.map((row) => row.controls.length).join(",") === "1,1,1,2,4,1" &&
-      expandedControlRows.find((row) => row.kind === "Bool")?.controls[0]?.type === "checkbox" &&
-      expandedControlRows.find((row) => row.kind === "Long")?.controls[0]?.step === "1" &&
+      expandedControlRows.map((row) => row.controls.length).join(",") === "2,1,2,4,2,1" &&
+      controlsOfKind("Float").map(control => control.type).join(",") === "range,number" &&
+      numericBounds(controlsOfKind("Float"), 0, 1, 0.5) &&
+      controlsOfKind("Bool")[0]?.type === "button" && controlsOfKind("Bool")[0]?.pressed === "true" &&
+      controlsOfKind("Long").map(control => control.type).join(",") === "range,number" &&
+      controlsOfKind("Long").every(control => control.step === "1") && numericBounds(controlsOfKind("Long"), 2, 16, 6) &&
+      controlsOfKind("Point2d").map(control => control.type).join(",") === "range,number,range,number" &&
+      numericBounds(controlsOfKind("Point2d"), 0, 1, 0.5) &&
+      controlsOfKind("Color").map(control => control.type).join(",") === "color,range" &&
+      controlsOfKind("Color")[0]?.value === "#ffbf66" && numericBounds(controlsOfKind("Color").slice(1), 0, 1, 1) &&
+      controlsOfKind("Event")[0]?.type === "button" &&
+      expandedControlRows.filter(row => row.resetDefaultPresent).map(row => row.kind).join(",") === "Float,Bool,Long,Point2d,Color" &&
       JSON.stringify(expandedControlLabels) === JSON.stringify(expectedControlLabels),
     eventPulseNonHistoricalInterlock:
+      pulseCompleted.mock?.eventPulses?.[0]?.layerId === 1 &&
+      pulseCompleted.mock?.eventPulses?.[0]?.stageIndex === 0 &&
+      pulseCompleted.mock?.eventPulses?.[0]?.controlName === "pulse" &&
       pulseBusy.mock?.eventPulses?.[0]?.values?.join(",") === "1" &&
       pulseBusy.mock?.historyStatus?.undo_depth === 4 && pulseBusy.mock?.historyStatus?.redo_depth === 2 &&
       pulseCompleted.mock?.eventPulses?.[0]?.values?.join(",") === "1,0" &&
@@ -17451,6 +17464,9 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
       disabledTail.layerOne?.label === "Monochrome" && disabledTail.layerOne?.focusedAction === "toggle-stage" &&
       disabledTail.layerOne?.focusedStageIndex === 1 && disabledTail.layerOne?.runtimeErrorCount === 0,
     moveRemoveSelectionIdentity:
+      removalPending.layerOne?.stackLabels.join(",") === maximumStackLabels &&
+      removalPending.layerOne?.stackRowCount === 8 &&
+      removalPending.mock?.calls.filter(call => call.command === "remove_video_layer_isf_effect").length === 0 &&
       crossedTail.layerOne?.stackLabels.join(",") === crossedStackLabels &&
       crossedTail.layerOne?.selectedStackIndex === 2 && crossedTail.layerOne?.label === "Monochrome" &&
       movedTailRestored.layerOne?.stackLabels.join(",") === maximumStackLabels &&
@@ -17522,6 +17538,7 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
     disabledTail,
     crossedTail,
     movedTailRestored,
+    removalPending,
     removedTail,
     selectedRootRestored,
     bypassed,

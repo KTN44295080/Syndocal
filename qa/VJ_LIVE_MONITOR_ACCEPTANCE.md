@@ -21,6 +21,7 @@ The Preview bus now has an ephemeral transport that is separate from project and
 - Preview supports local `File` and `Still Image` layers with a valid path. Camera, Screen, NDI and Spout sources are deliberately rejected so auditioning cannot consume a shared latest-frame queue.
 - Preview transport is runtime-only: it is excluded from `.sdc`, Recovery and Undo/Redo. New/load/Undo/standby transitions, layer removal, source identity replacement and Clear invalidate it.
 - Preview owns a dedicated decoder/renderer, uses decode prefetch zero and renders a one-layer snapshot. Reset uses `try_lock`, so Clear and project transitions do not wait for a slow decode. Source identity and transport generation are checked after rendering and again after JPEG encoding; a raced frame is returned as `busy`, not published as current.
+- **Effect audition (2026-10-19).** `set_vj_preview_effect` attaches an ephemeral layer effect chain to the staged Preview session (`effect_audition`). Only the Preview branch of `render_live_video_monitor_frame` reads it; Program, outputs, recording, projects, Recovery and Undo never do. Restaging the same layer keeps it; staging another layer, Clear, a replaced source or a removed layer ends it. Each change advances the transport generation so a frame rendered with the previous chain is reported busy. Taking it into Program is a separate, explicit operator action through the ordinary ticketed layer-chain command. See `qa/FX_UX_2026-10-19.md`.
 
 ## Verification completed
 

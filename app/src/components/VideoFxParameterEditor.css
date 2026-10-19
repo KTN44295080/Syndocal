@@ -1,0 +1,37 @@
+.videoFxParameterEditor { container-type: inline-size; display: grid; gap: 10px; min-width: 0; align-content: start; font-size: 14px; color: var(--theme-text); }
+.videoFxParameterEditor button, .videoFxParameterEditor input, .videoFxParameterEditor select { min-width: 44px; min-height: 44px; box-sizing: border-box; font: inherit; }
+.videoFxParameterEditor button { white-space: normal; }
+.videoFxParameterActions { display: flex; flex-wrap: wrap; gap: 4px; }
+.videoFxParameterActions > * { flex: 1 1 auto; }
+.videoFxParameter { display: grid; gap: 4px; padding-block: 6px; min-width: 0; border-bottom: 1px solid var(--theme-line); }
+.videoFxParameterHead, .videoFxParameterFoot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
+.videoFxParameterHead label { color: var(--theme-text); font-weight: 700; overflow-wrap: anywhere; }
+.videoFxParameterHead output { color: var(--theme-text); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.videoFxParameterFoot { color: var(--theme-muted); }
+.videoFxScalarPicker { display: grid; grid-template-columns: minmax(44px, 1fr) minmax(64px, 96px); gap: 4px; min-width: 0; }
+.videoFxScalarPicker input { width: 100%; }
+.videoFxPointPicker, .videoFxColorPicker { display: grid; gap: 4px; min-width: 0; }
+.videoFxPointPicker label { display: grid; align-items: center; grid-template-columns: 20px minmax(44px, 1fr) minmax(64px, 96px); gap: 4px; }
+.videoFxPointPicker input { width: 100%; }
+.videoFxColorPicker > input { width: 100%; }
+.videoFxPad { position: relative; height: 96px; min-width: 96px; overflow: hidden; touch-action: none; cursor: crosshair; background: var(--theme-inset); border: 1px solid var(--theme-line-strong); background-image: linear-gradient(var(--theme-line) 1px, transparent 1px), linear-gradient(90deg, var(--theme-line) 1px, transparent 1px); background-size: 25% 25%; }
+.videoFxPad[aria-disabled="true"] { cursor: default; opacity: .5; }
+.videoFxPadCrossH, .videoFxPadCrossV { position: absolute; background: var(--theme-accent); opacity: .5; pointer-events: none; }
+.videoFxPadCrossH { left: 0; right: 0; height: 1px; }
+.videoFxPadCrossV { top: 0; bottom: 0; width: 1px; }
+.videoFxPadDot { position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: var(--theme-accent); border: 2px solid var(--theme-on-accent); pointer-events: none; box-sizing: border-box; }
+.videoFxColorPicker label { display: grid; align-items: center; grid-template-columns: auto minmax(44px, 1fr); gap: 6px; }
+.videoFxPresets { border: 1px solid var(--theme-line); min-width: 0; }
+.videoFxPresets summary { display: flex; align-items: center; min-height: 44px; padding-inline: 8px; cursor: pointer; }
+.videoFxPresetBody { display: grid; gap: 6px; padding: 6px; min-width: 0; }
+.videoFxPresetBody label { display: grid; gap: 4px; min-width: 0; }
+.videoFxPresetBody input, .videoFxPresetBody select { width: 100%; min-width: 0; }
+.videoFxParameterEditor :is(label, label span, output, summary, select, option, input, button, p, span, details) { font-size: 14px; }
+.videoFxParameterEditor :focus-visible { outline: 2px solid var(--theme-focus); outline-offset: -2px; }
+
+/* In a narrow Inspector the slider and its number field stack so the slider keeps a usable length. */
+@container (max-width: 260px) {
+  .videoFxScalarPicker { grid-template-columns: minmax(0, 1fr); }
+  .videoFxPointPicker label { grid-template-columns: 20px minmax(0, 1fr); }
+  .videoFxPointPicker label input[type="number"] { grid-column: 2; }
+}

@@ -1,7 +1,9 @@
 import { createEffect, createMemo, createSignal, For, Show, untrack } from "solid-js";
 import { type Accessor } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import type { VideoBlendMode, VideoColorAdjust, VideoFxAdjust, VideoIsfEffectSummary, VideoIsfStageError, VideoLayerState, VideoLayerSummary } from "../types";
+import type { VideoBlendMode, VideoColorAdjust, VideoFxAdjust, VideoIsfEffectSummary, VideoIsfStageError, VideoLayerState, VideoLayerSummary, VideoEffectCatalog } from "../types";
+import type { FxLiveSession } from "../createFxLiveSession";
+import type { FxAuditionSession } from "../createFxAuditionSession";
 import { videoSourceKindLabel, videoSourceMetadataLabel } from "../videoHelpers";
 import { defaultColorAdjust, defaultFxAdjust } from "../videoLayerDefaults";
 import { VideoGeneratorEditor } from "./VideoGeneratorEditor";
@@ -10,6 +12,13 @@ import type { VideoGenerator } from "../types";
 import { VideoIsfEffectPanel } from "./VideoIsfEffectPanel";
 
 interface VideoLayerListPanelProps {
+  locale?: string;
+  projectEpoch?: number;
+  effectCatalog?: VideoEffectCatalog;
+  onApplyEffectCatalog?: (catalog: VideoEffectCatalog) => unknown | Promise<unknown>;
+  liveSession?: FxLiveSession;
+  /** Preview-only effect trial, shared with the Perform FX tab. */
+  audition?: FxAuditionSession;
   layers: VideoLayerSummary[];
   compact?: boolean;
   performance?: boolean;
@@ -288,6 +297,11 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
               eventPulseBusy={props.isfEventPulseBusy}
               onImport={props.onImportIsf}
               onApplyBuiltin={props.onApplyBuiltinIsf}
+              effectCatalog={props.effectCatalog}
+              locale={props.locale}
+              projectEpoch={props.projectEpoch}
+              onApplyEffectCatalog={props.onApplyEffectCatalog}
+              liveSession={props.liveSession}
               onSetEffect={props.onSetIsfEffect}
               onMoveEffect={props.onMoveIsfEffect}
               onRemoveEffect={props.onRemoveIsfEffect}

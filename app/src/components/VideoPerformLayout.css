@@ -172,7 +172,12 @@
 /* Inspector tabs and bodies. */
 .videoPerformInspectorBody { display: block; }
 .videoPerformInspectorClip { height: 100%; overflow: auto; overscroll-behavior: contain; padding: 6px; box-sizing: border-box; scrollbar-width: thin; }
-.videoPerformInspectorBrowser { display: grid; align-content: start; gap: 8px; height: 100%; padding: 12px; box-sizing: border-box; color: var(--theme-muted); }
+.videoPerformInspectorBrowser { display: block; min-height: 0; height: 100%; box-sizing: border-box; overflow: hidden; color: var(--theme-muted); }
+.videoFxBrowserSurface { height: 100%; min-height: 0; min-width: 0; }
+.videoEditorEffectBrowser { width: min(960px, 90vw); max-height: 85vh; border: 1px solid var(--theme-line); padding: 12px; background: var(--theme-panel); color: var(--theme-text); }
+.videoEditorEffectBrowser > header { display: flex; align-items: center; justify-content: space-between; min-height: 44px; font-size: 14px; margin-bottom: 8px; }
+.videoEditorEffectBrowser button { min-height: 44px; min-width: 44px; font-size: 14px; }
+.videoEditorEffectBrowser .videoFxBrowserSurface { height: 520px; max-height: 65vh; }
 .videoPerformInspectorBrowser > strong { color: var(--theme-text); font-family: var(--theme-font-label); letter-spacing: .06em; text-transform: uppercase; }
 .videoPerformInspectorBrowser > p { margin: 0; max-width: 62ch; line-height: 1.45; }
 .videoPerformInspectorClip .videoClipSlotInspectorEmbedded { position: static; z-index: auto; display: grid; gap: 8px; width: auto; max-height: none; overflow: visible; padding: 0; border: 0; box-shadow: none; background: transparent; }

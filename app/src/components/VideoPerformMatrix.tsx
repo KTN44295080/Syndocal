@@ -6,8 +6,11 @@ import { videoClipSlotBankCells } from "../videoClipSlotBankModel";
 import { VideoClipSlotBankPanel } from "./VideoClipSlotBankPanel";
 import { VideoLayerListPanel } from "./VideoLayerListPanel";
 import "./VideoPerformMatrix.css";
+import { FX_DRAG_MIME, readFxDragPayload, type FxCatalogEntry } from "../fxCatalogModel";
 
 export interface VideoPerformMatrixProps {
+  effectEntries?: FxCatalogEntry[];
+  onAddEffect?: (entry: FxCatalogEntry, layerId: number) => void | Promise<void>;
   bank: ComponentProps<typeof VideoClipSlotBankPanel>;
   layerList: ComponentProps<typeof VideoLayerListPanel>;
   runtimes: VideoClipLayerRuntimeSummary[];
@@ -66,7 +69,7 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
       || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
     const target = event.target instanceof Element ? event.target : null;
     // A focused pane divider owns its Arrow/Home/End resize keys.
-    if (target?.closest("input, textarea, select, [role='separator'], [contenteditable]:not([contenteditable='false'])")
+    if (target?.closest("input, textarea, select, [role='separator'], [contenteditable]:not([contenteditable='false']), [data-video-perform-pane='inspector'], [data-effect-browser]")
       || document.querySelector("[role='dialog'], dialog[open], [aria-modal='true'], .app[data-control-learn-mode]")) return;
     const layerId = selectedLayerId();
     if (layerId === null) return;
@@ -133,7 +136,20 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
     createEffect(() => setCells(reconcile(videoClipSlotBankCells(layer().clip_slots, runtime()), { key: "index" })));
     const selected = () => selectedLayerId() === layer().id;
     const live = () => runtime()?.active_slot_id != null && runtime()?.playing === true;
-    return <div class="videoPerformMatrixRow" classList={{ selected: selected() }} data-video-perform-row={layer().id} data-video-clip-slot-layer-id={layer().id} role="row" aria-selected={selected()}>
+    return <div class="videoPerformMatrixRow" classList={{ selected: selected() }} data-video-perform-row={layer().id} data-video-clip-slot-layer-id={layer().id} role="row" aria-selected={selected()}
+      onDragOver={event => { if (event.dataTransfer?.types.includes(FX_DRAG_MIME)) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }}
+      onDrop={event => {
+        if (!event.dataTransfer) return;
+        const entry = readFxDragPayload(event.dataTransfer, props.effectEntries ?? []);
+        if (!entry) return;
+        event.preventDefault(); event.stopPropagation();
+        props.bank.onSelectLayer(layer().id);
+        // A row may differ from the browser's selected target. Review the exact
+        // destination before changing its live chain.
+        const ja = document.documentElement.lang === "ja";
+        const target = `${layer().id} · ${layer().label}`;
+        if (globalThis.confirm(ja ? `追加先: レイヤー ${target}\n${entry.label}\nLIVE — 本番映像にも反映されます。追加しますか？` : `Add to: Layer ${target}\n${entry.label}\nLIVE — affects Program. Add effect?`)) void props.onAddEffect?.(entry, layer().id);
+      }}>
       <div class="videoPerformLayerStrip" role="rowheader">
         <div class="videoPerformLayerTop">
           <button type="button" class="videoPerformLayerName" aria-pressed={selected()} title={layer().label} data-video-perform-select-layer={layer().id} onClick={() => props.bank.onSelectLayer(layer().id)} data-no-localize>{layer().label}</button>

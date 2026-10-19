@@ -1,0 +1,15 @@
+.videoFxProblems { width: min(720px, 92vw); max-height: 80vh; padding: 12px; overflow: auto; color: var(--theme-text); background: var(--theme-panel); border: 1px solid var(--theme-line-strong); font-size: 14px; }
+.videoFxProblems > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.videoFxProblems h2 { margin: 0; font-size: 16px; font-family: var(--font-label); letter-spacing: .06em; text-transform: uppercase; }
+.videoFxProblems button { min-height: 44px; min-width: 44px; padding: 6px 12px; font: inherit; color: var(--theme-text); background: var(--theme-key); border: 1px solid var(--theme-line-strong); border-radius: var(--r-sm); cursor: pointer; }
+.videoFxProblems button:hover { background: var(--theme-key-hover); }
+.videoFxProblems :is(button, summary):focus-visible { outline: 2px solid var(--theme-focus); outline-offset: 2px; }
+.videoFxProblemList { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 10px; }
+.videoFxProblemList li { display: grid; gap: 4px; padding: 8px 10px; background: var(--theme-card); border: 1px solid var(--theme-line); border-left: 4px solid var(--theme-error); }
+.videoFxProblemList p { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.videoFxProblemList strong { font-size: 16px; color: var(--theme-error); }
+.videoFxProblemWhere { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; color: var(--theme-dim); }
+.videoFxProblemAction span { color: var(--theme-dim); }
+.videoFxProblemList summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; color: var(--theme-dim); }
+.videoFxProblemList pre { margin: 0; padding: 8px; max-height: 200px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--theme-inset); border: 1px solid var(--theme-line); font-size: 14px; }
+.videoFxProblemsEmpty { color: var(--theme-dim); }

@@ -2877,6 +2877,8 @@ export interface VjPreviewTransportSummary {
   updated_at_ms: number;
   generation: number;
   source_name?: string | null;
+  /** True while Preview renders an audition chain instead of the authored one. */
+  effect_audition?: boolean;
 }
 
 export interface CueSummary {

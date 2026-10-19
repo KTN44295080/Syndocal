@@ -132,6 +132,7 @@ const mediaPreviewIdentity = (asset: MediaAssetSummary) =>
   `${asset.id}\u0000${videoSourceKindLabel(asset.source.kind)}\u0000${asset.source.path ?? ""}\u0000${asset.source.name ?? ""}\u0000${asset.content_hash?.algorithm ?? ""}\u0000${asset.content_hash?.hex ?? ""}\u0000${asset.byte_size ?? ""}`;
 
 export function VideoControlPanel(props: VideoControlPanelProps) {
+  let effectBrowserDialog: HTMLDialogElement | undefined;
   // T6: Audio/AutoVJ/Reactive settings live behind collapsed drawers so the clip
   // bank dominates the pane. Open state persists per drawer in localStorage.
   const [audioInOpen, setAudioInOpen] = createSignal(loadMixerDrawerOpen("audio-in"));
@@ -254,6 +255,12 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
       data-workspace-pane={props.libraryOnly ? "upper" : undefined}
       data-video-media-library={props.libraryOnly ? "true" : undefined}
     >
+      <Show when={props.mixer && props.performContext?.renderEffectBrowser}>
+        <dialog ref={effectBrowserDialog} class="videoEditorEffectBrowser" data-video-editor-effect-browser aria-label="Effect browser">
+          <header><strong>Effect browser</strong><button type="button" onClick={() => effectBrowserDialog?.close()}>Close</button></header>
+          {props.performContext?.renderEffectBrowser?.()}
+        </dialog>
+      </Show>
       <div class="panelHeader">
         <h2>{props.libraryOnly ? "Media Library" : "Video Control"}</h2>
         <span>{props.libraryOnly ? `${props.mediaLibrary.assets.length} asset(s)` : `${props.layerCount} layer(s)`}</span>
@@ -299,6 +306,9 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
             <span>{props.layerCount} available</span>
           </div>
           <div class="videoMixerPaneActions">
+            <Show when={props.mixer && props.performContext?.renderEffectBrowser}>
+              <button type="button" data-open-effect-browser onClick={() => effectBrowserDialog?.showModal()}>Effect browser</button>
+            </Show>
             <Show when={props.mixer && props.clipGrid.layers.length > 0}>
               <details class="videoMixerSourceDisclosure" data-vj-media-import-disclosure>
                 <summary aria-label="Import Media">Import Media</summary>

@@ -13822,6 +13822,9 @@ struct VjPreviewTransportSummary {
     source_name: Option<String>,
     updated_at_ms: u64,
     generation: u64,
+    /// True while Preview renders an ephemeral audition chain instead of the
+    /// layer's authored chain. Program never reads this state.
+    effect_audition: bool,
 }
 
 impl VjPreviewTransportSummary {
@@ -13838,6 +13841,7 @@ impl VjPreviewTransportSummary {
             source_name: None,
             updated_at_ms,
             generation,
+            effect_audition: false,
         }
     }
 }
@@ -13889,6 +13893,10 @@ struct VjPreviewTransportSession {
     anchored_at: Instant,
     updated_at_ms: u64,
     generation: u64,
+    /// Runtime-only Preview effect chain. `None` renders the authored chain;
+    /// `Some(None)` auditions an empty chain. It is excluded from projects,
+    /// Recovery and Undo, and ends with the staged session.
+    effect_audition: Option<Option<VideoIsfEffectSummary>>,
 }
 
 #[derive(Debug, Default)]
@@ -13927,10 +13935,18 @@ impl VjPreviewTransportRuntime {
         };
         let (loop_enabled, loop_start_ms, loop_end_ms) =
             vj_preview_loop_bounds(&state, duration_ms);
+        let source = VjPreviewSourceIdentity::from_layer(layer);
+        // Restaging the same layer and source keeps its audition; any other
+        // staging ends it.
+        let effect_audition = self
+            .session
+            .as_ref()
+            .filter(|previous| previous.layer_id == layer.id && previous.source == source)
+            .and_then(|previous| previous.effect_audition.clone());
         let generation = self.next_generation();
         let mut session = VjPreviewTransportSession {
             layer_id: layer.id,
-            source: VjPreviewSourceIdentity::from_layer(layer),
+            source,
             source_name: vj_preview_source_name(layer),
             // Staging a pad is a cue operation, not a mirror of the live Program playhead.
             // Always begin at the clip in-point so an ended Program clip remains auditionable.
@@ -13944,6 +13960,7 @@ impl VjPreviewTransportRuntime {
             anchored_at: now,
             updated_at_ms,
             generation,
+            effect_audition,
         };
         session.position_ms = clamp_vj_preview_position(&session, session.position_ms);
         self.session = Some(session);
@@ -14048,6 +14065,39 @@ impl VjPreviewTransportRuntime {
         session.updated_at_ms = updated_at_ms;
         session.generation = generation;
         Ok(vj_preview_transport_summary(session))
+    }
+
+    /// Replaces or ends the staged layer's Preview-only effect chain. The
+    /// generation advances so a frame rendered with the previous chain is
+    /// reported busy instead of being published.
+    fn set_effect_audition_at(
+        &mut self,
+        layer_id: VideoLayerId,
+        audition: Option<Option<VideoIsfEffectSummary>>,
+        now: Instant,
+        updated_at_ms: u64,
+    ) -> Result<VjPreviewTransportSummary, String> {
+        self.require_session()?;
+        self.advance_at(now, updated_at_ms);
+        let staged_layer = self.session.as_ref().map(|session| session.layer_id);
+        if staged_layer != Some(layer_id) {
+            return Err(format!(
+                "Effect audition requires layer {layer_id} to be staged in Preview"
+            ));
+        }
+        let generation = self.next_generation();
+        let session = self.session.as_mut().expect("preview session was checked");
+        session.effect_audition = audition;
+        session.anchored_at = now;
+        session.updated_at_ms = updated_at_ms;
+        session.generation = generation;
+        Ok(vj_preview_transport_summary(session))
+    }
+
+    fn effect_audition(&self) -> Option<Option<VideoIsfEffectSummary>> {
+        self.session
+            .as_ref()
+            .and_then(|session| session.effect_audition.clone())
     }
 
     fn current_take_state_at(
@@ -14233,6 +14283,7 @@ fn vj_preview_transport_summary(session: &VjPreviewTransportSession) -> VjPrevie
         source_name: session.source_name.clone(),
         updated_at_ms: session.updated_at_ms,
         generation: session.generation,
+        effect_audition: session.effect_audition.is_some(),
     }
 }
 
@@ -25297,6 +25348,7 @@ const OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES: &[&str] = &[
     "set_timeline_playing",
     "set_video_layer_audio_monitor_volume",
     "set_video_master_opacity",
+    "set_vj_preview_effect",
     "set_vj_preview_playing",
     "set_vj_preview_speed",
     "sync_ableton_link_clock",
@@ -80489,10 +80541,52 @@ fn clear_vj_preview(state: State<'_, AppState>) -> Result<VjPreviewTransportSumm
     Ok(summary)
 }
 
+/// Preview-only effect audition. It changes no project, Program or output
+/// state: the chain is held beside the staged transport and rendered only by the
+/// Preview monitor. `active = false` returns Preview to the authored chain.
+#[tauri::command]
+fn set_vj_preview_effect(
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+    active: bool,
+    effect: Option<VideoIsfEffectSummary>,
+) -> Result<VjPreviewTransportSummary, String> {
+    let audition = if active {
+        Some(effect.map(sanitize_video_isf_effect).transpose()?)
+    } else {
+        None
+    };
+    let snapshot = state.engine.video_snapshot();
+    let now = Instant::now();
+    let updated_at_ms = vj_preview_timestamp_ms();
+    let mut transport = state
+        .vj_preview_transport
+        .lock()
+        .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
+    let result = transport.set_effect_audition_at(layer_id, audition, now, updated_at_ms);
+    drop(transport);
+    if !valid {
+        reset_vj_preview_renderer(&state)?;
+    }
+    result
+}
+
+/// Read-only description of a built-in effect, so an audition can be assembled
+/// without writing it into a layer first.
+#[tauri::command]
+fn get_builtin_video_isf_effect(preset_id: String) -> Result<VideoIsfEffectSummary, String> {
+    let preset_id = preset_id.trim();
+    video::builtin_isf_effect(preset_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("Unknown built-in VJ effect '{preset_id}'"))
+}
+
 fn vj_preview_render_snapshot(
     snapshot: &protocol::VideoSnapshot,
     layer_id: VideoLayerId,
     position_ms: u64,
+    effect_audition: Option<Option<VideoIsfEffectSummary>>,
 ) -> Result<protocol::VideoSnapshot, String> {
     let mut layer = snapshot
         .layers
@@ -80506,6 +80600,9 @@ fn vj_preview_render_snapshot(
     // render_layer_preview treats position zero as an invitation to use loop_start_ms.
     // The independent transport must be able to seek to an actual zero frame.
     layer.state.loop_start_ms = 0;
+    if let Some(effect) = effect_audition {
+        layer.isf_effect = effect;
+    }
     Ok(protocol::VideoSnapshot {
         layers: vec![layer],
         media_assets: Vec::new(),
@@ -80637,13 +80734,17 @@ fn render_live_video_monitor_frame(
             let _ = layer_id;
             let now = Instant::now();
             let updated_at_ms = vj_preview_timestamp_ms();
-            let (summary, valid) = {
+            let (summary, valid, effect_audition) = {
                 let mut transport = state
                     .vj_preview_transport
                     .lock()
                     .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
                 let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
-                (transport.summary_at(now, updated_at_ms), valid)
+                (
+                    transport.summary_at(now, updated_at_ms),
+                    valid,
+                    transport.effect_audition(),
+                )
             };
             if !valid {
                 reset_vj_preview_renderer(&state)?;
@@ -80651,8 +80752,12 @@ fn render_live_video_monitor_frame(
             let layer_id = summary
                 .layer_id
                 .ok_or_else(|| "Preview monitor has no staged layer".to_string())?;
-            let preview_video =
-                vj_preview_render_snapshot(&snapshot, layer_id, summary.position_ms)?;
+            let preview_video = vj_preview_render_snapshot(
+                &snapshot,
+                layer_id,
+                summary.position_ms,
+                effect_audition,
+            )?;
             let mut renderer = match state.vj_preview_renderer.try_lock() {
                 Ok(renderer) => renderer,
                 Err(TryLockError::WouldBlock) => {
@@ -80924,7 +81029,8 @@ mod vj_preview_transport_tests {
         assert_eq!(staged.position_ms, 1_750);
         assert!(staged.generation > initial.generation);
         assert_eq!(staged.updated_at_ms, 1_001);
-        let preview = vj_preview_render_snapshot(&snapshot.video, 7, staged.position_ms).unwrap();
+        let preview =
+            vj_preview_render_snapshot(&snapshot.video, 7, staged.position_ms, None).unwrap();
         assert_eq!(preview.layers.len(), 1);
         assert_eq!(preview.layers[0].state.position_ms, 1_750);
         assert_eq!(snapshot.video.layers[0].state.position_ms, 250);
@@ -81073,6 +81179,133 @@ mod vj_preview_transport_tests {
             runtime.stage_at(&looped, started, 61).unwrap().position_ms,
             240
         );
+    }
+
+    #[test]
+    fn effect_audition_is_preview_only_scoped_to_the_staged_layer_and_expires_with_it() {
+        let invert = video::builtin_isf_effect("invert").unwrap().unwrap();
+        let mut authored = file_layer(7, 0, Some(5_000));
+        authored.isf_effect = Some(video::builtin_isf_effect("monochrome").unwrap().unwrap());
+        let other = file_layer(8, 0, Some(5_000));
+        let mut snapshot = snapshot_with_layer(authored.clone());
+        snapshot.video.layers.push(other.clone());
+        let started = Instant::now();
+        let mut runtime = VjPreviewTransportRuntime::default();
+
+        assert!(runtime
+            .set_effect_audition_at(7, Some(None), started, 10)
+            .unwrap_err()
+            .contains("No VJ Preview layer is staged"));
+        let staged = runtime.stage_at(&authored, started, 11).unwrap();
+        assert!(!staged.effect_audition);
+        assert!(runtime
+            .set_effect_audition_at(8, Some(None), started, 12)
+            .unwrap_err()
+            .contains("requires layer 8"));
+
+        // The chain under audition renders in Preview and leaves the authored
+        // snapshot, which Program renders, untouched.
+        let auditioned = runtime
+            .set_effect_audition_at(7, Some(Some(invert.clone())), started, 13)
+            .unwrap();
+        assert!(auditioned.effect_audition);
+        assert!(auditioned.generation > staged.generation);
+        let preview =
+            vj_preview_render_snapshot(&snapshot.video, 7, 0, runtime.effect_audition()).unwrap();
+        assert_eq!(
+            preview.layers[0].isf_effect.as_ref().unwrap().label,
+            "Invert"
+        );
+        assert_eq!(
+            snapshot.video.layers[0].isf_effect.as_ref().unwrap().label,
+            "Monochrome"
+        );
+        assert!(!vj_preview_frame_is_current(&staged, &auditioned, true));
+
+        // Some(None) auditions an empty chain; None returns to the authored one.
+        runtime
+            .set_effect_audition_at(7, Some(None), started, 14)
+            .unwrap();
+        let empty =
+            vj_preview_render_snapshot(&snapshot.video, 7, 0, runtime.effect_audition()).unwrap();
+        assert!(empty.layers[0].isf_effect.is_none());
+        let ended = runtime
+            .set_effect_audition_at(7, None, started, 15)
+            .unwrap();
+        assert!(!ended.effect_audition);
+        let authored_again =
+            vj_preview_render_snapshot(&snapshot.video, 7, 0, runtime.effect_audition()).unwrap();
+        assert_eq!(
+            authored_again.layers[0].isf_effect.as_ref().unwrap().label,
+            "Monochrome"
+        );
+
+        // Restaging the same layer keeps an active audition; staging another
+        // layer, clearing, or losing the source ends it.
+        runtime
+            .set_effect_audition_at(7, Some(Some(invert)), started, 16)
+            .unwrap();
+        assert!(
+            runtime
+                .stage_at(&authored, started, 17)
+                .unwrap()
+                .effect_audition
+        );
+        assert!(
+            !runtime
+                .stage_at(&other, started, 18)
+                .unwrap()
+                .effect_audition
+        );
+        runtime.stage_at(&authored, started, 19).unwrap();
+        assert!(!runtime.summary_at(started, 19).effect_audition);
+        runtime
+            .set_effect_audition_at(7, Some(None), started, 20)
+            .unwrap();
+        runtime.clear_at(21);
+        assert!(!runtime.summary_at(started, 21).effect_audition);
+        assert!(runtime.effect_audition().is_none());
+
+        // A replaced source or a removed layer ends the audition with the staged session.
+        runtime.stage_at(&authored, started, 22).unwrap();
+        runtime
+            .set_effect_audition_at(7, Some(None), started, 23)
+            .unwrap();
+        let mut replaced = snapshot.clone();
+        replaced.video.layers[0].source.path = Some("replacement.mp4".to_string());
+        assert!(!runtime.reconcile_at(&replaced.video, started, 24));
+        assert!(runtime.effect_audition().is_none());
+        runtime.stage_at(&authored, started, 25).unwrap();
+        runtime
+            .set_effect_audition_at(7, Some(None), started, 26)
+            .unwrap();
+        assert!(!runtime.reconcile_at(&protocol::VideoSnapshot::default(), started, 27));
+        assert!(!runtime.summary_at(started, 27).effect_audition);
+    }
+
+    #[test]
+    fn effect_audition_uses_the_live_shader_validation() {
+        // The command sanitises with the same function as the live layer setter,
+        // so a source the engine rejects can never reach the Preview renderer.
+        let mut broken = video::builtin_isf_effect("invert").unwrap().unwrap();
+        broken.source = "not an ISF shader".into();
+        assert!(sanitize_video_isf_effect(broken).is_err());
+        let mut crowded = video::builtin_isf_effect("invert").unwrap().unwrap();
+        let stage = crowded.clone();
+        crowded.stack =
+            vec![video_isf_stage_from_root(stage); video::VIDEO_ISF_EFFECT_STACK_MAX_STAGES];
+        assert!(sanitize_video_isf_effect(crowded)
+            .unwrap_err()
+            .contains("limit"));
+    }
+
+    #[test]
+    fn builtin_effect_description_is_read_only_and_rejects_unknown_ids() {
+        let effect = get_builtin_video_isf_effect(" invert ".to_string()).unwrap();
+        assert_eq!(effect.label, "Invert");
+        assert!(get_builtin_video_isf_effect("missing".to_string())
+            .unwrap_err()
+            .contains("Unknown built-in"));
     }
 }
 
@@ -97345,6 +97578,11 @@ pub(crate) mod tests {
                 "video_snapshot",
             ),
             (
+                "fn set_vj_preview_effect(",
+                "/// Read-only description of a built-in effect",
+                "video_snapshot",
+            ),
+            (
                 "fn render_live_video_monitor_frame(",
                 "\n#[cfg(test)]\nmod vj_preview_transport_tests",
                 "video_layer_thumbnail_snapshot",
@@ -97897,7 +98135,7 @@ pub(crate) mod tests {
             );
         }
         // The extension setter owns its lifecycle authority inside the handler.
-        assert_eq!(runtime_routes.len(), 177);
+        assert_eq!(runtime_routes.len(), 178);
         // Generator routes own renderer-ticketed publication admission. The
         // runtime-only dispatch policy must not classify those project edits.
         const GENERATOR_PROJECT_ROUTES: [&str; 2] =
@@ -135154,6 +135392,8 @@ fn main() {
             stage_vj_preview_layer,
             set_vj_preview_playing,
             seek_vj_preview,
+            set_vj_preview_effect,
+            get_builtin_video_isf_effect,
             set_vj_preview_speed,
             clear_vj_preview,
             get_live_video_monitor_frame,

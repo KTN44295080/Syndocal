@@ -1,13 +1,25 @@
-import { createEffect, createMemo, createSignal, For, Match, on, Show, Switch, type ComponentProps } from "solid-js";
+import { createEffect, createMemo, createSignal, For, on, Show, type ComponentProps } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import type { VideoIsfControlSummary, VideoLayerSummary } from "../types";
+import type { VideoEffectCatalog, VideoIsfControlSummary, VideoIsfEffectStageSummary, VideoLayerSummary } from "../types";
+import { fxControlValueText, replaceFxStage } from "../fxParameterModel";
+import { VideoFxParameterEditor } from "./VideoFxParameterEditor";
+import { VideoFxLiveSafety } from "./VideoFxLiveSafety";
+import { VideoFxAuditionBar } from "./VideoFxAuditionBar";
+import type { FxAuditionSession } from "../createFxAuditionSession";
+import type { FxLiveSession } from "../createFxLiveSession";
 import { VideoLayerListPanel } from "./VideoLayerListPanel";
 import "./VideoPerformQuickFx.css";
 
 interface VideoPerformQuickFxProps {
+  projectEpoch?: number;
+  locale?: string;
   layer: VideoLayerSummary | null;
   layerList: ComponentProps<typeof VideoLayerListPanel>;
   onOpenEditor: () => void;
+  effectCatalog?: VideoEffectCatalog;
+  onApplyEffectCatalog?: (catalog: VideoEffectCatalog) => unknown | Promise<unknown>;
+  liveSession?: FxLiveSession;
+  audition?: FxAuditionSession;
 }
 
 interface QuickStage {
@@ -16,43 +28,36 @@ interface QuickStage {
   index: number;
   label: string;
   enabled: boolean;
+  stage: VideoIsfEffectStageSummary;
   controls: (VideoIsfControlSummary & { id: string })[];
 }
 
 /** Value readout for a control. ISF summaries carry no unit metadata, so the only
  * unit shown is the percent sign of a normalised 0-1 float. */
-export const quickFxValueText = (control: VideoIsfControlSummary): string => {
-  const first = control.value[0];
-  switch (control.kind) {
-    case "Float": {
-      if (control.minimum[0] === 0 && control.maximum[0] === 1) return `${Math.round(first * 100)} %`;
-      return String(Number(first.toFixed(2)));
-    }
-    case "Long": {
-      const at = control.values.indexOf(first);
-      return at >= 0 && control.labels[at] ? control.labels[at] : String(Math.round(first));
-    }
-    case "Point2d":
-      return `${Number(control.value[0].toFixed(2))}, ${Number(control.value[1].toFixed(2))}`;
-    default:
-      return "";
-  }
-};
+export const quickFxValueText = (control: VideoIsfControlSummary): string => fxControlValueText(control);
 
 /** A view of the existing layer-scoped ISF stack, with no separate FX state or
  * publication path. Stable stage/control stores retain focused DOM across polls. */
 export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
   const [stages, setStages] = createStore<QuickStage[]>([]);
   const [selectedIndex, setSelectedIndex] = createSignal(0);
+  const [removeIndex, setRemoveIndex] = createSignal<number | null>(null);
+  // While an audition is open the stages, parameters and edits belong to the
+  // Preview-only draft; every other time they are the layer's live chain.
+  const audition = () => props.audition?.active(props.layer?.id) ?? null;
+  const shownEffect = createMemo(() => audition() ? audition()!.draft : props.layer?.isf_effect);
+  const effectSignature = createMemo(() => JSON.stringify([props.projectEpoch, props.layer?.id, shownEffect()]));
+  createEffect(on(effectSignature, () => setRemoveIndex(null), { defer: true }));
   createEffect(() => {
     const layer = props.layer;
-    const effect = layer?.isf_effect;
+    const effect = shownEffect();
     const next = layer && effect ? [effect, ...(effect.stack ?? [])].map((stage, index) => ({
       id: `${layer.id}:${index}`,
       layerId: layer.id,
       index,
       label: stage.label,
       enabled: stage.enabled,
+      stage,
       // The shader's declared order supplies its primary operator controls.
       controls: stage.controls.map((control) => ({ ...control, id: control.name })),
     })) : [];
@@ -60,26 +65,26 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
   });
   // A different layer starts at its first stage; a shorter chain clamps.
   const layerId = createMemo(() => props.layer?.id ?? null);
-  createEffect(on(layerId, () => setSelectedIndex(0), { defer: true }));
+  createEffect(on(layerId, () => { setSelectedIndex(0); setRemoveIndex(null); }, { defer: true }));
   const activeStage = createMemo(() => stages[Math.min(selectedIndex(), Math.max(0, stages.length - 1))] ?? null);
 
-  const busy = () => typeof props.layerList.isfEventPulseBusy === "function"
+  const liveBusy = () => typeof props.layerList.isfEventPulseBusy === "function"
     ? props.layerList.isfEventPulseBusy()
     : Boolean(props.layerList.isfEventPulseBusy);
-  const controlLabel = (stage: QuickStage, control: VideoIsfControlSummary) =>
-    `${control.name} for ${stage.label} FX on ${props.layer?.label ?? "Video layer"} (layer ${stage.layerId})`;
-  const setComponent = (stage: QuickStage, control: VideoIsfControlSummary, component: number, value: number) => {
-    if (!Number.isFinite(value)) return;
-    const next = [...control.value] as [number, number, number, number];
-    next[component] = value;
-    void props.layerList.onSetIsfControl(stage.layerId, stage.index, control.name, next);
-  };
-  const colorValue = (control: VideoIsfControlSummary) => `#${control.value.slice(0, 3)
-    .map((component) => Math.round(Math.max(0, Math.min(1, component)) * 255).toString(16).padStart(2, "0"))
-    .join("")}`;
-
+  const busy = () => audition() ? Boolean(props.audition?.busy()) : liveBusy();
+  // One set of stage commands: the draft while auditioning, the ticketed live
+  // commands otherwise.
+  const setEnabled = (layerId: number, index: number, enabled: boolean) =>
+    audition() ? props.audition!.setEnabled(layerId, index, enabled) : props.layerList.onSetIsfEffectEnabled(layerId, index, enabled);
+  const moveStage = (layerId: number, index: number, delta: -1 | 1) =>
+    audition() ? props.audition!.moveStage(layerId, index, delta) : props.layerList.onMoveIsfEffect(layerId, index, delta);
+  const removeStage = (layerId: number, index: number) =>
+    audition() ? props.audition!.removeStage(layerId, index) : props.layerList.onRemoveIsfEffect(layerId, index);
+  const history = () => audition()
+    ? { canUndo: () => props.audition!.canUndo(), undo: () => props.audition!.undo() }
+    : undefined;
   return (
-    <section class="videoPerformQuickFx" data-perform-quick-fx data-video-perform-region="quick-fx" aria-label="Selected layer effect chain">
+    <section class="videoPerformQuickFx" data-perform-quick-fx data-video-perform-region="quick-fx" data-fx-auditioning={audition() ? "true" : undefined} aria-label="Selected layer effect chain">
       <header class="videoPerformQuickFxHeader">
         <div class="videoPerformQuickFxLayer">
           <span class="videoPerformQuickFxLayerName" data-no-localize title={props.layer?.label ?? ""}>{props.layer?.label ?? ""}</span>
@@ -109,7 +114,7 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
                   <button type="button" class="videoPerformQuickFxSwitch" data-perform-fx-bypass aria-pressed={stage.enabled}
                     aria-label={`${stage.label} FX enabled for ${props.layer?.label ?? "Video layer"} (layer ${stage.layerId})`}
                     classList={{ active: stage.enabled }} disabled={busy()}
-                    onClick={() => void props.layerList.onSetIsfEffectEnabled(stage.layerId, stage.index, !stage.enabled)}>
+                    onClick={() => void setEnabled(stage.layerId, stage.index, !stage.enabled)}>
                     <span class="videoPerformQuickFxKnob" aria-hidden="true" />
                     <span>{stage.enabled ? "On" : "Off"}</span>
                   </button>
@@ -117,70 +122,42 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
               )}
             </For>
           </Show>
+          <Show when={activeStage()}>{(stage) => <div class="videoPerformQuickFxActions">
+            <button type="button" disabled={busy() || stage().index === 0} onClick={() => {
+              const index = stage().index; void moveStage(stage().layerId, index, -1); setSelectedIndex(index - 1); setRemoveIndex(null);
+            }}>Up</button>
+            <button type="button" disabled={busy() || stage().index >= stages.length - 1} onClick={() => {
+              const index = stage().index; void moveStage(stage().layerId, index, 1); setSelectedIndex(index + 1); setRemoveIndex(null);
+            }}>Down</button>
+            <Show when={removeIndex() === stage().index} fallback={<button type="button" disabled={busy()} onClick={() => audition() ? void removeStage(stage().layerId, stage().index) : setRemoveIndex(stage().index)}>Remove</button>}>
+              <button type="button" class="danger" disabled={busy()} onClick={() => { void removeStage(stage().layerId, stage().index); setRemoveIndex(null); }}>Confirm remove</button>
+              <button type="button" onClick={() => setRemoveIndex(null)}>Cancel</button>
+            </Show>
+          </div>}</Show>
+          <Show when={props.audition} fallback={null}>
+            <VideoFxAuditionBar session={props.audition} layerId={props.layer?.id ?? null} locale={props.locale} />
+          </Show>
+          <Show when={!audition()}>
+            <VideoFxLiveSafety session={props.liveSession} layerId={props.layer?.id ?? null} />
+          </Show>
         </div>
         <div class="videoPerformQuickFxParameters" data-perform-fx-detail={activeStage()?.index ?? ""} aria-label="Selected stage parameters">
           <Show when={activeStage()}>
             {(stage) => (
-              <Show when={stage().controls.length > 0} fallback={<span class="emptyHint">No inline parameters.</span>}>
-                <For each={stage().controls}>
-                  {(control) => (
-                    <label class="videoPerformQuickFxParameter" data-perform-fx-control={control.name} data-perform-fx-kind={control.kind}>
-                      <span class="videoPerformQuickFxParameterHead">
-                        <span data-no-localize title={control.name}>{control.name}</span>
-                        <Show when={quickFxValueText(control)}>
-                          {(text) => <output class="videoPerformQuickFxValue" data-no-localize>{text()}</output>}
-                        </Show>
-                      </span>
-                      <Switch>
-                        <Match when={control.kind === "Event"}>
-                          <button type="button" disabled={busy()} aria-label={controlLabel(stage(), control)}
-                            onClick={() => void props.layerList.onTriggerIsfEvent(stage().layerId, stage().index, control.name)}>Trigger</button>
-                        </Match>
-                        <Match when={control.kind === "Bool"}>
-                          <button type="button" disabled={busy()} aria-pressed={control.value[0] >= 0.5}
-                            aria-label={controlLabel(stage(), control)} class={control.value[0] >= 0.5 ? "active" : ""}
-                            onClick={() => setComponent(stage(), control, 0, control.value[0] >= 0.5 ? 0 : 1)}>
-                            {control.value[0] >= 0.5 ? "On" : "Off"}
-                          </button>
-                        </Match>
-                        <Match when={control.kind === "Color"}>
-                          <input type="color" value={colorValue(control)} disabled={busy()} aria-label={controlLabel(stage(), control)}
-                            onInput={(event) => {
-                              const hex = event.currentTarget.value;
-                              void props.layerList.onSetIsfControl(stage().layerId, stage().index, control.name,
-                                [parseInt(hex.slice(1, 3), 16) / 255, parseInt(hex.slice(3, 5), 16) / 255,
-                                  parseInt(hex.slice(5, 7), 16) / 255, control.value[3]]);
-                            }} />
-                        </Match>
-                        <Match when={control.kind === "Long" && control.values.length > 0}>
-                          <select disabled={busy()} value={control.value[0]} aria-label={controlLabel(stage(), control)}
-                            onChange={(event) => setComponent(stage(), control, 0, Number(event.currentTarget.value))}>
-                            <For each={control.values}>{(value, index) =>
-                              <option value={value} data-no-localize>{control.labels[index()] ?? value}</option>}
-                            </For>
-                          </select>
-                        </Match>
-                        <Match when={control.kind === "Point2d"}>
-                          <div class="videoPerformQuickFxPoint">
-                            <For each={[0, 1]}>{(component) => (
-                              <input type="number" disabled={busy()} min={control.minimum[component]} max={control.maximum[component]}
-                                step="0.01" value={control.value[component]}
-                                aria-label={`${control.name} component ${component + 1} for ${props.layer?.label ?? "Video layer"} (layer ${stage().layerId})`}
-                                onChange={(event) => setComponent(stage(), control, component, Number(event.currentTarget.value))} />
-                            )}</For>
-                          </div>
-                        </Match>
-                        <Match when={control.kind === "Float" || control.kind === "Long"}>
-                          <input type="range" disabled={busy()} min={control.minimum[0]} max={control.maximum[0]}
-                            step={control.kind === "Long" ? 1 : "any"} value={control.value[0]} aria-label={controlLabel(stage(), control)}
-                            aria-valuetext={String(Number(control.value[0].toFixed(3)))}
-                            onInput={(event) => setComponent(stage(), control, 0, Number(event.currentTarget.value))} />
-                        </Match>
-                      </Switch>
-                    </label>
-                  )}
-                </For>
-              </Show>
+              <VideoFxParameterEditor stage={stage().stage} identity={stage().id} busy={busy()} locale={props.locale}
+                projectEpoch={props.projectEpoch} layerId={stage().layerId} liveSession={props.liveSession} history={history()}
+                auditioning={Boolean(audition())}
+                effectCatalog={props.effectCatalog} onApplyEffectCatalog={props.onApplyEffectCatalog}
+                onSetStage={(replacement) => {
+                  const effect = shownEffect();
+                  if (!effect) return;
+                  const next = replaceFxStage(effect, stage().index, replacement);
+                  return audition() ? props.audition!.replaceChain(stage().layerId, next) : props.layerList.onSetIsfEffect(stage().layerId, next);
+                }}
+                onSetControl={(name, value) => audition()
+                  ? props.audition!.setControl(stage().layerId, stage().index, name, value)
+                  : props.layerList.onSetIsfControl(stage().layerId, stage().index, name, value)}
+                onTriggerEvent={(name) => audition() ? undefined : props.layerList.onTriggerIsfEvent(stage().layerId, stage().index, name)} />
             )}
           </Show>
         </div>

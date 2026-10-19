@@ -1,0 +1,6 @@
+.videoFxLiveSafety { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:8px; border:1px solid var(--theme-line); background:var(--theme-panel); color:var(--theme-text); font-size:14px; }
+.videoFxLiveSafety details { flex:1 1 200px; }
+.videoFxLiveSafety summary { min-height:44px; display:flex; align-items:center; cursor:pointer; color:var(--theme-text); }
+.videoFxLiveSafety p { margin:8px 0; line-height:1.5; }
+.videoFxLiveActions { display:flex; flex-wrap:wrap; gap:4px; }
+.videoFxLiveActions button { min-height:44px; min-width:44px; font-size:14px; }
