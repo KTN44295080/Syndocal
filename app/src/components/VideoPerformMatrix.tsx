@@ -1,9 +1,10 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, type ComponentProps } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { controlMappingTargetData } from "../controlMappingLearn";
-import type { MediaAssetAvailability, VideoBlendMode, VideoClipLayerRuntimeSummary, VideoLayerSummary } from "../types";
+import type { MediaAssetAvailability, VideoBlendMode, VideoClipLayerRuntimeSummary, VideoLayerSummary, VideoLayerGroupSummary, CompositionSummary } from "../types";
 import { videoClipSlotBankCells } from "../videoClipSlotBankModel";
 import { VideoClipSlotBankPanel } from "./VideoClipSlotBankPanel";
+import { defaultVideoGroupMix, videoGroupBlends } from "../videoLayerGroups";
 import { VideoLayerListPanel } from "./VideoLayerListPanel";
 import { confirmDialog } from "../inAppDialog";
 import { addEffectToLiveLayerDialog } from "../inAppDialogCopy";
@@ -11,6 +12,12 @@ import "./VideoPerformMatrix.css";
 import { FX_DRAG_MIME, readFxDragPayload, type FxCatalogEntry } from "../fxCatalogModel";
 
 export interface VideoPerformMatrixProps {
+  groups?: VideoLayerGroupSummary[];
+  compositions?: CompositionSummary[];
+  selectedGroupId?: number | null;
+  onSelectGroup?: (groupId: number | null) => void;
+  onPatchGroup?: (id: number, patch: Partial<VideoLayerGroupSummary>) => unknown;
+  groupBusy?: boolean;
   effectEntries?: FxCatalogEntry[];
   onAddEffect?: (entry: FxCatalogEntry, layerId: number) => void | Promise<void>;
   bank: ComponentProps<typeof VideoClipSlotBankPanel>;
@@ -32,14 +39,22 @@ const blends: VideoBlendMode[] = ["Normal", "Add", "Multiply", "Screen", "Overla
  * focused row and pad while the runtime publishes replacement snapshots. */
 export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
   const [rows, setRows] = createStore<{ id: number; layer: VideoLayerSummary }[]>([]);
-  createEffect(() => setRows(reconcile(props.bank.layers.map((layer) => ({ id: layer.id, layer })), { key: "id", merge: true })));
+  const orderedLayers = createMemo(() => {
+    const ids = [...new Set((props.compositions ?? []).flatMap(composition => composition.layer_ids))];
+    return [...ids.map(id => props.bank.layers.find(layer => layer.id === id)).filter((layer): layer is VideoLayerSummary => Boolean(layer)), ...props.bank.layers.filter(layer => !ids.includes(layer.id))];
+  });
+  createEffect(() => setRows(reconcile(orderedLayers().map((layer) => ({ id: layer.id, layer })), { key: "id", merge: true })));
+  const [collapsed, setCollapsed] = createSignal<number[]>([]);
+  const groupFor = (id: number) => props.groups?.find(group => group.layer_ids.includes(id));
+  const visibleRows = () => rows.filter(row => !collapsed().includes(groupFor(row.id)?.id ?? -1));
+  const selectLayer = (id: number) => { props.onSelectGroup?.(null); props.bank.onSelectLayer(id); };
   const [focusedColumn, setFocusedColumn] = createSignal(0);
   let root: HTMLDivElement | undefined;
   const selectedLayerId = () => props.bank.layer?.id ?? rows[0]?.id ?? null;
 
   const focusCell = (layerId: number, column: number) => {
     setFocusedColumn(column);
-    props.bank.onSelectLayer(layerId);
+    selectLayer(layerId);
     const layer = rows.find((row) => row.id === layerId)?.layer;
     props.bank.onSelect(layer?.clip_slots?.[column]?.id ?? null);
     queueMicrotask(() => {
@@ -60,7 +75,7 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
 
   const queue = (layerId: number, column: number) => {
     const slot = rows.find((row) => row.id === layerId)?.layer.clip_slots?.[column];
-    props.bank.onSelectLayer(layerId);
+    selectLayer(layerId);
     props.bank.onSelect(slot?.id ?? null);
     setFocusedColumn(column);
     if (slot) void props.bank.onQueue(slot.id);
@@ -79,7 +94,7 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
       || document.querySelector("[role='dialog'], dialog[open], [aria-modal='true'], .app[data-control-learn-mode]")) return;
     const layerId = selectedLayerId();
     if (layerId === null) return;
-    const rowIndex = Math.max(0, rows.findIndex((row) => row.id === layerId));
+    const rowIndex = Math.max(0, visibleRows().findIndex((row) => row.id === layerId));
     const targetPad = target?.closest<HTMLElement>("[data-video-perform-cell-index]");
     const column = targetPad ? Number(targetPad.dataset.videoPerformCellIndex) : focusedColumn();
     let nextColumn = column;
@@ -87,7 +102,7 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
     if (event.key === "ArrowLeft") nextColumn = Math.max(0, column - 1);
     else if (event.key === "ArrowRight") nextColumn = Math.min(31, column + 1);
     else if (event.key === "ArrowUp") nextRow = Math.max(0, rowIndex - 1);
-    else if (event.key === "ArrowDown") nextRow = Math.min(rows.length - 1, rowIndex + 1);
+    else if (event.key === "ArrowDown") nextRow = Math.min(visibleRows().length - 1, rowIndex + 1);
     else if (event.key === "Home") nextColumn = 0;
     else if (event.key === "End") nextColumn = 31;
     else if (event.key === " " || event.key === "Enter") {
@@ -108,7 +123,7 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
     }
     event.preventDefault();
     event.stopImmediatePropagation();
-    focusCell(rows[nextRow].id, nextColumn);
+    if (visibleRows()[nextRow]) focusCell(visibleRows()[nextRow].id, nextColumn);
   };
   onMount(() => window.addEventListener("keydown", keyDown, true));
   onCleanup(() => window.removeEventListener("keydown", keyDown, true));
@@ -122,7 +137,7 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
     const slot = selectedSlot();
     const layerId = selectedLayerId();
     if (!slot || layerId === null) return;
-    props.bank.onSelectLayer(layerId);
+    selectLayer(layerId);
     props.bank.onSelect(slot.id);
     void props.bank.onPreview(slot.id);
   };
@@ -130,7 +145,7 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
     const layerId = selectedLayerId();
     if (layerId === null) return;
     const slot = selectedSlot();
-    props.bank.onSelectLayer(layerId);
+    selectLayer(layerId);
     props.bank.onSelect(slot?.id ?? null);
     props.bank.onMore(slot?.id ?? null, trigger);
   };
@@ -142,14 +157,14 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
     createEffect(() => setCells(reconcile(videoClipSlotBankCells(layer().clip_slots, runtime()), { key: "index" })));
     const selected = () => selectedLayerId() === layer().id;
     const live = () => runtime()?.active_slot_id != null && runtime()?.playing === true;
-    return <div class="videoPerformMatrixRow" classList={{ selected: selected() }} data-video-perform-row={layer().id} data-video-clip-slot-layer-id={layer().id} role="row" aria-selected={selected()}
+    return <div class="videoPerformMatrixRow" classList={{ selected: selected(), grouped: Boolean(groupFor(layer().id)) }} data-video-perform-group-child={groupFor(layer().id)?.id} data-video-perform-row={layer().id} data-video-clip-slot-layer-id={layer().id} role="row" aria-selected={selected()}
       onDragOver={event => { if (event.dataTransfer?.types.includes(FX_DRAG_MIME)) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }}
       onDrop={async event => {
         if (!event.dataTransfer) return;
         const entry = readFxDragPayload(event.dataTransfer, props.effectEntries ?? []);
         if (!entry) return;
         event.preventDefault(); event.stopPropagation();
-        props.bank.onSelectLayer(layer().id);
+        selectLayer(layer().id);
         // A row may differ from the browser's selected target. Review the exact
         // destination before changing its live chain.
         const target = layer();
@@ -157,7 +172,7 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
       }}>
       <div class="videoPerformLayerStrip" role="rowheader">
         <div class="videoPerformLayerTop">
-          <button type="button" class="videoPerformLayerName" aria-pressed={selected()} title={layer().label} data-video-perform-select-layer={layer().id} onClick={() => props.bank.onSelectLayer(layer().id)} data-no-localize>{layer().label}</button>
+          <button type="button" class="videoPerformLayerName" aria-pressed={selected()} title={layer().label} data-video-perform-select-layer={layer().id} onClick={() => selectLayer(layer().id)} data-no-localize>{layer().label}</button>
           <button type="button" aria-pressed={layer().state.solo} classList={{ active: layer().state.solo }} data-video-layer-solo={layer().id} {...controlMappingTargetData({ action: "VideoLayerSolo", label: `${layer().label} solo`, layer_id: layer().id })} onClick={() => void props.layerList.onSetLayerState(layer().id, { ...layer().state, solo: !layer().state.solo })}>Solo</button>
           <button type="button" aria-pressed={!layer().state.enabled} classList={{ active: !layer().state.enabled }} data-video-layer-bypass={layer().id} {...controlMappingTargetData({ action: "VideoLayerEnabled", label: `${layer().label} enabled`, layer_id: layer().id })} onClick={() => void props.layerList.onSetLayerState(layer().id, { ...layer().state, enabled: !layer().state.enabled })}>Bypass</button>
           <button type="button" data-video-layer-stop={layer().id} onClick={() => void props.onStop(layer().id)}>Stop</button>
@@ -179,7 +194,7 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
         const state = () => !cell.slot ? "Empty" : missing() ? "Missing" : failed() ? "Error" : cell.active ? (runtime()?.playing ? "LIVE" : previewing() ? "Preview" : "Paused") : cell.queued || cell.pending ? "Queued" : "Loaded";
         const selectedCell = () => selected() && (cell.slot ? cell.slot.id === props.bank.selectedSlotId : focusedColumn() === cell.index && props.bank.selectedSlotId === null);
         return <div class="videoPerformMatrixCell" classList={{ occupied: cell.slot !== null, live: cell.active && runtime()?.playing === true, queued: cell.queued || cell.pending, preview: previewing(), selected: selectedCell(), error: missing() || failed() }} role="gridcell" data-video-clip-slot-id={cell.slot?.id} data-video-clip-slot-index={cell.index} data-video-clip-slot-layer-id={layer().id} data-video-perform-cell-state={state()}>
-          <button type="button" class="videoPerformClipTrigger" data-video-perform-layer-id={layer().id} data-video-perform-cell-index={cell.index} data-video-clip-slot-pad-index={cell.index} aria-label={`Queue clip ${cell.index + 1}: ${asset()?.label ?? "Empty"}`} aria-pressed={selectedCell()} tabIndex={selectedCell() || selected() && props.bank.selectedSlotId == null && cell.index === focusedColumn() ? 0 : -1} onFocus={() => setFocusedColumn(cell.index)} onClick={() => queue(layer().id, cell.index)} onContextMenu={(event) => { event.preventDefault(); props.bank.onSelectLayer(layer().id); props.bank.onSelect(cell.slot?.id ?? null); props.bank.onMore(cell.slot?.id ?? null, event.currentTarget); }}>
+          <button type="button" class="videoPerformClipTrigger" data-video-perform-layer-id={layer().id} data-video-perform-cell-index={cell.index} data-video-clip-slot-pad-index={cell.index} aria-label={`Queue clip ${cell.index + 1}: ${asset()?.label ?? "Empty"}`} aria-pressed={selectedCell()} tabIndex={selectedCell() || selected() && props.bank.selectedSlotId == null && cell.index === focusedColumn() ? 0 : -1} onFocus={() => setFocusedColumn(cell.index)} onClick={() => queue(layer().id, cell.index)} onContextMenu={(event) => { event.preventDefault(); selectLayer(layer().id); props.bank.onSelect(cell.slot?.id ?? null); props.bank.onMore(cell.slot?.id ?? null, event.currentTarget); }}>
             <span class="videoPerformClipImage"><Show when={props.thumbnailsAuthorized && cell.slot && props.bank.thumbnails[cell.slot.media_asset_id]} fallback={<span class="videoPerformClipPlaceholder" aria-hidden="true">{cell.slot ? "▧" : "+"}</span>}>{(thumbnail) => <img src={thumbnail()} alt="" loading="lazy" />}</Show><kbd data-no-localize>{videoPerformClipKeys[cell.index].toUpperCase()}</kbd></span>
             <span class="videoPerformClipTitle" title={asset()?.label} data-no-localize>{cell.slot ? asset()?.label ?? `#${cell.slot.id}` : "—"}</span>
             <span class="videoPerformClipState"><span aria-hidden="true">{state() === "LIVE" ? "▶ " : state() === "Queued" ? "◷ " : missing() || failed() ? "! " : ""}</span><span>{state()}</span><Show when={previewing() && state() !== "Preview"}><span class="videoPerformPreviewBadge"> · Preview</span></Show></span>
@@ -189,11 +204,32 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
     </div>;
   };
 
+  const GroupHeader = (header: { id: number }) => {
+    const group = () => ({ ...defaultVideoGroupMix, ...props.groups!.find(item => item.id === header.id)! });
+    const patch = (value: Partial<VideoLayerGroupSummary>) => props.onPatchGroup?.(header.id, value);
+    // The current learn model cannot represent a video group. Do not claim a
+    // child-layer mapping is group control; preserve explicit target metadata.
+    const mapping = (property: string) => ({ ...controlMappingTargetData(null), "data-control-map-group-id": header.id, "data-control-map-group-property": property, "data-control-map-unsupported": "video-group" });
+    return <div class="videoPerformGroupRow" data-video-perform-group={header.id} role="row">
+      <div class="videoPerformGroupStrip" role="rowheader">
+        <button type="button" data-video-group-collapse={header.id} aria-label={collapsed().includes(header.id) ? "Expand group" : "Collapse group"} aria-expanded={!collapsed().includes(header.id)} onClick={() => setCollapsed(ids => ids.includes(header.id) ? ids.filter(id => id !== header.id) : [...ids, header.id])}>{collapsed().includes(header.id) ? "\u25b8" : "\u25be"}</button>
+        <button type="button" class="videoPerformGroupName" aria-pressed={props.selectedGroupId === header.id} data-video-perform-select-group={header.id} title={group().label} onClick={() => props.onSelectGroup?.(header.id)} data-no-localize>{group().label}</button>
+        <label title="Group opacity"><input type="range" min="0" max="1" step="0.01" value={group().opacity} aria-label="Group opacity" data-video-group-opacity={header.id} disabled={props.groupBusy} {...mapping("opacity")} onChange={event => patch({ opacity: Number(event.currentTarget.value) })} /><span data-no-localize>{Math.round(group().opacity * 100)}%</span></label>
+        <select value={group().blend_mode} aria-label="Group blend" data-video-group-blend={header.id} disabled={props.groupBusy} onChange={event => patch({ blend_mode: event.currentTarget.value as VideoBlendMode })}><For each={videoGroupBlends}>{blend => <option value={blend}>{blend === "SoftLight" ? "Soft Light" : blend}</option>}</For></select>
+        <button type="button" aria-pressed={group().solo} data-video-group-solo={header.id} disabled={props.groupBusy} {...mapping("solo")} onClick={() => patch({ solo: !group().solo })}>Solo</button>
+        <button type="button" aria-pressed={group().bypassed} data-video-group-bypass={header.id} disabled={props.groupBusy} {...mapping("bypassed")} onClick={() => patch({ bypassed: !group().bypassed })}>Bypass</button>
+      </div>
+    </div>;
+  };
+
   return <section class="videoPerformMatrix" data-video-perform-matrix data-video-perform-region="matrix" aria-label="Clip matrix">
     <Show when={rows.length > 0} fallback={<div class="videoPerformMatrixEmpty"><span>No video layers. Add a file, still, or input above.</span><button type="button" onClick={() => void props.bank.onImport()}>Import</button></div>}>
       <div ref={root} class="videoPerformMatrixScroll" role="grid" aria-label="Video layers and clips" aria-rowcount={rows.length + 1} aria-colcount="33" tabIndex={-1}>
         <div class="videoPerformMatrixHead" role="row"><div class="videoPerformMatrixCorner" role="columnheader"><strong title={`${rows.length} × 32`}>Layers / Clips</strong><button type="button" data-video-perform-inspect disabled={!selectedSlot()} title="Preview thumbnail" onClick={inspectSelected}>Inspect</button><button type="button" data-video-perform-clip-options aria-label="Options for the selected clip" title="Options for the selected clip" onClick={(event) => clipOptions(event.currentTarget)}>Clip…</button></div><For each={Array.from({ length: 32 }, (_, index) => index)}>{(index) => <div class="videoPerformMatrixColumn" role="columnheader"><span data-no-localize>{index + 1}</span><kbd data-no-localize>{videoPerformClipKeys[index].toUpperCase()}</kbd></div>}</For></div>
-        <For each={rows}>{(row) => <Row layer={row.layer} />}</For>
+        <For each={rows}>{(row) => <>
+          <Show when={groupFor(row.id)?.layer_ids[0] === row.id ? groupFor(row.id) : undefined}>{group => <GroupHeader id={group().id} />}</Show>
+          <Show when={!collapsed().includes(groupFor(row.id)?.id ?? -1)}><Row layer={row.layer} /></Show>
+        </>}</For>
       </div>
     </Show>
   </section>;

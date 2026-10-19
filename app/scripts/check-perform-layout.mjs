@@ -234,7 +234,7 @@ try {
   await mkdir(evidenceDir, { recursive: true });
   const reservation = createTcpServer();
   await new Promise((done, reject) => { reservation.once("error", reject); reservation.listen(0, "127.0.0.1", done); });
-  const vitePort = reservation.address().port;
+  const vitePort = Number(process.env.SYNDOCAL_PERFORM_PORT ?? reservation.address().port);
   await new Promise((done, reject) => reservation.close((error) => error ? reject(error) : done()));
   server = await createServer({ root: appRoot, cacheDir: resolve(evidenceDir, "vite-cache"), server: { host: "127.0.0.1", port: vitePort, strictPort: true }, clearScreen: false, plugins: [focusFixturePlugin] });
   await server.listen();
@@ -242,9 +242,10 @@ try {
   await server.transformRequest("/src/App.tsx");
   const origin = server.resolvedUrls.local[0];
   profile = await mkdtemp(join(tmpdir(), "syndocal-perform-check-"));
-  browser = spawn(browserPath, ["--headless=new", "--disable-gpu", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--no-first-run", "--no-default-browser-check", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
+  browser = spawn(browserPath, ["--headless=new", "--disable-gpu", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--no-first-run", "--no-default-browser-check", `--remote-debugging-port=${process.env.SYNDOCAL_CDP_PORT ?? 0}`, `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
   browser.on("error", (error) => { console.error(error); process.exitCode = 1; });
-  const port = await waitFor(async () => Number((await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]), "owned browser debugger");
+  const port = process.env.SYNDOCAL_CDP_PORT ? Number(process.env.SYNDOCAL_CDP_PORT) : await waitFor(async () => Number((await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]), "owned browser debugger");
+  await waitFor(async () => (await fetch(`http://127.0.0.1:${port}/json/version`)).ok, "owned browser ready");
   const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   let pageTarget = targets.find((target) => target.type === "page");
   cdp = new Cdp();
@@ -331,10 +332,11 @@ try {
       assert.ok(tempo.cluster.right <= tempo.state.left + 1 && tempo.state.right <= tempo.windowControls.left + 1 && tempo.windowControls.right <= tempo.viewportWidth + 1 && tempo.topbarOverflow <= 0, label+': top bar tempo cluster fits without overlap or overflow '+JSON.stringify(tempo));
       const rowSelector=root+' [data-video-perform-row="1"]';
       // Density: complete layer rows inside the matrix viewport (excluding the sticky head and horizontal scrollbar).
-      const matrixDensity = await cdp.evaluate('(()=>{const sc=document.querySelector('+JSON.stringify(root+' .videoPerformMatrixScroll')+');sc.scrollTop=0;const b=sc.getBoundingClientRect();const head=sc.querySelector(".videoPerformMatrixHead").getBoundingClientRect();const limit=b.top+sc.clientTop+sc.clientHeight;const rows=[...sc.querySelectorAll("[data-video-perform-row]")];const full=rows.filter(r=>{const x=r.getBoundingClientRect();return x.top>=head.bottom-1&&x.bottom<=limit+1});const first=rows[0].getBoundingClientRect();const cell=rows[0].querySelector(".videoPerformMatrixCell");return {fullRows:full.length,totalRows:rows.length,headHeight:head.height,rowHeight:first.height,stripHeight:rows[0].querySelector(".videoPerformLayerStrip").getBoundingClientRect().height,cellButtons:cell.querySelectorAll("button").length,actionRows:document.querySelectorAll(".videoPerformClipActions").length,numberBadges:document.querySelectorAll(".videoPerformClipNumber").length,keyBadges:cell.querySelectorAll("kbd").length}})()');
+      const matrixDensity = await cdp.evaluate('(()=>{const sc=document.querySelector('+JSON.stringify(root+' .videoPerformMatrixScroll')+');sc.scrollTop=0;const b=sc.getBoundingClientRect();const head=sc.querySelector(".videoPerformMatrixHead").getBoundingClientRect();const limit=b.top+sc.clientTop+sc.clientHeight;const rows=[...sc.querySelectorAll("[data-video-perform-row]")];const full=rows.filter(r=>{const x=r.getBoundingClientRect();return x.top>=head.bottom-1&&x.bottom<=limit+1});const first=rows[0].getBoundingClientRect();const cell=rows[0].querySelector(".videoPerformMatrixCell");const groupHeaders=[...sc.querySelectorAll("[data-video-perform-group]")].filter(r=>{const x=r.getBoundingClientRect();return x.top>=head.bottom-1&&x.bottom<=limit+1}).length;return {fullRows:full.length,groupHeaders,totalRows:rows.length,headHeight:head.height,rowHeight:first.height,stripHeight:rows[0].querySelector(".videoPerformLayerStrip").getBoundingClientRect().height,cellButtons:cell.querySelectorAll("button").length,actionRows:document.querySelectorAll(".videoPerformClipActions").length,numberBadges:document.querySelectorAll(".videoPerformClipNumber").length,keyBadges:cell.querySelectorAll("kbd").length}})()');
       const expectedRows = width >= 1920 ? 4 : 3;
       assert.ok(matrixDensity.totalRows >= 4, label+': fixture has at least 4 layers '+JSON.stringify(matrixDensity));
-      assert.ok(matrixDensity.fullRows >= expectedRows, label+': at least '+expectedRows+' complete layer rows visible '+JSON.stringify(matrixDensity));
+      // A 44px group strip is a matrix row too: it uses a row slot inside the unchanged pane height instead of stealing it from the monitors and FX cards; the remaining layers scroll inside the matrix.
+      assert.ok(matrixDensity.fullRows + matrixDensity.groupHeaders >= expectedRows, label+': at least '+expectedRows+' complete matrix rows (layers plus group strips) visible '+JSON.stringify(matrixDensity));
       assert.equal(matrixDensity.headHeight, 44, label+': matrix head is 44px');
       assert.ok(matrixDensity.rowHeight <= 106 && matrixDensity.stripHeight <= 104, label+': compact layer row '+JSON.stringify(matrixDensity));
       assert.deepEqual([matrixDensity.cellButtons, matrixDensity.actionRows, matrixDensity.numberBadges, matrixDensity.keyBadges], [1, 0, 0, 1], label+': clip cell is the trigger only (key badge kept, no number badge or action row)');
@@ -365,6 +367,27 @@ try {
         const selector=rowSelector+' [data-video-layer-'+attr+']';const measurement=await inspect(selector);geometry.push(measurement);
         assert.equal(measurement.failure,null,label+': strip '+attr);assert.ok(measurement.height>=44&&measurement.width>=44,label+': strip hit target '+attr);
       }
+      // Groups add a compact header while retaining three actual child rows.
+      const groupSelector = root + ' [data-video-perform-group="6401"]';
+      for (const part of ['collapse', 'opacity', 'blend', 'solo', 'bypass']) {
+        const control = groupSelector + ' [data-video-group-' + part + '="6401"]';
+        const measurement = await inspect(control);
+        assert.equal(measurement.failure, null, label+': visible group '+part+' '+JSON.stringify(measurement));
+        assert.ok(measurement.height >= 44 && measurement.width >= 44, label+': group hit target '+part);
+      }
+      assert.equal(await cdp.evaluate('document.querySelector('+JSON.stringify(rowSelector)+').dataset.videoPerformGroupChild'), '6401', label+': layer is visibly nested under its group');
+      assert.equal(await cdp.evaluate('document.querySelector('+JSON.stringify(groupSelector+' [data-video-group-opacity]')+').dataset.controlMapUnsupported'), 'video-group', label+': group learn is explicitly unsupported rather than mapped to a child layer');
+      await cdp.evaluate('document.querySelector('+JSON.stringify(groupSelector+' [data-video-perform-select-group]')+').click()');
+      await waitFor(()=>cdp.evaluate('!!document.querySelector("[data-video-group-inspector=\\"6401\\"]")'), label+': group Inspector selected');
+      assert.equal(await cdp.evaluate('!!document.querySelector("[data-video-group-inspector] [data-video-group-transform-enabled]")'), true, label+': group transform available');
+      await writeFile(join(evidenceDir,label+'-group-inspector.png'),Buffer.from((await cdp.capture({format:'png',captureBeyondViewport:false})).data,'base64'));
+      await cdp.evaluate('document.querySelector('+JSON.stringify(groupSelector+' [data-video-group-collapse]')+').click()');
+      assert.equal(await cdp.evaluate('!!document.querySelector('+JSON.stringify(rowSelector)+')'), false, label+': collapsed group hides its child');
+      assert.equal(await cdp.evaluate('document.querySelector('+JSON.stringify(groupSelector+' [data-video-group-collapse]')+').getAttribute("aria-expanded")'), 'false', label+': collapsed group accessibility state');
+      await cdp.evaluate('document.querySelector('+JSON.stringify(groupSelector+' [data-video-group-collapse]')+').click()');
+      await waitFor(()=>cdp.evaluate('!!document.querySelector('+JSON.stringify(rowSelector)+')'), label+': expand restores child');
+      await cdp.evaluate('document.querySelector('+JSON.stringify(rowSelector+' [data-video-perform-select-layer]')+').click()');
+      await waitFor(()=>cdp.evaluate('!document.querySelector("[data-video-group-inspector]")'), label+': selecting child restores layer Inspector');
       // ---- Top 1 / bottom 2: Perform shares the Lighting arrangement. ----
       const paneRect = (name) => cdp.evaluate('(()=>{const e=document.querySelector('+JSON.stringify(root+' [data-video-perform-pane="'+name+'"]')+');if(!e)return null;const r=e.getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height}})()');
       const panes = { matrix: await paneRect('matrix'), output: await paneRect('output'), inspector: await paneRect('inspector') };

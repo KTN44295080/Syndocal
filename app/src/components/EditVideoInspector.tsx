@@ -4,6 +4,8 @@ import type { MediaAssetAvailability, MediaAssetSummary } from "../types";
 import { VideoIsfEffectPanel } from "./VideoIsfEffectPanel";
 import type { VideoLayerListPanel } from "./VideoLayerListPanel";
 import "./EditVideoInspector.css";
+import { VideoLayerGroupsPanel } from "./VideoLayerGroupsPanel";
+import type { VideoControlPanelProps } from "./VideoControlPanel";
 
 type LayerFxProps = Pick<ComponentProps<typeof VideoLayerListPanel>,
   "layers" | "bpm" | "isfRuntimeErrors" | "isfEventPulseBusy" | "onImportIsf" |
@@ -15,6 +17,7 @@ interface EditVideoInspectorProps {
   asset: MediaAssetSummary | null | undefined;
   availabilityById: Record<number, MediaAssetAvailability>;
   layerFx: LayerFxProps;
+  groupEffects?: VideoControlPanelProps["effectScopes"];
 }
 
 export function EditVideoInspector(props: EditVideoInspectorProps) {
@@ -37,6 +40,7 @@ export function EditVideoInspector(props: EditVideoInspectorProps) {
             </dl>
           </>}
         </Show>
+        <Show when={props.groupEffects}>{effects => <VideoLayerGroupsPanel effects={effects()} layers={props.layerFx.layers} />}</Show>
         <details class="editVideoAdvancedDisclosure" onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
           <summary>Advanced Video Controls</summary>
           <Show when={advancedOpen()}>

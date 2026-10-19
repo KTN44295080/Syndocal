@@ -384,3 +384,14 @@
   background-image: var(--theme-pattern-error, none);
 }
 .videoPerformMatrix .videoPerformPreviewBadge { text-decoration: underline; }
+
+/* Group policy is a single 44px strip above its unchanged child controls. */
+.videoPerformGroupRow { width: 3536px; min-width: 100%; height: 44px; border-bottom: 1px solid var(--theme-line-strong); background: var(--theme-raised); }
+.videoPerformGroupStrip { position: sticky; left: 0; display: grid; grid-template-columns: 44px minmax(140px,1fr) minmax(140px,220px) 130px 64px 80px; gap: 6px; width: min(1060px,calc(100vw - 42px)); height: 44px; padding-inline: 6px; box-sizing: border-box; align-items: center; background: var(--theme-raised); }
+.videoPerformMatrix .videoPerformGroupStrip button, .videoPerformMatrix .videoPerformGroupStrip select, .videoPerformMatrix .videoPerformGroupStrip input { min-height: 44px; min-width: 44px; font-family: var(--theme-font-ui); font-size: 14px; margin: 0; }
+.videoPerformGroupStrip label { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0; }
+.videoPerformGroupStrip label input { width: 100%; min-width: 0; }
+.videoPerformGroupStrip label span { min-width: 4ch; font-variant-numeric: tabular-nums; }
+.videoPerformGroupName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.videoPerformGroupStrip button[aria-pressed="true"] { outline: 2px solid var(--theme-selected); outline-offset: -2px; }
+.videoPerformMatrixRow.grouped .videoPerformLayerName { padding-inline-start: 18px; box-shadow: inset 3px 0 var(--theme-line-strong); }
