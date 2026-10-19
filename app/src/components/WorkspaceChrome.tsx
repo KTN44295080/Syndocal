@@ -41,6 +41,12 @@ type WorkspaceChromeProps = {
   onOpenVideoLiveControls: () => void;
   blackout: boolean;
   videoBlackout: boolean;
+  /**
+   * Why this machine cannot change output state (for example Standby), or null
+   * when it can. The keys stay in place and focusable (aria-disabled, not
+   * disabled) so activating one explains the situation instead of failing.
+   */
+  blackoutBlockedReason?: string | null;
   lightingMaster: number;
   videoMaster: number;
   bpm: number;
@@ -647,9 +653,11 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
 
             <button
               type="button"
-              class={`topbarIconButton topbarSafetyButton${props.blackout ? " engaged" : ""}`}
+              class={`topbarIconButton topbarSafetyButton${props.blackout ? " engaged" : ""}${props.blackoutBlockedReason ? " blocked" : ""}`}
               data-global-operator-action="dmx-blackout"
-              title={props.blackout ? "Clear DMX Blackout" : "DMX Blackout"}
+              aria-disabled={props.blackoutBlockedReason ? "true" : undefined}
+              data-blackout-blocked={props.blackoutBlockedReason ? "true" : undefined}
+              title={props.blackoutBlockedReason ?? (props.blackout ? "Clear DMX Blackout" : "DMX Blackout")}
               aria-label={props.blackout ? "Clear DMX Blackout" : "DMX Blackout"}
               aria-pressed={props.blackout}
               onClick={() => props.onSetBlackout(!props.blackout)}
@@ -659,9 +667,11 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             </button>
             <button
               type="button"
-              class={`topbarIconButton topbarSafetyButton${props.videoBlackout ? " engaged" : ""}`}
+              class={`topbarIconButton topbarSafetyButton${props.videoBlackout ? " engaged" : ""}${props.blackoutBlockedReason ? " blocked" : ""}`}
               data-global-operator-action="video-blackout"
-              title={props.videoBlackout ? "Clear Video Blackout" : "Video Blackout"}
+              aria-disabled={props.blackoutBlockedReason ? "true" : undefined}
+              data-blackout-blocked={props.blackoutBlockedReason ? "true" : undefined}
+              title={props.blackoutBlockedReason ?? (props.videoBlackout ? "Clear Video Blackout" : "Video Blackout")}
               aria-label={props.videoBlackout ? "Clear Video Blackout" : "Video Blackout"}
               aria-pressed={props.videoBlackout}
               onClick={() => props.onSetVideoBlackout(!props.videoBlackout)}
@@ -671,9 +681,11 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             </button>
             <button
               type="button"
-              class={`topbarIconButton topbarSafetyButton${props.blackout && props.videoBlackout ? " engaged" : ""}`}
+              class={`topbarIconButton topbarSafetyButton${props.blackout && props.videoBlackout ? " engaged" : ""}${props.blackoutBlockedReason ? " blocked" : ""}`}
               data-global-operator-action="all-blackout"
-              title={props.blackout && props.videoBlackout ? "Clear All Blackout" : "All Blackout"}
+              aria-disabled={props.blackoutBlockedReason ? "true" : undefined}
+              data-blackout-blocked={props.blackoutBlockedReason ? "true" : undefined}
+              title={props.blackoutBlockedReason ?? (props.blackout && props.videoBlackout ? "Clear All Blackout" : "All Blackout")}
               aria-label={props.blackout && props.videoBlackout ? "Clear All Blackout" : "All Blackout"}
               aria-pressed={props.blackout && props.videoBlackout}
               onClick={() => props.onSetAllBlackout(!(props.blackout && props.videoBlackout))}

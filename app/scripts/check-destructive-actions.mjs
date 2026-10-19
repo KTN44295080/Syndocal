@@ -113,4 +113,15 @@ for (const [workspace, mode, consent, expectedPrompts, expectedDiscardChecks] of
   assert.equal(sandbox.newProjectInFlight, false, "a declined request releases its in-flight guard");
 }
 
+// Standby: a Blackout that this machine cannot apply must be explained before the
+// confirmation dialog, so nothing fails after the operator confirms.
+{
+  const blackoutInitializer = appSource.match(/const requestPerformVideoBlackout = async \(enabled: boolean\) => \{([\s\S]*?)\n  \};/);
+  assert.ok(blackoutInitializer, "guarded Perform blackout request exists");
+  const body = blackoutInitializer[1];
+  assert.ok(body.indexOf("readOutputDrive()") >= 0 && body.indexOf("readOutputDrive()") < body.indexOf("confirmDialog(blackoutDialog(enabled))"), "output authority is read before the question is asked");
+  assert.match(body, /drive\.kind === "blocked"[\s\S]*?BLACKOUT_STATUS_KEY[\s\S]*?return;/, "a blocked machine gets a keyed in-app message and no dialog");
+  assert.match(appSource, /const applyOutputDrive = [\s\S]*?clearStatusByKey\(BLACKOUT_STATUS_KEY\)/, "the refusal note retires when the output state changes");
+}
+
 console.log("destructive action helpers ok");

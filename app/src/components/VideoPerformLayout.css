@@ -149,6 +149,12 @@
 .videoPerformMaster button { width: 100%; }
 .videoPerformBlackoutHint { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--theme-muted); line-height: 16px; overflow: hidden; }
 .videoPerformBlackoutHint > svg { flex: 0 0 auto; width: 16px; height: 16px; }
+/* This machine cannot change output (Standby): the key stays focusable and
+ * explains why; it reads as unavailable, never as a hidden emergency path. */
+.videoPerformMaster button[data-blackout-blocked]:not(.engaged) { border-color: var(--theme-disabled-line); background: var(--theme-disabled-bg); color: var(--theme-disabled-text); }
+.videoPerformBlackoutHint.blocked { color: var(--theme-warn); min-width: 0; }
+.videoPerformBlackoutHint.blocked > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.videoPerformBlackoutShort { display: none; }
 .videoPerformFieldLabel { white-space: nowrap; }
 
 /* Short panes (laptop heights): Master and the guarded Blackout share one row.
@@ -163,6 +169,9 @@
   .videoPerformMaster > label > strong { font-size: 14px; }
   .videoPerformBlackoutRow { display: block; }
   .videoPerformBlackoutHint { display: none; }
+  /* Short panes have no room for the caption: the key itself names the state. */
+  .videoPerformMaster button[data-blackout-blocked] .videoPerformBlackoutLabel { display: none; }
+  .videoPerformMaster button[data-blackout-blocked] .videoPerformBlackoutShort { display: inline; }
 }
 @container perform-controls (max-width: 340px) {
   .videoPerformFieldLabel { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }

@@ -265,6 +265,15 @@ try {
   await cdp.evaluate("document.querySelector('[data-workspace-option=control]').click()");
   await waitFor(()=>cdp.evaluate("document.querySelector('[data-edit-domain-navigation] [data-control-mode-option=live]')?.getAttribute('aria-selected') === 'true'"),"Edit returns to the last creation tab (Timeline)");
   assert.deepEqual(cdp.errors,[],"workspace round trip creates no browser errors");
+  // Standby: the always-visible blackout keys stay in every workspace and keep their place
+  // (aria-disabled, never removed) while explaining that this machine is not driving outputs.
+  await cdp.evaluate("window.__syndocalOutputDriveFixture='standby'");
+  await waitFor(()=>cdp.evaluate("document.querySelector('[data-global-operator-action=video-blackout]')?.getAttribute('aria-disabled') === 'true'"),"top-bar blackout keys show Standby");
+  assert.deepEqual(await cdp.evaluate("['dmx-blackout','video-blackout','all-blackout'].map(a=>{const b=document.querySelector('[data-global-operator-action='+a+']');return [!!b,b?.disabled,b?.getAttribute('aria-disabled'),b?.title]})"),
+    ['dmx-blackout','video-blackout','all-blackout'].map(()=>[true,false,'true','Standby: this machine is not driving outputs']),"DMX/VID/ALL stay present and focusable with the Standby reason");
+  await cdp.evaluate("window.__syndocalOutputDriveFixture='driving'");
+  await waitFor(()=>cdp.evaluate("!document.querySelector('[data-global-operator-action=video-blackout]')?.hasAttribute('aria-disabled')"),"top-bar blackout keys recover when outputs are driven");
+  await cdp.evaluate("window.__syndocalOutputDriveFixture=undefined");
   await writeFile(join(evidenceDir,"workspace-ia-results.json"),JSON.stringify({softwareOnly:true,results,migration:"module: both/perform idempotent and ratios retained; browser: legacy Edit Perform boots Control Video",errors:cdp.errors},null,2));
   console.log("Workspace IA: 12 tab/locale screenshots and persisted migration passed");
 } catch(error) {

@@ -22,6 +22,8 @@
   gap: 4px;
 }
 .topbarOrganized .topbarTransportCluster > [data-global-operator-action="dmx-blackout"] { margin-left: 8px; }
+/* Standby: the blackout keys stay in place and focusable but read as unavailable. */
+.app .topbarTransportCluster > .topbarSafetyButton[data-blackout-blocked]:not(.engaged) { border-color: var(--theme-disabled-line); background-color: var(--theme-disabled-bg); background-image: none; color: var(--theme-disabled-text); }
 
 /* Read-only clock context beside BPM and Tap: source over beat lights + sync. */
 .topbarTempoSync {

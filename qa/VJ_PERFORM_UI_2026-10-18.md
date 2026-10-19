@@ -213,6 +213,12 @@ Open native findings (not repaired here):
 1. Under the Standby role, Perform blackout is refused ("Exactly one active output lease ...
    required"); the refusal then stays in the status footer. The desk should explain or
    disable the control instead of failing after confirmation.
+   Addressed 2026-10-20 (browser evidence only; native confirmation pending): the blackout
+   keys (Perform desk, top-bar DMX/VID/ALL, Ctrl+Shift+B) read the output role and lease
+   (`outputDriveStatus.ts`), stay focusable but show "Standby: this machine is not driving
+   outputs", explain on activation without opening a confirmation, and the keyed footer
+   note retires when the state changes. Emergency S0 and the runtime-latch release are
+   unchanged; unknown state never blocks.
 2. Clip Inspector: for a slot whose asset is Pattern 06, the Media asset select displayed
    asset 1, so Assign could reassign the wrong asset (`VideoClipSlotInspectorPanel.tsx`,
    outside this diff).

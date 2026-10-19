@@ -1,6 +1,7 @@
 import { createMemo, createSignal, For, Match, mergeProps, Show, Switch, onCleanup, onMount, type JSX } from "solid-js";
 import type { VideoClipLayerRuntimeSummary } from "../types";
 import type { VideoControlPanelProps } from "./VideoControlPanel";
+import { outputDriveShortLabel } from "../outputDriveStatus";
 import { LiveVideoMonitorPanel } from "./LiveVideoMonitorPanel";
 import { LiveVideoOutputHealthReadout } from "./LiveVideoOutputHealthReadout";
 import { VideoStagePreviewButton } from "./VideoClipGridPanel";
@@ -58,6 +59,7 @@ const matrixChromePx = 2 + 44 + 44 + 16;
 export function VideoPerformDesk(props: VideoControlPanelProps) {
   let legend!: HTMLDialogElement;
   let blackout!: HTMLButtonElement;
+  const blackoutBlockedReason = () => props.masterControls.blackoutBlockedReason ?? null;
   const keyboardEnabled = () => props.performContext?.keyboardEnabled !== false;
   const shortcut = (event: KeyboardEvent) => {
     if (!keyboardEnabled() || event.repeat || event.isComposing || event.defaultPrevented ||
@@ -199,15 +201,19 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
                   onInput={event => void props.masterControls.onSetMasterOpacity(Number(event.currentTarget.value))}
                   {...controlMappingTargetData({ action: "VideoMaster", label: "Video Master" })} /></label>
               <div class="videoPerformBlackoutRow">
-                <button ref={blackout} class={`killButton${props.masterControls.blackout ? " engaged" : ""}`} data-video-perform-blackout
+                <button ref={blackout} class={`killButton${props.masterControls.blackout ? " engaged" : ""}${blackoutBlockedReason() ? " blocked" : ""}`} data-video-perform-blackout
                   aria-pressed={props.masterControls.blackout} onClick={() => void props.masterControls.onSetBlackout(!props.masterControls.blackout)}
-                  title={props.masterControls.blackout ? "BLACKOUT ENGAGED" : "Confirmation required"}
+                  aria-disabled={blackoutBlockedReason() ? "true" : undefined} data-blackout-blocked={blackoutBlockedReason() ? "true" : undefined}
+                  aria-describedby="videoPerformBlackoutReason"
+                  title={blackoutBlockedReason() ?? (props.masterControls.blackout ? "BLACKOUT ENGAGED" : "Confirmation required")}
                   {...controlMappingTargetData({ action: "VideoBlackout", label: "Video Blackout" })}>
-                  {props.masterControls.blackout ? "Recover video…" : "Blackout…"}
+                  <span class="videoPerformBlackoutLabel">{props.masterControls.blackout ? "Recover video…" : "Blackout…"}</span>
+                  <Show when={blackoutBlockedReason()}><span class="videoPerformBlackoutShort">{outputDriveShortLabel(blackoutBlockedReason() ?? "")}</span></Show>
                 </button>
-                <span class="videoPerformBlackoutHint">
+                <span class={`videoPerformBlackoutHint${blackoutBlockedReason() ? " blocked" : ""}`} id="videoPerformBlackoutReason"
+                  data-video-perform-blackout-reason role="status">
                   <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
-                  <span>{props.masterControls.blackout ? "BLACKOUT ENGAGED" : "Confirmation required"}</span>
+                  <span>{blackoutBlockedReason() ?? (props.masterControls.blackout ? "BLACKOUT ENGAGED" : "Confirmation required")}</span>
                 </span>
               </div>
             </section>

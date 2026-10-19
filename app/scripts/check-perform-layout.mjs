@@ -619,6 +619,61 @@ try {
       await cdp.evaluate('document.querySelector('+JSON.stringify(dlgConfirm)+').click()');
       await waitFor(async()=>!(await dialogOpen()),label+': Confirm closes the dialog');
       assert.equal(cdp.dialogs.length,dialogsBefore,label+': no browser dialog ("tauri.localhost says") ever opened');
+      // Standby: this machine is not driving outputs. The operator learns that before acting:
+      // the keys stay visible and focusable but read as unavailable, activating one explains
+      // instead of opening a confirmation that can only fail, and the footer note retires itself.
+      {
+        const reasonText=locale==='ja'?'スタンバイ: このマシンは出力を制御していません':'Standby: this machine is not driving outputs';
+        const footer='.appStatusLine[data-status-key="blackout-unavailable"]';
+        const reasonEl=root+' [data-video-perform-blackout-reason]';
+        const setDrive=(value)=>cdp.evaluate('window.__syndocalOutputDriveFixture='+JSON.stringify(value));
+        await setDrive('driving');
+        await waitFor(()=>cdp.evaluate('!document.querySelector('+JSON.stringify(selectors.guardedBlackout)+').hasAttribute("data-blackout-blocked")'),label+': a machine that drives outputs keeps Blackout available');
+        await setDrive('standby');
+        await waitFor(()=>cdp.evaluate('document.querySelector('+JSON.stringify(selectors.guardedBlackout)+').getAttribute("aria-disabled")==="true"'),label+': Standby marks the Perform Blackout unavailable');
+        const blocked=await cdp.evaluate('(()=>{const b=document.querySelector('+JSON.stringify(selectors.guardedBlackout)+');const r=document.querySelector('+JSON.stringify(reasonEl)+');const v=document.querySelector('+JSON.stringify(selectors.blackout)+');const a=document.querySelector("[data-global-operator-action=all-blackout]");const d=document.querySelector("[data-global-operator-action=dmx-blackout]");return {disabledAttr:b.disabled,tabIndex:b.tabIndex,title:b.title,described:b.getAttribute("aria-describedby")===r?.id,reason:r?.innerText.trim(),vid:v.getAttribute("aria-disabled"),all:a.getAttribute("aria-disabled"),dmx:d.getAttribute("aria-disabled"),vidTitle:v.title,vidEnabled:!v.disabled&&!a.disabled&&!d.disabled}})()');
+        assert.equal(blocked.disabledAttr,false,label+': the unavailable key stays focusable (aria-disabled, not removed)');
+        assert.ok(blocked.tabIndex>=0&&blocked.described,label+': the unavailable key stays in the tab order and points at its reason');
+        assert.equal(blocked.reason,reasonText,label+': the Perform desk states why Blackout is unavailable');
+        assert.equal(blocked.title,reasonText,label+': the key title carries the reason');
+        assert.deepEqual([blocked.vid,blocked.all,blocked.dmx],['true','true','true'],label+': top-bar DMX/VID/ALL keys show the same state');
+        assert.equal(blocked.vidTitle,reasonText,label+': top-bar keys carry the reason');
+        assert.ok(blocked.vidEnabled,label+': top-bar blackout keys remain focusable controls');
+        assert.equal((await inspect(selectors.guardedBlackout)).failure,null,label+': the unavailable Blackout key stays visible');
+        // Wide panes show the full caption; short panes (no room for it) name the state on the key itself.
+        const reasonShown=(await inspect(reasonEl)).failure===null;
+        if(!reasonShown){
+          const shortKey=selectors.guardedBlackout+' .videoPerformBlackoutShort';
+          assert.equal((await inspect(shortKey)).failure,null,label+': a short pane names the state on the Blackout key without hover');
+          assert.equal(await cdp.evaluate('document.querySelector('+JSON.stringify(shortKey)+').textContent.trim()'),locale==='ja'?'スタンバイ':'Standby',label+': the short key label is the localized state');
+        }
+        assert.ok((await inspect(selectors.guardedBlackout)).height>=44,label+': the unavailable key keeps its 44px target');
+        await writeFile(join(evidenceDir,label+'-blackout-standby.png'),Buffer.from((await cdp.capture({format:'png',captureBeyondViewport:false})).data,'base64'));
+        // Enter on the key and Ctrl+Shift+B explain; neither opens a confirmation.
+        await focus(selectors.guardedBlackout);await cdp.key('Enter','Enter',13);
+        await waitFor(()=>cdp.evaluate('!!document.querySelector('+JSON.stringify(footer)+')'),label+': Enter on the unavailable key explains in the status line');
+        assert.equal(await dialogOpen(),false,label+': no confirmation opens for a blackout that cannot be applied');
+        assert.equal(await cdp.evaluate('document.querySelector('+JSON.stringify(footer+' .appStatusText')+').textContent'),locale==='ja'?'ブラックアウトは適用されませんでした。'+reasonText+'。':'No blackout was applied. '+reasonText+'.',label+': the refusal names the reason in the status line');
+        assert.equal(await blackoutState(),blackoutBefore,label+': nothing was applied');
+        await cdp.evaluate('document.activeElement?.blur()');
+        await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'B',code:'KeyB',windowsVirtualKeyCode:66,modifiers:10});
+        await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'B',code:'KeyB',windowsVirtualKeyCode:66,modifiers:10});
+        await sleep(250);
+        assert.equal(await dialogOpen(),false,label+': Ctrl+Shift+B explains without a confirmation under Standby');
+        await cdp.evaluate('document.querySelector('+JSON.stringify(selectors.blackout)+').click()');
+        await sleep(250);
+        assert.equal(await dialogOpen(),false,label+': the top-bar VID key explains without a confirmation under Standby');
+        // The note describes the previous state: it retires when the state changes.
+        await setDrive('driving');
+        await waitFor(()=>cdp.evaluate('!document.querySelector('+JSON.stringify(footer)+')&&!document.querySelector('+JSON.stringify(selectors.guardedBlackout)+').hasAttribute("data-blackout-blocked")'),label+': the refusal retires from the status line once outputs are driven again');
+        // The emergency path is intact again: the same key asks, then proceeds.
+        await focus(selectors.guardedBlackout);await cdp.key('Enter','Enter',13);
+        await waitFor(dialogOpen,label+': Blackout confirms again once this machine drives outputs');
+        await focus(dlgCancel);await cdp.key('Enter','Enter',13);
+        await waitFor(async()=>!(await dialogOpen()),label+': the restored confirmation can be declined');
+        await setDrive(undefined);
+        assert.equal(cdp.dialogs.length,dialogsBefore,label+': Standby handling never opens a browser dialog');
+      }
       // Legend is on demand and must never cause page scroll.
       await focus(selectors.legend);await cdp.key('Enter','Enter',13);
       await waitFor(()=>cdp.evaluate('!!document.querySelector("[data-video-perform-legend][open]")'),label+': keyboard legend shown');
