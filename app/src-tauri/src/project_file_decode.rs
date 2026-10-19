@@ -16,8 +16,15 @@ pub(super) fn project_and_control_mappings_from_value(
             .get("version")
             .and_then(Value::as_u64)
             .ok_or_else(|| "Project version must be an unsigned integer".to_string())?;
-        if version != u64::from(PROJECT_FILE_VERSION) {
-            return Err(format!("Unsupported project version {version}"));
+        match version {
+            1 => {
+                // v1 groups existed only as scoped FX membership. Serde defaults
+                // give those groups pass-through image controls; absent groups
+                // remain absent. The save path always emits the current schema.
+                value["version"] = Value::from(PROJECT_FILE_VERSION);
+            }
+            current if current == u64::from(PROJECT_FILE_VERSION) => {}
+            _ => return Err(format!("Unsupported project version {version}")),
         }
         migrate_legacy_spatial_parameter_models(&mut value)?;
         let legacy_dj_transition_discarded = value.get("dj_transition").is_some();

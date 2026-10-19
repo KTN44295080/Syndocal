@@ -4,6 +4,7 @@ use crate::{
     project_backup_id_from_reserved_target,
     project_file_json::{parse_json_with_byte_limit, read_json_with_byte_limit},
     validate_app_name, validate_project_file, ProjectBackupEnvelope, PROJECT_BACKUP_VERSION,
+    PROJECT_FILE_VERSION,
 };
 use std::path::Path;
 
@@ -28,7 +29,12 @@ fn validate_backup_envelope(backup: &ProjectBackupEnvelope) -> Result<(), String
 fn parse_project_backup_json(json: &str) -> Result<ProjectBackupEnvelope, String> {
     let value = parse_json_with_byte_limit(json, PROJECT_BACKUP_MAX_BYTES, "Project backup JSON")?;
     // Consume the unique-key Value; no second byte parse or persistence-image clone.
-    let backup = deserialize_input(value, "Project backup JSON")?;
+    let mut backup: ProjectBackupEnvelope = deserialize_input(value, "Project backup JSON")?;
+    // Schema 1 differs from 2 only by optional layer-group image controls, which
+    // serde defaults to pass-through. The stored backup file is never rewritten.
+    if backup.project.version == 1 {
+        backup.project.version = PROJECT_FILE_VERSION;
+    }
     validate_backup_envelope(&backup)?;
     Ok(backup)
 }
@@ -135,7 +141,12 @@ mod tests {
             created_at_unix_ms: 97,
             source_path: Some("C:/公演/日本語.sdc".to_string()),
             reason: "before update 日本語".to_string(),
-            project: serde_json::from_str(PHASE1_SAMPLE_PROJECT_JSON).unwrap(),
+            project: {
+                let mut project: protocol::ProjectFile =
+                    serde_json::from_str(PHASE1_SAMPLE_PROJECT_JSON).unwrap();
+                project.version = PROJECT_FILE_VERSION;
+                project
+            },
             midi_mappings: Vec::new(),
             osc_mappings: Vec::new(),
             dmx_mappings: Vec::new(),
@@ -194,11 +205,20 @@ mod tests {
                 .contains("Unsupported project backup version 2")
         );
         envelope.version = PROJECT_BACKUP_VERSION;
-        envelope.project.version = 2;
+        envelope.project.version = PROJECT_FILE_VERSION + 1;
         assert!(
             parse_project_backup_json(&serde_json::to_string(&envelope).unwrap())
                 .unwrap_err()
-                .contains("Unsupported project version 2")
+                .contains("Unsupported project version 3")
+        );
+        envelope.project.version = 1;
+        let legacy = parse_project_backup_json(&serde_json::to_string(&envelope).unwrap()).unwrap();
+        assert_eq!(legacy.project.version, PROJECT_FILE_VERSION);
+        envelope.project.version = 0;
+        assert!(
+            parse_project_backup_json(&serde_json::to_string(&envelope).unwrap())
+                .unwrap_err()
+                .contains("Unsupported project version 0")
         );
         envelope = sample(1);
         envelope.app = "foreign".to_string();
