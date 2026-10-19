@@ -1,7 +1,9 @@
 import { createEffect, createMemo, createSignal, For, on, Show, type ComponentProps } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import type { VideoEffectCatalog, VideoIsfControlSummary, VideoIsfEffectStageSummary, VideoLayerSummary } from "../types";
-import { fxControlValueText, replaceFxStage } from "../fxParameterModel";
+import { cloneFxStage, fxControlValueText, replaceFxStage } from "../fxParameterModel";
+import { moveFxStageTo } from "../fxAuditionModel";
+import { createFxStageReorder } from "../createFxStageReorder";
 import { VideoFxParameterEditor } from "./VideoFxParameterEditor";
 import { VideoFxLiveSafety } from "./VideoFxLiveSafety";
 import { VideoFxAuditionBar } from "./VideoFxAuditionBar";
@@ -13,6 +15,7 @@ import "./VideoPerformQuickFx.css";
 interface VideoPerformQuickFxProps {
   projectEpoch?: number;
   locale?: string;
+  bpm?: number;
   layer: VideoLayerSummary | null;
   layerList: ComponentProps<typeof VideoLayerListPanel>;
   onOpenEditor: () => void;
@@ -51,16 +54,21 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
   createEffect(() => {
     const layer = props.layer;
     const effect = shownEffect();
-    const next = layer && effect ? [effect, ...(effect.stack ?? [])].map((stage, index) => ({
-      id: `${layer.id}:${index}`,
-      layerId: layer.id,
-      index,
-      label: stage.label,
-      enabled: stage.enabled,
-      stage,
-      // The shader's declared order supplies its primary operator controls.
-      controls: stage.controls.map((control) => ({ ...control, id: control.name })),
-    })) : [];
+    // The store reconciles into the objects it holds, so it must never hold the layer's own snapshot
+    // objects: a draft shown in their place would be written into the live chain.
+    const next = layer && effect ? [effect, ...(effect.stack ?? [])].map((source, index) => {
+      const stage = cloneFxStage(source);
+      return {
+        id: `${layer.id}:${index}`,
+        layerId: layer.id,
+        index,
+        label: stage.label,
+        enabled: stage.enabled,
+        stage,
+        // The shader's declared order supplies its primary operator controls.
+        controls: stage.controls.map((control) => ({ ...control, id: control.name })),
+      };
+    }) : [];
     setStages(reconcile(next, { key: "id" }));
   });
   // A different layer starts at its first stage; a shorter chain clamps.
@@ -80,6 +88,22 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
     audition() ? props.audition!.moveStage(layerId, index, delta) : props.layerList.onMoveIsfEffect(layerId, index, delta);
   const removeStage = (layerId: number, index: number) =>
     audition() ? props.audition!.removeStage(layerId, index) : props.layerList.onRemoveIsfEffect(layerId, index);
+  // Drag-and-drop reorder. A neighbour swap is exactly the Up/Down command; a longer move is
+  // one chain write through the same ticketed command that every stage edit uses (and one Undo).
+  const reorder = createFxStageReorder({
+    layerId: () => props.layer?.id ?? null,
+    count: () => stages.length,
+    disabled: () => busy(),
+    onReorder: (layerId, from, to) => {
+      setRemoveIndex(null);
+      setSelectedIndex(to);
+      if (Math.abs(to - from) === 1) { void moveStage(layerId, from, to > from ? 1 : -1); return; }
+      const effect = shownEffect();
+      if (!effect) return;
+      const next = moveFxStageTo(effect, from, to);
+      void (audition() ? props.audition!.replaceChain(layerId, next) : props.layerList.onSetIsfEffect(layerId, next));
+    },
+  });
   const history = () => audition()
     ? { canUndo: () => props.audition!.canUndo(), undo: () => props.audition!.undo() }
     : undefined;
@@ -105,7 +129,11 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
             <For each={stages}>
               {(stage) => (
                 <div class="videoPerformQuickFxStage" data-perform-fx-stage={stage.index} data-perform-fx-layer={stage.layerId}
-                  data-fx-enabled={stage.enabled} data-fx-selected={activeStage()?.id === stage.id} role="listitem">
+                  data-fx-enabled={stage.enabled} data-fx-selected={activeStage()?.id === stage.id} role="listitem"
+                  data-fx-draggable={reorder.canDrag() ? "true" : undefined} draggable={reorder.canDrag()}
+                  title={reorder.canDrag() ? "Drag to reorder, or use Up and Down." : undefined}
+                  data-fx-dragging={reorder.dragging() === stage.index ? "true" : undefined} data-fx-drop={reorder.dropEdge(stage.index)}
+                  {...reorder.handlers(() => stage.index)}>
                   <button type="button" class="videoPerformQuickFxSelect" data-perform-fx-select
                     aria-pressed={activeStage()?.id === stage.id} onClick={() => setSelectedIndex(stage.index)}>
                     <span class="videoPerformQuickFxNumber" aria-hidden="true">{stage.index + 1}</span>
@@ -144,7 +172,7 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
         <div class="videoPerformQuickFxParameters" data-perform-fx-detail={activeStage()?.index ?? ""} aria-label="Selected stage parameters">
           <Show when={activeStage()}>
             {(stage) => (
-              <VideoFxParameterEditor stage={stage().stage} identity={stage().id} busy={busy()} locale={props.locale}
+              <VideoFxParameterEditor stage={stage().stage} identity={stage().id} busy={busy()} locale={props.locale} bpm={props.bpm}
                 projectEpoch={props.projectEpoch} layerId={stage().layerId} liveSession={props.liveSession} history={history()}
                 auditioning={Boolean(audition())}
                 effectCatalog={props.effectCatalog} onApplyEffectCatalog={props.onApplyEffectCatalog}

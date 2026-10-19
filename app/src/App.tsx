@@ -26926,6 +26926,7 @@ export default function App() {
   const videoLayerListProps: ComponentProps<typeof VideoControlPanel>["layerList"] = {
     get locale() { return uiLocale(); },
     get projectEpoch() { return captureProjectAuthorityIdentity().project_epoch; },
+    get bpm() { return snapshot().clock.bpm; },
     get effectCatalog() { return videoEffectCatalog(); },
     onApplyEffectCatalog: applyVideoEffectCatalog,
     liveSession: fxLiveSession,

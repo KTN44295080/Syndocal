@@ -1776,6 +1776,11 @@ h3 {
   background: var(--theme-bg);
 }
 
+.videoIsfStackRow[data-fx-draggable="true"] { cursor: grab; }
+.videoIsfStackRow[data-fx-dragging="true"] { opacity: 0.55; }
+.videoIsfStackRow[data-fx-drop="before"] { box-shadow: inset 0 3px 0 0 var(--theme-focus); }
+.videoIsfStackRow[data-fx-drop="after"] { box-shadow: inset 0 -3px 0 0 var(--theme-focus); }
+
 .videoIsfStackRow.selected {
   border-color: #b97435;
   box-shadow: inset 2px 0 0 #e59b4a;

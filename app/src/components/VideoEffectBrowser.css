@@ -10,13 +10,14 @@
 .videoFxCatalogScope { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; }
 .videoFxCatalogTarget { overflow-wrap: anywhere; font-weight: 400; }
 .videoFxCatalogLive { color: var(--theme-warn); font-size: 14px; }
-.videoFxCatalogActions { display: flex; flex-wrap: wrap; gap: 6px; }
-.videoFxCatalogTools { display: flex; gap: 6px; align-items: center; flex: 0 0 auto; position: relative; }
-.videoFxCatalogSearch { display: flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 0; }
+.videoFxCatalogTools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; flex: 0 0 auto; position: relative; }
+.videoFxCatalogSearch { display: flex; align-items: center; gap: 8px; flex: 1 1 220px; min-width: 0; }
 .videoFxCatalogSearch > span { font-family: var(--theme-font-ui); font-size: 14px; }
 .videoFxCatalogSearch input { flex: 1 1 0; width: 0; padding: 6px 10px; color: var(--theme-text); background: var(--theme-inset); border: 1px solid var(--theme-line-strong); }
-.videoFxCatalogFilters { display: flex; flex-wrap: wrap; gap: 6px; position: absolute; top: 100%; right: 0; z-index: 3; width: min(100%, 460px); padding: 8px; background: var(--theme-panel); border: 1px solid var(--theme-line-strong); }
-.videoFxCatalogFilters button { flex: 0 0 auto; white-space: nowrap; padding: 6px 10px; }
+/* Category chips are always visible beside the search. Wide panes wrap them; narrow panes keep one row that scrolls sideways. */
+.videoFxCatalogStrip { display: contents; }
+.videoFxCatalogChips { display: flex; flex-wrap: wrap; gap: 6px; flex: 2 1 320px; min-width: 0; }
+.videoFxCatalogChip { flex: 0 0 auto; white-space: nowrap; padding: 6px 12px; }
 .videoFxCatalog button { color: var(--theme-text); background: var(--theme-key); border: 1px solid var(--theme-line-strong); border-radius: var(--r-sm); cursor: pointer; padding: 6px 10px; }
 .videoFxCatalog button:hover:not(:disabled) { background: var(--theme-key-hover); }
 .videoFxCatalog button[aria-pressed="true"] { background: var(--theme-accent); color: var(--theme-on-accent); }
@@ -48,13 +49,20 @@
 @container (min-width: 800px) { .videoFxCatalogResults { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .videoFxCatalogTry { border-color: var(--theme-preview) !important; }
 .videoFxCatalogAdd { border-color: var(--theme-program) !important; }
-.videoFxCatalogActions { flex: 0 0 auto; flex-wrap: nowrap; }
+.videoFxCatalogActions { display: flex; flex: 0 0 auto; flex-wrap: nowrap; gap: 6px; }
 .videoFxCatalogActions > button { white-space: nowrap; }
 /* Narrow panes (the Perform Inspector at 1366x768 is about 440px wide and 190px tall): one scope line,
    one tool row, and a compact list row per effect (thumbnail left, name and one description line,
    Try and Add on the right) so at least two effects are visible without scrolling. */
 @container (max-width: 720px) {
   .videoFxCatalog { gap: 4px; }
+  /* The search, the chips and the actions share one 44px row (no extra height in the Inspector). The chips and
+     actions scroll sideways inside their strip; a scrollbar would add height, so it is hidden and the wheel scrolls it. */
+  .videoFxCatalogTools { flex-wrap: nowrap; }
+  .videoFxCatalogSearch { flex: 0 0 132px; }
+  .videoFxCatalogStrip { display: flex; flex: 1 1 0; align-items: center; gap: 8px; min-width: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .videoFxCatalogStrip::-webkit-scrollbar { display: none; }
+  .videoFxCatalogChips { flex: 0 0 auto; flex-wrap: nowrap; }
   .videoFxCatalogHeader { min-height: 0; gap: 0; }
   .videoFxCatalogScope { flex: 1 1 100%; flex-direction: row; flex-wrap: nowrap; align-items: baseline; gap: 10px; min-height: 22px; }
   .videoFxCatalogTarget { flex: 0 1 auto; max-width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
@@ -77,4 +85,4 @@
   .videoFxCatalogButtons > button { min-width: 52px; padding: 4px 8px; }
   .videoFxCatalogHint { display: none; }
 }
-@container (max-width: 380px) { .videoFxCatalogThumbnail { display: none; } .videoFxCatalogCard { grid-template-columns: minmax(0, 1fr) auto; } .videoFxCatalogTools { flex-wrap: wrap; } }
+@container (max-width: 380px) { .videoFxCatalogThumbnail { display: none; } .videoFxCatalogCard { grid-template-columns: minmax(0, 1fr) auto; } .videoFxCatalogTools { flex-wrap: wrap; } .videoFxCatalogSearch { flex: 1 1 100%; } .videoFxCatalogStrip { flex: 1 1 100%; } }

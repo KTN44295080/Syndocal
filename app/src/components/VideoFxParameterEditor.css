@@ -10,6 +10,14 @@
 .videoFxParameterFoot { color: var(--theme-muted); }
 .videoFxScalarPicker { display: grid; grid-template-columns: minmax(44px, 1fr) minmax(64px, 96px); gap: 4px; min-width: 0; }
 .videoFxScalarPicker input { width: 100%; }
+.videoFxTempoSync { display: grid; gap: 4px; min-width: 0; }
+.videoFxTempoUnits { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.videoFxTempoUnits > button, .videoFxTempoUnits > select { flex: 0 1 auto; padding-inline: 10px; color: var(--theme-text); background: var(--theme-key); border: 1px solid var(--theme-line-strong); border-radius: var(--r-sm); cursor: pointer; }
+.videoFxTempoUnits > button[aria-pressed="true"] { background: var(--theme-accent); color: var(--theme-on-accent); }
+.videoFxTempoUnits > select { width: auto; min-width: 88px; flex: 0 0 auto; }
+.videoFxTempoUnits > button:disabled, .videoFxTempoUnits > select:disabled { color: var(--theme-disabled-text); background: var(--theme-disabled-bg); cursor: default; }
+.videoFxTempoReadout, .videoFxTempoNote { margin: 0; color: var(--theme-muted); overflow-wrap: anywhere; }
+.videoFxTempoNote { color: var(--theme-warn); }
 .videoFxPointPicker, .videoFxColorPicker { display: grid; gap: 4px; min-width: 0; }
 .videoFxPointPicker label { display: grid; align-items: center; grid-template-columns: 20px minmax(44px, 1fr) minmax(64px, 96px); gap: 4px; }
 .videoFxPointPicker input { width: 100%; }
