@@ -2076,6 +2076,41 @@ const japaneseText: Record<string, string> = {
   skipped: "スキップ",
   "Verify": "検証",
   "Verify All": "すべて検証",
+  "Media health…": "メディア状態…",
+  "Details": "詳細",
+  "Checked": "確認時刻",
+  "Media health summary": "メディア状態の概要",
+  "See which media files are missing or changed, and fix them": "見つからない・内容が変わったメディアファイルを確認し、修復します",
+  "Another media operation is running. Wait for it or cancel it first.": "別のメディア操作を実行中です。完了を待つか、先にキャンセルしてください。",
+  "No local media files in this project.": "このプロジェクトにはローカルのメディアファイルがありません。",
+  "The file is not at the path the project recorded.": "プロジェクトに記録されたパスにファイルがありません。",
+  "The file is there but could not be read.": "ファイルはありますが、読み取れませんでした。",
+  "The file at this path has different content than the project recorded. Relink the right file, or adopt a different one after confirming.": "このパスのファイルは、プロジェクトに記録された内容と異なります。正しいファイルを再リンクするか、確認のうえ別のファイルを採用してください。",
+  "Not hash-checked on this machine yet. Use Verify All.": "このマシンではまだハッシュを検証していません。「すべて検証」を実行してください。",
+  "Present and matching the recorded content.": "ファイルがあり、記録された内容と一致しています。",
+  "Relink missing from folder…": "見つからないファイルをフォルダーから再リンク…",
+  "No file is missing": "見つからないファイルはありません",
+  "Run Verify All first to find the missing files": "先に「すべて検証」を実行して、見つからないファイルを特定してください",
+  "Choose a folder; missing files are matched by name and size": "フォルダーを選ぶと、見つからないファイルをファイル名とサイズで照合します",
+  "Relinking": "再リンク中",
+  "Proposed matches": "照合結果の候補",
+  "Apply selected": "選択を適用",
+  "Same name and size": "名前とサイズが一致",
+  "Same name, size differs": "名前は一致・サイズが異なる",
+  "No missing file was found by name in this folder.": "このフォルダーには、見つからないファイルと同じ名前のファイルがありませんでした。",
+  "Not every file in this folder could be scanned (too many files, too deep, or an unreadable folder), so some matches may be missing. Choose a narrower folder to be sure.": "このフォルダーのすべてのファイルは確認できませんでした（ファイル数が多い・階層が深い・読めないフォルダーがある）。照合できないものがある可能性があります。確実にするには、より狭いフォルダーを選んでください。",
+  "left out: several files have the same name": "件は除外: 同じ名前のファイルが複数あります",
+  "candidates": "件の候補",
+  "not found in this folder": "件はこのフォルダーに見つかりません",
+  "Each file is checked against the project's recorded content before it is linked. Files with different content are skipped; relink those one at a time.": "再リンクの前に、各ファイルをプロジェクトに記録された内容と照合します。内容が異なるファイルはスキップされます。それらは1件ずつ再リンクしてください。",
+  "These files have different content than the project recorded, so they were not applied. Relink them one at a time to review and confirm adopting the new file:": "次のファイルはプロジェクトに記録された内容と異なるため適用されませんでした。1件ずつ再リンクし、新しいファイルを採用するか確認してください:",
+  "Choose relink folder": "再リンク用フォルダーを選択",
+  "This file's content differs from what the project recorded for this asset (the hash does not match).": "このファイルの内容は、プロジェクトがこの素材として記録した内容と異なります（ハッシュが一致しません）。",
+  "Folder relink canceled. No project changes were made.": "フォルダー再リンクをキャンセルしました。プロジェクトは変更されていません。",
+  "Folder relink canceled.": "フォルダー再リンクをキャンセルしました。",
+  "This asset changed after the folder was reviewed. Choose the folder again.": "確認後にこの素材が変更されました。フォルダーを選び直してください。",
+  "The relink did not return a result.": "再リンクの結果が返されませんでした。",
+  "Folder relink: nothing was applied.": "フォルダー再リンク: 何も適用されませんでした。",
   "Verify machine-local Media Library availability before Timeline placement": "タイムライン配置前に、このマシンのメディアライブラリ利用可否を検証",
   Abs: "絶対値",
   "Active / Standby": "アクティブ／スタンバイ",
@@ -4659,6 +4694,21 @@ const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
   [
     /^Media availability: (\d+) verified(?:, (\d+) need attention)?\. Project history was not changed\.$/,
     (verified, attention) => `メディア利用可否: ${verified}件を検証済み${attention ? `、${attention}件は要確認` : ""}。プロジェクト履歴は変更されていません。`,
+  ],
+  [
+    /^Folder relink: (.+)\.$/,
+    (entries) => `フォルダー再リンク: ${entries.split(", ").map((entry) => {
+      const match = entry.match(/^(\d+) (relinked|have different content|failed|not attempted)$/);
+      if (!match) return entry;
+      const [, count, kind] = match;
+      const label = {
+        "relinked": "再リンク",
+        "have different content": "内容が異なる",
+        "failed": "失敗",
+        "not attempted": "未実行",
+      }[kind];
+      return label ? `${count}件 ${label}` : entry;
+    }).join("、")}。`,
   ],
   [
     /^Startup is fail-closed; explicitly arm machine output role (Lighting|Video|Both|Standby)$/,

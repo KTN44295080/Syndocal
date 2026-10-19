@@ -16,7 +16,7 @@ const evidence = path.resolve(process.env.THUMBNAIL_QA_DIR ?? path.join(appRoot,
 await mkdir(evidence, { recursive: true });
 const chrome = [process.env.CHROME_PATH, path.join(homedir(), 'AppData/Local/Google/Chrome/Application/chrome.exe'), chromium.executablePath()].find(p => p && existsSync(p));
 assert.ok(chrome, 'A browser executable is required');
-const server = await createServer({ root: appRoot, server: { host: '127.0.0.1', port: 5199, strictPort: true }, plugins: [{
+const server = await createServer({ root: appRoot, server: { host: '127.0.0.1', port: Number(process.env.SYNDOCAL_CHECK_PORT ?? 5199), strictPort: true }, plugins: [{
   name: 'thumbnail-recovery-fixture', configureServer(server) {
     server.middlewares.use((req, res, next) => {
       if (req.url !== '/__thumbnail-recovery/') return next();
@@ -33,7 +33,7 @@ try {
     const page = await browser.newPage({ viewport }); const errors = [];
     page.setDefaultTimeout(15000); page.setDefaultNavigationTimeout(15000);
     page.on('pageerror', e => { errors.push(e.message); console.error(e.stack); });
-    await page.goto('http://127.0.0.1:5199/__thumbnail-recovery/');
+    await page.goto(`http://127.0.0.1:${process.env.SYNDOCAL_CHECK_PORT ?? 5199}/__thumbnail-recovery/`);
     await page.waitForFunction(() => Boolean(window.__thumbnailRecoveryFixture));
     const layer = page.locator('[data-vj-thumbnail-request]');
     const asset = page.locator('[data-media-library-thumbnail-request]');

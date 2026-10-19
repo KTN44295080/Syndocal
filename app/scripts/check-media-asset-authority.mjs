@@ -1010,12 +1010,15 @@ const sourcePicker = app.slice(
 assert.match(sourcePicker, /const initiatingAuthority = captureProjectAuthorityIdentity\(\);[\s\S]*?let sideEffectAuthority = initiatingAuthority;[\s\S]*?sideEffectAuthority = preparedStart\.authority;[\s\S]*?select_video_source_file[\s\S]*?if \(!sideEffectsAreCurrent\(\)\) return;/, "Browse preserves its initiating epoch and cannot publish cancel/path/error into C after binding post-preflight E/R/H");
 assert.match(app, /setMediaAssetImportReport: \(report\) => \{[\s\S]*?isProjectAuthorityIdentityCurrent\(\{[\s\S]*?report\.project_epoch[\s\S]*?report\.project_revision[\s\S]*?report\.checkpoint_hash/, "delayed Prepare truth cannot repopulate a replacement project's issue rail");
 const relinkLibraryWorkflow = app.slice(
-  app.indexOf("const relinkMediaLibraryAsset = async"),
-  app.indexOf("const videoLayerHasMonitorableAudio", app.indexOf("const relinkMediaLibraryAsset = async")),
+  app.indexOf("const clearRelinkedAvailability = "),
+  app.indexOf("const videoLayerHasMonitorableAudio", app.indexOf("const clearRelinkedAvailability = ")),
 );
 assert.doesNotMatch(relinkLibraryWorkflow, /reserveAssets/, "Relink does not supersede availability by invocation reservation");
 assert.match(relinkLibraryWorkflow, /const statusLease = mediaLibraryStatusLease\.begin\(\);[\s\S]*?relinkMediaAsset\(assetId, \(message\) => \{[\s\S]*?mediaLibraryStatusLease\.isCurrent\(statusLease\)/, "Relink reserves the same shared status lease and passes a guarded publisher into the controller");
-assert.match(relinkLibraryWorkflow, /isProjectAuthorityIdentityCurrent\(result\.terminalAuthority\)[\s\S]*?mediaAssetAvailabilityRowAuthority\.shouldClearAfterRelink\(assetId, result\.terminalAuthority\)/, "Relink clears only a row not verified at its exact terminal E/R/H");
+assert.match(relinkLibraryWorkflow, /const clearRelinkedAvailability = [\s\S]*?projectMappingsAuthority\(\)\.project_epoch !== terminalAuthority\.project_epoch\) return false;[\s\S]*?mediaAssetAvailabilityRowAuthority\.shouldClearAfterRelink\(assetId, terminalAuthority\)/, "Relink clears only rows of its own project epoch, and only a row not verified at its exact terminal E/R/H");
+assert.match(relinkLibraryWorkflow, /clearRelinkedAvailability\(\[assetId\], result\.terminalAuthority\)/, "single-file Relink applies that clearing rule with its own terminal E/R/H");
+assert.match(relinkLibraryWorkflow, /clearRelinkedAvailability\(applied\.result\.relinked, applied\.terminalAuthority\)/, "folder Relink applies the same clearing rule with the batch's last terminal E/R/H");
+assert.match(relinkLibraryWorkflow, /const applied = await applyMediaRelinkRequests\(requests, onProgress\);\s*if \(!applied\) return null;/, "a folder relink whose project changed under it reports nothing");
 const relinkController = controller.slice(
   controller.indexOf("const relinkMediaAsset = async"),
   controller.indexOf("const setVideoLayerIsfEffect", controller.indexOf("const relinkMediaAsset = async")),

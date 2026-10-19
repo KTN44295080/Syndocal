@@ -39,6 +39,7 @@ mod native_thumbnail_ticket;
 #[cfg(test)]
 mod native_thumbnail_render_tests;
 mod media_asset_preview_contract;
+mod media_relink_folder;
 use media_asset_preview_contract::{
     media_asset_thumbnail_snapshot, validate_media_asset_preview_position,
     validate_media_asset_thumbnail_contract, validate_media_asset_thumbnail_dimensions,
@@ -27585,6 +27586,24 @@ fn select_video_source_files(
         .into_iter()
         .map(|path| path.to_string_lossy().to_string())
         .collect())
+}
+
+/// Folder picker for the Media Health "relink from folder" review. It only lists
+/// media file names and sizes; matching, validation and the project mutation all
+/// stay in the ordinary Media Asset relink operation.
+#[tauri::command]
+fn select_media_relink_folder(
+    window: WebviewWindow,
+) -> Result<Option<media_relink_folder::MediaRelinkFolderScan>, String> {
+    let Some(directory) = parented_file_dialog(&window).pick_folder() else {
+        return Ok(None);
+    };
+    let extensions = VIDEO_FILE_EXTENSIONS
+        .iter()
+        .chain(STILL_IMAGE_EXTENSIONS)
+        .copied()
+        .collect::<Vec<_>>();
+    media_relink_folder::scan_media_relink_folder(&directory, &extensions).map(Some)
 }
 
 #[tauri::command]
@@ -134975,6 +134994,7 @@ fn main() {
             select_gdtf_file,
             select_video_source_file,
             select_video_source_files,
+            select_media_relink_folder,
             select_video_isf_file,
             import_video_output_bitmap_mask,
             import_gdtf,

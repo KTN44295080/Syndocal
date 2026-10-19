@@ -390,6 +390,20 @@ try {
       assert.ok(monitors.previewW >= (width === 1366 ? 296 : width >= 1920 ? 400 : 240) && monitors.programW >= (width === 1366 ? 296 : width >= 1920 ? 400 : 240), label+': monitors are large '+JSON.stringify(monitors));
       // Matrix pane header: title, health and shortcuts; the removed desk header and 66px Quick FX strip are gone.
       assert.equal(await cdp.evaluate('document.querySelectorAll('+JSON.stringify(root+' .videoPerformDeskHeader, '+root+' .videoPerformQuickFxHeader strong')+').length'), 0, label+': legacy desk header and Quick FX strip are removed');
+      // ---- Media health: the header readout opens the per-asset health view (competitive review item 5). ----
+      const healthOpen = root + ' [data-video-perform-region="health"] [data-media-health-open]';
+      const healthButton = await inspect(healthOpen);
+      assert.equal(healthButton.failure, null, label + ': Media health Details button is fully visible in the header ' + JSON.stringify(healthButton));
+      assert.ok(healthButton.height >= 44 && healthButton.width >= 44, label + ': Media health Details keeps its 44px target ' + JSON.stringify(healthButton));
+      await cdp.evaluate('document.querySelector(' + JSON.stringify(healthOpen) + ').click()');
+      await waitFor(() => cdp.evaluate('document.querySelector("dialog[data-media-health-dialog][open]") !== null'), label + ': Details opens the health view');
+      const healthView = await cdp.evaluate('(()=>{const d=document.querySelector("dialog[data-media-health-dialog][open]");const r=d.getBoundingClientRect();const small=[...d.querySelectorAll("button")].filter(b=>{const x=b.getBoundingClientRect();return x.height<44||x.width<44}).length;return {within:r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight,small,verifyAll:!!d.querySelector("[data-media-health-verify-all]"),chips:d.querySelectorAll("[data-media-health-chip]").length,rows:d.querySelectorAll("[data-media-health-row]").length,groups:[...d.querySelectorAll("[data-media-health-group]")].map(g=>g.dataset.mediaHealthGroup)}})()');
+      assert.equal(healthView.within, true, label + ': health view fits the viewport ' + JSON.stringify(healthView));
+      assert.equal(healthView.small, 0, label + ': health view buttons keep 44px targets ' + JSON.stringify(healthView));
+      assert.equal(healthView.verifyAll, true, label + ': health view offers Verify All');
+      assert.ok(healthView.chips >= 5 && healthView.rows >= 1 && healthView.groups.includes('unverified'), label + ': fixture assets are listed by state ' + JSON.stringify(healthView));
+      await cdp.key('Escape', 'Escape', 27);
+      await waitFor(() => cdp.evaluate('document.querySelector("dialog[data-media-health-dialog][open]") === null'), label + ': Escape closes the health view');
       // ---- Inspector: FX tab shows every stage toggle and its parameters. ----
       const fxTab = await cdp.evaluate('(()=>{const q=document.querySelector('+JSON.stringify(root+' [data-video-perform-region="quick-fx"]')+');const stage=q.querySelector("[data-perform-fx-stage]");const bypass=q.querySelector("[data-perform-fx-bypass]");const control=q.querySelector("[data-perform-fx-control]");return {selected:document.querySelector("[data-video-perform-inspector-tab=fx]").getAttribute("aria-selected"),stages:q.querySelectorAll("[data-perform-fx-stage]").length,bypass:!!bypass,bypassPressed:bypass?.getAttribute("aria-pressed"),stageHeight:stage?.getBoundingClientRect().height,controls:q.querySelectorAll("[data-perform-fx-control]").length,value:q.querySelector("[data-perform-fx-control] output")?.textContent??null,rangeHeight:control?.querySelector("input")?.getBoundingClientRect().height??null}})()');
       assert.equal(fxTab.selected, 'true', label+': FX is the default Inspector tab '+JSON.stringify(fxTab));

@@ -14,6 +14,8 @@ import { controlMappingTargetData } from "../controlMappingLearn";
 import { FX_DRAG_MIME, readFxDragPayload, type FxCatalogEntry, type FxImportRejection } from "../fxCatalogModel";
 import { collectFxProblems } from "../fxRejectionExplanation";
 import { VideoFxProblemsDialog } from "./VideoFxProblemsDialog";
+import { MediaLibraryHealthDialog } from "./MediaHealthDialog";
+import { summarizeMediaHealth } from "../mediaHealthModel";
 
 /** Persisted pane ratios for the Perform workspace; the application owns them
  * (workspace layout storage) and the desk falls back to local ones without it. */
@@ -73,10 +75,19 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
   };
   onMount(() => window.addEventListener("keydown", shortcut, true));
   onCleanup(() => window.removeEventListener("keydown", shortcut, true));
-  const unhealthy = () => props.mediaLibrary.assets.filter(asset => {
-    const kind = props.mediaLibrary.availabilityById[asset.id]?.kind;
-    return kind === "missing" || kind === "hash_mismatch" || kind === "unreadable";
-  });
+  const mediaHealth = createMemo(() => summarizeMediaHealth(props.mediaLibrary.assets, props.mediaLibrary.availabilityById));
+  // One line for every broken media file; the health view lists which ones.
+  const mediaProblemSummary = () => {
+    const { counts } = mediaHealth();
+    const ja = props.performContext?.locale === "ja";
+    const parts = ([
+      ["missing", ja ? "見つからない" : "missing"],
+      ["unreadable", ja ? "読み取り不可" : "unreadable"],
+      ["hash_mismatch", ja ? "内容が不一致" : "content differs"],
+    ] as const).filter(([state]) => counts[state] > 0).map(([state, word]) => ja ? `${word} ${counts[state]}` : `${counts[state]} ${word}`);
+    return parts.length > 0 ? `${ja ? "メディアの問題" : "Media problems"}: ${parts.join(ja ? "・" : ", ")}` : "";
+  };
+  let mediaHealthDialog!: HTMLDialogElement;
   const unchecked = () => props.mediaLibrary.assets.filter(asset =>
     !props.mediaLibrary.availabilityById[asset.id] ||
     props.mediaLibrary.availabilityById[asset.id]?.kind === "available_unverified").length;
@@ -88,7 +99,7 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
   const errors = () => [...new Set([props.clipGrid.previewError, props.clipGrid.firstRunError, props.liveMonitors.preview.error, props.liveMonitors.program.error,
     props.liveMonitors.previewTransportError,
     ...(fxProblems().length ? [fxProblems().length === 1 ? fxProblems()[0].explanation.title : (props.performContext?.locale === "ja" ? `エフェクトの問題 ${fxProblems().length}件` : `${fxProblems().length} effect problems`)] : []),
-    ...unhealthy().map(asset => `${asset.label}: ${props.mediaLibrary.availabilityById[asset.id]?.kind}`),
+    ...(mediaProblemSummary() ? [mediaProblemSummary()] : []),
     ...props.mediaLibrary.lastImportReport?.entries.filter(entry => entry.status === "failed").map(entry => entry.message) ?? [],
   ].filter(Boolean))].join(" · ");
 
@@ -121,6 +132,7 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
         tools={<>
           <section class="videoPerformHealth" data-video-perform-region="health" aria-label="Media and monitor health">
             <strong>Media health</strong><span title={errors() || undefined}><Show when={errors()} fallback={<><span>Assets</span>: <span data-no-localize>{props.mediaLibrary.assets.length}</span> · <span>Not verified</span>: <span data-no-localize>{unchecked()}</span></>}>{error => <span data-no-localize>{error()}</span>}</Show></span>
+            <button type="button" data-media-health-open title="See which media files are missing or changed, and fix them" onClick={() => mediaHealthDialog.showModal()}>Details</button>
             <Show when={fxProblems().length > 0}>
               <button type="button" data-fx-problems-open onClick={() => fxProblemsDialog.showModal()}>Effect problems</button>
             </Show>
@@ -294,6 +306,7 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
       </section>
     </div>
     <VideoFxProblemsDialog ref={(element) => { fxProblemsDialog = element; }} problems={fxProblems()} locale={props.performContext?.locale} onClose={() => undefined} />
+    <MediaLibraryHealthDialog library={props.mediaLibrary} ref={(element) => { mediaHealthDialog = element; }} />
     <dialog ref={legend} class="videoPerformLegend" data-video-perform-legend>
       <h2>Keyboard shortcuts</h2>
       <dl><dt data-no-localize>F1 / F2 / F3</dt><dd>Setup / Edit / Control</dd>
