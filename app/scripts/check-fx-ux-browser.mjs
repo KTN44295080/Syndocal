@@ -23,6 +23,7 @@ import { createMemo, createRoot, createSignal } from "solid-js";
 import { render } from "solid-js/web";
 import { VideoPerformQuickFx } from "/src/components/VideoPerformQuickFx.tsx";
 import { VideoEffectBrowser } from "/src/components/VideoEffectBrowser.tsx";
+import { VideoIsfEffectPanel } from "/src/components/VideoIsfEffectPanel.tsx";
 import { VideoFxProblemsDialog } from "/src/components/VideoFxProblemsDialog.tsx";
 import { buildFxCatalog, builtinFxEntries } from "/src/fxCatalogModel.ts";
 import { createFxAuditionSession } from "/src/createFxAuditionSession.ts";
@@ -46,21 +47,24 @@ createRoot(() => {
 const [locale, setLocale] = createSignal("en");
 const [rejectionsOn, setRejectionsOn] = createSignal(false);
 const [runtimeErrors, setRuntimeErrors] = createSignal([]);
-const [layers, setLayers] = createSignal([
+const initialLayers = () => [
   { id: 1, label: "Opener Loop", isf_effect: null },
   { id: 2, label: "Strobe Wash", isf_effect: fxChainFromStages([stages.colorize(), stages.monochrome(), stages.strobe(), stages.rotate()]) },
-]);
+  { id: 3, label: "Single Stage", isf_effect: fxChainFromStages([stages.invert()]) },
+];
+const [layers, setLayers] = createSignal(initialLayers());
 const [transport, setTransport] = createSignal({ layer_id: null, effect_audition: false });
 const [catalog, setCatalog] = createSignal({ effect_chains: [], effect_presets: [], layer_groups: [], transition_buses: [] });
-const log = { commits: [], previews: [], liveWrites: 0, catalogWrites: 0, adds: [], auditions: [] };
+const log = { commits: [], previews: [], liveWrites: 0, moves: 0, sets: 0, catalogWrites: 0, adds: [], auditions: [] };
+const [bpm, setBpm] = createSignal(120);
 const updateLayer = (id, change) => setLayers(layers().map((layer) => layer.id === id ? { ...layer, isf_effect: change(layer.isf_effect) } : layer));
 const mapStages = (effect, change) => fxChainFromStages(fxChainStages(effect).map(change));
 const live = {
   layers: () => layers(),
   onSetIsfEffectEnabled: (id, index, enabled) => { log.liveWrites++; updateLayer(id, (effect) => mapStages(effect, (stage, at) => at === index ? { ...stage, enabled } : stage)); },
-  onMoveIsfEffect: (id, index, delta) => { log.liveWrites++; updateLayer(id, (effect) => { const list = fxChainStages(effect); [list[index], list[index + delta]] = [list[index + delta], list[index]]; return fxChainFromStages(list); }); },
+  onMoveIsfEffect: (id, index, delta) => { log.liveWrites++; log.moves++; updateLayer(id, (effect) => { const list = fxChainStages(effect); [list[index], list[index + delta]] = [list[index + delta], list[index]]; return fxChainFromStages(list); }); },
   onRemoveIsfEffect: (id, index) => { log.liveWrites++; updateLayer(id, (effect) => fxChainFromStages(fxChainStages(effect).filter((_, at) => at !== index))); },
-  onSetIsfEffect: (id, effect) => { log.liveWrites++; updateLayer(id, () => effect); },
+  onSetIsfEffect: (id, effect) => { log.liveWrites++; log.sets++; updateLayer(id, () => effect); },
   onSetIsfControl: (id, index, name, value) => { log.liveWrites++; updateLayer(id, (effect) => mapStages(effect, (stage, at) => at === index ? { ...stage, controls: stage.controls.map((item) => item.name === name ? { ...item, value } : item) } : stage)); },
   onTriggerIsfEvent: () => { log.liveWrites++; },
   isfEventPulseBusy: false,
@@ -86,17 +90,23 @@ const [selectedLayerId, setSelectedLayerId] = createSignal(2);
 const [view, setView] = createSignal("fx");
 const [size, setSize] = createSignal({ width: 446, height: 236 });
 const layer = () => layers().find((item) => item.id === selectedLayerId());
-let dialog;
+let dialog; let localizer;
 Object.assign(window, { __fxUx: {
-  log, setLocale: (value) => { setLocale(value); document.documentElement.lang = value; }, setView, setSize, setSelectedLayerId, setRejectionsOn,
+  log, setBpm, resetLayers: () => setLayers(initialLayers()), setLocale: (value) => { setLocale(value); document.documentElement.lang = value; localizer?.refresh(); }, setView, setSize, setSelectedLayerId, setRejectionsOn,
   setRuntimeErrors, layers, transport, audition, catalog, openProblems: () => dialog.showModal(), problems,
   setCatalog: (value) => { log.catalogWrites++; setCatalog(value); },
 }});
 const frame = () => ({ width: size().width + "px", height: size().height + "px" });
 render(() => <div class="fxUxStage">
   <div class="fxUxFrame" style={frame()} data-video-perform-pane="inspector">
-    {view() === "fx"
-      ? <VideoPerformQuickFx layer={layer()} layerList={live} locale={locale()} projectEpoch={1} onOpenEditor={() => {}}
+    {view() === "full"
+      ? <VideoIsfEffectPanel layerId={layer().id} layerLabel={layer().label} effect={layer().isf_effect} locale={locale()} bpm={bpm()} projectEpoch={1} liveSession={liveSession}
+          effectCatalog={catalog()} onApplyEffectCatalog={(value) => { window.__fxUx.setCatalog(value); return value; }}
+          onImport={() => {}} onApplyBuiltin={() => {}} onResetEffect={() => {}}
+          onSetEffect={live.onSetIsfEffect} onMoveEffect={live.onMoveIsfEffect} onRemoveEffect={live.onRemoveIsfEffect} onSetEffectEnabled={live.onSetIsfEffectEnabled}
+          onSetControl={live.onSetIsfControl} onTriggerEvent={live.onTriggerIsfEvent} />
+      : view() === "fx"
+      ? <VideoPerformQuickFx layer={layer()} layerList={live} locale={locale()} bpm={bpm()} projectEpoch={1} onOpenEditor={() => {}}
           effectCatalog={catalog()} onApplyEffectCatalog={(value) => { window.__fxUx.setCatalog(value); return value; }}
           liveSession={liveSession} audition={audition} />
       : <VideoEffectBrowser entries={entries()} layer={layer()} locale={locale()} onAdd={(entry, layerId) => { log.adds.push([entry.id, layerId]); }}
@@ -105,7 +115,7 @@ render(() => <div class="fxUxStage">
   </div>
   <VideoFxProblemsDialog ref={(element) => { dialog = element; }} problems={problems()} locale={locale()} onClose={() => {}} />
 </div>, document.getElementById("root"));
-installUiLocalization(document.body, locale);
+localizer = installUiLocalization(document.body, locale);
 document.documentElement.dataset.theme = "tally";
 window.__fxUxReady = true;
 });
@@ -299,9 +309,223 @@ try {
   await click("[data-fx-audition-discard]"); await settle();
   assert.equal(await ux("return u.audition.state()"), null);
 
+  // ---- Task 18 D1: tempo-synced beat and bar units ----
+  await ux("u.resetLayers();u.setBpm(120)");
+  await setView([1920, 1080], "en", "tally", "fx", 700, 620);
+  await click('[data-perform-fx-stage="2"] [data-perform-fx-select]'); await settle();
+  const syncBox = "[data-perform-fx-control=rate] [data-fx-tempo-sync]";
+  // Serialised in the page: CDP flattens store proxies, JSON.stringify is what the project writer sees.
+  const rateControl = async () => JSON.parse(await ux("return JSON.stringify(u.layers()[1].isf_effect.stack[1].controls.find(c=>c.name==='rate'))"));
+  const pickCount = (value) => evaluate(`(()=>{const s=document.querySelector(${JSON.stringify(syncBox + " [data-fx-tempo-count]")});s.value=${JSON.stringify(String(value))};s.dispatchEvent(new Event('change',{bubbles:true}))})()`).then(settle);
+  const readout = () => text(`${syncBox} [data-fx-tempo-readout]`);
+  assert.equal(await evaluate("document.querySelectorAll('[data-fx-tempo-sync]').length"), 1, "only the Strobe rate offers beat and bar units, not the duty ratio");
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(syncBox)}).dataset.fxTempoSync`), "hz", "controls start as a raw Hz value");
+  assert.deepEqual(await evaluate(`[...document.querySelectorAll(${JSON.stringify(syncBox + " [data-fx-tempo-unit]")})].map(e=>e.textContent+':'+e.getAttribute('aria-pressed'))`), ["Hz:true", "Beats:false", "Bars:false"]);
+  for (const item of await geometry(`${syncBox} button`)) { assert.ok(item.h >= 44 && item.w >= 44 && item.font >= 14, `tempo unit button keeps 44px and 14px ${JSON.stringify(item)}`); }
+  let sets = await ux("return u.log.sets"); let writes = await ux("return u.log.liveWrites");
+  await click(`${syncBox} [data-fx-tempo-unit=beats]`); await settle();
+  assert.equal(await ux("return u.log.sets"), sets + 1, "choosing a unit is one write through the ticketed chain command");
+  let rateNow = await rateControl();
+  assert.deepEqual(rateNow.tempo_sync, { unit: "beats", count: 1 }, "the choice is stored on the control, which is project state");
+  assert.equal(rateNow.value[0], 2, "120 BPM, one cycle per beat = 2 Hz");
+  assert.equal(await readout(), "One cycle per 1 beat = 2 Hz at 120 BPM");
+  assert.equal(await evaluate("document.querySelector('[data-perform-fx-control=rate] input[type=range]').disabled && document.querySelector('[data-perform-fx-control=rate] input[type=number]').disabled"), true, "a synced value is not hand-edited");
+  assert.deepEqual(await evaluate(`[...document.querySelectorAll(${JSON.stringify(syncBox + " [data-fx-tempo-count] option")})].map(e=>e.textContent)`), ["1/4", "1/2", "1", "2", "4"]);
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(syncBox + " [data-fx-tempo-count]")}).getAttribute('aria-label')`), "Beats per cycle");
+  await pickCount(0.25);
+  rateNow = await rateControl();
+  assert.deepEqual([rateNow.tempo_sync.count, rateNow.value[0]], [0.25, 8], "1/4 beat at 120 BPM = 8 Hz");
+  assert.equal(await readout(), "One cycle per 1/4 beat = 8 Hz at 120 BPM");
+  await click(`${syncBox} [data-fx-tempo-unit=bars]`); await settle();
+  rateNow = await rateControl();
+  assert.deepEqual([rateNow.tempo_sync.unit, rateNow.tempo_sync.count, rateNow.value[0]], ["bars", 0.25, 2], "a bar is four beats: 1/4 bar = 1 beat = 2 Hz");
+  assert.equal(await readout(), "One cycle per 1/4 bar = 2 Hz at 120 BPM");
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(syncBox + " [data-fx-tempo-count]")}).getAttribute('aria-label')`), "Bars per cycle");
+  assert.equal(await evaluate("document.querySelectorAll('[data-fx-tempo-resync]').length"), 0, "no re-sync is offered while the value follows the clock");
+  await shot("tempo-sync-en-tally-1920x1080");
+  // The tempo changes: the stored value is stale until the operator re-syncs it (the runtime does not follow the clock yet).
+  await ux("u.setBpm(90)"); await settle();
+  assert.equal((await rateControl()).value[0], 2, "a tempo change alone never writes the project");
+  assert.equal(await evaluate("document.querySelectorAll('[data-fx-tempo-resync]').length"), 1, "a stale synced value offers Re-sync to tempo");
+  writes = await ux("return u.log.liveWrites");
+  await click("[data-fx-tempo-resync]"); await settle();
+  assert.equal(await ux("return u.log.liveWrites"), writes + 1, "re-sync is one write");
+  assert.equal((await rateControl()).value[0], 1.5);
+  assert.equal(await readout(), "One cycle per 1/4 bar = 1.5 Hz at 90 BPM");
+  assert.equal(await evaluate("document.querySelectorAll('[data-fx-tempo-resync]').length"), 0);
+  // A request outside the control's range is limited and says so.
+  await pickCount(4);
+  rateNow = await rateControl();
+  assert.equal(rateNow.value[0], 0.5, "4 bars at 90 BPM = 0.094 Hz is limited to the 0.5 Hz minimum");
+  assert.equal(await evaluate("document.querySelectorAll('[data-fx-tempo-clamped]').length"), 1, "the limit is shown");
+  assert.equal(await evaluate("document.querySelectorAll('[data-fx-tempo-resync]').length"), 0, "a value at its limit is in sync");
+  // Randomize leaves a synced control alone; the other controls still change.
+  await click(`${syncBox} [data-fx-tempo-unit=beats]`); await settle();
+  const beforeRandom = (await rateControl()).value[0];
+  await click("[data-fx-randomize]"); await settle();
+  rateNow = await rateControl();
+  assert.deepEqual([rateNow.tempo_sync.unit, rateNow.value[0]], ["beats", beforeRandom], "Randomize keeps a synced control on the clock");
+  // Hz keeps the number; Reset default replaces the sync with the raw default.
+  await click(`${syncBox} [data-fx-tempo-unit=hz]`); await settle();
+  rateNow = await rateControl();
+  assert.equal(rateNow.tempo_sync ?? null, null, "Hz removes the sync");
+  assert.equal(rateNow.value[0], beforeRandom, "and keeps the last value as a plain number");
+  await click(`${syncBox} [data-fx-tempo-unit=bars]`); await settle();
+  await click("[data-perform-fx-control=rate] .videoFxParameterFoot button"); await settle();
+  rateNow = await rateControl();
+  assert.deepEqual([rateNow.tempo_sync ?? null, rateNow.value[0]], [null, 8], "Reset default ends the sync and restores the declared default");
+  // Without a usable tempo the beat and bar units are off, with the reason.
+  await ux("u.setBpm(0)"); await settle();
+  assert.equal(await evaluate(`[...document.querySelectorAll(${JSON.stringify(syncBox + " [data-fx-tempo-unit]")})].map(e=>e.disabled).join()`), "false,true,true", "beats and bars need a tempo");
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(syncBox + " [data-fx-tempo-unit=beats]")}).title`), "Tempo unavailable");
+  await ux("u.setBpm(120)"); await settle();
+  // Japanese.
+  await ux("u.setLocale('ja')"); await settle();
+  await click(`${syncBox} [data-fx-tempo-unit=beats]`); await settle();
+  assert.equal(await readout(), "1拍ごとに1回 ＝ 2 Hz（120 BPM）");
+  assert.deepEqual(await evaluate(`[...document.querySelectorAll(${JSON.stringify(syncBox + " [data-fx-tempo-unit]")})].map(e=>e.textContent)`), ["Hz", "拍", "小節"]);
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(syncBox + " [data-fx-tempo-count]")}).getAttribute('aria-label')`), "1周期あたりの拍数");
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(syncBox + " [role=group]")}).getAttribute('aria-label')`), "時間の単位");
+  await ux("u.setBpm(100)"); await settle();
+  assert.match(await text("[data-fx-tempo-resync]"), /テンポに再同期/);
+  await shot("tempo-sync-ja-tally-1920x1080");
+  await ux("u.setBpm(120);u.setLocale('en')"); await settle();
+  // During an audition the choice goes to the Preview draft, never to Program.
+  await click("[data-fx-audition-begin]"); await settle();
+  writes = await ux("return u.log.liveWrites");
+  await click(`${syncBox} [data-fx-tempo-unit=bars]`); await settle();
+  assert.equal(await ux("return u.log.liveWrites"), writes, "an audition edits only its draft");
+  assert.deepEqual(await ux("return u.audition.state().draft.stack[1].controls.find(c=>c.name==='rate').tempo_sync"), { unit: "bars", count: 1 });
+  await click("[data-fx-audition-discard]"); await settle();
+  // An imported shader with a rate-like Float qualifies; a plain amount does not (model check covers names).
+
+  // ---- Task 18 D2: drag-and-drop reorder of chain stages ----
+  await ux("u.resetLayers()");
+  const order = (layer = 1) => ux(`const e=u.layers()[${layer}].isf_effect;return [e.label,...e.stack.map(s=>s.label)].join('>')`);
+  const drag = (from, to, { drop = true, payload = true } = {}) => evaluate(`(()=>{const a=document.querySelector(${JSON.stringify(from)}),b=document.querySelector(${JSON.stringify(to)});const dt=new DataTransfer();
+    const fire=(el,type)=>{const e=new DragEvent(type,{bubbles:true,cancelable:true,dataTransfer:dt});el.dispatchEvent(e);return e};
+    if(!${payload}) dt.setData('application/x-syndocal-fx','builtin:invert');
+    const start=${payload} ? fire(a,'dragstart') : null;
+    const over=fire(b,'dragover'); const edge=b.dataset.fxDrop||null; const dragging=a.dataset.fxDragging||null;
+    const dropped=${drop} ? fire(b,'drop') : null; if(start) fire(a,'dragend');
+    return {overPrevented:over.defaultPrevented,edge,dragging,dropPrevented:dropped?dropped.defaultPrevented:null,after:b.dataset.fxDrop||null};})()`);
+  const rowSel = (index) => `[data-perform-fx-stage="${index}"]`;
+  await setView([1920, 1080], "en", "tally", "fx", 700, 620, 2);
+  assert.equal(await order(), "Colorize>Monochrome>Strobe>Rotate");
+  assert.equal(await evaluate("[...document.querySelectorAll('[data-perform-fx-stage]')].every(e=>e.draggable&&e.dataset.fxDraggable==='true'&&e.title.length>0)"), true, "every stage row is a drag source with a hint");
+  assert.equal(await evaluate("[...document.querySelectorAll('.videoPerformQuickFxActions button')].map(e=>e.textContent).slice(0,2).join()"), "Up,Down", "the keyboard buttons stay");
+  sets = await ux("return u.log.sets"); let moves = await ux("return u.log.moves"); writes = await ux("return u.log.liveWrites");
+  let result = await drag(rowSel(0), rowSel(1));
+  assert.deepEqual([result.overPrevented, result.edge, result.dragging, result.dropPrevented, result.after], [true, "after", "true", true, null], "dragover accepts the drop and shows the insertion edge; it clears after the drop");
+  await settle();
+  assert.equal(await order(), "Monochrome>Colorize>Strobe>Rotate");
+  assert.deepEqual([await ux("return u.log.moves"), await ux("return u.log.sets")], [moves + 1, sets], "a neighbour drag is exactly the Up/Down command");
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(rowSel(1))}).dataset.fxSelected`), "true", "the dragged stage stays selected");
+  result = await drag(rowSel(0), rowSel(3)); await settle();
+  assert.equal(await order(), "Colorize>Strobe>Rotate>Monochrome", "a longer drag inserts the stage at the drop position");
+  assert.deepEqual([await ux("return u.log.moves"), await ux("return u.log.sets"), await ux("return u.log.liveWrites")], [moves + 1, sets + 1, writes + 2], "a longer drag is one write through the ticketed chain command");
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(rowSel(3))}).dataset.fxSelected`), "true");
+  result = await drag(rowSel(3), rowSel(0)); await settle();
+  assert.equal(result.edge, "before");
+  assert.equal(await order(), "Monochrome>Colorize>Strobe>Rotate");
+  writes = await ux("return u.log.liveWrites");
+  result = await drag(rowSel(1), rowSel(1)); await settle();
+  assert.equal(await ux("return u.log.liveWrites"), writes, "dropping a stage on itself writes nothing");
+  assert.equal(result.edge, null);
+  result = await drag(rowSel(0), rowSel(2), { drop: false }); await settle();
+  assert.equal(await evaluate("document.querySelectorAll('[data-fx-drop]').length"), 0, "a cancelled drag leaves no marker");
+  assert.equal(await ux("return u.log.liveWrites"), writes, "a cancelled drag writes nothing");
+  // An effect card dragged over the chain is not mistaken for a stage reorder.
+  result = await drag(rowSel(0), rowSel(1), { payload: false, drop: false });
+  assert.deepEqual([result.overPrevented, result.edge], [false, null], "an effect-card drag is ignored by the reorder");
+  // The Up/Down buttons still work.
+  await click(`${rowSel(0)} [data-perform-fx-select]`); await settle();
+  moves = await ux("return u.log.moves");
+  await evaluate("[...document.querySelectorAll('.videoPerformQuickFxActions button')].find(e=>e.textContent==='Down').click()"); await settle();
+  assert.equal(await ux("return u.log.moves"), moves + 1);
+  assert.equal(await order(), "Colorize>Monochrome>Strobe>Rotate");
+  // A single stage has nothing to reorder.
+  await setView([1920, 1080], "en", "tally", "fx", 700, 620, 3);
+  assert.equal(await evaluate("document.querySelector('[data-perform-fx-stage=\"0\"]').draggable"), false, "one stage is not draggable");
+  // During an audition a drag edits the Preview draft only.
+  await setView([1920, 1080], "en", "tally", "fx", 700, 620, 2);
+  await click("[data-fx-audition-begin]"); await settle();
+  writes = await ux("return u.log.liveWrites");
+  await ux("u.audition.setEnabled(2,0,false)"); await settle();
+  assert.equal(await ux("return u.layers()[1].isf_effect.enabled"), true, "showing an audition draft never writes into the live chain objects");
+  await ux("u.audition.setEnabled(2,0,true)"); await settle();
+  await drag(rowSel(0), rowSel(2)); await settle();
+  assert.equal(await ux("return u.log.liveWrites"), writes, "an audition reorder never reaches Program");
+  assert.equal(await ux("const d=u.audition.state().draft;return [d.label,...d.stack.map(s=>s.label)].join('>')"), "Monochrome>Strobe>Colorize>Rotate");
+  assert.equal(await order(), "Colorize>Monochrome>Strobe>Rotate", "the live chain is unchanged");
+  await click("[data-fx-audition-discard]"); await settle();
+  await shot("reorder-en-tally-1920x1080");
+  // The Full FX editor shares the behaviour.
+  await setView([1920, 1080], "en", "tally", "full", 700, 620, 2);
+  await evaluate("document.querySelector('.videoIsfPanel').open=true"); await settle();
+  const fullRow = (index) => `[data-video-isf-stage-index="${index}"]`;
+  assert.equal(await evaluate("[...document.querySelectorAll('[data-video-isf-stage-index]')].every(e=>e.draggable&&e.title.length>0)"), true);
+  assert.equal(await evaluate("document.querySelectorAll('[data-video-isf-action=move-up]').length"), 4, "Up and Down stay in the Full FX editor");
+  sets = await ux("return u.log.sets"); moves = await ux("return u.log.moves");
+  await drag(fullRow(1), fullRow(2)); await settle();
+  assert.deepEqual([await ux("return u.log.moves"), await ux("return u.log.sets"), await order()], [moves + 1, sets, "Colorize>Strobe>Monochrome>Rotate"], "a neighbour drag uses the move command");
+  await drag(fullRow(0), fullRow(3)); await settle();
+  assert.deepEqual([await ux("return u.log.moves"), await ux("return u.log.sets"), await order()], [moves + 1, sets + 1, "Strobe>Monochrome>Rotate>Colorize"], "a longer drag is one set-effect write");
+  await drag(fullRow(3), fullRow(0)); await settle();
+  assert.equal(await order(), "Colorize>Strobe>Monochrome>Rotate");
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(fullRow(0))}).dataset.fxDrop ?? null`), null);
+  await ux("u.resetLayers()");
+
+  // ---- Task 18 D3: always-visible category chips ----
+  await setView([1366, 768], "en", "tally", "browser", 446, 236);
+  const chipRow = "[data-fx-category-chips]";
+  assert.equal(await evaluate("document.querySelectorAll('[data-fx-filter-toggle]').length"), 0, "the category drop-down is gone");
+  const chipNames = await evaluate(`[...document.querySelectorAll('${chipRow} [data-fx-category]')].map(e=>e.dataset.fxCategory)`);
+  assert.equal(chipNames[0], "All"); assert.ok(chipNames.includes("Colour") && chipNames.length >= 3, `chips list All and each category present ${chipNames}`);
+  assert.equal(await evaluate(`document.querySelector('${chipRow}').getAttribute('role')`), "group");
+  assert.deepEqual(await evaluate(`[...document.querySelectorAll('${chipRow} [aria-pressed=true]')].map(e=>e.dataset.fxCategory)`), ["All"]);
+  const narrowChips = await evaluate(`(()=>{const row=document.querySelector('${chipRow}'),frame=document.querySelector('.fxUxFrame').getBoundingClientRect(),first=row.querySelector('[data-fx-category]').getBoundingClientRect(),s=getComputedStyle(row.parentElement),search=document.querySelector('[data-fx-catalog-search]').getBoundingClientRect();return {overflowX:s.overflowX,wrap:getComputedStyle(row).flexWrap,scrollbarWidth:s.scrollbarWidth,sameRow:Math.abs(first.top-search.top)<=8,firstInside:first.left>=frame.left&&first.right<=frame.right&&first.top>=frame.top&&first.bottom<=frame.bottom}})()`);
+  assert.deepEqual(narrowChips, { overflowX: "auto", wrap: "nowrap", scrollbarWidth: "none", sameRow: true, firstInside: true }, "narrow panes keep one scrolling row beside the search (no scrollbar height), with the first chip visible");
+  await click(`${chipRow} [data-fx-category=Colour]`); await settle();
+  assert.deepEqual(await evaluate("[...document.querySelectorAll('[data-fx-catalog-card]')].map(e=>e.dataset.fxCatalogCard).sort()"), ["builtin:colorize", "builtin:invert", "builtin:monochrome"], "a chip filters in one click");
+  assert.deepEqual(await evaluate(`[...document.querySelectorAll('${chipRow} [aria-pressed=true]')].map(e=>e.dataset.fxCategory)`), ["Colour"]);
+  await click(`${chipRow} [data-fx-category=All]`); await settle();
+  assert.ok((await evaluate("document.querySelectorAll('[data-fx-catalog-card]').length")) >= 14);
+  // A pane too narrow for every chip scrolls the row sideways, and focus brings the last chip into view.
+  await ux("u.setSize({width:300,height:236})"); await settle();
+  // The scrollbar is hidden (it would add height), so the wheel scrolls the strip sideways until its end, then the list.
+  const wheel = (deltaY) => evaluate(`(()=>{const s=document.querySelector('${chipRow}').parentElement;const before=s.scrollLeft;const e=new WheelEvent('wheel',{deltaY:${deltaY},bubbles:true,cancelable:true});s.dispatchEvent(e);return {prevented:e.defaultPrevented,moved:s.scrollLeft-before}})()`);
+  await evaluate(`document.querySelector('${chipRow}').parentElement.scrollLeft=0`);
+  let wheeled = await wheel(40);
+  assert.deepEqual([wheeled.prevented, wheeled.moved > 0], [true, true], "the wheel scrolls the chip strip sideways");
+  wheeled = await wheel(-400);
+  assert.deepEqual([wheeled.prevented, wheeled.moved < 0], [true, true], "and back");
+  wheeled = await wheel(-40);
+  assert.equal(wheeled.prevented, false, "at the start the wheel scrolls the effect list instead");
+  await evaluate(`(()=>{const s=document.querySelector('${chipRow}').parentElement;s.scrollLeft=s.scrollWidth})()`);
+  assert.equal((await wheel(40)).prevented, false, "and at the end");
+  await evaluate(`document.querySelector('${chipRow}').parentElement.scrollLeft=0`);
+  await evaluate(`document.querySelector('${chipRow} [data-fx-category]').focus()`);
+  for (let step = 1; step < chipNames.length; step++) await key("Tab", "Tab", 9);
+  assert.equal(await evaluate("document.activeElement.dataset.fxCategory"), chipNames.at(-1), "Tab reaches the last chip");
+  await delay(400);
+  // The browser keeps the focused chip reachable by scrolling the row (not the page).
+  await evaluate("document.activeElement.scrollIntoView({inline:'nearest'})"); await delay(150);
+  const sideways = await evaluate(`(()=>{const strip=document.querySelector('${chipRow}').parentElement;const last=[...strip.querySelectorAll('[data-fx-category]')].at(-1).getBoundingClientRect(),box=strip.getBoundingClientRect();return {scrollable:strip.scrollWidth>strip.clientWidth,scrolled:strip.scrollLeft>0&&last.right<=box.right+1,outer:document.documentElement.scrollWidth<=window.innerWidth}})()`);
+  assert.deepEqual(sideways, { scrollable: true, scrolled: true, outer: true }, "the chip row scrolls inside the pane and never the page");
+  // Wide panes wrap instead of scrolling; the Japanese labels show.
+  await setView([1920, 1080], "ja", "cobalt", "browser", 900, 640);
+  const wide = await evaluate(`(()=>{const row=document.querySelector('${chipRow}');return {wrap:getComputedStyle(row).flexWrap,scrollable:row.scrollWidth>row.clientWidth+1||row.parentElement.scrollWidth>row.parentElement.clientWidth+1,labels:[...row.querySelectorAll('[data-fx-category]')].slice(0,2).map(e=>e.textContent)}})()`);
+  assert.deepEqual(wide, { wrap: "wrap", scrollable: false, labels: ["すべて", "色"] });
+  await evaluate("document.querySelector('[data-effect-browser]').scrollTop=0"); await settle();
+  await shot("chips-ja-cobalt-1920x1080");
+  await setView([1366, 768], "en", "tally", "browser", 446, 236);
+  await evaluate(`document.querySelector('[data-effect-browser]').scrollTop=0;document.querySelector('${chipRow}').parentElement.scrollLeft=0`); await settle();
+  await shot("chips-en-tally-1366x768");
+
   // ---- Target sizes and text size ----
   await setView([1366, 768], "ja", "tally", "browser", 446, 236);
-  for (const selector of ["[data-fx-catalog-add]", "[data-fx-catalog-audition]", "[data-fx-catalog-search]", "[data-fx-filter-toggle]"]) {
+  for (const selector of ["[data-fx-catalog-add]", "[data-fx-catalog-audition]", "[data-fx-catalog-search]", "[data-fx-category]"]) {
     for (const item of await geometry(selector)) { assert.ok(item.h >= 44 && item.w >= 44, `${selector} keeps a 44px target ${JSON.stringify(item)}`); assert.ok(item.font >= 14, `${selector} text is at least 14px`); }
   }
   await setView([1920, 1080], "en", "tally", "fx", 700, 620);
@@ -319,7 +543,7 @@ try {
   await setView([1920, 1080], "ja", "tally", "browser", 900, 640);
   assert.deepEqual(await smallText("[data-effect-browser]"), [], "browser text is at least 14px");
   assert.deepEqual(errors, [], JSON.stringify(errors));
-  console.log(`FX UX browser: parameters (labels, units, ranges, colour picker, reset), presets, Randomize, Preview-only audition with A/B and confirmed Take, rejection cards and problems dialog in EN/JA and two themes; evidence ${evidenceDir}`);
+  console.log(`FX UX browser: parameters (labels, units, ranges, colour picker, reset), presets, Randomize, Preview-only audition with A/B and confirmed Take, rejection cards and problems dialog in EN/JA and two themes; tempo-synced beat/bar units (store, re-sync, range limit, audition draft), drag-and-drop stage reorder in the Perform FX tab and the Full FX editor, and always-visible category chips; evidence ${evidenceDir}`);
 } finally {
   socket?.close();
   for (const call of pending.values()) clearTimeout(call.timer);

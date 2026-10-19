@@ -439,22 +439,33 @@ try {
       await cdp.evaluate(`(()=>{const e=document.querySelector('${search}');e.focus();e.value='monochrome';e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
       await waitFor(()=>cdp.evaluate("document.querySelectorAll('[data-fx-catalog-card]').length===1"),label+': name search filters cards');
       assert.equal(await cdp.evaluate("document.querySelector('[data-fx-catalog-card]').dataset.fxCatalogCard"),'builtin:monochrome');
-      await cdp.evaluate(`(()=>{const e=document.querySelector('${search}');e.value='';e.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-fx-filter-toggle]').click();})()`);
+      await cdp.evaluate(`(()=>{const e=document.querySelector('${search}');e.value='';e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      // Task 18 D: category chips are always visible (no drop-down); narrow panes scroll the one chip row sideways.
+      assert.equal(await cdp.evaluate("document.querySelectorAll('[data-fx-filter-toggle]').length"),0,label+': the category drop-down is gone');
+      const chipState = await cdp.evaluate("(()=>{const row=document.querySelector('[data-fx-category-chips]'),chips=[...row.querySelectorAll('[data-fx-category]')],r=row.getBoundingClientRect(),style=getComputedStyle(row);return {names:chips.map(c=>c.dataset.fxCategory),pressed:chips.filter(c=>c.getAttribute('aria-pressed')==='true').map(c=>c.dataset.fxCategory),role:row.getAttribute('role'),label:row.getAttribute('aria-label'),overflowX:getComputedStyle(row.parentElement).overflowX,wrap:style.flexWrap,scrollable:row.parentElement.scrollWidth>row.parentElement.clientWidth+1,strip:row.parentElement.className,sameRowAsSearch:Math.abs(row.getBoundingClientRect().top-document.querySelector('[data-fx-catalog-search]').getBoundingClientRect().top)<=8,rowBottom:r.bottom,heights:chips.map(c=>c.getBoundingClientRect().height),widths:chips.map(c=>c.getBoundingClientRect().width),font:parseFloat(getComputedStyle(chips[0]).fontSize)}})()");
+      assert.equal(chipState.role,'group',label+': chips are a labelled group '+JSON.stringify(chipState));
+      assert.ok(chipState.label&&chipState.label.length>0,label+': chip group has a name');
+      assert.ok(chipState.names[0]==='All'&&chipState.names.includes('Colour')&&chipState.names.length>=4,label+': chips list All and every category '+JSON.stringify(chipState.names));
+      assert.deepEqual(chipState.pressed,['All'],label+': All is pressed by default');
+      assert.ok(chipState.heights.every(h=>h>=44)&&chipState.widths.every(w=>w>=44)&&chipState.font>=14,label+': chips keep 44px targets and 14px text '+JSON.stringify(chipState));
+      assert.equal((await inspect('[data-fx-category-chips] [data-fx-category=All]')).failure,null,label+': first chip fully visible without opening anything');
+      if (width < 1000) assert.ok(chipState.overflowX==='auto'&&chipState.wrap==='nowrap'&&chipState.sameRowAsSearch,label+': narrow panes keep one row (beside the search) that scrolls sideways '+JSON.stringify(chipState));
       await cdp.evaluate("document.querySelector('[data-fx-category=Colour]').click()");
       assert.ok(await cdp.evaluate("[...document.querySelectorAll('[data-fx-catalog-card]')].every(e=>['builtin:invert','builtin:monochrome','builtin:colorize'].includes(e.dataset.fxCatalogCard))"),label+': category chips filter');
-      await cdp.evaluate("document.querySelector('[data-fx-filter-toggle]').click();document.querySelector('[data-fx-category=All]').click();document.querySelector('[data-fx-catalog-search]').focus()");
-      await cdp.key('Tab','Tab',9);
-      assert.equal(await cdp.evaluate("document.activeElement.hasAttribute('data-fx-filter-toggle')"),true,label+': filter keyboard reachable');
-      // Task 14: Import ISF and FX Chain now sit in the tool row (search, filter, import, chain), so the first card
-      // follows them in tab order. Every stop in between is one of those tool-row buttons.
-      let toolStops = 0;
-      for (let attempt = 0; attempt < 4; attempt++) {
+      assert.deepEqual(await cdp.evaluate("[...document.querySelectorAll('[data-fx-category][aria-pressed=true]')].map(c=>c.dataset.fxCategory)"),['Colour'],label+': exactly the chosen chip is pressed');
+      await cdp.evaluate("document.querySelector('[data-fx-category=All]').click();document.querySelector('[data-fx-catalog-search]').focus()");
+      assert.ok(await cdp.evaluate("document.querySelectorAll('[data-fx-catalog-card]').length")>=14,label+': All restores every card');
+      // Tab order: search, every chip, the tool-row actions (Import ISF, FX Chain), then the first card.
+      let toolStops = 0; let chipStops = 0;
+      for (let attempt = 0; attempt < 30; attempt++) {
         await cdp.key('Tab','Tab',9);
         if (await cdp.evaluate("document.activeElement.hasAttribute('data-fx-catalog-card')")) break;
-        assert.equal(await cdp.evaluate("!!document.activeElement.closest('.videoFxCatalogActions')"),true,label+': tab order between the filter and the first card is the tool-row actions');
+        if (await cdp.evaluate("document.activeElement.hasAttribute('data-fx-category')")) { chipStops++; continue; }
+        assert.equal(await cdp.evaluate("!!document.activeElement.closest('.videoFxCatalogActions')"),true,label+': tab order before the chips is the tool-row actions');
         toolStops++;
       }
-      assert.ok(toolStops <= 2,label+': at most Import ISF and FX Chain sit between the filter and the first card');
+      assert.ok(toolStops <= 2,label+': at most Import ISF and FX Chain sit between the search and the chips');
+      assert.equal(chipStops,chipState.names.length,label+': every chip is keyboard reachable in order');
       assert.equal(await cdp.evaluate("document.activeElement.hasAttribute('data-fx-catalog-card')"),true,label+': card keyboard reachable');
       await cdp.evaluate("document.querySelector('[data-fx-catalog-add]').scrollIntoView({block:'nearest'})");
       const addTarget = await inspect('[data-fx-catalog-add]');

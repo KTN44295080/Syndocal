@@ -6,7 +6,7 @@ import type { VideoLayerListPanel } from "./VideoLayerListPanel";
 import "./EditVideoInspector.css";
 
 type LayerFxProps = Pick<ComponentProps<typeof VideoLayerListPanel>,
-  "layers" | "isfRuntimeErrors" | "isfEventPulseBusy" | "onImportIsf" |
+  "layers" | "bpm" | "isfRuntimeErrors" | "isfEventPulseBusy" | "onImportIsf" |
   "onApplyBuiltinIsf" | "onSetIsfEffect" | "onMoveIsfEffect" |
   "onRemoveIsfEffect" | "onSetIsfEffectEnabled" | "onResetIsfEffect" |
   "onSetIsfControl" | "onTriggerIsfEvent">;
@@ -55,6 +55,7 @@ export function EditVideoInspector(props: EditVideoInspectorProps) {
                     layerId={layerId}
                     layerLabel={selectedLayer()?.label}
                     compact
+                    bpm={props.layerFx.bpm}
                     effect={selectedLayer()?.isf_effect}
                     runtimeErrors={props.layerFx.isfRuntimeErrors?.filter((error) => error.layer_id === layerId) ?? []}
                     eventPulseBusy={props.layerFx.isfEventPulseBusy}

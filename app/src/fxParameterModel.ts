@@ -1,4 +1,4 @@
-import type { VideoEffectCatalog, VideoEffectPresetSummary, VideoIsfControlSummary, VideoIsfEffectStageSummary, VideoIsfEffectSummary } from "./types";
+import type { VideoEffectCatalog, VideoEffectPresetSummary, VideoIsfControlSummary, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoIsfTempoSync } from "./types";
 import { builtinFxEntries, readIsfMetadata } from "./fxCatalogModel";
 
 export type FxValue = [number, number, number, number];
@@ -15,6 +15,8 @@ export function cloneFxStage(stage: VideoIsfEffectStageSummary): VideoIsfEffectS
       value: [...control.value] as FxValue, default: [...control.default] as FxValue,
       minimum: [...control.minimum] as FxValue, maximum: [...control.maximum] as FxValue,
       labels: [...control.labels], values: [...control.values],
+      // A copy, so a store proxy or a draft never shares the sync object with the chain it came from.
+      ...(control.tempo_sync ? { tempo_sync: { unit: control.tempo_sync.unit, count: control.tempo_sync.count } } : {}),
     })) };
 }
 
@@ -82,7 +84,8 @@ export function fxControlValueText(control: VideoIsfControlSummary, stage?: Vide
 
 export function randomizeFxStage(stage: VideoIsfEffectStageSummary, random: () => number = Math.random): VideoIsfEffectStageSummary {
   return { ...stage, controls: stage.controls.map((control) => {
-    if (control.kind === "Event") return { ...control, value: [...control.value] as FxValue };
+    // A tempo-synced control follows the clock, so Randomize leaves it alone.
+    if (control.kind === "Event" || control.tempo_sync) return { ...control, value: [...control.value] as FxValue };
     const next = [...control.value] as FxValue;
     const unit = () => Math.max(0, Math.min(1, random()));
     for (let component = 0; component < fxComponentCount(control); component++) {
@@ -137,7 +140,78 @@ export function builtinFxStagePresets(stage: VideoIsfEffectStageSummary): { labe
   return (recipes[builtin] ?? []).map(([label, values]) => ({ label, stage: { ...stage,
     controls: stage.controls.map((control) => {
       const value = values[control.name];
-      return { ...control, value: boundedFxValue(control, value === undefined ? control.default : typeof value === "number" ? [value, ...control.default.slice(1)] : value) };
+      const recalled = { ...control, value: boundedFxValue(control, value === undefined ? control.default : typeof value === "number" ? [value, ...control.default.slice(1)] : value) };
+      // A recipe value is a raw number, so it replaces any tempo sync on that control.
+      if (value !== undefined) delete recalled.tempo_sync;
+      return recalled;
     }),
   } }));
+}
+
+/* ---- Tempo sync (beats and bars) --------------------------------------------------
+ * A time control (rate, speed, frequency) can be expressed as one cycle per 1/4, 1/2, 1,
+ * 2 or 4 beats or bars of the global tempo. The choice is authored project state
+ * (`tempo_sync` on the control). The value is derived from the clock when the choice
+ * is made or re-synced; the runtime does not yet follow later tempo changes itself. */
+
+export const FX_TEMPO_SYNC_COUNTS = [0.25, 0.5, 1, 2, 4] as const;
+export const FX_BEATS_PER_BAR = 4;
+const TIME_CONTROL_WORDS = new Set(["rate", "speed", "freq", "frequency", "hz", "lfo", "strobe"]);
+
+/** Built-ins list the controls whose shader maths is known to be cycles per second. Other shaders
+ * qualify only when a Float control is named like a rate, speed, frequency or LFO. */
+export function fxIsTimeControl(control: VideoIsfControlSummary, stage?: VideoIsfEffectStageSummary): boolean {
+  if (control.kind !== "Float" || !(control.maximum[0] > control.minimum[0]) || control.minimum[0] < 0) return false;
+  const builtin = builtinLabel(stage);
+  if (builtin) return (builtin === "Strobe" && control.name === "rate") || (builtin === "Glitch Shift" && control.name === "speed");
+  return control.name.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9]+/).some((word) => TIME_CONTROL_WORDS.has(word));
+}
+
+export const fxTempoSyncPeriodBeats = (sync: VideoIsfTempoSync): number => sync.count * (sync.unit === "bars" ? FX_BEATS_PER_BAR : 1);
+export const fxValidBpm = (bpm: unknown): bpm is number => typeof bpm === "number" && Number.isFinite(bpm) && bpm > 0;
+
+/** Cycles per second of one cycle per `sync` at `bpm`; NaN when the tempo is unusable. */
+export const fxTempoSyncHz = (bpm: number | undefined, sync: VideoIsfTempoSync): number =>
+  fxValidBpm(bpm) ? bpm / 60 / fxTempoSyncPeriodBeats(sync) : Number.NaN;
+
+export interface FxTempoSyncState {
+  target: number;
+  /** The tempo asks for a value outside the control's range, so the range limit is used. */
+  clamped: boolean;
+  /** The stored value already equals the clock-derived target (within one percent). */
+  inSync: boolean;
+}
+
+/** The value a synced control should hold at `bpm`, or null without a usable tempo. */
+export function fxTempoSyncState(control: VideoIsfControlSummary, bpm: number | undefined, sync = control.tempo_sync): FxTempoSyncState | null {
+  if (!sync) return null;
+  const hz = fxTempoSyncHz(bpm, sync);
+  if (!Number.isFinite(hz)) return null;
+  const target = Math.max(control.minimum[0], Math.min(control.maximum[0], hz));
+  const difference = Math.abs(control.value[0] - target);
+  return { target, clamped: target !== hz, inSync: difference <= Math.max(0.001, Math.abs(target) * 0.01) };
+}
+
+/** Sets or clears a control's sync. A new sync also moves the value to the clock-derived target. */
+export function withFxTempoSync(control: VideoIsfControlSummary, sync: VideoIsfTempoSync | null, bpm: number | undefined): VideoIsfControlSummary {
+  const next: VideoIsfControlSummary = { ...control, value: [...control.value] as FxValue };
+  if (!sync) { delete next.tempo_sync; return next; }
+  next.tempo_sync = { unit: sync.unit, count: sync.count };
+  const state = fxTempoSyncState(next, bpm);
+  if (state) next.value[0] = state.target;
+  return next;
+}
+
+/** Re-derives every synced control of a stage from the clock. */
+export function resyncFxStage(stage: VideoIsfEffectStageSummary, bpm: number | undefined): VideoIsfEffectStageSummary {
+  return { ...stage, controls: stage.controls.map((control) => control.tempo_sync ? withFxTempoSync(control, control.tempo_sync, bpm) : control) };
+}
+
+export const fxTempoSyncCountText = (count: number): string => count === 0.25 ? "1/4" : count === 0.5 ? "1/2" : String(count);
+
+/** "1/4 beat", "2 beats", "1/2 bar", "4 bars" (Japanese: 拍, 小節). */
+export function fxTempoSyncLabel(sync: VideoIsfTempoSync, locale?: string): string {
+  const ja = locale === "ja";
+  const plural = sync.count > 1;
+  return `${fxTempoSyncCountText(sync.count)}${ja ? "" : " "}${sync.unit === "bars" ? (ja ? "小節" : plural ? "bars" : "bar") : (ja ? "拍" : plural ? "beats" : "beat")}`;
 }

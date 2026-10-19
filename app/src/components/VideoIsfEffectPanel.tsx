@@ -8,6 +8,8 @@ import type {
   VideoIsfStageError,
 } from "../types";
 import { replaceFxStage } from "../fxParameterModel";
+import { moveFxStageTo } from "../fxAuditionModel";
+import { createFxStageReorder } from "../createFxStageReorder";
 import { VideoFxParameterEditor } from "./VideoFxParameterEditor";
 import { VideoFxLiveSafety } from "./VideoFxLiveSafety";
 import type { FxLiveSession } from "../createFxLiveSession";
@@ -15,6 +17,7 @@ import { explainFxRejection } from "../fxRejectionExplanation";
 
 interface VideoIsfEffectPanelProps {
   projectEpoch?: number;
+  bpm?: number;
   locale?: string;
   effectCatalog?: VideoEffectCatalog;
   onApplyEffectCatalog?: (catalog: VideoEffectCatalog) => unknown | Promise<unknown>;
@@ -127,6 +130,20 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
     });
   };
 
+  // Drag-and-drop reorder. A neighbour swap is exactly the Up/Down command; a longer move is
+  // one chain write through the ticketed set-effect command (one Undo FX step).
+  const reorder = createFxStageReorder({
+    layerId: () => props.layerId,
+    count: () => stages().length,
+    disabled: () => eventPulseBusy(),
+    onReorder: (_layerId, from, to) => {
+      setRemoveConfirmation(null);
+      setSelectedStageIndex(to);
+      if (Math.abs(to - from) === 1) { void props.onMoveEffect(props.layerId, from, to > from ? 1 : -1); return; }
+      if (props.effect) void props.onSetEffect(props.layerId, moveFxStageTo(props.effect, from, to) as VideoIsfEffectSummary);
+    },
+  });
+
   const removeStage = (stageIndex: number) => {
     const stageCount = stages().length;
     setSelectedStageIndex((selectedIndex) => {
@@ -200,6 +217,12 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
             class={`videoIsfStackRow ${selectedStageIndex() === index() ? "selected" : ""}`}
             data-video-isf-stage-index={index()}
             role="listitem"
+            draggable={reorder.canDrag()}
+            title={reorder.canDrag() ? "Drag to reorder, or use Up and Down." : undefined}
+            data-fx-draggable={reorder.canDrag() ? "true" : undefined}
+            data-fx-dragging={reorder.dragging() === index() ? "true" : undefined}
+            data-fx-drop={reorder.dropEdge(index())}
+            {...reorder.handlers(index)}
           >
             <button
               class="videoIsfStageSelect"
@@ -278,7 +301,7 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
           <Show when={stage().description}>
             {(description) => <p class="fieldHint">{description()}</p>}
           </Show>
-          <VideoFxParameterEditor stage={stage()} identity={`${props.layerId}:${selectedStageIndex()}`} busy={eventPulseBusy()} locale={props.locale}
+          <VideoFxParameterEditor stage={stage()} identity={`${props.layerId}:${selectedStageIndex()}`} busy={eventPulseBusy()} locale={props.locale} bpm={props.bpm}
             projectEpoch={props.projectEpoch} layerId={props.layerId} liveSession={props.liveSession}
             effectCatalog={props.effectCatalog} onApplyEffectCatalog={props.onApplyEffectCatalog}
             onSetStage={(replacement) => {

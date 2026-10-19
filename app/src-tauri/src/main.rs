@@ -43567,6 +43567,8 @@ fn mutate_legacy_video_layer_isf_catalog(
                     let VideoEffectKind::Isf { effect } = &mut stage.effect.kind;
                     for control in &mut effect.controls {
                         control.value = control.default;
+                        // The default is a raw value, so a reset also ends any tempo sync.
+                        control.tempo_sync = None;
                         if control.kind == VideoIsfControlKind::Event {
                             control.value = [0.0; 4];
                         }
@@ -43593,6 +43595,8 @@ fn mutate_legacy_video_layer_isf_catalog(
                     );
                     }
                     control.value = value;
+                    // A raw write (MIDI, API, agent) takes the control off the tempo clock.
+                    control.tempo_sync = None;
                 }
             }
             Ok(())
@@ -43823,6 +43827,12 @@ fn sanitize_video_isf_stage(
     let prepared =
         video::prepare_isf_shader(effect.source.as_ref()).map_err(|error| error.to_string())?;
     let resolved = video::resolved_isf_control_values_from_controls(&prepared, &effect.controls);
+    protocol::validate_video_isf_tempo_sync(&effect.controls)?;
+    let requested_tempo_sync = effect
+        .controls
+        .iter()
+        .filter_map(|control| control.tempo_sync.map(|sync| (control.name.clone(), sync)))
+        .collect::<Vec<_>>();
     let source_path = effect.source_path.and_then(|path| {
         let path = path.trim().to_string();
         (!path.is_empty()).then_some(path)
@@ -43833,6 +43843,23 @@ fn sanitize_video_isf_stage(
     canonical.enabled = effect.enabled;
     for (control, value) in canonical.controls.iter_mut().zip(resolved) {
         control.value = value;
+        // Tempo sync is an authored choice that only applies to Float time controls.
+        if control.kind == VideoIsfControlKind::Float {
+            control.tempo_sync = requested_tempo_sync
+                .iter()
+                .find(|(name, _)| *name == control.name)
+                .map(|(_, sync)| *sync);
+        }
+    }
+    if let Some((name, _)) = requested_tempo_sync.iter().find(|(name, _)| {
+        !canonical
+            .controls
+            .iter()
+            .any(|control| control.name == *name && control.tempo_sync.is_some())
+    }) {
+        return Err(format!(
+            "ISF control '{name}' has a tempo sync but the shader declares no such Float control"
+        ));
     }
     Ok(canonical)
 }
@@ -122641,6 +122668,59 @@ f 1 2 3
         assert_eq!(canonical.controls[0].maximum[0], 1.0);
 
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn video_isf_sanitizer_keeps_valid_tempo_sync_and_rejects_unknown_counts() {
+        let mut effect = test_isf_effect();
+        effect.controls[0].tempo_sync = Some(protocol::VideoIsfTempoSync {
+            unit: protocol::VideoIsfTempoSyncUnit::Bars,
+            count: 0.5,
+        });
+        let canonical = sanitize_video_isf_effect(effect.clone()).unwrap();
+        assert_eq!(
+            canonical.controls[0].tempo_sync,
+            effect.controls[0].tempo_sync
+        );
+        let json = serde_json::to_value(&canonical).unwrap();
+        assert_eq!(
+            json["controls"][0]["tempo_sync"],
+            serde_json::json!({"unit": "bars", "count": 0.5})
+        );
+        // Older projects have no field and round-trip without one.
+        let plain =
+            serde_json::to_value(sanitize_video_isf_effect(test_isf_effect()).unwrap()).unwrap();
+        assert!(plain["controls"][0].get("tempo_sync").is_none());
+
+        effect.controls[0].tempo_sync = Some(protocol::VideoIsfTempoSync {
+            unit: protocol::VideoIsfTempoSyncUnit::Beats,
+            count: 3.0,
+        });
+        assert!(sanitize_video_isf_effect(effect.clone())
+            .unwrap_err()
+            .contains("tempo sync"));
+
+        // A sync belongs to a Float control the shader really declares.
+        let mut ghost = test_isf_effect();
+        let mut missing = ghost.controls[0].clone();
+        missing.name = "ghost".to_string();
+        missing.tempo_sync = Some(protocol::VideoIsfTempoSync {
+            unit: protocol::VideoIsfTempoSyncUnit::Beats,
+            count: 1.0,
+        });
+        ghost.controls.push(missing);
+        assert!(sanitize_video_isf_effect(ghost)
+            .unwrap_err()
+            .contains("no such Float control"));
+        let mut not_float = test_isf_effect();
+        not_float.controls[0].kind = VideoIsfControlKind::Bool;
+        not_float.controls[0].tempo_sync = Some(protocol::VideoIsfTempoSync {
+            unit: protocol::VideoIsfTempoSyncUnit::Bars,
+            count: 1.0,
+        });
+        assert!(sanitize_video_isf_effect(not_float)
+            .unwrap_err()
+            .contains("not a Float control"));
     }
 
     #[test]

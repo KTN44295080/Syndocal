@@ -40,16 +40,27 @@ function Thumbnail(props: { entry: FxCatalogEntry; ja: boolean }) {
   </div>;
 }
 
+/** The narrow strip hides its scrollbar (it would cost Inspector height), so the mouse wheel scrolls it
+ * sideways while it can still move that way; at either end the wheel scrolls the effect list again. */
+function sideScroll(event: WheelEvent & { currentTarget: HTMLDivElement }) {
+  const strip = event.currentTarget;
+  const max = strip.scrollWidth - strip.clientWidth;
+  if (event.deltaX !== 0 || max <= 1 || event.deltaY === 0) return;
+  if ((event.deltaY < 0 && strip.scrollLeft <= 0) || (event.deltaY > 0 && strip.scrollLeft >= max - 1)) return;
+  event.preventDefault();
+  strip.scrollLeft += event.deltaY;
+}
+
 /** A catalog adapter. All additions still go through the existing scoped chain command. */
 export function VideoEffectBrowser(props: VideoEffectBrowserProps) {
   const [entries, setEntries] = createStore<FxCatalogEntry[]>([]);
   createEffect(() => setEntries(reconcile(props.entries, { key: "id" })));
   const [query, setQuery] = createSignal("");
   const [category, setCategory] = createSignal<FxCategory | "All">("All");
-  const [filtersOpen, setFiltersOpen] = createSignal(false);
-  let filterButton!: HTMLButtonElement;
   const ja = () => props.locale === "ja";
   const categories = createMemo(() => ["All", ...new Set(entries.map((entry) => entry.category))] as (FxCategory | "All")[]);
+  // A category that no longer exists (for example after an import is removed) falls back to All.
+  createEffect(() => { if (!categories().includes(category())) setCategory("All"); });
   const filtered = createMemo(() => filterFxCatalog(entries, query(), category(), props.locale));
   const chainSources = createMemo(() => new Set(props.layer?.isf_effect ? [props.layer.isf_effect, ...(props.layer.isf_effect.stack ?? [])].map((stage) => normalizeFxSource(stage.source)) : []));
   const target = () => props.layer ? `${ja() ? "追加先：レイヤー" : "Add to: Layer"} ${props.layer.id} · ${props.layer.label}` : (ja() ? "追加先のレイヤーを選択してください" : "Select a layer to add effects");
@@ -84,18 +95,21 @@ export function VideoEffectBrowser(props: VideoEffectBrowserProps) {
     </header>
     <div class="videoFxCatalogTools">
       <label class="videoFxCatalogSearch"><span>{ja() ? "検索" : "Search"}</span>
-        <input type="search" data-fx-catalog-search value={query()} placeholder={ja() ? "名前・種類・説明で検索" : "Name, category or description"}
+        <input type="search" data-fx-catalog-search value={query()} placeholder={ja() ? "エフェクトを検索" : "Search effects"}
+          title={ja() ? "名前・種類・説明で検索" : "Search by name, category or description"}
           onInput={(event) => setQuery(event.currentTarget.value)} />
       </label>
-      <button ref={filterButton} type="button" data-fx-filter-toggle aria-expanded={filtersOpen()} aria-label={ja() ? "種類で絞り込む" : "Filter by category"}
-        onClick={() => setFiltersOpen(!filtersOpen())}>{fxCategoryLabel(category(), props.locale)} ▾</button>
-      <Show when={filtersOpen()}><div class="videoFxCatalogFilters" role="group" aria-label={ja() ? "種類で絞り込む" : "Filter by category"}>
-        <For each={categories()}>{(item) => <button type="button" data-fx-category={item} aria-pressed={category() === item}
-          onClick={() => { setCategory(item); setFiltersOpen(false); filterButton.focus(); }}>{fxCategoryLabel(item, props.locale)}</button>}</For>
-      </div></Show>
-      <div class="videoFxCatalogActions">
-        <Show when={props.onImport}><button type="button" disabled={props.busy} onClick={props.onImport}>{ja() ? "ISFを読み込む" : "Import ISF"}</button></Show>
-        <Show when={props.onOpenFx}><button type="button" onClick={props.onOpenFx}>{ja() ? "チェーンへ" : "FX Chain"}</button></Show>
+      {/* One strip: wide panes wrap the chips beside the search; narrow panes keep a single row that
+          scrolls sideways, so the filter costs no extra height in the Inspector. */}
+      <div class="videoFxCatalogStrip" onWheel={sideScroll}>
+        <div class="videoFxCatalogChips" role="group" data-fx-category-chips aria-label={ja() ? "種類で絞り込む" : "Filter by category"}>
+          <For each={categories()}>{(item) => <button type="button" class="videoFxCatalogChip" data-fx-category={item} aria-pressed={category() === item}
+            onClick={() => setCategory(item)}>{fxCategoryLabel(item, props.locale)}</button>}</For>
+        </div>
+        <div class="videoFxCatalogActions">
+          <Show when={props.onImport}><button type="button" disabled={props.busy} onClick={props.onImport}>{ja() ? "ISFを読み込む" : "Import ISF"}</button></Show>
+          <Show when={props.onOpenFx}><button type="button" onClick={props.onOpenFx}>{ja() ? "チェーンへ" : "FX Chain"}</button></Show>
+        </div>
       </div>
     </div>
     <div class="videoFxCatalogResults" role="list" aria-label={ja() ? "エフェクト一覧" : "Effects"}>

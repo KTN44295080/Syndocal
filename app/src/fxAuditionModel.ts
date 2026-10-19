@@ -48,6 +48,15 @@ export function auditionMoveStage(chain: FxChain, index: number, delta: number):
   return fxChainFromStages(stages);
 }
 
+/** Moves one stage to a new position (insert, not swap), as a drag-and-drop reorder does. */
+export function moveFxStageTo(chain: FxChain, from: number, to: number): FxChain {
+  const stages = fxChainStages(chain);
+  if (!stages[from] || to < 0 || to >= stages.length || from === to) return chain;
+  const [moved] = stages.splice(from, 1);
+  stages.splice(to, 0, moved);
+  return fxChainFromStages(stages);
+}
+
 export function auditionRemoveStage(chain: FxChain, index: number): FxChain {
   const stages = fxChainStages(chain);
   if (!stages[index]) return chain;
@@ -68,7 +77,12 @@ export function auditionSetControl(chain: FxChain, index: number, name: string, 
 export function auditionResetStage(chain: FxChain, index: number): FxChain {
   const stages = fxChainStages(chain);
   if (!stages[index]) return chain;
-  stages[index].controls = stages[index].controls.map((control) => ({ ...control, value: [...control.default] as FxValue }));
+  // The declared default is a raw value, so it also ends any tempo sync (like the live Reset).
+  stages[index].controls = stages[index].controls.map((control) => {
+    const reset = { ...control, value: [...control.default] as FxValue };
+    delete reset.tempo_sync;
+    return reset;
+  });
   return fxChainFromStages(stages);
 }
 

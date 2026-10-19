@@ -91,6 +91,12 @@
   background: var(--theme-raised);
 }
 
+/* Drag-and-drop reorder: the row is the drag source; Up and Down stay for the keyboard. */
+.videoPerformQuickFxStage[data-fx-draggable="true"] { cursor: grab; }
+.videoPerformQuickFxStage[data-fx-dragging="true"] { opacity: 0.55; }
+.videoPerformQuickFxStage[data-fx-drop="before"] { box-shadow: inset 0 3px 0 0 var(--theme-focus); }
+.videoPerformQuickFxStage[data-fx-drop="after"] { box-shadow: inset 0 -3px 0 0 var(--theme-focus); }
+
 .videoPerformQuickFxStage[data-fx-enabled="false"] {
   border-left-color: var(--theme-line-strong);
   background: var(--theme-inset);

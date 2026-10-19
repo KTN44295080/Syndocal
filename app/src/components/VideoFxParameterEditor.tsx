@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import type { VideoEffectCatalog, VideoIsfControlSummary, VideoIsfEffectStageSummary } from "../types";
-import { boundedFxValue, builtinFxStagePresets, fxControlLabel, fxControlValueText, fxDisplayScale, matchingFxStagePresets, randomizeFxStage, saveFxStagePreset, type FxValue } from "../fxParameterModel";
+import type { VideoEffectCatalog, VideoIsfControlSummary, VideoIsfEffectStageSummary, VideoIsfTempoSync, VideoIsfTempoSyncUnit } from "../types";
+import { boundedFxValue, builtinFxStagePresets, FX_TEMPO_SYNC_COUNTS, fxControlLabel, fxControlValueText, fxDisplayScale, fxIsTimeControl, fxTempoSyncCountText, fxTempoSyncLabel, fxTempoSyncState, fxValidBpm, matchingFxStagePresets, randomizeFxStage, resyncFxStage, saveFxStagePreset, withFxTempoSync, type FxValue } from "../fxParameterModel";
 import "./VideoFxParameterEditor.css";
 import { VideoFxPointPad } from "./VideoFxPointPad";
 import { translateUiText } from "../uiLocalization";
@@ -16,6 +16,8 @@ interface VideoFxParameterEditorProps {
   /** Event controls fire on Program, so an audition cannot offer them. */
   auditioning?: boolean;
   locale?: string;
+  /** Global tempo (`snapshot.clock.bpm`) that beat and bar units are derived from. */
+  bpm?: number;
   stage: VideoIsfEffectStageSummary;
   identity: string;
   busy: boolean;
@@ -61,7 +63,27 @@ export function VideoFxParameterEditor(props: VideoFxParameterEditorProps) {
     const id = presetId();
     const stage = id.startsWith("builtin:") ? builtins()[Number(id.slice(8))]?.stage
       : presets().find((preset) => String(preset.id) === id)?.payload.stages[0].effect.effect;
-    if (stage) void apply({ ...stage, enabled: props.stage.enabled });
+    // A preset saved with a tempo sync follows today's tempo, not the tempo it was saved at.
+    if (stage) void apply(resyncFxStage({ ...stage, enabled: props.stage.enabled }, props.bpm));
+  };
+  const ja = () => props.locale === "ja";
+  const setSync = (control: VideoIsfControlSummary, sync: VideoIsfTempoSync | null) =>
+    apply({ ...props.stage, controls: props.stage.controls.map((candidate) =>
+      candidate.name === control.name ? withFxTempoSync(candidate, sync, props.bpm) : candidate) });
+  const resetControl = (control: VideoIsfControlSummary) => {
+    // A raw default replaces a tempo sync; otherwise the control would read out of sync at once.
+    if (control.tempo_sync) return void apply({ ...props.stage, controls: props.stage.controls.map((candidate) =>
+      candidate.name === control.name ? { ...withFxTempoSync(candidate, null, props.bpm), value: boundedFxValue(candidate, candidate.default) } : candidate) });
+    return void props.onSetControl(control.name, boundedFxValue(control, control.default));
+  };
+  const syncReadout = (control: VideoIsfControlSummary) => {
+    const sync = control.tempo_sync;
+    if (!sync) return "";
+    const state = fxTempoSyncState(control, props.bpm);
+    if (!state) return ja() ? `${fxTempoSyncLabel(sync, "ja")}ごと・テンポを取得できません` : `${fxTempoSyncLabel(sync)} per cycle · tempo unavailable`;
+    const hz = `${Number(state.target.toFixed(3))} Hz`;
+    const bpm = `${Number(props.bpm!.toFixed(1))} BPM`;
+    return ja() ? `${fxTempoSyncLabel(sync, "ja")}ごとに1回 ＝ ${hz}（${bpm}）` : `One cycle per ${fxTempoSyncLabel(sync)} = ${hz} at ${bpm}`;
   };
   return (
     <div class="videoFxParameterEditor" data-fx-parameter-editor>
@@ -89,9 +111,36 @@ export function VideoFxParameterEditor(props: VideoFxParameterEditorProps) {
                 <For each={[0, 1]}>{(component) => <label><span>{component === 0 ? "X" : "Y"}</span><input type="range" min={control.minimum[component]} max={control.maximum[component]} step="any" value={control.value[component]} disabled={disabled()} aria-label={`${fxControlLabel(control, props.stage.source)} ${component === 0 ? "X" : "Y"}`} onChange={(event) => setComponent(control, component, Number(event.currentTarget.value))} /><input type="number" min={control.minimum[component]} max={control.maximum[component]} step="0.01" value={control.value[component]} disabled={disabled()} aria-label={`${fxControlLabel(control, props.stage.source)} ${component === 0 ? "X" : "Y"}`} onChange={(event) => setComponent(control, component, Number(event.currentTarget.value))} /></label>}</For>
               </div>
             </Match>
-            <Match when={control.kind === "Float" || control.kind === "Long"}><div class="videoFxScalarPicker"><input type="range" min={control.minimum[0]} max={control.maximum[0]} step={control.kind === "Long" ? 1 : "any"} value={control.value[0]} aria-valuetext={fxControlValueText(control, props.stage)} disabled={disabled()} aria-label={fxControlLabel(control, props.stage.source)} onChange={(event) => setComponent(control, 0, Number(event.currentTarget.value))} /><input type="number" min={Number((control.minimum[0] * fxDisplayScale(control, props.stage)).toFixed(3))} max={Number((control.maximum[0] * fxDisplayScale(control, props.stage)).toFixed(3))} step={control.kind === "Long" ? 1 : fxDisplayScale(control, props.stage) === 1 ? 0.01 : 1} value={Number((control.value[0] * fxDisplayScale(control, props.stage)).toFixed(3))} disabled={disabled()} aria-label={fxControlLabel(control, props.stage.source)} onChange={(event) => setComponent(control, 0, Number(event.currentTarget.value) / fxDisplayScale(control, props.stage))} /></div></Match>
+            <Match when={control.kind === "Float" || control.kind === "Long"}><div class="videoFxScalarPicker"><input type="range" min={control.minimum[0]} max={control.maximum[0]} step={control.kind === "Long" ? 1 : "any"} value={control.value[0]} aria-valuetext={fxControlValueText(control, props.stage)} disabled={disabled() || Boolean(control.tempo_sync)} aria-label={fxControlLabel(control, props.stage.source)} onChange={(event) => setComponent(control, 0, Number(event.currentTarget.value))} /><input type="number" min={Number((control.minimum[0] * fxDisplayScale(control, props.stage)).toFixed(3))} max={Number((control.maximum[0] * fxDisplayScale(control, props.stage)).toFixed(3))} step={control.kind === "Long" ? 1 : fxDisplayScale(control, props.stage) === 1 ? 0.01 : 1} value={Number((control.value[0] * fxDisplayScale(control, props.stage)).toFixed(3))} disabled={disabled() || Boolean(control.tempo_sync)} aria-label={fxControlLabel(control, props.stage.source)} onChange={(event) => setComponent(control, 0, Number(event.currentTarget.value) / fxDisplayScale(control, props.stage))} /></div></Match>
           </Switch>
-          <Show when={control.kind !== "Event"}><div class="videoFxParameterFoot"><Show when={control.kind !== "Color"} fallback={<span />}><span><span>Range</span>: <span data-no-localize>{fxControlValueText(control, props.stage, control.minimum)} – {fxControlValueText(control, props.stage, control.maximum)}</span></span></Show><button type="button" disabled={disabled()} onClick={() => void props.onSetControl(control.name, boundedFxValue(control, control.default))}>Reset default</button></div></Show>
+          <Show when={fxIsTimeControl(control, props.stage)}>
+            <div class="videoFxTempoSync" data-fx-tempo-sync={control.tempo_sync ? control.tempo_sync.unit : "hz"} data-fx-tempo-control={control.name}>
+              <div class="videoFxTempoUnits" role="group" aria-label="Time unit">
+                <button type="button" data-fx-tempo-unit="hz" aria-pressed={!control.tempo_sync} disabled={disabled()} title="Raw value in cycles per second" onClick={() => { if (control.tempo_sync) void setSync(control, null); }}>Hz</button>
+                <For each={["beats", "bars"] as VideoIsfTempoSyncUnit[]}>{(unit) => (
+                  <button type="button" data-fx-tempo-unit={unit} aria-pressed={control.tempo_sync?.unit === unit}
+                    disabled={disabled() || !fxValidBpm(props.bpm)} title={fxValidBpm(props.bpm) ? "Follow the global tempo" : "Tempo unavailable"}
+                    onClick={() => { if (control.tempo_sync?.unit !== unit) void setSync(control, { unit, count: control.tempo_sync?.count ?? 1 }); }}>{unit === "beats" ? "Beats" : "Bars"}</button>
+                )}</For>
+                <Show when={control.tempo_sync}>{(sync) => (
+                  <select data-fx-tempo-count aria-label={sync().unit === "bars" ? "Bars per cycle" : "Beats per cycle"} disabled={disabled()} value={String(sync().count)}
+                    onChange={(event) => void setSync(control, { unit: sync().unit, count: Number(event.currentTarget.value) })}>
+                    <For each={FX_TEMPO_SYNC_COUNTS}>{(count) => <option data-no-localize value={String(count)} selected={sync().count === count}>{fxTempoSyncCountText(count)}</option>}</For>
+                  </select>
+                )}</Show>
+              </div>
+              <Show when={control.tempo_sync}>
+                <p class="videoFxTempoReadout" data-fx-tempo-readout data-no-localize>{syncReadout(control)}</p>
+                <Show when={fxTempoSyncState(control, props.bpm)}>{(state) => <>
+                  <Show when={state().clamped}><p class="videoFxTempoNote" data-fx-tempo-clamped>Limited by this control's range.</p></Show>
+                  <Show when={!state().inSync}>
+                    <button type="button" data-fx-tempo-resync disabled={disabled()} onClick={() => void setSync(control, control.tempo_sync!)}>Re-sync to tempo</button>
+                  </Show>
+                </>}</Show>
+              </Show>
+            </div>
+          </Show>
+          <Show when={control.kind !== "Event"}><div class="videoFxParameterFoot"><Show when={control.kind !== "Color"} fallback={<span />}><span><span>Range</span>: <span data-no-localize>{fxControlValueText(control, props.stage, control.minimum)} – {fxControlValueText(control, props.stage, control.maximum)}</span></span></Show><button type="button" disabled={disabled()} onClick={() => resetControl(control)}>Reset default</button></div></Show>
         </div>
       )}</For>
       <div class="videoFxParameterActions">

@@ -283,7 +283,7 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
           <Switch>
             <Match when={tab() === "fx"}>
               <VideoPerformQuickFx layer={props.clipSlotBank.layer} layerList={props.layerList}
-                locale={props.performContext?.locale}
+                locale={props.performContext?.locale} bpm={props.layerList.bpm}
                 projectEpoch={props.layerList.projectEpoch}
                 effectCatalog={props.effectScopes.catalog} onApplyEffectCatalog={props.effectScopes.onApplyCatalog} liveSession={props.layerList.liveSession} audition={props.layerList.audition}
                 onOpenEditor={() => props.performContext?.onOpenEditor()} />

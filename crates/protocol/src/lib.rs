@@ -878,6 +878,35 @@ pub enum VideoIsfControlKind {
     Color,
 }
 
+/// Musical unit of a tempo-synced time control.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoIsfTempoSyncUnit {
+    Beats,
+    Bars,
+}
+
+/// Beats per bar used when a tempo sync is expressed in bars (4/4).
+pub const VIDEO_ISF_TEMPO_SYNC_BEATS_PER_BAR: f32 = 4.0;
+
+/// Allowed multipliers of the sync unit: 1/4, 1/2, 1, 2 or 4.
+pub const VIDEO_ISF_TEMPO_SYNC_COUNTS: [f32; 5] = [0.25, 0.5, 1.0, 2.0, 4.0];
+
+/// The operator's choice to express a time control (rate, speed, frequency) as one
+/// cycle per `count` beats or bars of the global tempo instead of a raw number.
+/// This is authored state only: the runtime does not yet track the clock.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct VideoIsfTempoSync {
+    pub unit: VideoIsfTempoSyncUnit,
+    pub count: f32,
+}
+
+impl VideoIsfTempoSync {
+    pub fn is_valid(&self) -> bool {
+        VIDEO_ISF_TEMPO_SYNC_COUNTS.contains(&self.count)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VideoIsfControlSummary {
     pub name: String,
@@ -890,6 +919,9 @@ pub struct VideoIsfControlSummary {
     pub labels: Vec<String>,
     #[serde(default)]
     pub values: Vec<i32>,
+    /// Optional tempo-sync choice for a Float time control. Older projects omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tempo_sync: Option<VideoIsfTempoSync>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2937,6 +2969,29 @@ fn validate_video_effect_kind(kind: &VideoEffectKind) -> Result<(), String> {
                         .to_string(),
                 );
             }
+            validate_video_isf_tempo_sync(&effect.controls)?;
+        }
+    }
+    Ok(())
+}
+
+/// A tempo sync is authored state for Float time controls and uses one of the five musical counts.
+pub fn validate_video_isf_tempo_sync(controls: &[VideoIsfControlSummary]) -> Result<(), String> {
+    for control in controls {
+        let Some(sync) = control.tempo_sync else {
+            continue;
+        };
+        if control.kind != VideoIsfControlKind::Float {
+            return Err(format!(
+                "ISF control '{}' has a tempo sync but is not a Float control",
+                control.name
+            ));
+        }
+        if !sync.is_valid() {
+            return Err(format!(
+                "ISF control '{}' tempo sync must use 1/4, 1/2, 1, 2 or 4 beats or bars",
+                control.name
+            ));
         }
     }
     Ok(())
@@ -15535,9 +15590,52 @@ mod tests {
                 maximum: [1.0, 0.0, 0.0, 0.0],
                 labels: Vec::new(),
                 values: Vec::new(),
+                tempo_sync: None,
             }],
             stack: Vec::new(),
         }
+    }
+
+    #[test]
+    fn isf_tempo_sync_is_optional_in_json_and_validated() {
+        // Older projects have no field; a stored choice round-trips; unset is omitted.
+        let mut effect = clip_slot_test_effect();
+        let plain = serde_json::to_value(&effect).unwrap();
+        assert!(plain["controls"][0].get("tempo_sync").is_none());
+        let reread: super::VideoIsfEffectSummary = serde_json::from_value(plain).unwrap();
+        assert_eq!(reread.controls[0].tempo_sync, None);
+        effect.controls[0].tempo_sync = Some(super::VideoIsfTempoSync {
+            unit: super::VideoIsfTempoSyncUnit::Bars,
+            count: 0.25,
+        });
+        let json = serde_json::to_value(&effect).unwrap();
+        assert_eq!(
+            json["controls"][0]["tempo_sync"],
+            serde_json::json!({"unit": "bars", "count": 0.25})
+        );
+        let reread: super::VideoIsfEffectSummary = serde_json::from_value(json).unwrap();
+        assert_eq!(reread, effect);
+        assert!(super::validate_video_isf_tempo_sync(&effect.controls).is_ok());
+        for count in super::VIDEO_ISF_TEMPO_SYNC_COUNTS {
+            effect.controls[0].tempo_sync = Some(super::VideoIsfTempoSync {
+                unit: super::VideoIsfTempoSyncUnit::Beats,
+                count,
+            });
+            assert!(super::validate_video_isf_tempo_sync(&effect.controls).is_ok());
+        }
+        for count in [0.0, 3.0, -1.0, f32::NAN, f32::INFINITY] {
+            effect.controls[0].tempo_sync = Some(super::VideoIsfTempoSync {
+                unit: super::VideoIsfTempoSyncUnit::Beats,
+                count,
+            });
+            assert!(super::validate_video_isf_tempo_sync(&effect.controls).is_err());
+        }
+        effect.controls[0].tempo_sync = Some(super::VideoIsfTempoSync {
+            unit: super::VideoIsfTempoSyncUnit::Beats,
+            count: 1.0,
+        });
+        effect.controls[0].kind = super::VideoIsfControlKind::Color;
+        assert!(super::validate_video_isf_tempo_sync(&effect.controls).is_err());
     }
 
     #[test]

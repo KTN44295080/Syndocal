@@ -2405,6 +2405,14 @@ export interface VideoLayerState {
 
 export type VideoIsfControlKind = "Event" | "Bool" | "Long" | "Float" | "Point2d" | "Color";
 
+export type VideoIsfTempoSyncUnit = "beats" | "bars";
+
+/** One cycle per `count` beats or bars (4/4) of the global tempo; count is 0.25, 0.5, 1, 2 or 4. */
+export interface VideoIsfTempoSync {
+  unit: VideoIsfTempoSyncUnit;
+  count: number;
+}
+
 export interface VideoIsfControlSummary {
   name: string;
   kind: VideoIsfControlKind;
@@ -2414,6 +2422,8 @@ export interface VideoIsfControlSummary {
   maximum: [number, number, number, number];
   labels: string[];
   values: number[];
+  /** Authored tempo-sync choice for a Float time control; absent means a raw value. */
+  tempo_sync?: VideoIsfTempoSync | null;
 }
 
 export interface VideoIsfEffectStageSummary {

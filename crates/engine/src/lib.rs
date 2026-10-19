@@ -55286,6 +55286,8 @@ fn apply_active_video_clip_slot_effect_overrides(
             .find(|control| control.name == effect_override.control_name)
         {
             control.value = effect_override.value;
+            // The clip's override is a raw value, so the effective control is no longer tempo-synced.
+            control.tempo_sync = None;
         }
     }
 }
@@ -67427,6 +67429,8 @@ fn mutate_video_isf_effect_stack(
                 } else {
                     control.default
                 };
+                // The default is a raw value, so a reset also ends any tempo sync.
+                control.tempo_sync = None;
             }
         }
         VideoIsfStackMutation::SetControl {
@@ -67475,6 +67479,8 @@ fn mutate_video_isf_effect_stack(
                 | VideoIsfControlKind::Color => {}
             }
             control.value = value;
+            // A raw write (MIDI, API, agent) takes the control off the tempo clock.
+            control.tempo_sync = None;
         }
     }
     let total_source_bytes = stages.iter().map(|stage| stage.source.len()).sum::<usize>();
@@ -89421,6 +89427,7 @@ mod tests {
                         maximum: [1.0; 4],
                         labels: Vec::new(),
                         values: Vec::new(),
+                        tempo_sync: None,
                     }],
                 },
                 VideoIsfEffectStageSummary {
@@ -89439,6 +89446,7 @@ mod tests {
                         maximum: [32.0, 0.0, 0.0, 0.0],
                         labels: Vec::new(),
                         values: Vec::new(),
+                        tempo_sync: None,
                     }],
                 },
             ],
@@ -89622,6 +89630,7 @@ mod tests {
             maximum: [1.0; 4],
             labels: Vec::new(),
             values: Vec::new(),
+            tempo_sync: None,
         });
         effect
     }
@@ -90078,6 +90087,7 @@ mod tests {
             maximum: [1.0; 4],
             labels: Vec::new(),
             values: Vec::new(),
+            tempo_sync: None,
         });
         incoming.stack.push(VideoIsfEffectStageSummary {
             enabled: true,
@@ -90200,6 +90210,7 @@ mod tests {
             maximum: [1.0; 4],
             labels: Vec::new(),
             values: Vec::new(),
+            tempo_sync: None,
         });
         incoming.stack.push(VideoIsfEffectStageSummary {
             enabled: true,
@@ -91986,6 +91997,7 @@ mod tests {
                 maximum: [1.0; 4],
                 labels: Vec::new(),
                 values: Vec::new(),
+                tempo_sync: None,
             }],
         }
         };
@@ -92073,6 +92085,7 @@ mod tests {
                     maximum: [0.0; 4],
                     labels: Vec::new(),
                     values: Vec::new(),
+                    tempo_sync: None,
                 }],
             }),
         )
@@ -92102,7 +92115,66 @@ mod tests {
             maximum: [1.0; 4],
             labels: Vec::new(),
             values: Vec::new(),
+            tempo_sync: None,
         }
+    }
+
+    #[test]
+    fn video_isf_raw_control_writes_and_reset_end_a_tempo_sync() {
+        let synced = || VideoIsfEffectSummary {
+            enabled: true,
+            label: "Strobe".to_string(),
+            source: "/* test */".into(),
+            source_path: None,
+            description: None,
+            categories: Vec::new(),
+            controls: vec![protocol::VideoIsfControlSummary {
+                name: "rate".to_string(),
+                kind: VideoIsfControlKind::Float,
+                value: [2.0, 0.0, 0.0, 0.0],
+                default: [8.0, 0.0, 0.0, 0.0],
+                minimum: [0.5, 0.0, 0.0, 0.0],
+                maximum: [30.0, 0.0, 0.0, 0.0],
+                labels: Vec::new(),
+                values: Vec::new(),
+                tempo_sync: Some(protocol::VideoIsfTempoSync {
+                    unit: protocol::VideoIsfTempoSyncUnit::Beats,
+                    count: 1.0,
+                }),
+            }],
+            stack: Vec::new(),
+        };
+        // Moving or bypassing a stage keeps the sync: it is part of the stage.
+        let moved = mutate_video_isf_effect_stack(
+            Some(synced()),
+            VideoIsfStackMutation::SetEnabled {
+                stage_index: 0,
+                enabled: false,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert!(moved.controls[0].tempo_sync.is_some());
+        let written = mutate_video_isf_effect_stack(
+            Some(synced()),
+            VideoIsfStackMutation::SetControl {
+                stage_index: 0,
+                control_name: "rate".to_string(),
+                value: [4.0, 0.0, 0.0, 0.0],
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(written.controls[0].value[0], 4.0);
+        assert_eq!(written.controls[0].tempo_sync, None);
+        let reset = mutate_video_isf_effect_stack(
+            Some(synced()),
+            VideoIsfStackMutation::Reset { stage_index: 0 },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(reset.controls[0].value[0], 8.0);
+        assert_eq!(reset.controls[0].tempo_sync, None);
     }
 
     #[test]

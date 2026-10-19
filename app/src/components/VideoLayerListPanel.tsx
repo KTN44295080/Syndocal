@@ -14,6 +14,8 @@ import { VideoIsfEffectPanel } from "./VideoIsfEffectPanel";
 interface VideoLayerListPanelProps {
   locale?: string;
   projectEpoch?: number;
+  /** Global tempo for beat and bar units in the FX parameter editor. */
+  bpm?: number;
   effectCatalog?: VideoEffectCatalog;
   onApplyEffectCatalog?: (catalog: VideoEffectCatalog) => unknown | Promise<unknown>;
   liveSession?: FxLiveSession;
@@ -300,6 +302,7 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
               effectCatalog={props.effectCatalog}
               locale={props.locale}
               projectEpoch={props.projectEpoch}
+              bpm={props.bpm}
               onApplyEffectCatalog={props.onApplyEffectCatalog}
               liveSession={props.liveSession}
               onSetEffect={props.onSetIsfEffect}
