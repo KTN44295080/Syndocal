@@ -22,9 +22,16 @@ const mock = {
   },
   executeBlackoutRelease: async () => calls.push(["release-safety"]),
 };
-new Function("require", "exports", ts.transpileModule(source, {
+const transpileCommonJs = (text, fileName) => ts.transpileModule(text, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-}).outputText)(name => {
+  fileName,
+}).outputText;
+const driveExports = {};
+new Function("require", "exports", transpileCommonJs(
+  await readFile(new URL("../src/outputDriveStatus.ts", import.meta.url), "utf8"), "outputDriveStatus.ts",
+))(name => { assert.fail(`outputDriveStatus must stay dependency-free, required ${name}`); }, driveExports);
+new Function("require", "exports", transpileCommonJs(source, "createTargetBlackoutController.ts"))(name => {
+  if (name === "./outputDriveStatus") return driveExports;
   assert.equal(name, "./outputControlController"); return mock;
 }, exports);
 const messages = [];
@@ -197,6 +204,82 @@ assert.match(
   /if \(showError && isProjectAuthorityIdentityCurrent\(authority\) && detail !== timelineFollowRuntimeLastError\)/,
   "current or failed convergence retains the existing explicit Follow warning path",
 );
+// Standby / no output authority: the blackout is explained before any command is
+// sent, the S0 latch release stays reachable, and the refusal retires on state change.
+{
+  const standbyCalls = [];
+  const standbyMessages = [];
+  const cleared = [];
+  let drive = driveExports.classifyOutputDrive({ state: "Ready", effective_role: "Standby", desired_role: "Standby" }, false);
+  assert.deepEqual(drive, { kind: "blocked", reason: "standby", message: "Standby: this machine is not driving outputs" });
+  assert.equal(driveExports.outputDriveBlockedMessage(drive), "Standby: this machine is not driving outputs");
+  assert.equal(driveExports.classifyOutputDrive({ state: "Ready", effective_role: "Both", desired_role: "Both" }, false).reason, "no_lease");
+  assert.equal(driveExports.classifyOutputDrive({ state: "Transitioning", effective_role: "Standby", desired_role: "Both" }, false).reason, "fenced");
+  assert.deepEqual(
+    driveExports.classifyOutputDrive({ state: "Ready", effective_role: "Standby", desired_role: "Standby" }, true),
+    { kind: "driving" },
+    "a held Lighting+Video lease always means this machine drives outputs",
+  );
+  mock.executeTargetBlackout = async (_invoke, target, enabled) => { standbyCalls.push([target, enabled]); return appliedReceipt; };
+  mock.executeBlackoutRelease = async () => { standbyCalls.push(["release-safety"]); return appliedReceipt; };
+  let latched = false;
+  const standby = exports.createTargetBlackoutController({
+    invoke() { throw new Error("unexpected direct IPC"); },
+    safety: { engage: async () => undefined },
+    safetyBlackoutEngaged: () => latched,
+    refreshSnapshot: async () => undefined,
+    setMessage: (message, key) => standbyMessages.push([message, key]),
+    clearMessage: key => cleared.push(key),
+    checkOutputDrive: async () => drive,
+  });
+  for (const method of ["setLightingBlackout", "setVideoBlackout", "setAllBlackout"]) {
+    await standby[method](true);
+    await standby[method](false);
+  }
+  assert.deepEqual(standbyCalls, [], "no OutputControl command is sent while this machine cannot act");
+  assert.equal(standbyMessages.length, 6);
+  assert.ok(standbyMessages.every(([message, key]) => key === "blackout-unavailable"
+    && message === "No blackout was applied. Standby: this machine is not driving outputs."),
+  "every refusal is one clear keyed message");
+  assert.deepEqual(cleared, [], "a refused blackout never claims success");
+  // The runtime S0 latch release is never hidden by the role check.
+  latched = true;
+  await standby.setLightingBlackout(false);
+  assert.deepEqual(standbyCalls, [["release-safety"], ["lighting", false]], "S0 latch release stays reachable");
+  latched = false;
+  standbyCalls.length = 0;
+  // Driving machines are never blocked, and unknown never blocks.
+  for (const reachable of [{ kind: "driving" }, { kind: "unknown" }]) {
+    drive = reachable;
+    await standby.setVideoBlackout(true);
+  }
+  assert.deepEqual(standbyCalls, [["video", true], ["video", true]]);
+  assert.deepEqual(cleared, ["blackout-unavailable", "blackout-unavailable", "blackout-unavailable"], "success retires a stale refusal");
+  // A refusal that still happens after the pre-check explains the role instead of the raw lease error.
+  standbyMessages.length = 0;
+  let checks = 0;
+  const racing = exports.createTargetBlackoutController({
+    invoke() { throw new Error("unexpected direct IPC"); },
+    safety: { engage: async () => undefined },
+    refreshSnapshot: async () => undefined,
+    setMessage: (message, key) => standbyMessages.push([message, key]),
+    checkOutputDrive: async () => (++checks === 1 ? { kind: "driving" } : driveExports.classifyOutputDrive({ state: "Ready", effective_role: "Standby", desired_role: "Standby" }, false)),
+  });
+  mock.executeTargetBlackout = async () => { throw new Error("Exactly one active output lease with the requested resources is required; nothing was applied."); };
+  await racing.setVideoBlackout(true);
+  assert.deepEqual(standbyMessages, [["No blackout was applied. Standby: this machine is not driving outputs.", "blackout-unavailable"]]);
+}
+const standbyWiring = {
+  app: appSource,
+  chrome: await readFile(new URL("../src/components/WorkspaceChrome.tsx", import.meta.url), "utf8"),
+  desk: await readFile(new URL("../src/components/VideoPerformDesk.tsx", import.meta.url), "utf8"),
+};
+assert.match(standbyWiring.app, /checkOutputDrive: readOutputDrive/, "the one blackout controller receives the fresh output-authority check");
+assert.match(standbyWiring.app, /const drive = await readOutputDrive\(\);\s*if \(drive\.kind === "blocked"\)[\s\S]*?confirmDialog\(blackoutDialog\(enabled\)\)/, "the role is explained before the confirmation dialog opens");
+assert.match(standbyWiring.app, /blackoutBlockedReason=\{blackoutBlockedReason\(\)\}/, "top-bar DMX/VID/ALL keys receive the reason");
+assert.equal((standbyWiring.chrome.match(/aria-disabled=\{props\.blackoutBlockedReason \? "true" : undefined\}/g) ?? []).length, 3, "DMX, VID and ALL keys expose the reason without disappearing");
+assert.match(standbyWiring.desk, /aria-disabled=\{blackoutBlockedReason\(\) \? "true" : undefined\}/, "Perform desk Blackout exposes the reason");
+assert.doesNotMatch(standbyWiring.chrome + standbyWiring.desk, /\sdisabled=\{[^}]*blackoutBlockedReason/, "emergency keys are never removed from the tab order");
 console.log("target blackout controller: PASS (canonical ordering, failure visibility, and bounded Timeline Follow stale-read convergence)");
 
 // One DMX control may clear the internal runtime latch first. Its second

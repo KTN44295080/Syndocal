@@ -31,6 +31,8 @@ const videoOwnershipMessage = (status: VideoOutputWindowStatus): string => {
 interface VideoMasterControlsPanelProps {
   masterOpacity: number;
   blackout: boolean;
+  /** Why this machine cannot change output state (e.g. Standby); null when it can. */
+  blackoutBlockedReason?: string | null;
   onSetMasterOpacity: (opacity: number) => void | Promise<void>;
   onSetBlackout: (blackout: boolean) => void | Promise<void>;
 }

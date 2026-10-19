@@ -671,6 +671,15 @@ import { createTimelineKeyframeController } from "./createTimelineKeyframeContro
 import { createTimelineAutomationController } from "./createTimelineAutomationController";
 import { createSafetyBlackoutRuntimeController } from "./safetyBlackoutRuntimeController";
 import { createTargetBlackoutController } from "./createTargetBlackoutController";
+import {
+  BLACKOUT_STATUS_KEY,
+  blackoutNotAppliedMessage,
+  classifyOutputDrive,
+  outputDriveBlockedMessage,
+  sameOutputDriveStatus,
+  type OutputDriveStatus,
+} from "./outputDriveStatus";
+import { queryOutputDriveStatus } from "./outputDriveQuery";
 import { createProjectAuthorityReceiptConvergence } from "./projectAuthorityReceiptConvergence";
 import {
   createTimelineFollowAuthorityConvergence,
@@ -17807,11 +17816,67 @@ export default function App() {
     if (!isTauriRuntime()) throw new Error(tauriBackendUnavailableMessage);
     return tauriInvoke<T>(command, args);
   };
+  // Whether this machine can change output state (Standby cannot). Blackout
+  // controls read this to explain themselves instead of failing after a
+  // confirmation; "unknown" (not yet read, unreadable) never blocks.
+  const [outputDrive, setOutputDrive] = createSignal<OutputDriveStatus>({ kind: "unknown" });
+  const clearStatusByKey = (key: string) => {
+    setAppStatus((current) => current.key === key ? appStatusFromMessage("Ready") : current);
+  };
+  const applyOutputDrive = (next: OutputDriveStatus) => {
+    if (sameOutputDriveStatus(untrack(outputDrive), next)) return;
+    setOutputDrive(next);
+    // A blackout refusal describes the previous state; retire it on any change.
+    clearStatusByKey(BLACKOUT_STATUS_KEY);
+  };
+  // A browser (no desktop backend) has no output authority: a harness sets
+  // window.__syndocalOutputDriveFixture ("standby" | "fenced" | "no_lease" | "driving") or
+  // ?syndocalOutputRole=... to exercise the states. Unset, it is "unknown" and never blocks.
+  const fixtureOutputDrive = (): OutputDriveStatus => {
+    const raw = (window as Window & { __syndocalOutputDriveFixture?: string }).__syndocalOutputDriveFixture
+      ?? new URLSearchParams(window.location.search).get("syndocalOutputRole");
+    const ownership = { state: "Ready" as const, effective_role: "Both" as const, desired_role: "Both" as const };
+    switch (raw) {
+      case "standby": return classifyOutputDrive({ ...ownership, effective_role: "Standby", desired_role: "Standby" }, false);
+      case "fenced": return classifyOutputDrive({ ...ownership, state: "Transitioning" }, false);
+      case "no_lease": return classifyOutputDrive(ownership, false);
+      case "driving": return { kind: "driving" };
+      default: return { kind: "unknown" };
+    }
+  };
+  const readOutputDrive = async (): Promise<OutputDriveStatus> => {
+    const next = !isTauriRuntime()
+      ? fixtureOutputDrive()
+      : paneWindow
+        ? { kind: "unknown" as const }
+        : await queryOutputDriveStatus(invoke);
+    applyOutputDrive(next);
+    return next;
+  };
+  createEffect(() => {
+    if (paneWindow) return;
+    let disposed = false;
+    let inFlight = false;
+    const poll = async () => {
+      if (disposed || inFlight) return;
+      inFlight = true;
+      try { await readOutputDrive(); } finally { inFlight = false; }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), isTauriRuntime() ? 1_500 : 150);
+    onCleanup(() => {
+      disposed = true;
+      window.clearInterval(timer);
+    });
+  });
+  const blackoutBlockedReason = () => outputDriveBlockedMessage(outputDrive());
   const targetBlackout = createTargetBlackoutController({
     invoke,
     refreshProjectAuthority: refreshProjectAuthorityAfterTargetBlackout,
     refreshSnapshot,
     setMessage,
+    clearMessage: clearStatusByKey,
+    checkOutputDrive: readOutputDrive,
     safety: createSafetyBlackoutRuntimeController({ invoke: invokeSafetyBlackoutRuntime }),
     safetyBlackoutEngaged: () => snapshot().safety_blackout_engaged,
   });
@@ -26327,8 +26392,16 @@ export default function App() {
 
   // Perform confirms only the UI request; the existing blackout owner remains authoritative.
   const requestPerformVideoBlackout = async (enabled: boolean) => {
-    if (workspaceTab() === "touch" && controlMode() === "perform" &&
-      !await confirmDialog(blackoutDialog(enabled))) return;
+    if (workspaceTab() === "touch" && controlMode() === "perform") {
+      // Explain a machine that cannot act before asking, so nothing fails
+      // after the operator has confirmed.
+      const drive = await readOutputDrive();
+      if (drive.kind === "blocked") {
+        setMessage(blackoutNotAppliedMessage(drive), BLACKOUT_STATUS_KEY);
+        return;
+      }
+      if (!await confirmDialog(blackoutDialog(enabled))) return;
+    }
     return setVideoBlackout(enabled);
   };
 
@@ -27101,6 +27174,7 @@ export default function App() {
         controlMode={controlMode()}
         blackout={snapshot().authored_blackout || snapshot().safety_blackout_engaged}
         videoBlackout={snapshot().video.blackout}
+        blackoutBlockedReason={blackoutBlockedReason()}
         lightingMaster={snapshot().lighting_master}
         videoMaster={snapshot().video.master_opacity}
         bpm={snapshot().clock.bpm}
@@ -28445,6 +28519,7 @@ export default function App() {
           masterControls={{
             get masterOpacity() { return snapshot().video.master_opacity; },
             get blackout() { return snapshot().video.blackout; },
+            get blackoutBlockedReason() { return blackoutBlockedReason(); },
             onSetMasterOpacity: setVideoMasterOpacity,
             onSetBlackout: requestPerformVideoBlackout,
           }}

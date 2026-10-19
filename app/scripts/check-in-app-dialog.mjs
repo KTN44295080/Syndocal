@@ -116,6 +116,14 @@ try {
   assert.equal(localization.translateUiText(copy.removeFixturesDialog(1, "Front Spot 1").title, "ja"), "灯体「Front Spot 1」を削除しますか？");
   assert.equal(localization.translateUiText(copy.installUpdateDialog("1.2.3").title, "ja"), "Syndocal 1.2.3 をインストールしますか？");
   assert.equal(copy.blackoutDialog(true).tone, "danger");
+  // Standby explanations are plain in-app text (never a dialog) with Japanese for every reason.
+  for (const [english, japanese] of [
+    ["Standby: this machine is not driving outputs", "スタンバイ: このマシンは出力を制御していません"],
+    ["Fenced: outputs are held while the machine output role changes", "保護中: 出力ロールの切り替え中は出力が保留されています"],
+    ["Output off: no active output lease on this machine", "出力オフ: このマシンには有効な出力リースがありません"],
+    ["No blackout was applied. Standby: this machine is not driving outputs.", "ブラックアウトは適用されませんでした。スタンバイ: このマシンは出力を制御していません。"],
+  ]) assert.equal(localization.translateUiText(english, "ja"), japanese, `Standby wording localized: ${english}`);
+  for (const word of ["Standby", "Fenced", "Output off"]) assert.notEqual(localization.translateUiText(word, "ja"), word, `short key label localized: ${word}`);
   assert.equal(copy.blackoutDialog(false).tone, "danger", "Recover is guarded like Blackout");
 
   console.log(`in-app dialog service and wording ok (${samples.length} dialogs localized)`);
