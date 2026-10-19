@@ -334,7 +334,7 @@ assertOrderedMarkers(
   explicitArmPath,
   [
     "let preferred_role = state.engine.output_ownership_status().desired_role;",
-    "apply_output_ownership_role(&app, &state, preferred_role)",
+    "apply_standby_output_ownership_role_command(&app, &state, preferred_role)",
   ],
   "preserved desired-role arm behavior",
 );
