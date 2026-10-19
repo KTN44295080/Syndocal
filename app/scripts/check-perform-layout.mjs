@@ -238,6 +238,8 @@ try {
   await new Promise((done, reject) => reservation.close((error) => error ? reject(error) : done()));
   server = await createServer({ root: appRoot, cacheDir: resolve(evidenceDir, "vite-cache"), server: { host: "127.0.0.1", port: vitePort, strictPort: true }, clearScreen: false, plugins: [focusFixturePlugin] });
   await server.listen();
+  await server.environments.client.depsOptimizer?.scanProcessing;
+  await server.transformRequest("/src/App.tsx");
   const origin = server.resolvedUrls.local[0];
   profile = await mkdtemp(join(tmpdir(), "syndocal-perform-check-"));
   browser = spawn(browserPath, ["--headless=new", "--disable-gpu", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--no-first-run", "--no-default-browser-check", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
@@ -272,14 +274,14 @@ try {
       currentCase = label;
       const url = `${origin}?syndocalViewportFixture=vj-bank&performCase=${label}`;
       await cdp.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
-      await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `localStorage.setItem('syndocal.uiLocale.v1', ${JSON.stringify(locale)}); localStorage.setItem('syndocal.workspaceLayout.v1', JSON.stringify({workspace_tab:'control',control_mode:'perform'}));` }).then(async ({ identifier }) => {
+      await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `localStorage.setItem('syndocal.uiLocale.v1', ${JSON.stringify(locale)}); localStorage.setItem('syndocal.workspaceLayout.v1', JSON.stringify({workspace_tab:'touch',control_mode:'perform',touch_control_domain:'video'}));` }).then(async ({ identifier }) => {
         await cdp.send("Page.navigate", { url });
         await waitFor(() => cdp.evaluate(`location.href === ${JSON.stringify(url)} && document.readyState === 'complete'`), `${label} navigation committed`);
         await cdp.send("Page.bringToFront");
-        await waitFor(() => cdp.evaluate("!!document.querySelector('#edit-domain-tab-perform')"), `${label} workspace chrome`);
+        await waitFor(() => cdp.evaluate("!!document.querySelector('[data-workspace-option=touch]')"), `${label} workspace chrome`);
         // Existing vj-bank fixture intentionally opens its historic Mixer desk.
         // Enter the new surface through the actual workspace control.
-        await cdp.evaluate("document.querySelector('#edit-domain-tab-perform').click()");
+        await cdp.evaluate("document.querySelector('[data-workspace-option=touch]').click(); document.querySelector('[data-control-domain=video]').click()");
         await waitFor(() => cdp.evaluate(`!!document.querySelector(${JSON.stringify(root)}) && !!document.querySelector(${JSON.stringify(selectors.launch)})`), `${label} loaded`);
         await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier });
       });
@@ -787,10 +789,10 @@ try {
   currentCase='divider-persistence';
   await freshTarget();
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1366,height:768,deviceScaleFactor:1,mobile:false});
-  const persistedScript=await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:"localStorage.setItem('syndocal.uiLocale.v1','en');localStorage.setItem('syndocal.workspaceLayout.v1',JSON.stringify({workspace_tab:'control',control_mode:'perform',perform_top_split_ratio:0.66,perform_lower_split_ratio:0.6}));"});
+  const persistedScript=await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:"localStorage.setItem('syndocal.uiLocale.v1','en');localStorage.setItem('syndocal.workspaceLayout.v1',JSON.stringify({workspace_tab:'touch',control_mode:'perform',touch_control_domain:'video',perform_top_split_ratio:0.66,perform_lower_split_ratio:0.6}));"});
   await cdp.send('Page.navigate',{url:`${origin}?syndocalViewportFixture=vj-bank&performCase=persistence`});
-  await waitFor(()=>cdp.evaluate("!!document.querySelector('#edit-domain-tab-perform')"),currentCase+': workspace chrome');
-  await cdp.evaluate("document.querySelector('#edit-domain-tab-perform').click()");
+  await waitFor(()=>cdp.evaluate("!!document.querySelector('[data-workspace-option=touch]')"),currentCase+': workspace chrome');
+  await cdp.evaluate("document.querySelector('[data-workspace-option=touch]').click(); document.querySelector('[data-control-domain=video]').click()");
   await waitFor(()=>cdp.evaluate('!!document.querySelector('+JSON.stringify(root)+') && !!document.querySelector('+JSON.stringify(selectors.launch)+')'),currentCase+': Perform loaded');
   await cdp.send('Page.removeScriptToEvaluateOnNewDocument',{identifier:persistedScript.identifier});
   const restoredRatios=await cdp.evaluate('(()=>{const a=(k)=>Number(document.querySelector("[data-video-perform-layout] [data-workspace-splitter=\\""+k+"\\"]").getAttribute("aria-valuenow"));return {top:a("upper-lower"),lower:a("lower-left-right")}})()');

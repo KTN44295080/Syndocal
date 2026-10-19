@@ -31111,99 +31111,6 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
   min-height: 0;
 }
 
-.layoutTouch.touchDomainBoth > .touchSurfacePanel {
-  display: none;
-}
-
-.layoutTouch.touchDomainBoth > .touchVideoPanel {
-  display: none;
-}
-
-.layoutTouch.touchDomainBoth > .touchBothLivePanel {
-  grid-column: 1 / -1;
-  grid-row: 1;
-  display: grid;
-  grid-template-rows: 44px repeat(2, minmax(0, 1fr)) 48px;
-  min-width: 0;
-  min-height: 0;
-  padding: 56px 12px 0;
-  overflow: hidden;
-  background: var(--theme-panel);
-}
-
-.touchBothHeader,
-.touchBothFooter {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-width: 0;
-}
-
-.touchBothHeader {
-  border-bottom: 1px solid var(--theme-line);
-}
-
-.touchBothFooter {
-  justify-content: flex-start;
-  border-top: 1px solid var(--theme-line);
-}
-
-.touchBothFooter button {
-  margin-left: auto;
-}
-
-.touchBothLane {
-  display: grid;
-  grid-template-columns: minmax(175px, 1.1fr) auto minmax(175px, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  min-height: 0;
-  border-bottom: 1px solid var(--theme-line);
-}
-
-.touchBothIdentity,
-.touchBothVideoStatus,
-.touchBothMaster {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-}
-
-.touchBothIdentity span,
-.touchBothVideoStatus span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.touchBothIdentity strong {
-  color: #ffb448;
-}
-
-.touchBothActions,
-.touchBothEndActions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.touchBothMaster span {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.touchBothMaster input {
-  width: 100%;
-  min-width: 0;
-}
-
-.app .layoutTouch > .touchBothLivePanel button,
-.app .layoutTouch > .touchBothLivePanel input[type="range"] {
-  min-height: 48px;
-}
-
 .touchSurfaceToolbar {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -40960,3 +40867,45 @@ strong, b { font-weight: var(--fw-text); }
 
 /* The focused pane carries the stronger accent; every other pane title keeps the calm idle bar. */
 .app :is(.videoPerformPane, .panel, .controlContextPane, .mappingPersistentWorkspaceGrid):focus-within { --pane-bar-color: var(--theme-accent); }
+
+/* Control domains share the persistent workspace chrome. */
+.layoutTouch.touchDomainLighting .touchSurfaceToolbar {
+  padding-inline-start: 2px;
+}
+.touchControlDomainTabs.controlModeTabs {
+  justify-content: flex-start;
+}
+.controlModeTabs .controlVideoToolsButton {
+  margin-inline-start: auto;
+}
+.controlVideoToolsDialog {
+  width: min(1100px, calc(100vw - 48px));
+  max-height: calc(100dvh - 48px);
+  padding: 16px;
+  overflow: auto;
+  color: var(--theme-text);
+  background: var(--theme-panel);
+  border: 1px solid var(--theme-line);
+}
+.controlVideoToolsDialog::backdrop {
+  background: #0009;
+}
+.controlVideoToolsDialog > .panelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.controlVideoToolsDialog button {
+  min-height: 44px;
+}
+.controlVideoToolsDialog .touchVideoPanel {
+  display: grid;
+  gap: 12px;
+}
+
+/* Preserve the former live overview's touch targets in the merged overview. */
+.layoutControl.controlModeBoth .controlBothPanel button,
+.layoutControl.controlModeBoth .controlBothPanel input[type="range"] {
+  min-height: 48px;
+}

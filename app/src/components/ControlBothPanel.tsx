@@ -39,9 +39,9 @@ const percent = (value: number) => `${Math.round(value * 100)}%`;
 export function ControlBothPanel(props: ControlBothPanelProps) {
   return (
     <section
-      id="edit-domain-panel-both"
+      id="control-domain-panel-both"
       role="tabpanel"
-      aria-labelledby="edit-domain-tab-both"
+      aria-labelledby="control-domain-both"
       class="panel controlBothPanel controlPanel"
       data-workspace-pane="upper"
       aria-label="Lighting and Video control overview"

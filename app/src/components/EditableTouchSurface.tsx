@@ -637,6 +637,9 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
   return (
     <section
       class="panel touchPanel touchSurfacePanel"
+      id="control-domain-panel-lighting"
+      role="tabpanel"
+      aria-labelledby="control-domain-lighting"
       aria-label="Editable Touch surface"
       data-touch-surface
       data-workspace-pane="upper"

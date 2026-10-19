@@ -2,6 +2,7 @@ export type WorkspaceTab = "setup" | "control" | "touch";
 export type SetupArea = "lighting" | "video" | "mapping" | "io" | "security";
 export type SetupSubTab = "patch" | "video" | "mapping" | "io" | "authority";
 export type ControlMode = "edit" | "live" | "mixer" | "both" | "perform";
+export type ControlDomain = "lighting" | "video" | "both";
 export type ControlCategory = "dimmer" | "color" | "position" | "gobo" | "beam" | "focus" | "other" | "fader";
 export type TimelineDeskSurface = "show" | "automation" | "playback";
 export type TimelineContextDrawer = "none" | "cue" | "block";
@@ -48,15 +49,39 @@ export const controlModeLabel = (mode: ControlMode): string =>
 export const setupSubTabLabel = (tab: SetupSubTab): string =>
   setupSubTabs.find((candidate) => candidate.id === tab)?.label ?? tab;
 
-// The persistent Edit chrome exposes each existing control mode as one domain.
-// Mode IDs remain stable for saved layouts, shortcuts, and pane-window compatibility.
+// Activities and live control domains have separate chrome. The persisted mode
+// IDs remain stable for layouts, shortcuts, mappings and pane windows.
 export const editDomainModes = [
   controlModes.find((mode) => mode.id === "edit")!,
   controlModes.find((mode) => mode.id === "mixer")!,
-  controlModes.find((mode) => mode.id === "both")!,
   controlModes.find((mode) => mode.id === "live")!,
-  controlModes.find((mode) => mode.id === "perform")!,
 ];
+
+export const controlDomainModes: { id: ControlDomain; mode: ControlMode; label: string }[] = [
+  { id: "lighting", mode: "edit", label: "Lighting" },
+  { id: "video", mode: "perform", label: "Video" },
+  { id: "both", mode: "both", label: "Both" },
+];
+
+export const controlModeForDomain = (domain: ControlDomain): ControlMode =>
+  domain === "video" ? "perform" : domain === "both" ? "both" : "edit";
+
+export const controlDomainForMode = (mode: ControlMode): ControlDomain =>
+  mode === "perform" ? "video" : mode === "both" ? "both" : "lighting";
+
+export const isPerformWorkspace = (workspace: WorkspaceTab, mode: ControlMode): boolean =>
+  workspace === "touch" && mode === "perform";
+
+export const isBothWorkspace = (workspace: WorkspaceTab, mode: ControlMode): boolean =>
+  workspace === "touch" && mode === "both";
+
+export const workspaceModeForTabShortcut = (workspace: WorkspaceTab, code: string): ControlMode | null => {
+  const match = code.match(/^(?:Digit|Numpad)([1-3])$/);
+  if (!match) return null;
+  const index = Number(match[1]) - 1;
+  return workspace === "touch" ? controlDomainModes[index]?.mode ?? null
+    : workspace === "control" ? editDomainModes[index]?.id ?? null : null;
+};
 
 export const controlCategories: { id: ControlCategory; label: string }[] = [
   { id: "dimmer", label: "Dimmer" },

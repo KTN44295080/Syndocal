@@ -1555,7 +1555,8 @@ try {
 
     // Both: the combined live overview keeps the two operator domains visible
     // without mounting a second copy of the dense Video desk.
-    assert.equal(await clickVisible(client, '[data-control-mode-option="both"]'), true, "select Both domain");
+    assert.equal(await clickVisible(client, '[data-workspace-option="touch"]'), true, "open Control workspace");
+    assert.equal(await clickVisible(client, '[data-control-domain="both"]'), true, "select Both domain");
     await waitFor(() => evaluate(client, 'document.querySelector(".layout.layoutSharedWorkspace.layoutControl.controlModeBoth") !== null'), "Both domain");
     const both = await waitFor(async () => {
       const value = await measureBoth(client);
@@ -1581,6 +1582,7 @@ try {
 
     // Timeline: inspect upper arranger, the two header disclosures, and the
     // lower Sources shelf before exercising expansion/Escape priority.
+    assert.equal(await clickVisible(client, '[data-workspace-option="control"]'), true, "return to Edit workspace");
     assert.equal(await clickVisible(client, '[data-control-mode-option="live"]'), true, "select Timeline domain");
     await waitFor(() => evaluate(client, 'document.querySelector(".layout.layoutSharedWorkspace.layoutControl.controlModeLive") !== null'), "Timeline domain");
     const timeline = await waitFor(async () => {

@@ -12,6 +12,7 @@ import {
   controlModeForShortcut,
   setupSubTabForShortcut,
   workspaceTabForShortcut,
+  workspaceModeForTabShortcut,
   type ControlMode,
   type SetupSubTab,
   type WorkspaceTab,
@@ -228,6 +229,10 @@ export function resolveAppShortcut(
     const tab = setupSubTabForShortcut(event.code);
     return tab ? { kind: "selectSetupMode", tab } : null;
   }
+  if (event.altKey && !commandModifier && !event.shiftKey) {
+    const mode = workspaceModeForTabShortcut(context.workspaceTab, event.code);
+    return mode ? { kind: "setControlMode", mode } : null;
+  }
   if (event.altKey) return null;
 
   if (context.workspaceTab === "setup") {
@@ -263,7 +268,7 @@ export function resolveAppShortcut(
     if (event.code === "Escape" && context.mappingInteractionActive) return { kind: "cancelMappingInteraction" };
   }
 
-  if (context.workspaceTab !== "control" || commandModifier) return null;
+  if ((context.workspaceTab !== "control" && context.workspaceTab !== "touch") || commandModifier) return null;
 
   // Timeline-local commands win while the timeline surface is active. Outside
   // that surface, L keeps its established Control-mode switch behavior.
@@ -285,7 +290,8 @@ export function resolveAppShortcut(
     if (event.code === "KeyB" && event.shiftKey) return { kind: "setTimelineLoopB" };
   }
 
-  const mode = controlModeForShortcut(event.code);
+  const requestedMode = controlModeForShortcut(event.code);
+  const mode = context.workspaceTab === "touch" && requestedMode === "mixer" ? "perform" : requestedMode;
   if (mode) return { kind: "setControlMode", mode };
   if (event.code === "Space") {
     return { kind: event.shiftKey ? "triggerPreviousCue" : "triggerNextCue", enabled: context.cueIds.length > 0 };

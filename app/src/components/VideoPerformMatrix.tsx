@@ -70,6 +70,10 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
     if (props.keyboardEnabled === false || event.defaultPrevented || event.repeat || event.isComposing
       || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
     const target = event.target instanceof Element ? event.target : null;
+    // Domain tabs own their roving focus keys; row keys still launch from the
+    // persistent chrome just as they do elsewhere outside editable controls.
+    if (target?.closest("[data-control-domain]") &&
+      ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
     // A focused pane divider owns its Arrow/Home/End resize keys.
     if (target?.closest("input, textarea, select, [role='separator'], [contenteditable]:not([contenteditable='false']), [data-video-perform-pane='inspector'], [data-effect-browser]")
       || document.querySelector("[role='dialog'], dialog[open], [aria-modal='true'], .app[data-control-learn-mode]")) return;

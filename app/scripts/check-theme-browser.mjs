@@ -30,7 +30,7 @@ const workspaces = [
   { id: "lighting-edit", fixture: "timeline", workspace: "control", mode: "edit" },
   { id: "setup-patch", fixture: "patch", workspace: "setup" },
   { id: "video-edit", fixture: "operator-vj", workspace: "control", mode: "mixer" },
-  { id: "control-perform", fixture: "vj-bank", workspace: "control", mode: "perform" },
+  { id: "control-perform", fixture: "vj-bank", workspace: "touch", mode: "perform" },
   { id: "timeline", fixture: "timeline-layered", workspace: "control", mode: "live" },
 ];
 const report = { typeRoles: [], timestamp: new Date().toISOString(), browserPlugin: "unavailable", fallbackReason: "Browser plugin not available; task requires existing fixture harness", softwareOnly: true, screenshots: [], themes: [], textContrast: [], interactions: [], errors: [], warnings: [], baselineAssetNotices: [], failedResponses: [] };

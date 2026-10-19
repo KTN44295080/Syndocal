@@ -257,6 +257,7 @@ try {
 
     assert.equal(await click(client, '[data-workspace-option="touch"]'), true);
     assert.equal(await click(client, '[data-control-domain="video"]'), true, "Control Video domain is explicitly selected");
+    assert.equal(await click(client, '[data-control-video-tools]'), true, "original live video controls remain reachable");
     await waitFor(() => evaluate(client, "document.querySelector('[data-video-clip-slot-bank=control]')?.querySelectorAll('.videoClipSlotPad').length === 32"), "Control Clip Slot bank");
     const control = await measureBank(client, "control");
     assert.equal(control.padCount, 32);
@@ -286,9 +287,9 @@ try {
       "Control converts the shared fixed-point duration to beat units without changing identity",
     );
     assert.equal(control.importVisible && control.cancelVisible && control.layerSelectorVisible && control.inspectorTriggerVisible, true, "Control exposes Import, cancel, layer selector, and inspector trigger");
-    const take = await evaluate(client, `(() => { const button = document.querySelector('.touchDomainVideo [data-video-clip-slot-take]'); const rect = button?.getBoundingClientRect(); return button instanceof HTMLButtonElement && Boolean(rect && rect.width > 0 && rect.height >= 44) && !button.disabled; })()`);
+    const take = await evaluate(client, `(() => { const button = document.querySelector('.controlVideoToolsDialog [data-video-clip-slot-take]'); const rect = button?.getBoundingClientRect(); return button instanceof HTMLButtonElement && Boolean(rect && rect.width > 0 && rect.height >= 44) && !button.disabled; })()`);
     assert.equal(take, true, "Control has one visible enabled dominant queued Take target");
-    await evaluate(client, "document.querySelector('.touchDomainVideo .videoTransitionBusPanel.compact')?.scrollIntoView({block:'nearest'})");
+    await evaluate(client, "document.querySelector('.controlVideoToolsDialog .videoTransitionBusPanel.compact')?.scrollIntoView({block:'nearest'})");
     const controlBus = await measureTransitionBus(client, true);
     assert.ok(controlBus?.rect[0] > 0 && controlBus?.rect[1] > 0, "Control transition bus is visible with nonzero geometry");
     assert.deepEqual([controlBus.activeCount, controlBus.progress, controlBus.reverse, controlBus.release, controlBus.shortTargets], [1, 500, true, true, 0], "Control exposes the same active runtime truth and reversible 44px controls");

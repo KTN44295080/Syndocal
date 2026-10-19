@@ -359,6 +359,7 @@ assert.deepEqual(
     workspace_tab: "control",
     setup_sub_tab: "video",
     control_mode: "live",
+    touch_control_domain: "lighting",
     timeline_desk_surface: "playback",
     timeline_context_drawer: "cue",
     edit_desk_surface: "faders",

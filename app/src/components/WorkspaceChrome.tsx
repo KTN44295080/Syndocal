@@ -16,8 +16,8 @@ import type {
   OperatorLockMode,
   ShowClockIpcStatus,
 } from "../types";
-import { editDomainModes, setupAreaForSubTab, setupAreas, setupSubTabs, setupSubTabsForArea } from "../uiModes";
-import type { ControlMode, SetupSubTab, WorkspaceTab } from "../uiModes";
+import { controlDomainModes, editDomainModes, setupAreaForSubTab, setupAreas, setupSubTabs, setupSubTabsForArea } from "../uiModes";
+import type { ControlDomain, ControlMode, SetupSubTab, WorkspaceTab } from "../uiModes";
 import { translateUiText, type UiLocale } from "../uiLocalization";
 import { uiThemeOptions, type UiTheme } from "../uiTheme";
 import { summarizeShowClockForShell } from "../showClockShell";
@@ -35,6 +35,9 @@ type WorkspaceChromeProps = {
   workspaceTab: WorkspaceTab;
   setupSubTab: SetupSubTab;
   controlMode: ControlMode;
+  touchControlDomain: ControlDomain;
+  onControlDomain: (domain: ControlDomain) => unknown;
+  onOpenVideoLiveControls: () => void;
   blackout: boolean;
   videoBlackout: boolean;
   lightingMaster: number;
@@ -199,6 +202,16 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
     if (!target) return;
     props.onControlMode(target.id);
     queueMicrotask(() => document.getElementById(`edit-domain-tab-${target.id}`)?.focus());
+  };
+
+  const focusControlDomain = (current: ControlDomain, direction: -1 | 1 | "first" | "last") => {
+    const enabled = controlDomainModes.filter((domain) => !(props.operatorLockMode === "Partial" && domain.id === "lighting"));
+    const index = enabled.findIndex((domain) => domain.id === current);
+    const target = direction === "first" ? enabled[0] : direction === "last" ? enabled.at(-1)
+      : enabled[(index + direction + enabled.length) % enabled.length];
+    if (!target) return;
+    props.onControlDomain(target.id);
+    queueMicrotask(() => document.getElementById(`control-domain-${target.id}`)?.focus());
   };
 
   const liveLabel = () => {
@@ -856,6 +869,32 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               );
             }}
           </For>
+        </nav>
+      </Show>
+      <Show when={props.workspaceTab === "touch"}>
+        <nav class="controlModeTabs contextModeTabs touchControlDomainTabs" role="tablist" aria-label="Control domain" data-control-domain-navigation>
+          <For each={controlDomainModes}>
+            {(domain, index) => (
+              <button type="button" id={`control-domain-${domain.id}`} data-control-domain={domain.id}
+                data-control-mode-option={domain.mode} role="tab" aria-label={domain.label}
+                aria-selected={props.touchControlDomain === domain.id} aria-pressed={props.touchControlDomain === domain.id}
+                aria-controls={`control-domain-panel-${domain.id}`} aria-keyshortcuts={`Alt+${index() + 1}`}
+                tabindex={props.touchControlDomain === domain.id ? 0 : -1}
+                disabled={props.operatorLockMode === "Partial" && domain.id === "lighting"}
+                class={props.touchControlDomain === domain.id ? "active" : ""}
+                onClick={() => props.onControlDomain(domain.id)}
+                onKeyDown={(event) => {
+                  if (["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) {
+                    event.preventDefault();
+                    focusControlDomain(domain.id, event.key === "Home" ? "first" : event.key === "End" ? "last"
+                      : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1);
+                  }
+                }}>{domain.label}</button>
+            )}
+          </For>
+          <Show when={props.touchControlDomain === "video"}>
+            <button type="button" class="controlVideoToolsButton" data-control-video-tools onClick={props.onOpenVideoLiveControls}>Video live controls</button>
+          </Show>
         </nav>
       </Show>
       <Show when={props.controlLearnMode}>

@@ -128,7 +128,6 @@ import { StagePreview2D } from "./components/StagePreview2D";
 import { EditVideoInspector } from "./components/EditVideoInspector";
 import { VideoControlPanel } from "./components/VideoControlPanel";
 import { ControlBothPanel } from "./components/ControlBothPanel";
-import { TouchBothLivePanel } from "./components/TouchBothLivePanel";
 import { VideoClipSlotInspectorPanel } from "./components/VideoClipSlotInspectorPanel";
 import { defaultAutoVjSnapshot } from "./components/AutoVjStrip";
 import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
@@ -601,6 +600,9 @@ import {
   controlCategories,
   controlCategoryForAttribute,
   controlModeForShortcut,
+  controlModeForDomain,
+  controlDomainForMode,
+  type ControlDomain,
   setupSubTabForShortcut,
   workspaceTabForShortcut,
   type ControlMode,
@@ -2055,7 +2057,7 @@ export default function App() {
   const [timelineChildCueId, setTimelineChildCueId] = createSignal<number | null>(null);
   const [timelineNavigatorOpen, setTimelineNavigatorOpen] = createSignal(true);
   const [controlLiveView, setControlLiveView] = createSignal<"matrix" | "pads">("matrix");
-  const [touchControlDomain, setTouchControlDomain] = createSignal<"lighting" | "video" | "both">("lighting");
+  const [touchControlDomain, setTouchControlDomain] = createSignal<ControlDomain>(initialWorkspaceLayout.touch_control_domain ?? "lighting");
   const [liveStatusExpanded, setLiveStatusExpanded] = createSignal(false);
   const [authoredEffectEnableControlId, setAuthoredEffectEnableControlId] = createSignal<number | null>(null);
   const editDeskSurface = (): EditDeskSurface => controlCategory() === "fader" ? "faders" : "attributes";
@@ -4074,6 +4076,7 @@ export default function App() {
       setWorkspaceTab("setup");
     } else if (paneWindow === "touch") {
       setWorkspaceTab("touch");
+      setControlMode(controlModeForDomain(touchControlDomain()));
     } else {
       setWorkspaceTab("control");
       setControlMode(paneWindow === "programmer" ? "edit" : paneWindow === "mixer" ? "mixer" : "live");
@@ -5339,6 +5342,7 @@ export default function App() {
       setWorkspaceTab("setup");
     } else if (paneWindow === "touch") {
       setWorkspaceTab("touch");
+      setControlMode(controlModeForDomain(touchControlDomain()));
     } else {
       setWorkspaceTab("control");
       setControlMode(paneWindow === "programmer" ? "edit" : paneWindow === "mixer" ? "mixer" : "live");
@@ -5466,6 +5470,7 @@ export default function App() {
       workspace_tab: workspaceTab(),
       setup_sub_tab: setupSubTab(),
       control_mode: controlMode(),
+      touch_control_domain: touchControlDomain(),
       timeline_desk_surface: timelineDeskSurface(),
       timeline_context_drawer: timelineContextDrawer() === "block" ? "none" : timelineContextDrawer(),
       edit_desk_surface: editDeskSurface(),
@@ -5712,6 +5717,7 @@ export default function App() {
     workspace_tab: workspaceTab(),
     setup_sub_tab: setupSubTab(),
     control_mode: controlMode(),
+    touch_control_domain: touchControlDomain(),
     timeline_desk_surface: timelineDeskSurface(),
     timeline_context_drawer: timelineContextDrawer() === "block" ? "none" : timelineContextDrawer(),
     edit_desk_surface: editDeskSurface(),
@@ -5726,6 +5732,7 @@ export default function App() {
     setWorkspaceTab(layout.workspace_tab);
     setSetupSubTab(layout.setup_sub_tab);
     setControlMode(layout.control_mode);
+    setTouchControlDomain(layout.touch_control_domain ?? "lighting");
     setTimelineDeskSurface(layout.timeline_desk_surface);
     // Persisted retired drawer state fails closed to the closed drawer; the
     // Timeline Create-scene route was removed and must never restore.
@@ -5856,7 +5863,9 @@ export default function App() {
   void refreshOperatorPolicy(true);
   createEffect(() => {
     if (operatorLockMode() !== "Partial") return;
-    if (workspaceTab() !== "control" || controlMode() === "edit") {
+    const allowedAuthoring = workspaceTab() === "control" && controlMode() !== "edit";
+    const allowedLiveDesk = workspaceTab() === "touch" && (controlMode() === "perform" || controlMode() === "both");
+    if (!allowedAuthoring && !allowedLiveDesk) {
       setWorkspaceTab("control");
       setControlMode("live");
     }
@@ -10042,7 +10051,9 @@ export default function App() {
     workspaceTab() === "setup"
       ? `layoutSharedWorkspace layoutSetup setupMode-${setupSubTab()}`
       : workspaceTab() === "touch"
-        ? `layoutSharedWorkspace layoutControl layoutTouch controlModeEdit editDesk-faders touchDomain${touchControlDomain() === "video" ? "Video" : touchControlDomain() === "both" ? "Both" : "Lighting"}`
+        ? touchControlDomain() === "lighting"
+          ? "layoutSharedWorkspace layoutControl layoutTouch controlModeEdit editDesk-faders touchDomainLighting"
+          : `layoutSharedWorkspace layoutControl controlMode${touchControlDomain() === "video" ? "Perform" : "Both"}`
         : `layoutSharedWorkspace layoutControl controlMode${controlMode()[0].toUpperCase()}${controlMode().slice(1)}${
             controlMode() === "edit" ? ` editDesk-${editDeskSurface()}` : ""
           }`,
@@ -10056,7 +10067,7 @@ export default function App() {
   // they give the whole workspace height to their own surface.
   const persistentBandVisible = createMemo(
     () => sharedWorkspaceVisible()
-      && !(workspaceTab() === "control" && controlMode() === "perform")
+      && !(workspaceTab() === "touch" && controlMode() === "perform")
       && !(workspaceTab() === "setup" && (setupSubTab() === "io" || setupSubTab() === "authority")),
   );
   const liveMappingStageVisible = createMemo(
@@ -15778,7 +15789,7 @@ export default function App() {
     if (newProjectInFlight) return;
     newProjectInFlight = true;
     try {
-      if (workspaceTab() === "control" && controlMode() === "perform" &&
+      if (workspaceTab() === "touch" && controlMode() === "perform" &&
         !await confirmDialog(newProjectDuringShowDialog())) return;
       if (!await confirmDiscardProjectChanges("create a new project")) {
         setMessage("New project canceled.");
@@ -21324,7 +21335,7 @@ export default function App() {
       }
       return;
     }
-    const editVideoVisible = workspaceTab() === "control" && (controlMode() === "mixer" || controlMode() === "perform");
+    const editVideoVisible = ((workspaceTab() === "control" && controlMode() === "mixer") || (workspaceTab() === "touch" && controlMode() === "perform"));
     const controlVideoVisible = workspaceTab() === "touch";
     if (!editVideoVisible && !controlVideoVisible) return;
     void refreshVideoClipSlotRuntime(true);
@@ -21473,7 +21484,7 @@ export default function App() {
     });
   };
   createEffect(() => {
-    const active = workspaceTab() === "control" && (controlMode() === "mixer" || controlMode() === "both" || controlMode() === "perform");
+    const active = ((workspaceTab() === "control" && controlMode() === "mixer") || (workspaceTab() === "touch" && (controlMode() === "both" || controlMode() === "perform")));
     if (!isTauriRuntime()) {
       applyVjPreviewTransport(emptyVjPreviewTransport());
       return;
@@ -21486,7 +21497,7 @@ export default function App() {
   const liveVideoMonitors = createLiveVideoMonitorController({
     invoke,
     backendAvailable: () => isTauriRuntime(),
-    active: () => workspaceTab() === "control" && (controlMode() === "mixer" || controlMode() === "both" || controlMode() === "perform"),
+    active: () => ((workspaceTab() === "control" && controlMode() === "mixer") || (workspaceTab() === "touch" && (controlMode() === "both" || controlMode() === "perform"))),
     layerCount: () => snapshot().video.layers.length,
     previewLayerId: videoPreviewLayerId,
     programOutputId: selectedVideoOutputId,
@@ -25703,7 +25714,12 @@ export default function App() {
       return false;
     }
     if (mode === "mixer" || mode === "perform") authorizeVideoThumbnailAccess();
-    setControlMode(mode);
+    setVideoClipSlotInspectorOpen(false);
+    batch(() => {
+      setControlMode(mode);
+      setWorkspaceTab(mode === "perform" || mode === "both" ? "touch" : "control");
+      if (mode === "perform" || mode === "both") setTouchControlDomain(controlDomainForMode(mode));
+    });
     if (mode === "edit") {
       setEditDeskSurface("attributes");
       if (selectedSceneCue()) {
@@ -25719,9 +25735,28 @@ export default function App() {
     }
     // Domain panels unmount while switching. Return focus to the persistent tab
     // after the new panel/Portal host has been published.
-    requestAnimationFrame(() => document.getElementById(`edit-domain-tab-${mode}`)?.focus());
+    requestAnimationFrame(() => document.getElementById(mode === "perform" || mode === "both" ? `control-domain-${controlDomainForMode(mode)}` : `edit-domain-tab-${mode}`)?.focus());
     return true;
   };
+
+  const selectControlDomain = (domain: ControlDomain) => {
+    if (paneWindow && paneWindow !== "touch") return false;
+    if (operatorLockMode() === "Partial" && domain === "lighting") {
+      setMessage("Lighting editing is locked for this operator.");
+      return false;
+    }
+    if (domain === "video") authorizeVideoThumbnailAccess();
+    setVideoClipSlotInspectorOpen(false);
+    batch(() => {
+      setTouchControlDomain(domain);
+      setControlMode(controlModeForDomain(domain));
+      setWorkspaceTab("touch");
+    });
+    requestAnimationFrame(() => document.getElementById(`control-domain-${domain}`)?.focus());
+    return true;
+  };
+  let videoLiveControlsDialog: HTMLDialogElement | undefined;
+  const openVideoLiveControls = () => videoLiveControlsDialog?.showModal();
 
   const operatorRouteFixtureWindow = window as typeof window & {
     __syndocalTryLockedMappingSceneFxRoute?: () => void;
@@ -25760,13 +25795,30 @@ export default function App() {
     });
   }
 
+  let lastEditMode: ControlMode = "edit";
+  createEffect(() => {
+    const mode = controlMode();
+    if (workspaceTab() === "control" && mode !== "perform" && mode !== "both") lastEditMode = mode;
+  });
   const selectWorkspaceTab = (tab: WorkspaceTab): boolean => {
     if (operatorLockMode() !== null && tab === "setup") {
       setMessage("Unlock operator mode before opening Setup.");
       return false;
     }
-    if (tab === "control" && (controlMode() === "mixer" || controlMode() === "perform")) authorizeVideoThumbnailAccess();
-    setWorkspaceTab(tab);
+    const targetDomain = operatorLockMode() === "Partial" && touchControlDomain() === "lighting" ? "video" : touchControlDomain();
+    if ((tab === "control" && controlMode() === "mixer") || (tab === "touch" && targetDomain === "video")) authorizeVideoThumbnailAccess();
+    if (workspaceTab() !== tab) setVideoClipSlotInspectorOpen(false);
+    batch(() => {
+      if (tab === "touch") {
+        setTouchControlDomain(targetDomain);
+        setControlMode(controlModeForDomain(targetDomain));
+      } else if (tab === "control" && (workspaceTab() === "touch" || controlMode() === "perform" || controlMode() === "both")) {
+        // Control reuses the mode signal for its own domains; return Edit to the
+        // creation tab the operator last used instead of always Lighting.
+        setControlMode(operatorLockMode() === "Partial" && lastEditMode === "edit" ? "live" : lastEditMode);
+      }
+      setWorkspaceTab(tab);
+    });
     requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-workspace-option="${tab}"]`)?.focus());
     return true;
   };
@@ -25829,7 +25881,7 @@ export default function App() {
           selectSetupMode(route.setupSubTab!);
           if (route.activeIoConnection) setActiveIoConnection(route.activeIoConnection as IoConnectionId);
         } else if (route.workspace === "touch") {
-          setTouchControlDomain(route.touchControlDomain!);
+          selectControlDomain(route.touchControlDomain!);
         } else {
           selectControlMode(route.controlMode!);
           if (route.controlMode === "edit") selectEditDeskSurface(route.editDeskSurface!);
@@ -26258,7 +26310,7 @@ export default function App() {
 
   // Perform confirms only the UI request; the existing blackout owner remains authoritative.
   const requestPerformVideoBlackout = async (enabled: boolean) => {
-    if (workspaceTab() === "control" && controlMode() === "perform" &&
+    if (workspaceTab() === "touch" && controlMode() === "perform" &&
       !await confirmDialog(blackoutDialog(enabled))) return;
     return setVideoBlackout(enabled);
   };
@@ -26269,6 +26321,7 @@ export default function App() {
     setupSubTab,
     selectSetupMode,
     setControlMode: selectControlMode,
+    selectControlDomain,
     setMessage,
     saveProject,
     saveProjectAs,
@@ -26384,7 +26437,7 @@ export default function App() {
     // In Perform, native button activation owns Enter / Space. The global GO
     // shortcut must not consume a focused clip, pager or blackout action.
     if (
-      workspaceTab() === "control" && controlMode() === "perform" &&
+      workspaceTab() === "touch" && controlMode() === "perform" &&
       !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey &&
       (event.key === "Enter" || event.code === "Space") &&
       event.target instanceof HTMLElement && event.target.closest("button, summary")
@@ -27023,6 +27076,9 @@ export default function App() {
       data-control-learn-busy={controlLearnBusy() ? "true" : undefined}
     >
       <WorkspaceChrome
+        touchControlDomain={touchControlDomain()}
+        onControlDomain={selectControlDomain}
+        onOpenVideoLiveControls={openVideoLiveControls}
         workspaceTab={workspaceTab()}
         setupSubTab={setupSubTab()}
         controlMode={controlMode()}
@@ -27338,11 +27394,16 @@ export default function App() {
         <Show when={workspaceTab() === "control" && controlMode() !== "live"}>
           <section id="edit-domain-panel-live" role="tabpanel" aria-labelledby="edit-domain-tab-live" hidden />
         </Show>
-        <Show when={workspaceTab() === "control" && controlMode() !== "both"}>
-          <section id="edit-domain-panel-both" role="tabpanel" aria-labelledby="edit-domain-tab-both" hidden />
-        </Show>
-        <Show when={workspaceTab() === "control" && controlMode() !== "perform"}>
-          <section id="edit-domain-panel-perform" role="tabpanel" aria-labelledby="edit-domain-tab-perform" hidden />
+        <Show when={workspaceTab() === "touch"}>
+          <Show when={controlMode() !== "edit"}>
+            <section id="control-domain-panel-lighting" role="tabpanel" aria-labelledby="control-domain-lighting" hidden />
+          </Show>
+          <Show when={controlMode() !== "perform"}>
+            <section id="control-domain-panel-video" role="tabpanel" aria-labelledby="control-domain-video" hidden />
+          </Show>
+          <Show when={controlMode() !== "both"}>
+            <section id="control-domain-panel-both" role="tabpanel" aria-labelledby="control-domain-both" hidden />
+          </Show>
         </Show>
         <Show when={workspaceTab() === "control" && controlMode() === "edit"}>
           <section
@@ -27401,7 +27462,7 @@ export default function App() {
             </Show>
           </section>
         </Show>
-        <Show when={workspaceTab() === "control" && controlMode() === "both"}>
+        <Show when={workspaceTab() === "touch" && controlMode() === "both"}>
           <ControlBothPanel
             activeCueId={snapshot().active_cue_id ?? null}
             activeCueLabel={activeCue()?.label ?? "None"}
@@ -27424,8 +27485,8 @@ export default function App() {
             clipCount={snapshot().video.layers.length}
             selectedClipLabel={selectedVideoClipSlotLayer()?.label ?? null}
             recordingLabel={videoRecordingStatus().active ? "Recording" : videoRecordingStatus().state ?? "Idle"}
-            onOpenLighting={() => selectControlMode("edit")}
-            onOpenVideo={() => selectControlMode("mixer")}
+            onOpenLighting={() => selectControlDomain("lighting")}
+            onOpenVideo={() => selectControlDomain("video")}
             onBack={() => void triggerPreviousCue()}
             onGo={() => void triggerNextCue()}
             onRelease={() => {
@@ -27738,69 +27799,84 @@ export default function App() {
           </Show>
         </section>
         </Show>
-        <Show when={workspaceTab() === "touch"}>
-        <nav class="touchControlDomainTabs" aria-label="Control domain">
-          <button
-            type="button"
-            data-control-domain="lighting"
-            class={touchControlDomain() === "lighting" ? "active" : ""}
-            aria-pressed={touchControlDomain() === "lighting"}
-            onClick={() => setTouchControlDomain("lighting")}
-          >Lighting</button>
-          <button
-            type="button"
-            data-control-domain="video"
-            class={touchControlDomain() === "video" ? "active" : ""}
-            aria-pressed={touchControlDomain() === "video"}
-            onClick={() => setTouchControlDomain("video")}
-          >Video</button>
-          <button
-            type="button"
-            id="control-domain-both"
-            data-control-domain="both"
-            class={touchControlDomain() === "both" ? "active" : ""}
-            aria-pressed={touchControlDomain() === "both"}
-            onClick={() => setTouchControlDomain("both")}
-          >Both</button>
-        </nav>
-        <Show when={touchControlDomain() === "both"}>
-          <TouchBothLivePanel
-            activeCueId={snapshot().active_cue_id ?? null}
-            activeCueLabel={activeCue()?.label ?? "None"}
-            nextCueLabel={nextCue()?.label ?? "No cue"}
-            cueCount={snapshot().cues.length}
-            timelinePlaying={snapshot().timeline.playing}
-            timecode={formatShowTimecode(snapshot().timeline.position_ms)}
-            lightingMaster={snapshot().lighting_master}
-            videoMaster={snapshot().video.master_opacity}
-            blackout={snapshot().authored_blackout}
-            videoBlackout={snapshot().video.blackout}
-            enabledDmxOutputCount={enabledDmxOutputCount()}
-            dmxOutputCount={snapshot().dmx_outputs.length}
-            enabledVideoOutputCount={enabledVideoOutputCount()}
-            videoOutputCount={snapshot().video.outputs.length}
-            previewLabel={liveVideoPreviewLabel()}
-            previewStatus={liveVideoMonitors.preview().status}
-            programLabel={liveVideoProgramLabel()}
-            programStatus={liveVideoMonitors.program().status}
-            clipCount={snapshot().video.layers.length}
-            selectedClipLabel={selectedVideoClipSlotLayer()?.label ?? null}
-            recordingLabel={videoRecordingStatus().active ? "Recording" : videoRecordingStatus().state ?? "Idle"}
-            onOpenLighting={() => setTouchControlDomain("lighting")}
-            onOpenVideo={() => setTouchControlDomain("video")}
-            onBack={() => void triggerPreviousCue()}
-            onGo={() => void triggerNextCue()}
-            onRelease={() => {
-              const cueId = snapshot().active_cue_id;
-              if (cueId !== null && cueId !== undefined) void releaseCueById(cueId);
-            }}
-            onSetLightingMaster={setLightingMaster}
-            onSetVideoMaster={setVideoMasterOpacity}
-            onSetBlackout={(enabled) => void setBlackout(enabled)}
-            onSetVideoBlackout={(enabled) => void setVideoBlackout(enabled)}
-            onSetAllBlackout={(enabled) => void setAllBlackout(enabled)}
-          />
+        <Show when={workspaceTab() === "touch" && touchControlDomain() === "video"}>
+          <dialog class="controlVideoToolsDialog" ref={videoLiveControlsDialog} aria-labelledby="control-video-tools-title"
+            onClose={() => setVideoClipSlotInspectorOpen(false)}>
+            <header class="panelHeader">
+              <h2 id="control-video-tools-title">Video live controls</h2>
+              <button type="button" autofocus onClick={() => {
+                // Do not wait for the asynchronous dialog close event to reap the nested inspector.
+                setVideoClipSlotInspectorOpen(false);
+                videoLiveControlsDialog?.close();
+              }}>Close</button>
+            </header>
+        <TouchVideoPanel
+          layers={snapshot().video.layers}
+          outputs={snapshot().video.outputs}
+          selectedOutputId={selectedVideoOutputId()}
+          onSetLayerState={setVideoLayerState}
+          onAddCuePoint={addVideoCuePoint}
+          onJumpCuePoint={jumpVideoCuePoint}
+          onSelectOutput={setSelectedVideoOutputId}
+          windowStateForOutput={(outputId) => {
+            const state = videoOutputWindowState(outputId);
+            return { stateLabel: state.stateLabel, detail: state.detail };
+          }}
+          clipSlotBank={{
+            mode: "control",
+            get layers() { return snapshot().video.layers; },
+            get layer() { return selectedVideoClipSlotLayer(); },
+            get runtime() { return selectedVideoClipSlotRuntime(); },
+            get assets() { return snapshot().video.media_assets; },
+            get thumbnails() { return mediaAssetThumbnails(); },
+            get selectedSlotId() { return selectedVideoClipSlotId(); },
+            onSelectLayer: selectVideoClipSlotLayer,
+            onSelect: selectVideoClipSlot,
+            onQueue: (slotId) => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? queueVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
+            },
+            onPreview: previewVideoClipSlot,
+            onMore: openVideoClipSlotInspector,
+            onImport: () => importMediaFiles("File"),
+            onCancelQueue: () => {
+              const layer = selectedVideoClipSlotLayer();
+              return layer ? cancelQueuedVideoClipSlot(layer.id) : Promise.resolve(null);
+            },
+            onSetQuantization: updateVideoClipSlotQuantization,
+            get transitionKind() { return videoClipTakeKind(); },
+            get transitionDurationUnit() { return videoClipTakeDurationUnit(); },
+            get transitionDurationMilliunits() { return videoClipTakeDurationMilliunits(); },
+            onSetTransitionKind: setVideoClipTakeKind,
+            onSetTransitionDurationUnit: setVideoClipTakeDurationUnit,
+            onSetTransitionDurationMilliunits: (value) => setVideoClipTakeDurationMilliunits(
+              Math.max(1, Math.min(600_000, Math.round(value || 1))),
+            ),
+          }}
+          clipSlotTake={{
+            get enabled() {
+              const runtime = selectedVideoClipSlotRuntime();
+              return runtime?.transition != null || runtime?.queued_slot_id != null;
+            },
+            get label() { return selectedVideoClipSlotRuntime()?.transition ? "Reverse" : "Take"; },
+            onTake: takeSelectedVideoClipSlot,
+          }}
+          transitionBuses={{
+            get catalog() { return videoEffectCatalog(); },
+            get compositions() { return snapshot().video.compositions; },
+            get runtime() { return videoTransitionRuntime(); },
+            get busy() { return isfEventPulseBusy(); },
+            onApplyCatalog: applyVideoEffectCatalog,
+            onLaunch: launchVideoLayerTransitionBus,
+            onRelease: releaseVideoLayerTransitionBus,
+          }}
+        />
+        <Show when={videoClipSlotInspectorOpen() && selectedVideoClipSlotLayer()}>
+          {renderVideoClipSlotInspector(false)}
         </Show>
+          </dialog>
+        </Show>
+        <Show when={workspaceTab() === "touch" && touchControlDomain() === "lighting"}>
         <EditableTouchSurface
           bankAuthority={bankAuthority()}
           snapshot={snapshot()}
@@ -28022,70 +28098,6 @@ export default function App() {
             />
           </Show>
         </TouchFixturePanel>
-        <TouchVideoPanel
-          layers={snapshot().video.layers}
-          outputs={snapshot().video.outputs}
-          selectedOutputId={selectedVideoOutputId()}
-          onSetLayerState={setVideoLayerState}
-          onAddCuePoint={addVideoCuePoint}
-          onJumpCuePoint={jumpVideoCuePoint}
-          onSelectOutput={setSelectedVideoOutputId}
-          windowStateForOutput={(outputId) => {
-            const state = videoOutputWindowState(outputId);
-            return { stateLabel: state.stateLabel, detail: state.detail };
-          }}
-          clipSlotBank={{
-            mode: "control",
-            get layers() { return snapshot().video.layers; },
-            get layer() { return selectedVideoClipSlotLayer(); },
-            get runtime() { return selectedVideoClipSlotRuntime(); },
-            get assets() { return snapshot().video.media_assets; },
-            get thumbnails() { return mediaAssetThumbnails(); },
-            get selectedSlotId() { return selectedVideoClipSlotId(); },
-            onSelectLayer: selectVideoClipSlotLayer,
-            onSelect: selectVideoClipSlot,
-            onQueue: (slotId) => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? queueVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
-            },
-            onPreview: previewVideoClipSlot,
-            onMore: openVideoClipSlotInspector,
-            onImport: () => importMediaFiles("File"),
-            onCancelQueue: () => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? cancelQueuedVideoClipSlot(layer.id) : Promise.resolve(null);
-            },
-            onSetQuantization: updateVideoClipSlotQuantization,
-            get transitionKind() { return videoClipTakeKind(); },
-            get transitionDurationUnit() { return videoClipTakeDurationUnit(); },
-            get transitionDurationMilliunits() { return videoClipTakeDurationMilliunits(); },
-            onSetTransitionKind: setVideoClipTakeKind,
-            onSetTransitionDurationUnit: setVideoClipTakeDurationUnit,
-            onSetTransitionDurationMilliunits: (value) => setVideoClipTakeDurationMilliunits(
-              Math.max(1, Math.min(600_000, Math.round(value || 1))),
-            ),
-          }}
-          clipSlotTake={{
-            get enabled() {
-              const runtime = selectedVideoClipSlotRuntime();
-              return runtime?.transition != null || runtime?.queued_slot_id != null;
-            },
-            get label() { return selectedVideoClipSlotRuntime()?.transition ? "Reverse" : "Take"; },
-            onTake: takeSelectedVideoClipSlot,
-          }}
-          transitionBuses={{
-            get catalog() { return videoEffectCatalog(); },
-            get compositions() { return snapshot().video.compositions; },
-            get runtime() { return videoTransitionRuntime(); },
-            get busy() { return isfEventPulseBusy(); },
-            onApplyCatalog: applyVideoEffectCatalog,
-            onLaunch: launchVideoLayerTransitionBus,
-            onRelease: releaseVideoLayerTransitionBus,
-          }}
-        />
-        <Show when={videoClipSlotInspectorOpen() && selectedVideoClipSlotLayer()}>
-          {renderVideoClipSlotInspector(false)}
-        </Show>
         </Show>
         <Show when={workspaceTab() === "setup" && setupSubTab() === "patch"}>
         <aside
@@ -28345,7 +28357,7 @@ export default function App() {
         />
         </Show>
 
-        <Show when={workspaceTab() === "control" && (controlMode() === "mixer" || controlMode() === "perform")}>
+        <Show when={((workspaceTab() === "control" && controlMode() === "mixer") || (workspaceTab() === "touch" && controlMode() === "perform"))}>
         <VideoControlPanel
           mixer={true}
           performance={controlMode() === "perform"}
@@ -28643,7 +28655,7 @@ export default function App() {
             onRemoveAutomation: removeTimelineAutomation,
           }}
         />
-        <Show when={videoClipSlotInspectorOpen() && selectedVideoClipSlotLayer()}>
+        <Show when={controlMode() === "mixer" && videoClipSlotInspectorOpen() && selectedVideoClipSlotLayer()}>
           {renderVideoClipSlotInspector(false)}
         </Show>
         </Show>

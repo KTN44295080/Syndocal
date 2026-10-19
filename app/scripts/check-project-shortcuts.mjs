@@ -369,6 +369,17 @@ for (const [code, tab] of [
     `Alt+Ctrl+${code} must remain isolated from Setup navigation`,
   );
 }
+for (const workspaceTab of ["control", "touch"]) {
+  const expected = workspaceTab === "control" ? ["edit", "mixer", "live"] : ["edit", "perform", "both"];
+  for (const [index, mode] of expected.entries()) {
+    for (const prefix of ["Digit", "Numpad"]) {
+      assert.deepEqual(resolve(prefix + (index + 1), { altKey: true }, { workspaceTab }), { kind: "setControlMode", mode }, `${workspaceTab}: Alt+${prefix}${index + 1} selects the canonical tab`);
+      assert.equal(resolve(prefix + (index + 1), { altKey: true }, { workspaceTab, editable: true }), null, "tab shortcuts preserve editable fields");
+    }
+  }
+}
+assert.deepEqual(resolve("KeyM", {}, { workspaceTab: "touch" }), { kind: "setControlMode", mode: "perform" }, "Control M enters Video's Perform desk");
+assert.deepEqual(resolve("KeyE", {}, { workspaceTab: "touch" }), { kind: "setControlMode", mode: "edit" }, "Control E enters Lighting");
 assert.deepEqual(resolve("KeyL", {}, { timelineSurfaceActive: true }), { kind: "toggleTimelineLoop", enabled: true });
 assert.deepEqual(resolve("KeyL"), { kind: "setControlMode", mode: "live" });
 assert.deepEqual(resolve("KeyA", { shiftKey: true }, { timelineSurfaceActive: true }), { kind: "setTimelineLoopA" });
@@ -552,9 +563,9 @@ const mountedHandlerCode = ts.transpileModule(`const underTest = ${mountedHandle
 // Any open modal dialog (the in-app confirmation, protected close, the Perform
 // legend, ...) suspends every global shortcut in every workspace and mode.
 for (const [workspace, mode, domDialogOpen, inAppDialogOpen, expectedCalls] of [
-  ["control", "perform", true, false, 0],
-  ["control", "perform", false, true, 0],
-  ["control", "perform", false, false, 1],
+  ["touch", "perform", true, false, 0],
+  ["touch", "perform", false, true, 0],
+  ["touch", "perform", false, false, 1],
   ["control", "video", true, false, 0],
   ["control", "video", false, true, 0],
   ["control", "video", false, false, 1],

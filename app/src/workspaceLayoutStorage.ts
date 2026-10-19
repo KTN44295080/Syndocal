@@ -1,6 +1,7 @@
 import type {
   ControlCategory,
   ControlMode,
+  ControlDomain,
   EditDeskSurface,
   SetupSubTab,
   TimelineContextDrawer,
@@ -12,6 +13,8 @@ export type WorkspaceLayout = {
   workspace_tab: WorkspaceTab;
   setup_sub_tab: SetupSubTab;
   control_mode: ControlMode;
+  /** Remember the live Control domain independently of Edit's current mode. */
+  touch_control_domain?: ControlDomain;
   timeline_desk_surface: TimelineDeskSurface;
   timeline_context_drawer: TimelineContextDrawer;
   edit_desk_surface: EditDeskSurface;
@@ -28,6 +31,7 @@ export const defaultWorkspaceLayout: WorkspaceLayout = {
   workspace_tab: "setup",
   setup_sub_tab: "patch",
   control_mode: "edit",
+  touch_control_domain: "lighting",
   timeline_desk_surface: "show",
   timeline_context_drawer: "none",
   edit_desk_surface: "attributes",
@@ -48,6 +52,7 @@ const allowedSetupSubTabs: SetupSubTab[] = [
   "io",
 ];
 const allowedControlModes: ControlMode[] = ["edit", "live", "mixer", "both", "perform"];
+const allowedControlDomains: ControlDomain[] = ["lighting", "video", "both"];
 const allowedTimelineDeskSurfaces: TimelineDeskSurface[] = ["show", "automation", "playback"];
 // Block properties are tied to the current selection, so reopening that drawer
 // from a previous process would restore stale editing context. Only stable
@@ -88,14 +93,30 @@ export const workspaceLayoutFromUnknown = (candidate: unknown): WorkspaceLayout 
   }
   const value = candidate as Record<string, unknown>;
   const legacyCueSurface = value.timeline_desk_surface === "cues";
+  const workspace = enumValue(value.workspace_tab, allowedWorkspaceTabs, defaultWorkspaceLayout.workspace_tab);
+  const mode = enumValue(value.control_mode, allowedControlModes, defaultWorkspaceLayout.control_mode);
+  // Idempotent one-way migration: the former Edit live desks now belong to
+  // Control, while their stable mode IDs and Perform split ratios are retained.
+  const liveDeskMode = mode === "perform" || mode === "both";
+  const migratedLiveDesk = workspace === "control" && liveDeskMode;
+  // Setup with a dormant Perform/Both mode would have reopened that Edit desk
+  // from F2; it now remembers the equivalent Control domain instead. A Control
+  // layout without the field keeps its historical default (Lighting).
+  const dormantLiveDesk = workspace === "setup" && liveDeskMode;
+  const domain = migratedLiveDesk ? mode === "perform" ? "video" : "both"
+    : enumValue(value.touch_control_domain, allowedControlDomains,
+      dormantLiveDesk ? mode === "perform" ? "video" : "both" : "lighting");
   return {
-    workspace_tab: enumValue(value.workspace_tab, allowedWorkspaceTabs, defaultWorkspaceLayout.workspace_tab),
+    workspace_tab: migratedLiveDesk ? "touch" : workspace,
     setup_sub_tab: enumValue(
       normalizedSetupSubTab(value.setup_sub_tab),
       allowedSetupSubTabs,
       defaultWorkspaceLayout.setup_sub_tab,
     ),
-    control_mode: enumValue(value.control_mode, allowedControlModes, defaultWorkspaceLayout.control_mode),
+    control_mode: migratedLiveDesk ? mode : workspace === "touch"
+      ? domain === "video" ? "perform" : domain === "both" ? "both" : "edit"
+      : liveDeskMode ? "edit" : mode,
+    touch_control_domain: domain,
     timeline_desk_surface: enumValue(
       legacyCueSurface ? "show" : value.timeline_desk_surface,
       allowedTimelineDeskSurfaces,

@@ -108,7 +108,7 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
   const minTopPx = () => matrixChromePx + matrixRowPx * Math.max(1, Math.min(3, props.clipSlotBank.layers.length));
   const outputContext = createMemo(() => props.liveMonitors.programLabel ?? "");
 
-  return <section id="edit-domain-panel-perform" role="tabpanel" aria-labelledby="edit-domain-tab-perform"
+  return <section id="control-domain-panel-video" role="tabpanel" aria-labelledby="control-domain-video"
     class="panel videoControlPanel videoPerformLayout" data-video-perform-layout aria-label="VJ performance desk"
     data-perform-focus={focused() ?? undefined} data-perform-bottom-collapsed={bottomCollapsed() ? "true" : undefined}>
     <section class="videoPerformPane videoPerformPaneMatrix" data-video-perform-pane="matrix" aria-labelledby="video-perform-title">
@@ -288,7 +288,9 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
     <VideoFxProblemsDialog ref={(element) => { fxProblemsDialog = element; }} problems={fxProblems()} locale={props.performContext?.locale} onClose={() => undefined} />
     <dialog ref={legend} class="videoPerformLegend" data-video-perform-legend>
       <h2>Keyboard shortcuts</h2>
-      <dl><dt>1–9, 0, Q–P, A–L, Z–C</dt><dd>Queue a clip in the selected layer</dd>
+      <dl><dt data-no-localize>F1 / F2 / F3</dt><dd>Setup / Edit / Control</dd>
+        <dt data-no-localize>Alt + 1 / 2 / 3</dt><dd>Lighting / Video / Both</dd>
+        <dt>1–9, 0, Q–P, A–L, Z–C</dt><dd>Queue a clip in the selected layer</dd>
         <dt>← → ↑ ↓ · Home / End</dt><dd>Move clip and layer selection</dd>
         <dt>Space / Enter</dt><dd>Take the queued clip</dd>
         <dt data-no-localize>Ctrl + Shift + B</dt><dd>Blackout or recover, with confirmation</dd>

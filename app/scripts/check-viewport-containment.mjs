@@ -251,6 +251,7 @@ const controlTabs = [
 ];
 
 const selectControlSurface = async (client, modeId) => {
+  await clickWorkspaceOption(client, modeId === "perform" || modeId === "both" ? "touch" : "control");
   await clickControlModeOption(client, modeId);
 };
 const viewportRecentProjects = [
@@ -2815,7 +2816,7 @@ async function ensureTimelineShowSurface(client) {
 
 const workspaceOptionSelector = (workspace) => `[data-workspace-option="${workspace}"]`;
 const controlModeOptionSelector = (mode) =>
-  `[data-edit-domain-navigation] [data-control-mode-option="${mode}"]`;
+  `[data-control-mode-option="${mode}"]`;
 
 async function clickWorkspaceOption(client, workspace) {
   await clickVisibleSelector(client, workspaceOptionSelector(workspace));
@@ -3684,10 +3685,10 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     normalDensity.visibleChromeEditDomainNavigationCount === 1 &&
     normalDensity.editDomainNavigationDirectlyAfterTopbar &&
     normalDensity.oldLowerControlModeNavigationCount === 0 &&
-    JSON.stringify(normalDensity.editDomainModeIds) === JSON.stringify(['edit', 'mixer', 'both', 'live']) &&
-    JSON.stringify(normalDensity.editDomainModeLabels) === JSON.stringify(['Lighting', 'Video', 'Both', 'Timeline']) &&
-    normalDensity.editDomainButtonCount === 4 &&
-    normalDensity.editDomainButtonWidths.length === 4 &&
+    JSON.stringify(normalDensity.editDomainModeIds) === JSON.stringify(['edit', 'mixer', 'live']) &&
+    JSON.stringify(normalDensity.editDomainModeLabels) === JSON.stringify(['Lighting', 'Video', 'Timeline']) &&
+    normalDensity.editDomainButtonCount === 3 &&
+    normalDensity.editDomainButtonWidths.length === 3 &&
     normalDensity.editDomainButtonWidths.every((width) => width > 0)
   );
   const splitterAriaMatchesRendered = (state) => Boolean(
@@ -10787,29 +10788,29 @@ async function measure(client, label) {
       visibleRightPatchExecutionFormCount: visibleCount('.fixtureSetupContextPane [data-patch-minimal-form]'),
       visibleDuplicateFixtureButtonCount: [...document.querySelectorAll('.fixtureSetupEditor button')]
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'duplicate fixture').length,
-      controlModeTabCount: document.querySelectorAll('[data-edit-domain-navigation] [data-control-mode-option]').length,
-      controlModeSemanticTabCount: visibleCount('[data-edit-domain-navigation] [data-control-mode-option]'),
-      controlModeSemanticTabWidths: [...document.querySelectorAll('[data-edit-domain-navigation] [data-control-mode-option]')]
+      controlModeTabCount: document.querySelectorAll(':is([data-edit-domain-navigation], [data-control-domain-navigation]) [data-control-mode-option]').length,
+      controlModeSemanticTabCount: visibleCount(':is([data-edit-domain-navigation], [data-control-domain-navigation]) [data-control-mode-option]'),
+      controlModeSemanticTabWidths: [...document.querySelectorAll(':is([data-edit-domain-navigation], [data-control-domain-navigation]) [data-control-mode-option]')]
         .filter((button) => {
           const rect = button.getBoundingClientRect();
           const style = getComputedStyle(button);
           return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
         })
         .map((button) => Math.round(button.getBoundingClientRect().width * 100) / 100),
-      controlModeSemanticTabLabels: [...document.querySelectorAll('[data-edit-domain-navigation] [data-control-mode-option]')]
+      controlModeSemanticTabLabels: [...document.querySelectorAll(':is([data-edit-domain-navigation], [data-control-domain-navigation]) [data-control-mode-option]')]
         .filter((button) => button.getBoundingClientRect().width > 0)
         .map((button) => (button.textContent || '').trim()),
-      controlModeSemanticTabIds: [...document.querySelectorAll('[data-edit-domain-navigation] [data-control-mode-option]')]
+      controlModeSemanticTabIds: [...document.querySelectorAll(':is([data-edit-domain-navigation], [data-control-domain-navigation]) [data-control-mode-option]')]
         .filter((button) => button.getBoundingClientRect().width > 0)
         .map((button) => button.getAttribute('data-control-mode-option')),
-      editDomainNavigationCount: visibleCount('[data-edit-domain-navigation]'),
+      editDomainNavigationCount: visibleCount(':is([data-edit-domain-navigation], [data-control-domain-navigation])'),
       oldLowerControlModeNavigationCount: document.querySelectorAll(
         '[data-control-context-header] [data-control-mode-segment], [data-control-context-header] [data-control-mode-option]'
       ).length,
-      editDomainNavigationDirectlyAfterTopbar: document.querySelector('[data-edit-domain-navigation]')
+      editDomainNavigationDirectlyAfterTopbar: document.querySelector(':is([data-edit-domain-navigation], [data-control-domain-navigation])')
         ?.previousElementSibling?.classList.contains('topbar') ?? false,
       editDomainNavigationRect: (() => {
-        const element = [...document.querySelectorAll('[data-edit-domain-navigation]')]
+        const element = [...document.querySelectorAll(':is([data-edit-domain-navigation], [data-control-domain-navigation])')]
           .find((element) => element.getBoundingClientRect().width > 0)
         const rect = element?.getBoundingClientRect();
         return rect ? {
@@ -12479,15 +12480,15 @@ function hasExpectedControlModeSurface(result) {
     result.label.startsWith("control-edit-") ||
     result.label.startsWith("control-live-scene-settings-");
   const timelineSurface = result.label.startsWith("control-live-") && !lightingSurface;
-  if (result.controlModeTabCount !== 4) {
+  if (result.controlModeTabCount !== 3) {
     return false;
   }
   if (
-    result.controlModeSemanticTabCount !== 4 ||
-    result.controlModeSemanticTabWidths.length !== 4 ||
+    result.controlModeSemanticTabCount !== 3 ||
+    result.controlModeSemanticTabWidths.length !== 3 ||
     result.controlModeSemanticTabWidths.some((width) => width <= 0) ||
-    JSON.stringify(result.controlModeSemanticTabIds) !== JSON.stringify(['edit', 'mixer', 'both', 'live']) ||
-    JSON.stringify(result.controlModeSemanticTabLabels) !== JSON.stringify(['Lighting', 'Video', 'Both', 'Timeline']) ||
+    JSON.stringify(result.controlModeSemanticTabIds) !== JSON.stringify(bothSurface ? ['edit', 'perform', 'both'] : ['edit', 'mixer', 'live']) ||
+    JSON.stringify(result.controlModeSemanticTabLabels) !== JSON.stringify(bothSurface ? ['Lighting', 'Video', 'Both'] : ['Lighting', 'Video', 'Timeline']) ||
     result.editDomainNavigationCount !== 1 ||
     result.oldLowerControlModeNavigationCount !== 0 ||
     !result.editDomainNavigationDirectlyAfterTopbar ||
@@ -12495,7 +12496,7 @@ function hasExpectedControlModeSurface(result) {
   ) {
     return false;
   }
-  // Lighting / Video / Both / Timeline are the canonical top-level domains.
+  // Edit exposes Lighting / Video / Timeline; Control exposes Lighting / Video / Both.
   // The retired nested Lighting/Timeline switch must not reappear in a lower
   // pane or create a second route to the same surface.
   if (
@@ -12946,8 +12947,8 @@ function hasExpectedControlModeSurface(result) {
 }
 
 function editDomainNavigationPlacementIsStable(results) {
-  const primaryModes = results.filter((result) => /^control-(edit|live|mixer|both)-\d+x\d+$/.test(result.label));
-  if (primaryModes.length !== 4) return false;
+  const primaryModes = results.filter((result) => /^control-(edit|live|mixer)-\d+x\d+$/.test(result.label));
+  if (primaryModes.length !== 3) return false;
   const [reference, ...rest] = primaryModes.map((result) => result.editDomainNavigationRect);
   if (!reference || rest.some((rect) => !rect)) return false;
   return rest.every((rect) => ['x', 'y', 'width', 'height']
@@ -17882,6 +17883,7 @@ async function runViewport(client, viewport, { recycleForLayeredTimeline = null 
   await sleep(80);
   await pressKey(client, "F3");
   await sleep(120);
+  await clickVisibleSelector(client, '[data-control-domain="lighting"]');
   await checkEditableTouchSurface(client, "Default Desk", true);
   results.push(await measure(client, `touch-keyboard-${viewport.width}x${viewport.height}`));
   traceViewport(`touch keyboard measured ${viewport.width}x${viewport.height}`);
@@ -18249,6 +18251,7 @@ async function runViewport(client, viewport, { recycleForLayeredTimeline = null 
   }
   await clickWorkspaceOption(client, "touch");
   await sleep(180);
+  await clickVisibleSelector(client, '[data-control-domain="lighting"]');
   await checkEditableTouchSurface(client, "Default Desk", true);
   if (shouldCaptureViewport(viewport)) {
     mkdirSync(screenshotDir, { recursive: true });
@@ -18271,6 +18274,7 @@ async function runComposedTouchViewport(client, viewport) {
   await waitForApp(client);
   await clickWorkspaceOption(client, "touch");
   await sleep(180);
+  await clickVisibleSelector(client, '[data-control-domain="lighting"]');
   await checkEditableTouchSurface(client, "Viewport Touch", false, true);
   return measure(client, `touch-composed-${viewport.width}x${viewport.height}`);
 }
@@ -18341,6 +18345,7 @@ async function runTouchViewport(client, viewport) {
   await waitForApp(client);
   await clickWorkspaceOption(client, "touch");
   await sleep(180);
+  await clickVisibleSelector(client, '[data-control-domain="lighting"]');
   await checkEditableTouchSurface(client, "Default Desk", true);
   if (shouldCaptureViewport(viewport)) {
     mkdirSync(screenshotDir, { recursive: true });
@@ -18353,9 +18358,9 @@ async function runTouchViewport(client, viewport) {
     await sleep(120);
     if (domain === "both") {
       const both = await client.evaluate(`(() => {
-        const layout = document.querySelector('.layoutTouch.touchDomainBoth');
-        const panel = layout?.querySelector(':scope > .touchBothLivePanel');
-        const tabs = layout?.querySelector(':scope > .touchControlDomainTabs');
+        const layout = document.querySelector('.layoutControl.controlModeBoth');
+        const panel = layout?.querySelector(':scope > .controlBothPanel');
+        const tabs = document.querySelector('[data-control-domain-navigation]');
         const rect = (node) => node?.getBoundingClientRect();
         const visible = (node) => {
           const bounds = rect(node);
@@ -18372,7 +18377,7 @@ async function runTouchViewport(client, viewport) {
           tabsLeft: Boolean(tabs && rect(tabs) && rect(layout) && rect(tabs).left <= rect(layout).left + 8),
           retiredSplitHidden: !visible(layout?.querySelector(':scope > .touchSurfacePanel'))
             && !visible(layout?.querySelector(':scope > .touchVideoPanel')),
-          laneCount: panel?.querySelectorAll('.touchBothLane').length ?? 0,
+          laneCount: panel?.querySelectorAll('.controlBothDomainCard').length ?? 0,
           lowerCount: lower.length,
           lowerSideBySide: lower.length >= 2 && lower.every((node) => rect(node).top >= upper.bottom - 2)
             && rect(lower[0]).right <= rect(lower[1]).left + 2,
@@ -18393,11 +18398,11 @@ async function runTouchViewport(client, viewport) {
       writeFileSync(join(screenshotDir, `touch-${domain}-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
     }
   }
-  await clickVisibleSelector(client, '[data-touch-both-open="lighting"]');
-  assert.equal(await client.evaluate(`document.querySelector('[data-control-domain="lighting"]')?.getAttribute('aria-pressed')`), "true");
+  await clickVisibleSelector(client, '.controlBothHeaderActions button:first-child');
+  assert.equal(await client.evaluate(`document.querySelector('[data-control-domain="lighting"]')?.getAttribute('aria-selected')`), "true");
   await clickVisibleSelector(client, '[data-control-domain="both"]');
-  await clickVisibleSelector(client, '[data-touch-both-open="video"]');
-  assert.equal(await client.evaluate(`document.querySelector('[data-control-domain="video"]')?.getAttribute('aria-pressed')`), "true");
+  await clickVisibleSelector(client, '.controlBothHeaderActions button:nth-child(2)');
+  assert.equal(await client.evaluate(`document.querySelector('[data-control-domain="video"]')?.getAttribute('aria-selected')`), "true");
   return lighting;
 }
 
@@ -31372,7 +31377,7 @@ async function runEditIaVideoViewport(client, viewport) {
     };
   })()`);
   const checks = {
-    exactDomainTablist: navigation.tablist && JSON.stringify(navigation.ids) === JSON.stringify(['edit', 'mixer', 'both', 'live']) && navigation.selectedCount === 1 && navigation.association,
+    exactDomainTablist: navigation.tablist && JSON.stringify(navigation.ids) === JSON.stringify(['edit', 'mixer', 'live']) && navigation.selectedCount === 1 && navigation.association,
     domainKeyboardRoving: keyboardLighting && keyboardVideo,
     mediaLibraryFullControlReachable: layout.libraryVisible && layout.upperHasMinimumHeight,
     mediaLibraryOwnsUsableClipPane: layout.libraryHasUsableClipPane,
@@ -38736,8 +38741,8 @@ async function runEditLiveViewport(client, viewport) {
       initial.sharedHeaderSingleRow &&
       // Task 13b: the shared 44px Broadcast pane header.
       Math.abs(initial.sharedHeaderHeight - 44) <= 1 &&
-      // Edit, Live, Video, Both and Perform (59fbfa7b added Perform).
-      initial.modeTabWidths.length === 5 &&
+      // Creation tabs are exactly Lighting, Video and Timeline.
+      initial.modeTabWidths.length === 3 &&
       initial.modeTabWidths.every((width) => width > 0 && width <= 96) &&
       initial.editDeskTabWidths.length === 0 &&
       initial.editDeskTabWidths.every((width) => width > 0 && width <= 100)

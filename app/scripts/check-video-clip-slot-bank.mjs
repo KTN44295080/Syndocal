@@ -87,12 +87,12 @@ assert.match(bank, /progress_millis \/ 10/, "Control reports authoritative Clip 
 assert.match(bank, /Preview thumbnail for slot/, "Preview labels the supported asset-thumbnail behavior honestly");
 assert.match(inspector, /onReorder/, "inspector preserves authored reorder through full IDs");
 assert.match(inspector, /window\.requestAnimationFrame\(\(\) => props\.returnFocus\?\.focus\(\)\)/, "inspector restores focus on close");
-assert.match(inspector, /role="dialog"[\s\S]*aria-modal="true"/, "inspector uses dialog semantics");
+assert.match(inspector, /role=\{props\.embedded \? undefined : "dialog"\}[\s\S]*aria-modal=\{props\.embedded \? undefined : "true"\}/, "inspector uses dialog semantics");
 assert.match(inspector, /focusableSelector[\s\S]*event\.key !== "Tab"/, "inspector traps focus");
 for (const field of ["in_point_ms", "out_point_ms", "loop_mode", "speed", "launch_quantization", "cue_points", "effect_overrides"]) {
   assert.ok(inspector.includes(field), `inspector authors ${field}`);
 }
-assert.match(inspector, /globalThis\.confirm[\s\S]*props\.onRemove/, "remove is explicitly confirmed before the authored command");
+assert.match(inspector, /if \(!await confirmDialog\(removeClipSlotDialog\(slotId\)\)\) return;[\s\S]*props\.onRemove/, "remove is explicitly confirmed before the authored command");
 
 assert.ok(
   app.includes('controlMode() === "perform" ? "control" as const : "edit" as const') && app.includes('mode: "control"'),
@@ -133,8 +133,8 @@ assert.match(touch, /VideoClipSlotBankPanel/, "Control mounts the shared bank co
 assert.match(edit, /VideoClipSlotBankPanel/, "Edit Video mounts the shared bank component");
 assert.match(
   modes,
-  /editDomainModes = \[\s*controlModes\.find\(\(mode\) => mode\.id === "edit"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "mixer"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "both"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "live"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "perform"\)!,\s*\]/,
-  "Edit preserves Lighting, Video, Both and Timeline order, then appends Perform",
+  /editDomainModes = \[\s*controlModes\.find\(\(mode\) => mode\.id === "edit"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "mixer"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "live"\)!,\s*\]/,
+  "Edit exposes exactly Lighting, Video and Timeline in order",
 );
 
 assert.match(styles, /\.videoClipSlotBankPanel \{[\s\S]*overflow: auto;/, "bank scroll remains internal");

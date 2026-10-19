@@ -15,6 +15,8 @@ import { dispatchProjectFileShortcut } from "./projectFileShortcuts";
 import type { EngineSnapshot, TimelineSnapshot } from "./types";
 import {
   controlModeLabel,
+  controlDomainForMode,
+  type ControlDomain,
   type ControlMode,
   setupSubTabLabel,
   type SetupSubTab,
@@ -30,6 +32,7 @@ interface AppKeyboardControllerOptions {
   setupSubTab: Accessor<SetupSubTab>;
   selectSetupMode: (tab: SetupSubTab) => void;
   setControlMode: (mode: ControlMode) => unknown;
+  selectControlDomain: (domain: ControlDomain) => unknown;
   setMessage: (message: string) => unknown;
   saveProject: () => MaybePromise;
   saveProjectAs: () => MaybePromise;
@@ -117,8 +120,19 @@ export function createAppKeyboardController(options: AppKeyboardControllerOption
       options.setMappingViewportPanDrag(null);
     },
     setControlMode: (mode) => {
-      const accepted = options.setControlMode(mode);
-      if (accepted !== false) options.setMessage(`Edit: ${controlModeLabel(mode)}.`);
+      const liveDomain = mode === "perform" || mode === "both"
+        || (options.workspaceTab() === "touch" && mode === "edit");
+      if (liveDomain) {
+        if (!options.selectWorkspaceTab("touch")) return;
+        const accepted = options.selectControlDomain(controlDomainForMode(mode));
+        if (accepted !== false) options.setMessage(`Workspace: ${workspaceLabel("touch")}.`);
+      } else {
+        // The mode selector owns its authoring lock checks before moving the
+        // workspace, so a rejected shortcut leaves the current live desk intact.
+        const accepted = options.setControlMode(mode);
+        if (accepted === false) return;
+        if (options.selectWorkspaceTab("control")) options.setMessage(`Edit: ${controlModeLabel(mode)}.`);
+      }
     },
     triggerPreviousCue: options.triggerPreviousCue,
     triggerNextCue: options.triggerNextCue,

@@ -88,8 +88,8 @@ const newProjectCode = ts.transpileModule(`const underTest = ${newProjectInitial
   compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 for (const [workspace, mode, consent, expectedPrompts, expectedDiscardChecks] of [
-  ["control", "perform", false, 1, 0],
-  ["control", "perform", true, 1, 1],
+  ["touch", "perform", false, 1, 0],
+  ["touch", "perform", true, 1, 1],
   ["control", "video", false, 0, 1],
   ["setup", "perform", false, 0, 1],
 ]) {
