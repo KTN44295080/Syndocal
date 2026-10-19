@@ -1476,12 +1476,14 @@ h3 {
   scrollbar-width: thin;
 }
 
+/* Menu entries are list rows, not keys: no key bar, no rounded corners. */
 .appProjectMenu button {
   display: grid;
   align-items: center;
   min-height: 30px;
   border: 0;
-  border-radius: 3px;
+  border-radius: 0;
+  box-shadow: none;
   background: transparent;
   color: var(--theme-text);
   padding: 0 8px;
@@ -1521,9 +1523,9 @@ h3 {
 }
 
 .appProjectMenu .uiScaleMenu button.active {
-  background: #234968;
-  color: var(--theme-text);
-  box-shadow: inset 0 -2px 0 #79b8ff;
+  background: var(--theme-latched);
+  color: var(--theme-on-latched);
+  box-shadow: none;
 }
 
 .appProjectMenu .recentProjectMenuItem {
@@ -1535,20 +1537,20 @@ h3 {
   min-height: 38px;
   gap: 1px;
   background: var(--theme-panel);
-  box-shadow: inset 2px 0 0 #f2c14e;
+  box-shadow: inset 3px 0 0 var(--theme-queued);
 }
 
 .appProjectMenuLabel.backupLabel {
-  color: #79b8ff;
+  color: var(--theme-accent);
 }
 
 .backupProjectMenuItem {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 30px;
   min-height: 38px;
-  border-radius: 3px;
+  border-radius: 0;
   background: var(--theme-panel);
-  box-shadow: inset 2px 0 0 #4f9ee8;
+  box-shadow: inset 3px 0 0 var(--theme-accent);
 }
 
 .appProjectMenu .backupProjectMenuItem > button:first-child {
@@ -1568,7 +1570,7 @@ h3 {
 
 .appProjectMenu .backupProjectMenuItem .deleteBackupMenuItem:hover {
   color: var(--theme-text);
-  background: #653535;
+  background: var(--theme-danger-bg);
 }
 
 .appProjectMenu .mutedMenuItem {
