@@ -179,10 +179,14 @@ impl IsfGpuRuntime {
         if frame.width == 0 || frame.height == 0 {
             return Err(runtime_error("ISF input frame has an invalid size"));
         }
+        // The upload only borrows input bytes. Avoid a full RGBA frame copy
+        // for every executing scope; conversion still owns its temporary.
+        let converted;
         let rgba = if frame.format == VideoPixelFormat::Rgba8 {
-            frame.clone()
+            frame
         } else {
-            convert_frame_to_rgba8(frame).map_err(runtime_from_composite_error)?
+            converted = convert_frame_to_rgba8(frame).map_err(runtime_from_composite_error)?;
+            &converted
         };
         let expected_len = frame.width as usize * frame.height as usize * 4;
         if rgba.data.len() != expected_len {

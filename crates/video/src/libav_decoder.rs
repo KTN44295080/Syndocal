@@ -42,7 +42,11 @@ use std::cell::RefCell;
 // Bound forward catch-up to one second; larger jumps and reversals still seek.
 const LIBAV_SEQUENTIAL_REQUEST_GAP_MS: u64 = 1_000;
 #[cfg(any(feature = "libav", test))]
-const LIBAV_WORKING_SET_CAPACITY: usize = 8;
+// Retain the 16-input performance envelope without reopening every tick.
+// Retention is independent from the bounded eight-worker decode pool below.
+const LIBAV_WORKING_SET_CAPACITY: usize = 16;
+#[cfg(feature = "libav")]
+const LIBAV_DECODE_WORKERS: usize = 8;
 
 #[cfg(feature = "libav")]
 const LIBAV_SCALER_CACHE_CAPACITY: usize = 8;
@@ -195,7 +199,7 @@ fn libav_decode_pool() -> Option<&'static rayon::ThreadPool> {
             .num_threads(
                 std::thread::available_parallelism()
                     .map_or(1, std::num::NonZeroUsize::get)
-                    .clamp(1, LIBAV_WORKING_SET_CAPACITY),
+                    .clamp(1, LIBAV_DECODE_WORKERS),
             )
             .thread_name(|index| format!("syndocal-video-decode-{index}"))
             .build()
@@ -2382,8 +2386,9 @@ mod tests {
             );
             assert_eq!(preferred.decode_frame(&request).unwrap().unwrap(), frame);
             assert_eq!(
-                preferred.diagnostics(),
+                VideoDecoderDiagnostics { decode_wall_us: 0, ..preferred.diagnostics() },
                 VideoDecoderDiagnostics {
+                    decode_call_count: 1,
                     total_requests: 1,
                     libav_requests: 1,
                     libav_successes: 1,
@@ -2722,7 +2727,7 @@ mod tests {
             if label == "positive" {
                 let mut bounded = LibavFrameDecoder::software_for_tests();
                 request.position_ms = 0;
-                for layer_id in 1..=9 {
+                for layer_id in 1..=LIBAV_WORKING_SET_CAPACITY as u64 + 1 {
                     request.layer_id = layer_id;
                     bounded.decode_frame(&request).unwrap().unwrap();
                 }
@@ -2730,14 +2735,14 @@ mod tests {
                 assert_eq!(bounded.sessions.len(), LIBAV_WORKING_SET_CAPACITY);
                 assert_eq!(
                     bounded.working_set_lru,
-                    (2..=9)
+                    (2..=LIBAV_WORKING_SET_CAPACITY as u64 + 1)
                         .map(|layer_id| LibavRenderInputOwner::new(
                             protocol::VideoRenderInputKey::LEGACY,
                             layer_id,
                         ))
                         .collect::<Vec<_>>()
                 );
-                assert_eq!(bounded.session_counters.opens, 9);
+                assert_eq!(bounded.session_counters.opens, LIBAV_WORKING_SET_CAPACITY as u64 + 1);
                 assert_eq!(bounded.session_counters.evictions, 1);
                 assert!(bounded.entries.iter().all(|entry| entry.layer_id != 1));
                 assert!(bounded.sessions.iter().all(|session| session.layer_id != 1));

@@ -84676,7 +84676,10 @@ fn start_native_video_live_output(
                             })
                         },
                         || {
-                            prepare_native_video_output(
+                            // Preparation excludes the presenter GPU work and
+                            // its potential vsync wait, and excludes pacing.
+                            let render_started = Instant::now();
+                            let output = prepare_native_video_output(
                                 &mut renderer,
                                 &engine,
                                 output_id,
@@ -84686,9 +84689,11 @@ fn start_native_video_live_output(
                                 &label,
                                 None,
                                 gpu_support,
-                            )
+                            );
+                            let render_time = render_started.elapsed();
+                            output.map(|output| (output, render_time))
                         },
-                        |presenter, output| {
+                        |presenter, (output, render_time)| {
                             frame_validation_identity = match &output {
                                 NativeVideoOutputFrame::Presentable(frame) => {
                                     Some(frame.validation_identity.clone())
@@ -84723,7 +84728,7 @@ fn start_native_video_live_output(
                                                     "Native Display output present failed: {error:?}"
                                                 )
                                             })?;
-                                        output_health.delivered();
+                                        output_health.delivered_with_render_time(render_time);
                                         Ok(())
                                     },
                                 ) {

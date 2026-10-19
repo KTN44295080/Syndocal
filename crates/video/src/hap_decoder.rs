@@ -18,6 +18,10 @@ use super::{
 
 #[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
 pub struct VideoDecoderDiagnostics {
+    /// Synchronous decoder demand latency, including cache lookup/wait/fallback.
+    /// Parallel batches count once; background lookahead CPU/GPU work is excluded.
+    pub decode_wall_us: u64,
+    pub decode_call_count: u64,
     pub total_requests: u64,
     pub hap_requests: u64,
     pub hap_successes: u64,
@@ -263,7 +267,28 @@ impl PreferredVideoFrameDecoder {
         }
     }
 
+    fn measured_decode<T>(&mut self, decode: impl FnOnce(&mut Self) -> T) -> T {
+        let started = std::time::Instant::now();
+        let result = decode(self);
+        self.diagnostics.decode_wall_us = self.diagnostics.decode_wall_us.saturating_add(
+            started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
+        );
+        self.diagnostics.decode_call_count = self.diagnostics.decode_call_count.saturating_add(1);
+        result
+    }
+
     fn decode_input_frame_with_cancellation_impl(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: Option<&dyn VideoRenderCancellation>,
+        shared: bool,
+    ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
+        self.measured_decode(|decoder| {
+            decoder.decode_input_frame_with_cancellation_untimed(input, cancellation, shared)
+        })
+    }
+
+    fn decode_input_frame_with_cancellation_untimed(
         &mut self,
         input: &VideoRenderInput,
         cancellation: Option<&dyn VideoRenderCancellation>,
@@ -394,6 +419,14 @@ impl PreferredVideoFrameDecoder {
         inputs: &[VideoRenderInput],
         shared: bool,
     ) -> Vec<Result<Option<Arc<VideoFrame>>, VideoDecodeError>> {
+        self.measured_decode(|decoder| decoder.decode_tick_untimed(inputs, shared))
+    }
+
+    fn decode_tick_untimed(
+        &mut self,
+        inputs: &[VideoRenderInput],
+        shared: bool,
+    ) -> Vec<Result<Option<Arc<VideoFrame>>, VideoDecodeError>> {
         let together = inputs.len() > 1
             && inputs.iter().all(|input| {
                 let request = &input.request;
@@ -408,7 +441,7 @@ impl PreferredVideoFrameDecoder {
         if !together {
             return inputs
                 .iter()
-                .map(|input| self.decode_input_frame_with_cancellation_impl(input, None, shared))
+                .map(|input| self.decode_input_frame_with_cancellation_untimed(input, None, shared))
                 .collect();
         }
         for _ in inputs {
@@ -1117,8 +1150,9 @@ mod tests {
         assert_eq!(decoder.hap().movie_cache_len(), 1);
         assert_eq!(decoder.cache_len(), 1);
         assert_eq!(
-            decoder.diagnostics(),
+            VideoDecoderDiagnostics { decode_wall_us: 0, ..decoder.diagnostics() },
             VideoDecoderDiagnostics {
+                decode_call_count: 1,
                 total_requests: 1,
                 hap_requests: 1,
                 hap_successes: 1,

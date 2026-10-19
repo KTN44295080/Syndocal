@@ -1583,10 +1583,11 @@ where
                 }
             }
         }
-        let render_started = timing.as_ref().map(|_| Instant::now());
+        let render_started = Instant::now();
         let rendered = render(&mut follow_output_state);
-        if let (Some(timing), Some(start)) = (timing.as_mut(), render_started) {
-            timing.rendered(start.elapsed());
+        let render_time = render_started.elapsed();
+        if let Some(timing) = timing.as_mut() {
+            timing.rendered(render_time);
         }
         let handed_off_failure_lease =
             rendered
@@ -1722,7 +1723,7 @@ where
                                 }
                                 revalidate_final_sdk_authority(&engine, &authority)?;
                                 sender.send_image(&frame.data, frame.width, frame.height)?;
-                                output_health.delivered();
+                                output_health.delivered_with_render_time(render_time);
                                 if show_control.is_some() {
                                     ensure_strict_show_spout_sender_name(
                                         &sender,
