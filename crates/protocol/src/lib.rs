@@ -1052,14 +1052,60 @@ pub struct VideoEffectPresetSummary {
     pub payload: VideoEffectPresetPayload,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VideoLayerGroupSummary {
     pub id: VideoLayerGroupId,
     pub label: String,
     pub composition_id: CompositionId,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layer_ids: Vec<VideoLayerId>,
+    #[serde(default = "default_video_layer_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_video_group_opacity")]
+    pub opacity: f32,
+    #[serde(default = "default_video_group_blend")]
+    pub blend_mode: VideoBlendMode,
+    #[serde(default)]
+    pub solo: bool,
+    #[serde(default)]
+    pub bypassed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<Transform2D>,
 }
+
+fn default_video_group_opacity() -> f32 {
+    1.0
+}
+fn default_video_group_blend() -> VideoBlendMode {
+    VideoBlendMode::Normal
+}
+
+impl Default for VideoLayerGroupSummary {
+    fn default() -> Self {
+        Self {
+            id: VideoLayerGroupId(0),
+            label: String::new(),
+            composition_id: 1,
+            layer_ids: Vec::new(),
+            enabled: true,
+            opacity: 1.0,
+            blend_mode: VideoBlendMode::Normal,
+            solo: false,
+            bypassed: false,
+            transform: None,
+        }
+    }
+}
+
+/// Atomic composition permutations accompanying a group catalog mutation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoCompositionLayerOrder {
+    pub composition_id: CompositionId,
+    pub layer_ids: Vec<VideoLayerId>,
+}
+
+mod video_layer_groups;
+pub use video_layer_groups::apply_video_composition_layer_orders;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -2584,6 +2630,44 @@ fn validate_video_effect_chains(
 
     let mut grouped_layers = BTreeMap::new();
     for group in &video.layer_groups {
+        if !group.opacity.is_finite() || !(0.0..=1.0).contains(&group.opacity) {
+            return Err(format!(
+                "Video layer group {} opacity must be finite and within 0..1",
+                group.id.0
+            ));
+        }
+        if let Some(transform) = group.transform {
+            let values = [
+                transform.x,
+                transform.y,
+                transform.scale_x,
+                transform.scale_y,
+                transform.rotation_deg,
+                transform.crop_left,
+                transform.crop_top,
+                transform.crop_right,
+                transform.crop_bottom,
+            ];
+            if values.iter().any(|value| !value.is_finite())
+                || !(0.001..=100.0).contains(&transform.scale_x)
+                || !(0.001..=100.0).contains(&transform.scale_y)
+                || [
+                    transform.crop_left,
+                    transform.crop_top,
+                    transform.crop_right,
+                    transform.crop_bottom,
+                ]
+                .iter()
+                .any(|crop| !(0.0..1.0).contains(crop))
+                || transform.crop_left + transform.crop_right >= 1.0
+                || transform.crop_top + transform.crop_bottom >= 1.0
+            {
+                return Err(format!(
+                    "Video layer group {} has an invalid transform",
+                    group.id.0
+                ));
+            }
+        }
         if group.label.trim().is_empty() || group.label != group.label.trim() {
             return Err(format!(
                 "Video layer group {} label must be canonical",
@@ -18083,6 +18167,7 @@ mod tests {
                 label: "Backgrounds".to_string(),
                 composition_id: 9,
                 layer_ids: vec![1, 2],
+                ..Default::default()
             }],
             effect_chains: vec![super::VideoEffectChainSummary {
                 id: super::VideoEffectChainId(21),
@@ -18294,6 +18379,7 @@ mod tests {
             label: "Backgrounds".to_string(),
             composition_id: 9,
             layer_ids: vec![1, 2],
+            ..Default::default()
         };
         let from = super::VideoLayerTransitionTarget::Group { group_id: group.id };
         let to = super::VideoLayerTransitionTarget::Layer { layer_id: 3 };
@@ -20223,6 +20309,7 @@ mod tests {
                 label: "Zero".to_string(),
                 composition_id: 40,
                 layer_ids: vec![10],
+                ..Default::default()
             });
         assert!(matches!(
             super::validate_current_engine_snapshot_reference_integrity(&zero_group),

@@ -843,6 +843,7 @@ fn group_and_clip_chains_and_clip_transitions_are_not_eligible() {
         label: "Group".to_string(),
         composition_id: 5,
         layer_ids: vec![2, 3],
+        ..protocol::VideoLayerGroupSummary::default()
     });
     assert!(eligible(&grouped, &idle_runtime), "a group without a chain");
     grouped
