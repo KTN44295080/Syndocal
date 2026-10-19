@@ -16,6 +16,6 @@
 .timelineInlineChildGutter span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .timelineInlineChildBackground { fill: var(--theme-inset); stroke: var(--theme-line); }
 .timelineInlineChildBlock { fill: var(--identity); stroke: var(--identity-band); }
-.timelineInlineChildLabel { fill: var(--theme-text); font-size: 12px; pointer-events: none; }
+.timelineInlineChildLabel { fill: var(--theme-text); font-size: var(--fs-text); pointer-events: none; }
 .timelineInlineChildCanvas g .timelineInlineChildLabel { fill: var(--identity-text); }
 .timelineInlineChildCanvas { cursor: pointer; }

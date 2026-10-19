@@ -120,7 +120,7 @@ interface VideoRuntimeControllerOptions {
     phase: MediaAssetOperationPhase,
   ) => MediaAssetOperationLease;
   setMediaAssetImportReport: (report: MediaAssetImportReport | null) => void;
-  confirmMediaAssetAdoption: (assetId: MediaAssetId, replacementPath: string) => boolean;
+  confirmMediaAssetAdoption: (assetId: MediaAssetId, replacementPath: string) => boolean | Promise<boolean>;
   projectTransactionOwnerId: string;
   videoLabel: Accessor<string>;
   setVideoLabel: Setter<string>;
@@ -1305,7 +1305,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
         if (firstOutcome) setRelinkMessage(mediaAssetRelinkOutcomeMessage(firstOutcome));
         return firstOutcome ? { outcome: firstOutcome, terminalAuthority: sideEffectAuthority } : null;
       }
-      if (!options.confirmMediaAssetAdoption(assetId, replacementPath)) {
+      if (!await options.confirmMediaAssetAdoption(assetId, replacementPath)) {
         setRelinkMessageIfAuthorityCurrent(decisionAuthority, "Replacement adoption canceled. The existing content identity was kept.");
         return options.isProjectAuthorityCurrent(decisionAuthority)
           ? { outcome: firstOutcome, terminalAuthority: decisionAuthority }

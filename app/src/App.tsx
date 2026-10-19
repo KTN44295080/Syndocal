@@ -299,7 +299,23 @@ import {
 } from "./dmxAddressing";
 import { verifiedFixtureProfileRequest, type FixtureProfileHealthSummary } from "./fixtureCatalog";
 import { bundledLibraryProfileRequest } from "./bundledLibrary";
-import { confirmCueRemoval, confirmDestructiveAction } from "./destructiveActions";
+import { confirmCueRemoval, confirmDestructiveAction, type DestructiveActionKind } from "./destructiveActions";
+import { confirmDialog, isInAppDialogOpen, type ConfirmDialogOptions } from "./inAppDialog";
+import {
+  abandonPublicationDialog,
+  adoptMediaReplacementDialog,
+  blackoutDialog,
+  deleteBackupDialog,
+  disarmDjLinkDialog,
+  discardFxDraftDialog,
+  discardTimelineEditsDialog,
+  installUpdateDialog,
+  newProjectDuringShowDialog,
+  removeFixturesDialog,
+  returnDjControlDialog,
+  rotateDjLinkTokenDialog,
+} from "./inAppDialogCopy";
+import { InAppDialogHost } from "./components/InAppDialogHost";
 import { createLiveAudioInputStatusRequestGate } from "./liveAudioInputStatusSync";
 import {
   readLiveAudioInputSelectionStorage,
@@ -3306,7 +3322,7 @@ export default function App() {
   // Stores a settled-but-unsaved FX edit before the editor moves away from it.
   // An unsavable draft is discarded when `discardUnsavable`, otherwise the
   // operator is asked; false means they kept it and the move is cancelled.
-  let flushSceneEffectDraft = (_options: { discardUnsavable?: boolean } = {}) => true;
+  let flushSceneEffectDraft = (_options: { discardUnsavable?: boolean } = {}): true | Promise<boolean> => true;
   // Bumped whenever the FX form is reloaded or closed, so a save that was in
   // flight meanwhile does not touch the form that replaced it.
   let sceneEffectFormGeneration = 0;
@@ -10944,8 +10960,21 @@ export default function App() {
       },
     }));
   };
-  const confirmDiscardTimelineEditorDrafts = () =>
-    !timelineEditorDirty() || window.confirm(translateUiText("Discard unsaved Timeline edits?", uiLocale()));
+  // Removals ask in the app. The question can outlive the project it was asked about (a remote or
+  // MIDI action may replace it), so an answer given after the project epoch changed is a cancel.
+  const confirmCurrentProject = async (options: ConfirmDialogOptions): Promise<boolean> => {
+    const epoch = captureProjectAuthorityIdentity().project_epoch;
+    if (!await confirmDialog(options)) return false;
+    if (captureProjectAuthorityIdentity().project_epoch !== epoch) {
+      setMessage("The project changed while the question was open. Nothing was removed.");
+      return false;
+    }
+    return true;
+  };
+  const confirmRemoval = (kind: DestructiveActionKind, label: string) =>
+    confirmDestructiveAction(kind, label, confirmCurrentProject);
+  const confirmDiscardTimelineEditorDrafts = async (): Promise<boolean> =>
+    !timelineEditorDirty() || await confirmDialog(discardTimelineEditsDialog());
 
   const persistChildTimeline = async (
     cueId: number,
@@ -11339,11 +11368,7 @@ export default function App() {
     if (!update?.available || !update.version || applicationUpdateBusy()) {
       return;
     }
-    if (
-      !window.confirm(
-        `Install Syndocal ${update.version}?\n\nA verified project backup will be created before download. The signed installer may close and restart Syndocal.`,
-      )
-    ) {
+    if (!await confirmDialog(installUpdateDialog(update.version))) {
       return;
     }
     setApplicationUpdateBusy(true);
@@ -11629,12 +11654,14 @@ export default function App() {
       setMessage("Wait for the active FX Event pulse to finish before Undo / Redo.");
       return;
     }
-    if (!confirmDiscardTimelineEditorDrafts()) {
-      setMessage("Undo / Redo を取り消しました。未保存のタイムライン編集は保持されています。");
-      return;
-    }
+    // The busy flag is taken before the question and released when it is declined,
+    // so a second Undo / Redo cannot start while the dialog is open.
     setProjectHistoryNavigationBusy(true);
     try {
+      if (!await confirmDiscardTimelineEditorDrafts()) {
+        setMessage("Undo / Redo を取り消しました。未保存のタイムライン編集は保持されています。");
+        return;
+      }
       if (isTauriRuntime() && !viewportFixture) {
         const epoch = await flushProjectControlMappingsBeforeMutation();
         if (!await refreshProjectHistoryStatus() || captureProjectAuthorityIdentity().project_epoch !== epoch) {
@@ -13077,7 +13104,7 @@ export default function App() {
 
   const removeFixture = async (fixtureId: number) => {
     const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
-    if (fixture && !confirmDestructiveAction("fixture", fixture.label)) {
+    if (fixture && !await confirmRemoval("fixture", fixture.label)) {
       return;
     }
     try {
@@ -13712,7 +13739,7 @@ export default function App() {
   };
 
   const removeReferencePalette = async (palette: ReferencePaletteSummary) => {
-    if (!confirmDestructiveAction("palette", palette.label)) return;
+    if (!await confirmRemoval("palette", palette.label)) return;
     try {
       await invoke("remove_reference_palette", { paletteId: palette.id });
       setMessage(`Removed ${palette.label} and its Cue references.`);
@@ -13796,7 +13823,7 @@ export default function App() {
   };
 
   const removeFxColorPalette = async (paletteId: number, label: string) => {
-    if (!confirmDestructiveAction("palette", label)) return false;
+    if (!await confirmRemoval("palette", label)) return false;
     if (viewportFixture) {
       setSnapshot((current) => ({
         ...current,
@@ -14152,7 +14179,7 @@ export default function App() {
       return;
     }
     const removeLabel = fixtures.length === 1 ? fixtures[0].label : `${fixtures.length} selected fixtures`;
-    if (!window.confirm(`Remove ${removeLabel}?`)) {
+    if (!await confirmCurrentProject(removeFixturesDialog(fixtures.length, fixtures[0].label))) {
       return;
     }
     const removedIds = new Set(fixtures.map((fixture) => fixture.id));
@@ -15752,9 +15779,7 @@ export default function App() {
     newProjectInFlight = true;
     try {
       if (workspaceTab() === "control" && controlMode() === "perform" &&
-        !window.confirm(translateUiText(
-          "Create a new project and stop this show? Confirm to replace the current project.", uiLocale(),
-        ))) return;
+        !await confirmDialog(newProjectDuringShowDialog())) return;
       if (!await confirmDiscardProjectChanges("create a new project")) {
         setMessage("New project canceled.");
         return;
@@ -15948,12 +15973,9 @@ export default function App() {
     applyIndeterminate: applyProjectPublicationTerminal,
     captureSeed: requireTrustedProjectPublicationAuthority,
     ensureMutationAllowed: ensureProjectPublicationMutationAllowed,
-    confirmAbandon: (intent, status) => {
-      const description = intent.request.surface.replaceAll("_", " ");
-      return window.confirm(
-        `A ${description} request is still ${status.state}. Abandon that exact request? This cannot be undone.`,
-      );
-    },
+    confirmAbandon: (intent) => confirmDialog(
+      abandonPublicationDialog(intent.request.surface.replaceAll("_", " ")),
+    ),
     onPending: (status) => setMessage(projectPublicationPendingMessage(status)),
     onMissing: () => setMessage(
       "A saved publication request has no current receipt. Its dispatch state is unconfirmed; retry the same action to query or resume it.",
@@ -16645,7 +16667,7 @@ export default function App() {
   };
 
   const deleteProjectBackup = async (backup: ProjectBackupSummary) => {
-    if (!window.confirm(`Delete the backup from ${new Date(backup.created_at_unix_ms).toLocaleString()}?`)) {
+    if (!await confirmDialog(deleteBackupDialog(new Date(backup.created_at_unix_ms).toLocaleString()))) {
       return;
     }
     try {
@@ -18687,7 +18709,7 @@ export default function App() {
   };
   const disarmDjLinkMachine = async () => {
     if (djLinkTokenOperationBusy()) return;
-    if (!window.confirm("Disarm DJ Link? The machine credential will be removed and automatic start disabled.")) return;
+    if (!await confirmDialog(disarmDjLinkDialog())) return;
     const operationGeneration = ++djLinkTokenOperationGeneration;
     djLinkMachineRequestGeneration += 1;
     setDjLinkTokenOperationBusy(true);
@@ -18728,7 +18750,7 @@ export default function App() {
       setMessage("Stop the shared Remote listener before rotating the DJ Link token.");
       return;
     }
-    if (!window.confirm("Rotate the DJ Link token? The current token will be invalidated and shown once.")) return;
+    if (!await confirmDialog(rotateDjLinkTokenDialog())) return;
     const operationGeneration = ++djLinkTokenOperationGeneration;
     djLinkMachineRequestGeneration += 1;
     setDjLinkTokenOperationBusy(true);
@@ -18763,10 +18785,7 @@ export default function App() {
 
   const requestDjLinkOperatorReturn = async () => {
     if (djLinkOperatorReturnBusy()) return;
-    if (!window.confirm(translateUiText(
-      "Return DJ control authority? The current Timeline keeps running while the Agent reannounces its fresh track candidate.",
-      uiLocale(),
-    ))) return;
+    if (!await confirmDialog(returnDjControlDialog())) return;
     setDjLinkOperatorReturnBusy(true);
     try {
       await invoke("request_dj_link_operator_return_to_dj_control", {
@@ -19165,7 +19184,7 @@ export default function App() {
     }
     const deletingSelectedBank = selectedCueListId() === cueList.id;
     const deletedBankIndex = snapshot().cue_lists.findIndex((candidate) => candidate.id === cueList.id);
-    if (!confirmed && !confirmDestructiveAction("Bank", cueList.label)) return false;
+    if (!confirmed && !await confirmRemoval("Bank", cueList.label)) return false;
     if (!isTauriRuntime()) {
       const beforeCues = structuredClone(snapshot().cues);
       const beforeCueLists = structuredClone(snapshot().cue_lists);
@@ -19421,7 +19440,7 @@ export default function App() {
       if (authority) setMessage(`Playback Executor ${executor.id} is no longer available.`);
       return;
     }
-    if (!confirmDestructiveAction("playback executor", executor.label)) return;
+    if (!await confirmRemoval("playback executor", executor.label)) return;
     try {
       await invoke("remove_playback_executor", { executorId: executor.id });
       setMessage(`Removed Playback Executor ${executor.label}.`);
@@ -19983,7 +20002,7 @@ export default function App() {
     if (!cue) return false;
     if (cue && !confirmed) {
       const impact = cueRemovalImpact(cueId);
-      if (!confirmCueRemoval(cue.label, impact.linkedPlacements, impact.incomingJumps)) {
+      if (!await confirmCueRemoval(cue.label, impact.linkedPlacements, impact.incomingJumps, confirmCurrentProject)) {
         return false;
       }
     }
@@ -20061,7 +20080,7 @@ export default function App() {
   };
 
   const openOrCreateSuperScene = async (cueId: number, existingOnly = false) => {
-    const cue = requireAuthoritativeCue(cueId);
+    let cue = requireAuthoritativeCue(cueId);
     if (!cue) {
       return false;
     }
@@ -20069,10 +20088,14 @@ export default function App() {
       setMessage("選択した子タイムラインは存在しません。");
       return false;
     }
-    if (!confirmDiscardTimelineEditorDrafts()) {
+    if (!await confirmDiscardTimelineEditorDrafts()) {
       setMessage("Timeline open canceled; unsaved Timeline edits were kept.");
       return false;
     }
+    // The question is asynchronous: the Cue is re-read (and its authority re-checked) once it is answered.
+    const answeredCue = requireAuthoritativeCue(cueId);
+    if (!answeredCue) return false;
+    cue = answeredCue;
     if (!cue.child_timeline) {
       const childTimeline: ChildTimelineSummary = {
         layers: [
@@ -20172,8 +20195,8 @@ export default function App() {
     selectEffectType(nextType, true);
   };
 
-  const exitSuperScene = () => {
-    if (!confirmDiscardTimelineEditorDrafts()) {
+  const exitSuperScene = async () => {
+    if (!await confirmDiscardTimelineEditorDrafts()) {
       setMessage("Show timeline open canceled; unsaved Timeline edits were kept.");
       return;
     }
@@ -20194,11 +20217,14 @@ export default function App() {
       setMessage("選択したタイムラインは存在しません。");
       return;
     }
-    if (!confirmDiscardTimelineEditorDrafts()) return;
+    // The guard and the authority snapshot are taken before the question; the question may
+    // outlive the project it was asked about, so the answer is re-validated against them.
     const epoch = projectMappingsAuthority().project_epoch;
     const childCueId = timelineChildCueId();
     timelineNavigatorBusy = true;
     try {
+      if (!await confirmDiscardTimelineEditorDrafts()) return;
+      if (projectMappingsAuthority().project_epoch !== epoch || timelineChildCueId() !== childCueId) return;
       if (snapshot().timeline.id !== timelineId) {
         const result = await commitTimelineAdvanced({ kind: "select_timeline", timeline_id: timelineId, play: false });
         if (!result) return;
@@ -20920,9 +20946,9 @@ export default function App() {
         setLastMediaAssetImportReport(report);
       }
     },
-    confirmMediaAssetAdoption: (assetId, replacementPath) => globalThis.confirm(uiLocale() === "ja"
-      ? `メディア素材 ${assetId} の置換コンテンツを採用しますか？\n\n${replacementPath}\n\n保存済みのコンテンツ識別子を変更し、この素材へのすべての参照を更新します。`
-      : `Adopt replacement content for media asset ${assetId}?\n\n${replacementPath}\n\nThis changes the saved content identity and updates every reference to this asset.`),
+    confirmMediaAssetAdoption: (assetId, replacementPath) => confirmDialog(
+      adoptMediaReplacementDialog(assetId, replacementPath),
+    ),
     projectTransactionOwnerId,
     videoLabel,
     setVideoLabel,
@@ -24135,7 +24161,7 @@ export default function App() {
 
   const removeEffect = async (effectId: number) => {
     const effect = snapshot().effects.find((candidate) => candidate.id === effectId);
-    if (effect && !confirmDestructiveAction("effect", effect.label)) {
+    if (effect && !await confirmRemoval("effect", effect.label)) {
       return;
     }
     try {
@@ -24453,9 +24479,8 @@ export default function App() {
   // Every selection change (create, duplicate, remove, select) re-baselines
   // once the synchronously loaded draft has settled.
   createEffect(on(selectedSceneEffectId, () => rebaselineSceneEffectDraft(), { defer: true }));
-  const confirmDiscardSceneEffectDraft = () =>
-    !sceneEffectDraftDirty()
-    || window.confirm(translateUiText("Discard unsaved changes to this FX?", uiLocale()));
+  const confirmDiscardSceneEffectDraft = (): true | Promise<boolean> =>
+    !sceneEffectDraftDirty() || confirmDialog(discardFxDraftDialog());
 
   loadSceneEffectDraft = (cueId: number, effectId: number) => {
     sceneEffectFormGeneration += 1;
@@ -24465,11 +24490,12 @@ export default function App() {
     rebaselineSceneEffectDraft();
   };
 
-  const selectSceneEffect = (effectId: number) => {
+  const selectSceneEffect = async (effectId: number) => {
     if (effectId !== selectedSceneEffectId() && untrack(sceneEffectDraftDirty)) {
       // Edits are live: the pending edit of the current FX is stored before
       // switching. Only a draft that cannot be saved asks before discarding.
-      if (!flushSceneEffectDraft()) return;
+      const flushed = flushSceneEffectDraft();
+      if (flushed !== true && !await flushed) return;
     }
     const cue = selectedSceneCue();
     const target = cue?.effect_targets.find((candidate) => candidate.effect_id === effectId);
@@ -24595,7 +24621,8 @@ export default function App() {
     const quickFamily = quickSceneFxFamilies.includes(family as QuickSceneFxFamily)
       ? family as QuickSceneFxFamily
       : null;
-    if (!flushSceneEffectDraft()) return;
+    const flushedDraft = flushSceneEffectDraft();
+    if (flushedDraft !== true && !await flushedDraft) return;
     // The form is rebuilt for the new FX below: detach it from the selected
     // FX first, so no auto-save can write the new form into that FX.
     const previousEffectId = selectedSceneEffectId();
@@ -24710,7 +24737,8 @@ export default function App() {
     const cueId = selectedSceneCue()?.id;
     if (cueId === undefined) return;
     // A pending edit of the selected FX is stored first (queued ahead).
-    if (!flushSceneEffectDraft()) return;
+    const flushedDraft = flushSceneEffectDraft();
+    if (flushedDraft !== true && !await flushedDraft) return;
     const wasRunning = selectedSceneIsRunning();
     const removed = await enqueueSceneEffectOperation(async () => {
       const cue = latestSceneCue(cueId);
@@ -24773,7 +24801,8 @@ export default function App() {
     const cueId = selectedSceneCue()?.id;
     if (cueId === undefined) return;
     // A pending edit of the selected FX is stored first, so the copy has it.
-    if (!flushSceneEffectDraft()) return;
+    const flushedDraft = flushSceneEffectDraft();
+    if (flushedDraft !== true && !await flushedDraft) return;
     const duplicated = await enqueueSceneEffectOperation(async () => {
       const cue = latestSceneCue(cueId);
       const sourceIndex = cue?.effect_targets.findIndex((target) => target.effect_id === effectId) ?? -1;
@@ -25765,7 +25794,7 @@ export default function App() {
         timelineDeskSurface: timelineDeskSurface(), timelineChildCueId: timelineChildCueId() };
       return { workspace, controlMode: mode };
     },
-    restore: (route) => {
+    restore: function restoreRoute(route, confirmedDiscard = false) {
       if (route.workspace === "control" && route.controlMode === "edit" && operatorLockMode() === "Partial") {
         setMessage("Lighting editing is locked for this operator.");
         return false;
@@ -25777,7 +25806,15 @@ export default function App() {
         setMessage("移動先の子タイムラインは削除されています。");
         return false;
       }
-      if (!confirmDiscardTimelineEditorDrafts()) return false;
+      if (!confirmedDiscard && timelineEditorDirty()) {
+        // A browser traversal cannot wait for an in-app question. It is declined
+        // (history returns to the current route and the edits are kept); the same
+        // route is replayed only if the operator then confirms the discard.
+        void confirmDialog(discardTimelineEditsDialog()).then((confirmed) => {
+          if (confirmed) restoreRoute(route, true);
+        });
+        return false;
+      }
       batch(() => {
         if (childId !== timelineChildCueId()) {
           setTimelineChildCueId(childId);
@@ -26220,11 +26257,9 @@ export default function App() {
   };
 
   // Perform confirms only the UI request; the existing blackout owner remains authoritative.
-  const requestPerformVideoBlackout = (enabled: boolean) => {
+  const requestPerformVideoBlackout = async (enabled: boolean) => {
     if (workspaceTab() === "control" && controlMode() === "perform" &&
-      !window.confirm(translateUiText(enabled
-        ? "Engage video blackout? Confirm to black out Program."
-        : "Recover video from blackout? Confirm to restore Program.", uiLocale()))) return Promise.resolve();
+      !await confirmDialog(blackoutDialog(enabled))) return;
     return setVideoBlackout(enabled);
   };
 
@@ -26283,18 +26318,14 @@ export default function App() {
   });
 
   const handleAppKeyDown = (event: KeyboardEvent) => {
-    if (
-      event.key === "Escape" &&
-      !event.defaultPrevented &&
-      document.querySelector("dialog[open]")
-    ) {
-      event.stopImmediatePropagation();
+    // A modal dialog (an in-app confirmation, the protected-close and discard
+    // questions, the Perform legend, ...) owns native Tab/Enter/Space/Escape while
+    // it is open. None of its keys may fall through to global GO, workspace,
+    // project or Perform commands.
+    if (isInAppDialogOpen() || document.querySelector("dialog[open]")) {
+      if (event.key === "Escape" && !event.defaultPrevented) event.stopImmediatePropagation();
       return;
     }
-    // The modal legend owns native Tab/Enter/Escape behavior. Do not let its
-    // keys fall through to global GO, workspace or project commands.
-    if (workspaceTab() === "control" && controlMode() === "perform" &&
-      document.querySelector("[data-video-perform-legend][open]")) return;
     if (
       event.key === "Escape" &&
       !event.defaultPrevented &&
@@ -27217,6 +27248,7 @@ export default function App() {
           </section>
         </dialog>
       </Show>
+      <InAppDialogHost locale={uiLocale} />
       <Show when={pendingPatchGroupRegistration()}>
         {(pending) => (
           <dialog

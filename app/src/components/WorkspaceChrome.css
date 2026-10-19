@@ -34,7 +34,7 @@
   min-width: 0;
   padding: 0 4px;
   color: var(--theme-muted);
-  font-size: 10px;
+  font-size: var(--fs-text);
   line-height: 14px;
 }
 .topbarSyncSource { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -42,7 +42,7 @@
 .topbarBeats { display: inline-flex; flex: 0 0 auto; gap: 2px; }
 .topbarBeats i { width: 8px; height: 8px; box-sizing: border-box; border: 1px solid var(--theme-line-strong); border-radius: 0; background: var(--theme-inset); }
 .topbarBeats i.lit { border-color: var(--theme-ok); background: var(--theme-ok); box-shadow: 0 0 0 2px var(--theme-line); }
-.topbarSyncStatus { flex: 0 0 auto; white-space: nowrap; font-size: 9px; font-weight: 700; letter-spacing: 0; }
+.topbarSyncStatus { flex: 0 0 auto; white-space: nowrap; font-size: var(--fs-text); font-weight: 700; letter-spacing: 0; }
 .topbarTempoSync[data-topbar-sync-state="LOCK"] .topbarSyncStatus { color: var(--theme-ok); }
 .topbarTempoSync[data-topbar-sync-state="STALE"] .topbarSyncStatus { color: var(--theme-warn); }
 
@@ -56,7 +56,7 @@
   border-radius: var(--ui-radius-control);
   padding: 0 8px;
   color: inherit;
-  font-size: 11px;
+  font-size: var(--fs-control);
   cursor: pointer;
   list-style: none;
 }
@@ -79,7 +79,7 @@
   box-shadow: 0 8px 24px rgb(0 0 0 / 40%);
 }
 .topbarToolsPopover > section { display: grid; gap: 6px; }
-.topbarToolsPopover > section > strong { color: var(--theme-muted); font-size: 11px; font-weight: 700; }
+.topbarToolsPopover > section > strong { color: var(--theme-muted); font-size: var(--fs-text); font-weight: 400; }
 .topbarWorkspaceMenu .workspaceOperationsButton { width: 100%; text-align: left; }
 /* While locked, the lock state and Unlock sit in the header beside the disabled menu. */
 .topbarLockedOperations { display: flex; align-items: center; min-width: 0; }
@@ -97,13 +97,19 @@
      lights are the part omitted at the compact boundary. */
   .topbarTempoSync { width: 70px; }
   .topbarTempoSync .topbarBeats { display: none; }
+  /* The 14px chrome badge and key labels need a little less tracking and padding here so the
+     whole bar stays inside the 960px minimum window. */
+  .topbarOrganized .topbarShowClockStatus { letter-spacing: .02em; padding-inline: 4px; }
 }
 
 /* Condensed label typography retains the existing title row and hit targets. */
-.topbarOrganized :is(.workspaceTab, .workspaceOperationsButton, .topbarTools > summary),
-.topbarToolsPopover > section > strong {
+.topbarOrganized :is(.workspaceTab, .workspaceOperationsButton, .topbarTools > summary) {
   font-family: var(--theme-font-label);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: .04em;
+}
+.topbarToolsPopover > section > strong {
+  font-family: var(--theme-font-ui);
+  font-weight: 400;
 }

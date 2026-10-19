@@ -1,5 +1,7 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
+import { confirmDialog } from "../inAppDialog";
+import { revokeAllExternalAccessDialog } from "../inAppDialogCopy";
 
 type Capability = "read" | "runtime" | "live" | "authored" | "output" | "file" | "safety_blackout_engage";
 type Risk = "R0" | "R1" | "R2" | "R3" | "R4" | "R5" | "S0";
@@ -212,8 +214,8 @@ export function AgentAuthorityPanel(props: Props) {
     );
   };
 
-  const killSwitch = () => {
-    if (!window.confirm("Revoke every external principal and close all authority grants?")) return;
+  const killSwitch = async () => {
+    if (!await confirmDialog(revokeAllExternalAccessDialog())) return;
     void run(
       () => props.invokeCommand("agent_authority_kill_switch_v1"),
       () => { setMessage("Kill switch active: external principals are revoked and new pairing is blocked."); refresh(); },

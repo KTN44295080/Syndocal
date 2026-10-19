@@ -223,7 +223,7 @@ type StageFixtureLabelProps = {
   class?: string;
 };
 
-export const stageFixtureLabelScreenFontSizePx = 11;
+export const stageFixtureLabelScreenFontSizePx = 13;
 
 export const stageFixtureLabelWorldPerCssPixel = stageWorldPerCssPixel;
 

@@ -8,12 +8,12 @@
 }
 .videoFxCatalogHeader { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 0 0 auto; position: sticky; top: 0; z-index: 2; background: var(--theme-panel); }
 .videoFxCatalogScope { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; }
-.videoFxCatalogTarget { overflow-wrap: anywhere; font-weight: 600; }
+.videoFxCatalogTarget { overflow-wrap: anywhere; font-weight: 400; }
 .videoFxCatalogLive { color: var(--theme-warn); font-size: 14px; }
 .videoFxCatalogActions { display: flex; flex-wrap: wrap; gap: 6px; }
 .videoFxCatalogTools { display: flex; gap: 6px; align-items: center; flex: 0 0 auto; position: relative; }
 .videoFxCatalogSearch { display: flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 0; }
-.videoFxCatalogSearch > span { font-family: var(--font-label); font-size: 14px; }
+.videoFxCatalogSearch > span { font-family: var(--theme-font-ui); font-size: 14px; }
 .videoFxCatalogSearch input { flex: 1 1 0; width: 0; padding: 6px 10px; color: var(--theme-text); background: var(--theme-inset); border: 1px solid var(--theme-line-strong); }
 .videoFxCatalogFilters { display: flex; flex-wrap: wrap; gap: 6px; position: absolute; top: 100%; right: 0; z-index: 3; width: min(100%, 460px); padding: 8px; background: var(--theme-panel); border: 1px solid var(--theme-line-strong); }
 .videoFxCatalogFilters button { flex: 0 0 auto; white-space: nowrap; padding: 6px 10px; }
@@ -28,7 +28,7 @@
 .videoFxCatalogCard[data-fx-card-state="rejected"] { border-left-color: var(--theme-error); }
 .videoFxCatalogThumbnail { position: relative; width: 104px; height: 76px; overflow: hidden; background: var(--theme-inset); border: 1px solid var(--theme-line); }
 .videoFxCatalogThumbnail img { width: 100%; height: 58px; display: block; object-fit: cover; }
-.videoFxCatalogFallback { display: grid; place-items: center; height: 58px; font-family: var(--font-label); font-size: 24px; color: var(--theme-dim); background: repeating-linear-gradient(45deg, var(--theme-inset) 0 8px, var(--theme-raised) 8px 16px); }
+.videoFxCatalogFallback { display: grid; place-items: center; height: 58px; font-family: var(--theme-font-ui); font-size: 24px; color: var(--theme-dim); background: repeating-linear-gradient(45deg, var(--theme-inset) 0 8px, var(--theme-raised) 8px 16px); }
 .videoFxCatalogThumbnailNote { display: block; font-size: 14px; line-height: 18px; text-align: center; color: var(--theme-muted); background: var(--theme-inset); }
 .videoFxCatalogInfo { min-width: 0; overflow-wrap: anywhere; }
 .videoFxCatalogName { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
@@ -46,4 +46,35 @@
 .videoFxCatalogEmpty, .videoFxCatalogHint { font-size: 14px; line-height: 1.4; color: var(--theme-dim); margin: 0; }
 .videoFxCatalogHint { flex: 0 0 auto; }
 @container (min-width: 800px) { .videoFxCatalogResults { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@container (max-width: 400px) { .videoFxCatalogCard { grid-template-columns: 80px minmax(0, 1fr); } .videoFxCatalogThumbnail { width: 80px; } .videoFxCatalogButtons { grid-column: 1 / -1; flex-direction: row; } .videoFxCatalogButtons > button { flex: 1 1 0; } }
+.videoFxCatalogTry { border-color: var(--theme-preview) !important; }
+.videoFxCatalogAdd { border-color: var(--theme-program) !important; }
+.videoFxCatalogActions { flex: 0 0 auto; flex-wrap: nowrap; }
+.videoFxCatalogActions > button { white-space: nowrap; }
+/* Narrow panes (the Perform Inspector at 1366x768 is about 440px wide and 190px tall): one scope line,
+   one tool row, and a compact list row per effect (thumbnail left, name and one description line,
+   Try and Add on the right) so at least two effects are visible without scrolling. */
+@container (max-width: 720px) {
+  .videoFxCatalog { gap: 4px; }
+  .videoFxCatalogHeader { min-height: 0; gap: 0; }
+  .videoFxCatalogScope { flex: 1 1 100%; flex-direction: row; flex-wrap: nowrap; align-items: baseline; gap: 10px; min-height: 22px; }
+  .videoFxCatalogTarget { flex: 0 1 auto; max-width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+  .videoFxCatalogLive, .videoFxCatalogAuditioning { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  .videoFxCatalogProblem { font-size: 13px; }
+  .videoFxCatalogSearch > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .videoFxCatalogResults { gap: 4px; padding: 0; }
+  .videoFxCatalogCard { grid-template-columns: 64px minmax(0, 1fr) auto; gap: 8px; padding: 3px 6px; align-items: center; }
+  .videoFxCatalogThumbnail { width: 64px; height: 44px; }
+  .videoFxCatalogThumbnail img, .videoFxCatalogFallback { height: 44px; }
+  .videoFxCatalogFallback { font-size: 18px; }
+  .videoFxCatalogThumbnailNote { display: none; }
+  .videoFxCatalogName { flex-wrap: nowrap; gap: 8px; overflow: hidden; }
+  .videoFxCatalogName strong { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+  .videoFxCatalogName > span { flex: 0 0 auto; font-size: 14px; }
+  .videoFxCatalogInfo p { margin: 0; font-size: 14px; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; line-clamp: 1; }
+  .videoFxCatalogCard[data-fx-card-state="usable"] .videoFxCatalogState { display: none; }
+  .videoFxCatalogState { font-size: 14px; }
+  .videoFxCatalogButtons { flex-direction: row; align-self: center; gap: 4px; min-width: 0; }
+  .videoFxCatalogButtons > button { min-width: 52px; padding: 4px 8px; }
+  .videoFxCatalogHint { display: none; }
+}
+@container (max-width: 380px) { .videoFxCatalogThumbnail { display: none; } .videoFxCatalogCard { grid-template-columns: minmax(0, 1fr) auto; } .videoFxCatalogTools { flex-wrap: wrap; } }

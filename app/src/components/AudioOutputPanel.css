@@ -40,7 +40,7 @@
   max-width: 34ch;
   overflow-wrap: anywhere;
   color: var(--theme-muted);
-  font-size: 12px;
+  font-size: var(--fs-text);
 }
 
 .audioOutputState--ready strong {
@@ -85,7 +85,7 @@
   padding: 7px 10px;
   color: var(--theme-text);
   cursor: pointer;
-  font-weight: 700;
+  font-weight: 400;
 }
 
 .audioOutputDisclosureBody {
@@ -154,7 +154,7 @@
 .audioOutputTimelineCueAudioHeader output {
   flex: 0 0 auto;
   color: var(--theme-ok);
-  font-weight: 700;
+  font-weight: 400;
 }
 
 .audioOutputTimelineCueAudioHeader output.fault {

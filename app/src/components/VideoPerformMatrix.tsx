@@ -5,6 +5,8 @@ import type { MediaAssetAvailability, VideoBlendMode, VideoClipLayerRuntimeSumma
 import { videoClipSlotBankCells } from "../videoClipSlotBankModel";
 import { VideoClipSlotBankPanel } from "./VideoClipSlotBankPanel";
 import { VideoLayerListPanel } from "./VideoLayerListPanel";
+import { confirmDialog } from "../inAppDialog";
+import { addEffectToLiveLayerDialog } from "../inAppDialogCopy";
 import "./VideoPerformMatrix.css";
 import { FX_DRAG_MIME, readFxDragPayload, type FxCatalogEntry } from "../fxCatalogModel";
 
@@ -138,7 +140,7 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
     const live = () => runtime()?.active_slot_id != null && runtime()?.playing === true;
     return <div class="videoPerformMatrixRow" classList={{ selected: selected() }} data-video-perform-row={layer().id} data-video-clip-slot-layer-id={layer().id} role="row" aria-selected={selected()}
       onDragOver={event => { if (event.dataTransfer?.types.includes(FX_DRAG_MIME)) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }}
-      onDrop={event => {
+      onDrop={async event => {
         if (!event.dataTransfer) return;
         const entry = readFxDragPayload(event.dataTransfer, props.effectEntries ?? []);
         if (!entry) return;
@@ -146,9 +148,8 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
         props.bank.onSelectLayer(layer().id);
         // A row may differ from the browser's selected target. Review the exact
         // destination before changing its live chain.
-        const ja = document.documentElement.lang === "ja";
-        const target = `${layer().id} · ${layer().label}`;
-        if (globalThis.confirm(ja ? `追加先: レイヤー ${target}\n${entry.label}\nLIVE — 本番映像にも反映されます。追加しますか？` : `Add to: Layer ${target}\n${entry.label}\nLIVE — affects Program. Add effect?`)) void props.onAddEffect?.(entry, layer().id);
+        const target = layer();
+        if (await confirmDialog(addEffectToLiveLayerDialog(`${target.id} · ${target.label}`, entry.label))) void props.onAddEffect?.(entry, target.id);
       }}>
       <div class="videoPerformLayerStrip" role="rowheader">
         <div class="videoPerformLayerTop">

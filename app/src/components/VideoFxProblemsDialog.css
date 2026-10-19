@@ -1,6 +1,6 @@
 .videoFxProblems { width: min(720px, 92vw); max-height: 80vh; padding: 12px; overflow: auto; color: var(--theme-text); background: var(--theme-panel); border: 1px solid var(--theme-line-strong); font-size: 14px; }
 .videoFxProblems > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.videoFxProblems h2 { margin: 0; font-size: 16px; font-family: var(--font-label); letter-spacing: .06em; text-transform: uppercase; }
+.videoFxProblems h2 { margin: 0; font-size: 16px; font-family: var(--theme-font-ui); }
 .videoFxProblems button { min-height: 44px; min-width: 44px; padding: 6px 12px; font: inherit; color: var(--theme-text); background: var(--theme-key); border: 1px solid var(--theme-line-strong); border-radius: var(--r-sm); cursor: pointer; }
 .videoFxProblems button:hover { background: var(--theme-key-hover); }
 .videoFxProblems :is(button, summary):focus-visible { outline: 2px solid var(--theme-focus); outline-offset: 2px; }

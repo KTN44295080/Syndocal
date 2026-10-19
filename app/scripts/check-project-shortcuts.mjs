@@ -534,8 +534,8 @@ const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "ut
 assert.match(appSource, /window\.addEventListener\("keydown", handleAppKeyDown\)/, "the tested controller remains mounted");
 assert.match(appSource, /handleControlKeyDown\(event\)/, "the mounted application handler delegates to the controller");
 
-// Use the mounted handler itself: skipping matrix shortcuts while a modal is
-// open must not expose global workspace, GO or New Project shortcuts underneath.
+// Use the mounted handler itself: while a modal is open no global workspace,
+// GO, Blackout or New Project shortcut may fire underneath it.
 const appTree = ts.createSourceFile("App.tsx", appSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let mountedHandler;
 const findMountedHandler = (node) => {
@@ -549,25 +549,32 @@ assert.ok(mountedHandler, "mounted App keyboard entry point exists");
 const mountedHandlerCode = ts.transpileModule(`const underTest = ${mountedHandler.getText(appTree)}; underTest;`, {
   compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
 }).outputText;
-for (const [workspace, mode, legendOpen, expectedCalls] of [
-  ["control", "perform", true, 0],
-  ["control", "perform", false, 1],
-  ["control", "video", true, 1],
-  ["setup", "perform", true, 1],
+// Any open modal dialog (the in-app confirmation, protected close, the Perform
+// legend, ...) suspends every global shortcut in every workspace and mode.
+for (const [workspace, mode, domDialogOpen, inAppDialogOpen, expectedCalls] of [
+  ["control", "perform", true, false, 0],
+  ["control", "perform", false, true, 0],
+  ["control", "perform", false, false, 1],
+  ["control", "video", true, false, 0],
+  ["control", "video", false, true, 0],
+  ["control", "video", false, false, 1],
+  ["setup", "perform", true, false, 0],
+  ["setup", "perform", false, false, 1],
 ]) {
-  for (const [key, code, ctrlKey] of [["l", "KeyL", false], ["n", "KeyN", true], [" ", "Space", false]]) {
+  for (const [key, code, ctrlKey] of [["l", "KeyL", false], ["n", "KeyN", true], [" ", "Space", false], ["Enter", "Enter", false]]) {
     let calls = 0;
     let prevented = false;
     const handler = runInNewContext(mountedHandlerCode, {
       workspaceTab: () => workspace,
       controlMode: () => mode,
-      document: { querySelector: (selector) => legendOpen && selector === "[data-video-perform-legend][open]" ? {} : null },
+      isInAppDialogOpen: () => inAppDialogOpen,
+      document: { querySelector: (selector) => domDialogOpen && selector === "dialog[open]" ? {} : null },
       paneWindow: null,
       HTMLElement: class {},
       handleControlKeyDown: () => { calls += 1; },
     });
-    handler({ key, code, ctrlKey, defaultPrevented: false, preventDefault: () => { prevented = true; } });
-    assert.equal(calls, expectedCalls, `${workspace}/${mode} legend=${legendOpen}: ${code} global dispatch`);
+    handler({ key, code, ctrlKey, defaultPrevented: false, preventDefault: () => { prevented = true; }, stopImmediatePropagation: () => {} });
+    assert.equal(calls, expectedCalls, `${workspace}/${mode} dialog=${domDialogOpen}/in-app=${inAppDialogOpen}: ${code} global dispatch`);
     assert.equal(prevented, false, "modal suppression preserves native dialog default actions");
   }
 }

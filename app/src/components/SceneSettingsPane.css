@@ -9,7 +9,7 @@
   margin: 0;
   padding: 0;
   color: var(--theme-text);
-  font-size: 12px;
+  font-size: var(--fs-text);
   font-weight: 700;
 }
 
@@ -23,7 +23,7 @@
   border-radius: 0;
   background: var(--theme-accent);
   color: var(--theme-on-accent);
-  font-size: 11px;
+  font-size: var(--fs-text);
   font-weight: 800;
   line-height: 1;
 }
@@ -43,7 +43,7 @@
 .sceneFxChannelNote {
   margin: 0;
   color: var(--theme-muted);
-  font-size: 12px;
+  font-size: var(--fs-text);
   line-height: 1.45;
   text-wrap: pretty;
 }
@@ -102,8 +102,8 @@
   background: var(--theme-accent);
   color: var(--theme-on-accent);
   padding: 1px 6px;
-  font-size: 11px;
-  font-weight: 800;
+  font-size: var(--fs-text);
+  font-weight: 400;
 }
 
 /* The surface rail names its four views under the icons (same 40px targets). */
@@ -121,7 +121,7 @@
 .sceneSettingsSurfaceRailLabel {
   max-width: 100%;
   overflow: hidden;
-  font-size: 11px;
+  font-size: var(--fs-text);
   line-height: 1;
   text-overflow: clip;
   white-space: nowrap;
@@ -147,7 +147,7 @@
   justify-self: start;
   border-radius: 0;
   padding: 1px 7px;
-  font-size: 11px;
+  font-size: var(--fs-chrome);
   font-weight: 800;
   letter-spacing: 0.06em;
 }

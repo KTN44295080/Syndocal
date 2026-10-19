@@ -90,8 +90,8 @@
   gap: 5px;
   min-width: 0;
   color: var(--theme-muted);
-  font-size: 11px;
-  font-weight: 700;
+  font-size: var(--fs-text);
+  font-weight: 400;
 }
 
 .fixtureLimitsEditor .fixtureLimitFieldLabel > span {
@@ -102,7 +102,7 @@
 .fixtureLimitsEditor .fixtureLimitFieldLabel small {
   flex: 0 0 auto;
   color: var(--theme-dim);
-  font-size: 10px;
+  font-size: var(--fs-text);
   font-variant-numeric: tabular-nums;
   font-weight: 400;
   white-space: nowrap;

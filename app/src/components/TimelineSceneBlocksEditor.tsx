@@ -15,6 +15,7 @@ import type { TimelineCueEventSummary, TimelineTrackKind } from "../types";
 import type { SceneCueKind } from "../sceneCueKind";
 import { formatTimelineTimeInput, parseTimelineTimeInput } from "../timelineTimeInput";
 import { bankAuthorityIssueMessage, type FullBankAuthoritySnapshot } from "../bankAuthority";
+import { confirmDialog } from "../inAppDialog";
 
 export interface TimelineSceneBlockCueOption {
   id: number;
@@ -1034,13 +1035,15 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                       </button>
                       <button
                         type="button"
-                        onClick={() => {
-                          if (confirmTimelinePlacementRemoval(
-                            row().id,
-                            `${row().cue_number} · ${row().cue_label}`,
-                            totalDurationMs(row()),
+                        onClick={async () => {
+                          const target = row();
+                          if (await confirmTimelinePlacementRemoval(
+                            target.id,
+                            `${target.cue_number} · ${target.cue_label}`,
+                            totalDurationMs(target),
+                            confirmDialog,
                           )) {
-                            void props.onRemoveEvent(row());
+                            void props.onRemoveEvent(target);
                           }
                         }}
                       >
@@ -1394,11 +1397,12 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        if (confirmTimelinePlacementRemoval(
+                      onClick={async () => {
+                        if (await confirmTimelinePlacementRemoval(
                           event.id,
                           `${event.cue_number} · ${event.cue_label}`,
                           totalDurationMs(event),
+                          confirmDialog,
                         )) {
                           void props.onRemoveEvent(event);
                         }

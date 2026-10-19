@@ -5,7 +5,7 @@
 .videoFxParameterActions > * { flex: 1 1 auto; }
 .videoFxParameter { display: grid; gap: 4px; padding-block: 6px; min-width: 0; border-bottom: 1px solid var(--theme-line); }
 .videoFxParameterHead, .videoFxParameterFoot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
-.videoFxParameterHead label { color: var(--theme-text); font-weight: 700; overflow-wrap: anywhere; }
+.videoFxParameterHead label { color: var(--theme-text); font-weight: 400; overflow-wrap: anywhere; }
 .videoFxParameterHead output { color: var(--theme-text); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .videoFxParameterFoot { color: var(--theme-muted); }
 .videoFxScalarPicker { display: grid; grid-template-columns: minmax(44px, 1fr) minmax(64px, 96px); gap: 4px; min-width: 0; }

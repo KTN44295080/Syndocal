@@ -167,6 +167,7 @@ const matrixFocusSource = `
  import { render } from 'solid-js/web';
  import { VideoPerformMatrix } from '/src/components/VideoPerformMatrix.tsx';
  import { VideoEffectBrowser } from '/src/components/VideoEffectBrowser.tsx';
+ import { InAppDialogHost } from '/src/components/InAppDialogHost.tsx';
  import { buildFxCatalog } from '/src/fxCatalogModel.ts';
  import { viewportFixtureData } from '/src/viewportFixtureData.ts';
  import '/src/theme.css';import '/src/styles.css';
@@ -184,7 +185,7 @@ const matrixFocusSource = `
  }});
  const bank={mode:'control',get layers(){return layers()},get layer(){return layers().find(l=>l.id===selectedLayer())},get runtime(){return runtime()},assets:[101,102].map(id=>({id,label:'Focus asset '+id,source:initial[0].source})),thumbnails:{},get selectedSlotId(){return selected()},onSelectLayer:setSelectedLayer,onSelect:setSelected,onQueue:id=>queueCalls.push([selectedLayer(),id]),onPreview:id=>inspectCalls.push(id),onMore:(id,trigger)=>moreCalls.push({layer:selectedLayer(),slot:id,selected:selected(),anchor:trigger.matches('[data-video-perform-cell-index]')?'cell':trigger.hasAttribute('data-video-perform-clip-options')?'corner':'other'}),onImport:()=>{},onCancelQueue:()=>{},onSetQuantization:()=>{},transitionKind:'Cut',transitionDurationUnit:'Milliseconds',transitionDurationMilliunits:750,onSetTransitionKind:()=>{},onSetTransitionDurationUnit:()=>{},onSetTransitionDurationMilliunits:()=>{}};
  const list={get layers(){return layers()},onSetLayerState:(id,state)=>setLayers(layers().map(l=>l.id===id?{...l,state}:l)),onSetBlendMode:(id,blend_mode)=>setLayers(layers().map(l=>l.id===id?{...l,blend_mode}:l))};
- render(()=><><div style={{height:'680px',width:'1300px'}}><VideoPerformMatrix bank={bank} layerList={list} effectEntries={buildFxCatalog()} onAddEffect={(entry,id)=>effectAdds.push([entry.id,id])} runtimes={[runtime()]} availabilityById={{}} previewLayerId={previewLayerId()} thumbnailsAuthorized={false} onStop={()=>{}} keyboardEnabled={true} onTake={()=>takes.push(true)}/></div><section data-video-perform-pane="inspector" style={{height:'300px',width:'600px'}}><VideoEffectBrowser entries={buildFxCatalog()} layer={layers()[1]} onAdd={(entry,id)=>effectAdds.push([entry.id,id])}/></section></>,document.getElementById('root'));
+ render(()=><><InAppDialogHost locale={()=>'en'}/><div style={{height:'680px',width:'1300px'}}><VideoPerformMatrix bank={bank} layerList={list} effectEntries={buildFxCatalog()} onAddEffect={(entry,id)=>effectAdds.push([entry.id,id])} runtimes={[runtime()]} availabilityById={{}} previewLayerId={previewLayerId()} thumbnailsAuthorized={false} onStop={()=>{}} keyboardEnabled={true} onTake={()=>takes.push(true)}/></div><section data-video-perform-pane="inspector" style={{height:'300px',width:'600px'}}><VideoEffectBrowser entries={buildFxCatalog()} layer={layers()[1]} onAdd={(entry,id)=>effectAdds.push([entry.id,id])}/></section></>,document.getElementById('root'));
 `;
 
 const quickFxFocusPath = "/src/__perform-quick-fx-focus-fixture.tsx";
@@ -403,7 +404,7 @@ try {
       assert.equal((await inspect(root+' [data-video-clip-slot-inspector-embedded] > header')).failure, null, label+': embedded Clip Inspector header is visible (the body scrolls inside the pane)');
       await clickTab('browser');
       assert.deepEqual(await tabState(), { selected: ['browser'], panel: 'browser', clip: false, clipDialog: false, browser: true, fx: false }, label+': Browser tab mounts the FX catalog');
-      const browserState = await cdp.evaluate(`(()=>{const cards=[...document.querySelectorAll('[data-fx-catalog-card]')],target=document.querySelector('[data-fx-add-target]'),card=cards[0],b=card.getBoundingClientRect(),pane=document.querySelector('[data-video-perform-inspector-panel]').getBoundingClientRect();return {cards:cards.length,target:target.textContent,live:!!document.querySelector('[data-fx-live-warning]'),visibleCardPixels:Math.min(b.bottom,pane.bottom)-Math.max(b.top,pane.top),textSize:parseFloat(getComputedStyle(card).fontSize),outer:[document.documentElement.scrollWidth,document.documentElement.scrollHeight]}})()`);
+      const browserState = await cdp.evaluate(`(()=>{const cards=[...document.querySelectorAll('[data-fx-catalog-card]')],target=document.querySelector('[data-fx-add-target]'),card=cards[0],b=card.getBoundingClientRect(),pane=document.querySelector('[data-video-perform-inspector-panel]').getBoundingClientRect();return {cards:cards.length,target:target.textContent,live:!!document.querySelector('[data-fx-live-warning]'),visibleCardPixels:Math.min(b.bottom,pane.bottom)-Math.max(b.top,pane.top),fullyVisibleCards:cards.filter(c=>{const r=c.getBoundingClientRect();return r.top>=pane.top-1&&r.bottom<=pane.bottom+1}).length,textSize:parseFloat(getComputedStyle(card).fontSize),outer:[document.documentElement.scrollWidth,document.documentElement.scrollHeight]}})()`);
       assert.ok(browserState.cards >= 14, label+': all built-ins are cards');
       assert.equal(await cdp.evaluate("document.querySelectorAll('[data-fx-catalog-audition]').length"), browserState.cards, label+': every card offers the Preview-only Try beside the LIVE Add');
       assert.match(browserState.target, /1/); assert.ok(browserState.target.length > 14, label+': explicit layer add target');
@@ -412,6 +413,9 @@ try {
       // additional 720px regression case may show a partial card; scroll its
       // real Add control into view and verify the complete 44px target below.
       assert.ok(browserState.visibleCardPixels >= (height >= 768 ? 44 : 1), label+': card visible before internal scrolling '+JSON.stringify(browserState));
+      // Task 14 addendum: the Inspector is a compact list row in narrow panes, so at least two effects are
+      // fully visible without scrolling at the 1366x768 and larger viewports.
+      assert.ok(browserState.fullyVisibleCards >= (height >= 768 ? 2 : 1), label+': at least two effect cards are fully visible '+JSON.stringify(browserState));
       assert.ok(browserState.textSize >= 14, label+': readable catalog text');
       assert.deepEqual(browserState.outer, [width,height], label+': browser never creates document scroll');
       const search = '[data-fx-catalog-search]';
@@ -425,7 +429,16 @@ try {
       await cdp.evaluate("document.querySelector('[data-fx-filter-toggle]').click();document.querySelector('[data-fx-category=All]').click();document.querySelector('[data-fx-catalog-search]').focus()");
       await cdp.key('Tab','Tab',9);
       assert.equal(await cdp.evaluate("document.activeElement.hasAttribute('data-fx-filter-toggle')"),true,label+': filter keyboard reachable');
-      await cdp.key('Tab','Tab',9);
+      // Task 14: Import ISF and FX Chain now sit in the tool row (search, filter, import, chain), so the first card
+      // follows them in tab order. Every stop in between is one of those tool-row buttons.
+      let toolStops = 0;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        await cdp.key('Tab','Tab',9);
+        if (await cdp.evaluate("document.activeElement.hasAttribute('data-fx-catalog-card')")) break;
+        assert.equal(await cdp.evaluate("!!document.activeElement.closest('.videoFxCatalogActions')"),true,label+': tab order between the filter and the first card is the tool-row actions');
+        toolStops++;
+      }
+      assert.ok(toolStops <= 2,label+': at most Import ISF and FX Chain sit between the filter and the first card');
       assert.equal(await cdp.evaluate("document.activeElement.hasAttribute('data-fx-catalog-card')"),true,label+': card keyboard reachable');
       await cdp.evaluate("document.querySelector('[data-fx-catalog-add]').scrollIntoView({block:'nearest'})");
       const addTarget = await inspect('[data-fx-catalog-add]');
@@ -544,14 +557,66 @@ try {
       assert.notEqual((await inspect(blend)).value,beforeBlend,label+': blend keyboard changes');
       const beforeMaster=(await inspect(selectors.master)).value;await focus(selectors.master);await cdp.key('ArrowLeft','ArrowLeft',37);
       assert.notEqual((await inspect(selectors.master)).value,beforeMaster,label+': master keyboard changes');
-      // Reject the deliberate confirmation: no command may escape the guard.
-      const blackoutBefore=await cdp.evaluate('document.querySelector('+JSON.stringify(selectors.guardedBlackout)+').getAttribute("aria-pressed")');
-      cdp.acceptDialogs=false;const dialogsBefore=cdp.dialogs.length;
+      // The deliberate confirmation is the in-app dialog (never a browser prompt):
+      // no command may escape the guard, and nothing browser-native may open.
+      const dlg='[data-in-app-dialog]',dlgCancel=dlg+' [data-in-app-dialog-cancel]',dlgConfirm=dlg+' [data-in-app-dialog-confirm]';
+      const blackoutState=()=>cdp.evaluate('document.querySelector('+JSON.stringify(selectors.guardedBlackout)+').getAttribute("aria-pressed")');
+      const dialogOpen=()=>cdp.evaluate('!!document.querySelector('+JSON.stringify(dlg+'[open]')+')');
+      const dialogsBefore=cdp.dialogs.length;
+      const blackoutBefore=await blackoutState();
       await focus(selectors.guardedBlackout);await cdp.key('Enter','Enter',13);
-      await waitFor(()=>cdp.dialogs.length===dialogsBefore+1,label+': blackout confirmation guard');
-      assert.equal(cdp.dialogs.at(-1).type,'confirm',label+': deliberate confirmation required');
-      assert.equal(await cdp.evaluate('document.querySelector('+JSON.stringify(selectors.guardedBlackout)+').getAttribute("aria-pressed")'),blackoutBefore,label+': rejected guard preserves blackout');
-      cdp.acceptDialogs=true;
+      await waitFor(dialogOpen,label+': in-app blackout dialog opens');
+      const shown=await cdp.evaluate('(()=>{const d=document.querySelector('+JSON.stringify(dlg)+');const r=d.getBoundingClientRect();const title=document.getElementById(d.getAttribute("aria-labelledby"));const detail=document.getElementById(d.getAttribute("aria-describedby"));return {role:d.getAttribute("role"),modal:d.matches(":modal"),ariaModal:d.getAttribute("aria-modal"),tone:d.dataset.tone,title:title?.innerText,detail:detail?.innerText,focus:document.activeElement?.matches("[data-in-app-dialog-cancel]"),hazard:!!d.querySelector(".inAppDialogHazard"),inside:r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight,buttons:[...d.querySelectorAll("button")].map(b=>({text:b.innerText.trim(),h:Math.round(b.getBoundingClientRect().height),w:Math.round(b.getBoundingClientRect().width)}))}})()');
+      assert.equal(shown.role,'alertdialog',label+': dialog role');
+      assert.ok(shown.modal&&shown.ariaModal==='true',label+': dialog is modal');
+      assert.equal(shown.tone,'danger',label+': blackout is a danger dialog');
+      assert.ok(shown.hazard,label+': danger dialog carries the hazard stripe');
+      assert.ok(shown.inside,label+': dialog fits the viewport');
+      assert.ok(shown.focus,label+': a danger dialog starts focused on Cancel');
+      assert.ok(shown.buttons.length===2&&shown.buttons.every(b=>b.h>=44&&b.w>=44),label+': dialog targets are at least 44px '+JSON.stringify(shown.buttons));
+      if(locale==='ja'){assert.match(shown.title,/ブラックアウト/,label+': Japanese blackout title');assert.match(shown.detail,/即座/,label+': Japanese consequence');}
+      else{assert.match(shown.title,/Blackout video output\?/,label+': English blackout title');assert.match(shown.detail,/Program goes black immediately/,label+': English consequence');}
+      await writeFile(join(evidenceDir,label+'-blackout-dialog.png'),Buffer.from((await cdp.capture({format:'png',captureBeyondViewport:false})).data,'base64'));
+      // Perform and global shortcuts are suspended while the question is open.
+      await cdp.key('?','Slash');
+      assert.equal(await cdp.evaluate('!!document.querySelector("[data-video-perform-legend][open]")'),false,label+': Perform shortcuts are suspended under the dialog');
+      // Focus is trapped: Tab never leaves the dialog.
+      for(let i=0;i<5;i++){await cdp.key('Tab','Tab',9);assert.ok(await cdp.evaluate('document.activeElement?.closest("[data-in-app-dialog]")!==null'),label+': Tab stays inside the dialog');}
+      await focus(dlgCancel);
+      // Enter with focus on Cancel does nothing harmful and closes the question.
+      await cdp.key('Enter','Enter',13);
+      await waitFor(async()=>!(await dialogOpen()),label+': Enter on Cancel closes the dialog');
+      assert.equal(await blackoutState(),blackoutBefore,label+': Enter on Cancel preserves blackout');
+      assert.ok(await cdp.evaluate('document.activeElement?.matches('+JSON.stringify(selectors.guardedBlackout)+')'),label+': focus returns to the Blackout key');
+      // Escape cancels too.
+      await cdp.key('Enter','Enter',13);await waitFor(dialogOpen,label+': dialog reopens');
+      await cdp.key('Escape','Escape',27);
+      await waitFor(async()=>!(await dialogOpen()),label+': Escape cancels');
+      assert.equal(await blackoutState(),blackoutBefore,label+': Escape preserves blackout');
+      // Ctrl+Shift+B opens the same guarded dialog.
+      await cdp.evaluate('document.activeElement?.blur()');
+      await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'B',code:'KeyB',windowsVirtualKeyCode:66,modifiers:10});
+      await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'B',code:'KeyB',windowsVirtualKeyCode:66,modifiers:10});
+      await waitFor(dialogOpen,label+': Ctrl+Shift+B opens the same guarded dialog');
+      assert.equal(await cdp.evaluate('document.querySelector('+JSON.stringify(dlg)+').dataset.tone'),'danger',label+': Ctrl+Shift+B dialog is the danger dialog');
+      await focus(dlgCancel);await cdp.key('Enter','Enter',13);
+      await waitFor(async()=>!(await dialogOpen()),label+': Ctrl+Shift+B dialog cancels');
+      assert.equal(await blackoutState(),blackoutBefore,label+': Ctrl+Shift+B cancel preserves blackout');
+      // New Project in Perform asks in the app as well (Ctrl+N); declining changes nothing.
+      await cdp.evaluate('document.activeElement?.blur()');
+      await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'n',code:'KeyN',windowsVirtualKeyCode:78,modifiers:2});
+      await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'n',code:'KeyN',windowsVirtualKeyCode:78,modifiers:2});
+      await waitFor(dialogOpen,label+': New Project in Perform opens the in-app dialog');
+      const newProjectDialog=await cdp.evaluate('(()=>{const d=document.querySelector('+JSON.stringify(dlg)+');return {title:document.getElementById(d.getAttribute("aria-labelledby")).innerText,tone:d.dataset.tone,cancelFocused:document.activeElement?.matches("[data-in-app-dialog-cancel]")}})()');
+      assert.match(newProjectDialog.title,locale==='ja'?/新規プロジェクト/:/new project/i,label+': New Project dialog wording');
+      assert.ok(newProjectDialog.tone==='danger'&&newProjectDialog.cancelFocused,label+': New Project dialog starts on Cancel');
+      await cdp.key('Escape','Escape',27);
+      await waitFor(async()=>!(await dialogOpen()),label+': declining New Project closes the dialog');
+      // Confirming proceeds to the existing blackout path (the browser preview has no desktop backend).
+      await focus(selectors.guardedBlackout);await cdp.key('Enter','Enter',13);await waitFor(dialogOpen,label+': dialog opens for confirmation');
+      await cdp.evaluate('document.querySelector('+JSON.stringify(dlgConfirm)+').click()');
+      await waitFor(async()=>!(await dialogOpen()),label+': Confirm closes the dialog');
+      assert.equal(cdp.dialogs.length,dialogsBefore,label+': no browser dialog ("tauri.localhost says") ever opened');
       // Legend is on demand and must never cause page scroll.
       await focus(selectors.legend);await cdp.key('Enter','Enter',13);
       await waitFor(()=>cdp.evaluate('!!document.querySelector("[data-video-perform-legend][open]")'),label+': keyboard legend shown');
@@ -666,14 +731,21 @@ try {
   assert.equal(await cdp.evaluate('window.__matrixFocus.takes.length'),2,currentCase+': catalog Enter never Takes a queued clip');
   // Dragging a card onto a layer row adds to that exact row after a visible LIVE confirmation; declining adds nothing.
   const dropOnRow = (layer, payload) => cdp.evaluate(`(()=>{const row=document.querySelector('[data-video-perform-row="${layer}"]');const dt=new DataTransfer();dt.setData('application/x-syndocal-fx',${JSON.stringify(payload)});const over=new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:dt});row.dispatchEvent(over);row.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:dt}));return over.defaultPrevented})()`);
-  cdp.acceptDialogs = false; cdp.dialogs.length = 0;
+  cdp.dialogs.length = 0;
+  const inApp = '[data-in-app-dialog]';
   assert.equal(await dropOnRow(3, 'builtin:mirror'), true, currentCase+': a layer row accepts effect drops');
-  assert.equal(cdp.dialogs.length, 1, currentCase+': a row drop asks for confirmation naming its destination');
-  assert.match(cdp.dialogs[0].message, /Layer 3/, currentCase+': confirmation names the destination layer');
-  assert.match(cdp.dialogs[0].message, /LIVE/, currentCase+': confirmation states the LIVE consequence');
+  await waitFor(() => cdp.evaluate(`!!document.querySelector('${inApp}[open]')`), currentCase+': a row drop asks for confirmation in the app');
+  const dropDialog = await cdp.evaluate(`(()=>{const d=document.querySelector('${inApp}');return {title:document.getElementById(d.getAttribute('aria-labelledby')).innerText,detail:document.getElementById(d.getAttribute('aria-describedby')).innerText,tone:d.dataset.tone}})()`);
+  assert.match(dropDialog.title, /Layer 3/, currentCase+': confirmation names the destination layer');
+  assert.match(dropDialog.detail, /LIVE/, currentCase+': confirmation states the LIVE consequence');
+  assert.equal(cdp.dialogs.length, 0, currentCase+': the confirmation is never a browser dialog');
+  await cdp.evaluate(`document.querySelector('${inApp} [data-in-app-dialog-cancel]').click()`);
+  await waitFor(() => cdp.evaluate(`!document.querySelector('${inApp}[open]')`), currentCase+': declining closes the dialog');
   assert.equal((await cdp.evaluate('window.__matrixFocus.effectAdds')).length, 1, currentCase+': declined drop adds nothing');
-  cdp.acceptDialogs = true;
   await dropOnRow(3, 'builtin:mirror');
+  await waitFor(() => cdp.evaluate(`!!document.querySelector('${inApp}[open]')`), currentCase+': the second drop asks again');
+  await cdp.evaluate(`document.querySelector('${inApp} [data-in-app-dialog-confirm]').click()`);
+  await waitFor(() => cdp.evaluate(`!document.querySelector('${inApp}[open]')`), currentCase+': accepting closes the dialog');
   assert.deepEqual(await cdp.evaluate('window.__matrixFocus.effectAdds'), [['builtin:invert',2],['builtin:mirror',3]], currentCase+': accepted drop adds the exact card to the dropped row');
   await dropOnRow(3, 'builtin:unknown-or-untrusted-source');
   assert.equal((await cdp.evaluate('window.__matrixFocus.effectAdds')).length, 2, currentCase+': an unknown drag payload adds nothing');

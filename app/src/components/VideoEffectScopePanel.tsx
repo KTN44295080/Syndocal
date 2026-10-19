@@ -5,6 +5,8 @@ import type {
   VideoEffectPresetId,
   VideoEffectScope,
 } from "../types";
+import { confirmDialog } from "../inAppDialog";
+import { removeFxChainDialog, removeFxStageDialog } from "../inAppDialogCopy";
 
 interface VideoEffectScopePanelProps {
   scopeLabel: string;
@@ -101,11 +103,13 @@ export function VideoEffectScopePanel(props: VideoEffectScopePanelProps) {
       }),
     });
   };
-  const removeStage = (stageId: number) => {
+  const removeStage = async (stageId: number) => {
+    const before = chain();
+    const stage = before?.stages.find((entry) => entry.id === stageId);
+    if (!before || !stage || !await confirmDialog(removeFxStageDialog(stage.label))) return;
+    // The question is modal, but re-read the chain: it is the authority for what is removed.
     const current = chain();
-    if (!current) return;
-    const stage = current.stages.find((entry) => entry.id === stageId);
-    if (!stage || !globalThis.confirm(`Remove FX “${stage.label}”?`)) return;
+    if (!current || !current.stages.some((entry) => entry.id === stageId)) return;
     if (current.stages.length === 1) return props.onRemoveChain(props.scope);
     return replaceChain({ ...current, stages: current.stages.filter((entry) => entry.id !== stageId) });
   };
@@ -218,7 +222,7 @@ export function VideoEffectScopePanel(props: VideoEffectScopePanelProps) {
             <button
               class="danger"
               disabled={props.busy}
-              onClick={() => { if (globalThis.confirm(`Remove ${props.scopeLabel} effect chain?`)) void props.onRemoveChain(props.scope); }}
+              onClick={async () => { if (await confirmDialog(removeFxChainDialog(props.scopeLabel))) void props.onRemoveChain(props.scope); }}
             >
               Remove chain
             </button>

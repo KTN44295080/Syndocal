@@ -2,7 +2,7 @@
 .videoFxAudition[data-fx-audition-active="true"] { border-color: var(--theme-preview); background: var(--theme-card); }
 .videoFxAudition p { margin: 0; line-height: 1.45; color: var(--theme-dim); }
 .videoFxAuditionTitle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
-.videoFxAuditionTitle strong { font-family: var(--font-label); letter-spacing: .06em; color: var(--theme-preview); }
+.videoFxAuditionTitle strong { font-family: var(--theme-font-ui); color: var(--theme-preview); }
 .videoFxAuditionTitle span { color: var(--theme-text); }
 .videoFxAuditionToggle, .videoFxAuditionActions { display: flex; flex-wrap: wrap; gap: 4px; }
 .videoFxAudition button { min-height: 44px; min-width: 44px; padding: 6px 10px; font: inherit; color: var(--theme-text); background: var(--theme-key); border: 1px solid var(--theme-line-strong); border-radius: var(--r-sm); cursor: pointer; flex: 1 1 auto; white-space: normal; }

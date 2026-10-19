@@ -1,60 +1,80 @@
+import type { ConfirmDialogOptions } from "./inAppDialog";
+
 export type DestructiveActionKind = "fixture" | "cue" | "Bank" | "palette" | "playback executor" | "video output" | "effect";
 
-type ConfirmAction = (message: string) => boolean;
+/** The in-app `confirmDialog` (or a test double). A synchronous answer is accepted too. */
+export type ConfirmDialogFunction = (options: ConfirmDialogOptions) => boolean | Promise<boolean>;
 
-export function destructiveActionPrompt(kind: DestructiveActionKind, label: string): string {
-  return `Remove ${kind} "${label}"?\n\nYou can undo this action from the Project menu or with Ctrl/Cmd+Z.`;
+const undoMessage = "You can undo this from the Project menu or with Ctrl/Cmd+Z.";
+
+export function destructiveActionDialog(kind: DestructiveActionKind, label: string): ConfirmDialogOptions {
+  return {
+    title: `Remove ${kind} "${label}"?`,
+    message: undoMessage,
+    confirmLabel: "Remove",
+    tone: "danger",
+  };
 }
 
-export function confirmDestructiveAction(
+export async function confirmDestructiveAction(
   kind: DestructiveActionKind,
   label: string,
-  confirmAction: ConfirmAction = (message) => globalThis.confirm(message),
-): boolean {
-  return confirmAction(destructiveActionPrompt(kind, label));
+  ask: ConfirmDialogFunction,
+): Promise<boolean> {
+  return await ask(destructiveActionDialog(kind, label)) === true;
 }
 
 const countLabel = (count: number, singular: string, plural = `${singular}s`) =>
   `${count} ${count === 1 ? singular : plural}`;
 
-export function cueRemovalPrompt(
+export function cueRemovalDialog(
   label: string,
   timelinePlacementCount: number,
   incomingJumpCount: number,
-): string {
+): ConfirmDialogOptions {
   const placementImpact = timelinePlacementCount > 0
     ? `${countLabel(timelinePlacementCount, "timeline placement")} will also be removed.`
     : "No timeline placements are linked to this Cue.";
   const jumpImpact = incomingJumpCount > 0
     ? `${countLabel(incomingJumpCount, "incoming jump")} will be cleared.`
     : "No incoming jumps will be changed.";
-  return `Remove cue "${label}"?\n\n${placementImpact}\n${jumpImpact}\n\nYou can undo this action from the Project menu or with Ctrl/Cmd+Z.`;
+  return {
+    title: `Remove cue "${label}"?`,
+    message: [placementImpact, jumpImpact, undoMessage],
+    confirmLabel: "Remove",
+    tone: "danger",
+  };
 }
 
-export function confirmCueRemoval(
+export async function confirmCueRemoval(
   label: string,
   timelinePlacementCount: number,
   incomingJumpCount: number,
-  confirmAction: ConfirmAction = (message) => globalThis.confirm(message),
-): boolean {
-  return confirmAction(cueRemovalPrompt(label, timelinePlacementCount, incomingJumpCount));
+  ask: ConfirmDialogFunction,
+): Promise<boolean> {
+  return await ask(cueRemovalDialog(label, timelinePlacementCount, incomingJumpCount)) === true;
 }
 
-export function timelinePlacementRemovalPrompt(
+export function timelinePlacementRemovalDialog(
   eventId: number,
   sourceLabel: string,
   spanMs: number,
-): string {
+): ConfirmDialogOptions {
   const kind = spanMs > 0 ? "Scene Block" : "timeline point";
-  const span = spanMs > 0 ? ` · ${spanMs} ms span` : " · instant trigger";
-  return `Remove ${kind} #${eventId}?\n\nSource: ${sourceLabel}${span}\n\nYou can undo this action from the Project menu or with Ctrl/Cmd+Z.`;
+  const span = spanMs > 0 ? `${spanMs} ms span` : "instant trigger";
+  return {
+    title: `Remove ${kind} #${eventId}?`,
+    message: [`Source: ${sourceLabel} · ${span}`, undoMessage],
+    confirmLabel: "Remove",
+    tone: "danger",
+  };
 }
 
-export function confirmTimelinePlacementRemoval(
+export async function confirmTimelinePlacementRemoval(
   eventId: number,
   sourceLabel: string,
   spanMs: number,
-  confirmAction: ConfirmAction = (message) => globalThis.confirm(message),
-): boolean {
-  return confirmAction(timelinePlacementRemovalPrompt(eventId, sourceLabel, spanMs));
+  ask: ConfirmDialogFunction,
+): Promise<boolean> {
+  return await ask(timelinePlacementRemovalDialog(eventId, sourceLabel, spanMs)) === true;
 }

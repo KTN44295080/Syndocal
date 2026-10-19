@@ -7413,19 +7413,19 @@ async function runMappingViewportConformanceViewport(client, viewport) {
     toolbarCursorCoordinateReadoutRemainsVisible:
       initial.cursorReadout.active
       && /^X -?\d+\.\d{2} \/ Z -?\d+\.\d{2} \/ [A-Z]+$/.test(initial.cursorReadout.text),
-    labelScreenFontSizeIsNineToThirteenPxAtMaxZoom:
+    labelScreenFontSizeIsThirteenPxAtMaxZoom:
       maxZoom.label.fixtureId > 0
       && maxZoom.label.screenWidth > 0
       && maxZoom.label.screenHeight > 0
-      && maxZoom.label.screenFontSizePx >= 9
-      && maxZoom.label.screenFontSizePx <= 13,
-    labelScreenFontSizeIsNineToThirteenPxAtZoomOne:
+      && maxZoom.label.screenFontSizePx >= 12.95
+      && maxZoom.label.screenFontSizePx <= 13.05,
+    labelScreenFontSizeIsThirteenPxAtZoomOne:
       zoomOne.zoom.value === 1
       && zoomOne.label.fixtureId > 0
       && zoomOne.label.screenWidth > 0
       && zoomOne.label.screenHeight > 0
-      && zoomOne.label.screenFontSizePx >= 9
-      && zoomOne.label.screenFontSizePx <= 13,
+      && zoomOne.label.screenFontSizePx >= 12.95
+      && zoomOne.label.screenFontSizePx <= 13.05,
     fixtureLabelsRequireSelectionOrCurrentHover:
       hoverFixtureLabelAbsentBeforeHover
       && hoverFixtureIsCurrentHover
@@ -26032,9 +26032,10 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       before.kindBadgeCounts.STATIC === 14 &&
       before.kindBadgeCounts.FX === 0 &&
       before.kindBadgeCounts.TIMELINE === 1 &&
+      // Task 14 readability contract: kind badges are status badges at the 13px text floor in normal
+      // (not small-caps) letters, so they are never visually smaller than 13px.
       before.kindBadges.every((badge) =>
-        badge.fontVariantCaps === "all-small-caps" &&
-        (badge.kind === "TIMELINE" ? badge.fontSize === 9 : badge.fontSize === 11))],
+        badge.fontVariantCaps === "normal" && badge.fontSize === 13)],
     ["matrixCellsUsePrimaryNameAndSecondaryMetadataRows", () =>
       before.primaryRowCount === expectedCardCount &&
       before.metaRowCount === expectedCardCount &&
@@ -27564,6 +27565,12 @@ async function finishSceneSettingsSaveCapture(client) {
     const capture = structuredClone(window.__syndocalSceneSettingsSaveCapture);
     delete window.__syndocalSceneSettingsSaveCapture;
     delete window.__TAURI_INTERNALS__;
+    // Installing the capture makes the app "Tauri-backed", so its 1 s read-only status timers start to
+    // fire into it. As in the other command captures of this checker, those polls are recorded apart
+    // (and must all be known polls) so the exact-sequence assertion covers only the save's own commands.
+    const background = new Set(["remote_control_status", "get_dj_link_machine_status", "list_dj_link_wired_candidates"]);
+    capture.backgroundCommands = capture.commands.filter((command) => background.has(command));
+    capture.commands = capture.commands.filter((command) => !background.has(command));
     return capture;
   });
 }
@@ -40629,15 +40636,15 @@ async function main() {
       const closePx = (left, right, tolerance = 0.05) =>
         Number.isFinite(left) && Number.isFinite(right) && Math.abs(left - right) <= tolerance;
       const screenFixedAuditChecks = {
-        mappingLabelsUseSharedElevenPxScreenFixedFamilyAtZoom:
+        mappingLabelsUseSharedThirteenPxScreenFixedFamilyAtZoom:
           [result.initial, result.auditZoom, result.structureOnly].every((state) =>
             [
               state.screenFixedLabels.fixture,
               state.screenFixedLabels.projectionSurface,
               state.screenFixedLabels.stageObject,
             ].every((label) =>
-              label.targetScreenFontSizePx === 11
-              && closePx(label.screenFontSizePx, 11)
+              label.targetScreenFontSizePx === 13
+              && closePx(label.screenFontSizePx, 13)
             )
           )
           && result.initial.screenFixedLabels.projectionSurface.text === "Viewport Video Output"

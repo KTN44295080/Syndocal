@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
+import { typeRoleAudit } from "./type-roles-audit-lib.mjs";
 
 // Browser plugin/browser skill is not available in this session. The task
 // explicitly requires the existing app's browser fixture harness. This uses
@@ -32,7 +33,7 @@ const workspaces = [
   { id: "control-perform", fixture: "vj-bank", workspace: "control", mode: "perform" },
   { id: "timeline", fixture: "timeline-layered", workspace: "control", mode: "live" },
 ];
-const report = { timestamp: new Date().toISOString(), browserPlugin: "unavailable", fallbackReason: "Browser plugin not available; task requires existing fixture harness", softwareOnly: true, screenshots: [], themes: [], textContrast: [], interactions: [], errors: [], warnings: [], baselineAssetNotices: [], failedResponses: [] };
+const report = { typeRoles: [], timestamp: new Date().toISOString(), browserPlugin: "unavailable", fallbackReason: "Browser plugin not available; task requires existing fixture harness", softwareOnly: true, screenshots: [], themes: [], textContrast: [], interactions: [], errors: [], warnings: [], baselineAssetNotices: [], failedResponses: [] };
 let server, browser;
 await mkdir(artifacts, { recursive: true });
 try {
@@ -118,7 +119,7 @@ render(()=><main class="app" style="height:100vh;grid-template-rows:56px minmax(
     await pane.waitForFunction(theme => document.documentElement.dataset.theme === theme, theme);
     const tokens = await page.evaluate(() => {
       const style = getComputedStyle(document.documentElement);
-      const names = ["bg", "panel", "raised", "card", "inset", "text", "muted", "dim", "accent", "program", "preview", "queued", "error", "warn", "ok", "danger", "selected", "latched", "on-latched", "on-program", "on-preview", "on-queued", "on-error", "on-warn", "on-ok", "on-accent", "on-selected", "key", "key-hover", "key-down"];
+      const names = ["disabled-text", "disabled-bg", "bg", "panel", "raised", "card", "inset", "text", "muted", "dim", "accent", "program", "preview", "queued", "error", "warn", "ok", "danger", "selected", "latched", "on-latched", "on-program", "on-preview", "on-queued", "on-error", "on-warn", "on-ok", "on-accent", "on-selected", "key", "key-hover", "key-down"];
       const canvas = document.createElement("canvas"), ctx = canvas.getContext("2d", { willReadFrequently: true });
       return Object.fromEntries(names.map(name => {
         const raw = style.getPropertyValue(`--theme-${name}`).trim();
@@ -133,6 +134,7 @@ render(()=><main class="app" style="height:100vh;grid-template-rows:56px minmax(
     const pairs = [];
     for (const foreground of ["text", "muted", "dim"]) for (const background of ["bg", "panel", "raised", "card", "inset", "key", "key-hover", "key-down"]) pairs.push([foreground, background]);
     for (const background of ["program", "preview", "queued", "error", "warn", "ok", "accent", "selected", "latched"]) pairs.push([`on-${background}`, background]);
+    pairs.push(["disabled-text", "disabled-bg"]);
     const contrasts = pairs.map(([foreground, background]) => {
       assert.ok(tokens[foreground] && tokens[background], `defined semantic contrast tokens ${foreground}/${background}`);
       const a = luminance(tokens[foreground].rgb), b = luminance(tokens[background].rgb);
@@ -141,7 +143,9 @@ render(()=><main class="app" style="height:100vh;grid-template-rows:56px minmax(
       // use primary ink. Dim text on held keys is exploratory: the actual
       // rendered-text audit below detects any UI that uses that pairing.
       const required = !(foreground === "dim" && background === "key-down");
-      return { foreground, background, ratio, passes: ratio >= 4.5, required };
+      // Disabled text stays dimmer than normal text but must remain legible as "disabled" (3:1), not look broken.
+      const minimum = foreground === "disabled-text" ? 3 : 4.5;
+      return { foreground, background, ratio, passes: ratio >= minimum, required };
     });
     report.themes.push({ theme, tokens, contrasts });
     report.interactions.push({ theme, immediate: true, persisted: true, openPaneSynced: true });
@@ -251,11 +255,13 @@ render(()=><main class="app" style="height:100vh;grid-template-rows:56px minmax(
           assert.equal(performCase.monitorTitle?.textTransform, "none", `${theme} Perform monitor title span text-transform is none`);
           assert.equal(performCase.monitorChrome?.textTransform, "uppercase", `${theme} Perform monitor badge strong is uppercase`);
           assert.equal(performCase.monitorChrome?.text, "PREVIEW", `${theme} Perform monitor badge strong renders uppercase`);
-          assert.equal(performCase.matrixHeaderChrome?.textTransform, "uppercase", `${theme} Perform matrix header chrome is uppercase`);
+          // Task 14: "Layers / Clips" is a column-header label (UI role, normal case); only tabs, pane titles, action keys and status badges are chrome.
+          assert.equal(performCase.matrixHeaderChrome?.textTransform, "none", `${theme} Perform matrix header label is normal case (UI role)`);
         }
         if (["lighting-edit", "setup-patch", "control-perform"].includes(workspace.id) && configuration.locale === "en") {
           // Task 13b: every workspace pane header shares the Broadcast chrome: 44px, a
-          // condensed-uppercase accent label block, and the raised header surface.
+          // condensed-uppercase title and the raised header surface. Task 14: the title is calm:
+          // transparent fill, primary text colour and a 3px accent bar, never an inverse block.
           const chrome = await page.evaluate(() => {
             const headers = [...document.querySelectorAll(".workspacePaneHeader, .controlContextHeader:not(.timelineArrangerHeader), .mappingPersistentWorkspaceGrid > .mappingGroupStrip, .layout > * > .panelHeader, .layout > * > * > .panelHeader, .layout > * > * > * > .panelHeader, .layout .patchProfileBrowserHeader")]
               .filter(element => element.getBoundingClientRect().width > 0);
@@ -279,7 +285,8 @@ render(()=><main class="app" style="height:100vh;grid-template-rows:56px minmax(
           for (const header of chrome) {
             assert.ok(header.height >= 44 || (workspace.id === "control-perform" ? false : header.titleHeight >= 36), `${theme} ${workspace.id} ${header.cls} pane header is 44px ${JSON.stringify(header)}`);
             assert.equal(header.titleTransform, "uppercase", `${theme} ${workspace.id} ${header.cls} title is condensed uppercase`);
-            assert.equal(header.titleBackground, header.accent, `${theme} ${workspace.id} ${header.cls} title block uses the accent token`);
+            assert.match(header.titleBackground, /^(rgba\(0, 0, 0, 0\)|transparent)$/, `${theme} ${workspace.id} ${header.cls} title is not an inverse block (${header.titleBackground})`);
+            assert.notEqual(header.titleBackground, header.accent, `${theme} ${workspace.id} ${header.cls} title does not fill with the accent token`);
           }
           if (workspace.id === "control-perform") assert.equal(chrome.filter(header => header.cls === "workspacePaneHeader").length, 3, `${theme} Perform has Matrix, Output and Inspector pane headers`);
         }
@@ -315,6 +322,12 @@ render(()=><main class="app" style="height:100vh;grid-template-rows:56px minmax(
           return { measured, gradientsSkipped, failures };
         });
         report.textContrast.push({ workspace: workspace.id, theme, ...configuration, ...textContrast });
+        // Task 14 type roles: no visible text under 13px, interactive labels and list items at 14px,
+        // the condensed chrome face only where the stylesheet declares --type-role: chrome, and calm pane titles.
+        const typeRoles = await page.evaluate(typeRoleAudit);
+        report.typeRoles.push({ workspace: workspace.id, theme, ...configuration, measured: typeRoles.measured, minPx: typeRoles.minPx,
+          under: typeRoles.under, controlsUnder: typeRoles.controlsUnder, condensedOutside: typeRoles.condensedOutside,
+          uncalmTitles: typeRoles.titles.filter(title => !(title.transparentFill && title.primaryText && title.bar && !title.accentFill)) });
         console.log(`captured ${filename}`);
       }
     }
@@ -417,6 +430,14 @@ render(()=><main class="app" style="height:100vh;grid-template-rows:56px minmax(
   const renderedTextFailures = report.textContrast.flatMap(item => item.failures.map(failure => ({ workspace: item.workspace, theme: item.theme, locale: item.locale, ...failure })));
   report.renderedTextFailureCount = renderedTextFailures.length;
   assert.equal(renderedTextFailures.length, 0, `WCAG AA on visible solid-background text: ${JSON.stringify(renderedTextFailures.slice(0, 12))}`);
+  const roleFailures = report.typeRoles.flatMap(item => [
+    ...item.under.map(entry => ({ rule: "text under 13px", workspace: item.workspace, theme: item.theme, locale: item.locale, ...entry })),
+    ...item.controlsUnder.map(entry => ({ rule: "interactive label or list item under 14px", workspace: item.workspace, theme: item.theme, locale: item.locale, ...entry })),
+    ...item.condensedOutside.map(entry => ({ rule: "condensed face outside chrome", workspace: item.workspace, theme: item.theme, locale: item.locale, ...entry })),
+    ...item.uncalmTitles.map(entry => ({ rule: "pane title is not calm", workspace: item.workspace, theme: item.theme, locale: item.locale, ...entry })),
+  ]);
+  report.typeRoleFailureCount = roleFailures.length;
+  assert.equal(roleFailures.length, 0, `type roles (13px floor, 14px controls, chrome-only condensed face, calm pane titles): ${JSON.stringify(roleFailures.slice(0, 8))}`);
   report.passed = true;
 } catch (error) {
   report.passed = false;

@@ -1,5 +1,7 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { CompositionSummary, VideoEffectCatalog } from "../types";
+import { confirmDialog } from "../inAppDialog";
+import { removeFxPresetDialog, removeLayerGroupDialog } from "../inAppDialogCopy";
 
 interface VideoEffectCatalogSetupPanelProps {
   catalog: VideoEffectCatalog;
@@ -58,15 +60,15 @@ export function VideoEffectCatalogSetupPanel(props: VideoEffectCatalogSetupPanel
       }],
     });
   };
-  const removePreset = (presetId: number, label: string) => {
-    if (!globalThis.confirm(`Remove preset “${label}”?`)) return;
+  const removePreset = async (presetId: number, label: string) => {
+    if (!await confirmDialog(removeFxPresetDialog(label))) return;
     return props.onApply({
       ...props.catalog,
       effect_presets: props.catalog.effect_presets.filter((entry) => entry.id !== presetId),
     });
   };
-  const removeGroup = (groupId: number, label: string) => {
-    if (!globalThis.confirm(`Remove group “${label}” and its Group FX chain?`)) return;
+  const removeGroup = async (groupId: number, label: string) => {
+    if (!await confirmDialog(removeLayerGroupDialog(label))) return;
     return props.onApply({
       ...props.catalog,
       layer_groups: props.catalog.layer_groups.filter((entry) => entry.id !== groupId),

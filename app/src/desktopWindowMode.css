@@ -13,22 +13,21 @@
   color: var(--theme-text);
   padding: 0 8px;
   pointer-events: none;
-  font-size: 10px;
+  font-size: var(--fs-text);
   line-height: 1;
-  letter-spacing: 0.04em;
   white-space: nowrap;
 }
 
 .desktopWindowModeNotice strong {
   color: var(--theme-text);
   font-size: inherit;
-  font-weight: 800;
+  font-weight: 400;
 }
 
 .desktopWindowModeNotice span {
   color: var(--theme-muted);
   font-variant-numeric: tabular-nums;
-  font-weight: 700;
+  font-weight: 400;
 }
 
 .desktopWindowModeNotice[data-mode="fullscreen"] {

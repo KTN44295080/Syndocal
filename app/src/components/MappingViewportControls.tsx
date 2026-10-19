@@ -265,7 +265,7 @@ export function MappingViewportControls(props: MappingViewportControlsProps) {
     <>
       <div class="mappingViewportControls" data-mapping-viewport-readout>
         <span>Tool</span>
-        <strong>{props.stageTool.toUpperCase()}</strong>
+        <strong>{props.stageTool.charAt(0).toUpperCase() + props.stageTool.slice(1)}</strong>
         <span>Fixtures</span>
         <strong>{props.fixtureCount}</strong>
         <span>Surfaces</span>

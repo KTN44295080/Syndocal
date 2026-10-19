@@ -1,0 +1,132 @@
+/* In-app confirmation dialog. Broadcast tokens only, so every theme works; the
+   danger tone reuses the Blackout key's program/danger colours and hazard stripe. */
+.app .inAppDialog,
+.inAppDialog {
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--theme-line-strong);
+  border-radius: 0;
+  background: var(--theme-raised);
+  color: var(--theme-text);
+  font-family: var(--theme-font-ui);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 70%);
+}
+.inAppDialog::backdrop {
+  background: rgb(0 0 0 / 74%);
+}
+.inAppDialog[data-tone="danger"] {
+  border-color: var(--theme-danger);
+}
+.inAppDialogFrame {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+.inAppDialogHazard {
+  height: 6px;
+  background: var(--theme-hazard);
+}
+.inAppDialogHeader {
+  display: grid;
+  gap: 10px;
+  padding: 18px 20px 4px;
+}
+.inAppDialogBadge {
+  justify-self: start;
+  padding: 3px 8px 2px;
+  background: var(--theme-key);
+  border: 1px solid var(--theme-line-strong);
+  color: var(--theme-muted);
+  font-family: var(--theme-font-label);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+.inAppDialog[data-tone="danger"] .inAppDialogBadge {
+  background: var(--theme-danger-bg);
+  border-color: var(--theme-danger);
+  color: var(--theme-text);
+}
+.inAppDialogTitle {
+  margin: 0;
+  color: var(--theme-text);
+  font-family: var(--theme-font-ui);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: 0;
+  text-transform: none;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+.inAppDialogBody {
+  display: grid;
+  gap: 8px;
+  padding: 6px 20px 20px;
+  overflow: auto;
+}
+.inAppDialogBody p {
+  margin: 0;
+  color: var(--theme-muted);
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  text-wrap: pretty;
+}
+.inAppDialogActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--theme-line);
+  background: var(--theme-inset);
+}
+.inAppDialogActions button {
+  min-width: 120px;
+  min-height: 44px;
+  padding: 0 20px;
+  font-family: var(--theme-font-ui);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.inAppDialogActions button.inAppDialogConfirm {
+  border-color: var(--theme-accent);
+  background: var(--theme-accent);
+  color: var(--theme-on-accent);
+  box-shadow: inset 0 -3px 0 var(--theme-on-accent);
+}
+.inAppDialogActions button.inAppDialogConfirm:hover {
+  background: var(--theme-selected);
+  color: var(--theme-on-selected);
+}
+/* The dangerous confirm is the Blackout key: danger fill and the hazard stripe along its foot. */
+.inAppDialogActions button.inAppDialogConfirm.danger {
+  border-color: var(--theme-danger);
+  background-color: var(--theme-danger-bg);
+  background-image: var(--theme-hazard);
+  background-size: 100% 4px;
+  background-position: bottom;
+  background-repeat: no-repeat;
+  color: var(--theme-text);
+  box-shadow: none;
+}
+.inAppDialogActions button.inAppDialogConfirm.danger:hover {
+  background-color: var(--theme-danger-hover);
+  color: var(--theme-text);
+}
+.inAppDialogActions button:focus-visible {
+  outline: 3px solid var(--theme-focus);
+  outline-offset: 2px;
+}
+@media (max-width: 520px) {
+  .inAppDialogActions { flex-direction: column-reverse; }
+  .inAppDialogActions button { width: 100%; }
+}

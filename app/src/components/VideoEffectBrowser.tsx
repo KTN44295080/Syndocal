@@ -75,19 +75,15 @@ export function VideoEffectBrowser(props: VideoEffectBrowserProps) {
   return <section class="videoFxCatalog" data-effect-browser data-no-localize aria-label={ja() ? "エフェクトブラウザー" : "Effect browser"}>
     <header class="videoFxCatalogHeader">
       <div class="videoFxCatalogScope"><strong class="videoFxCatalogTarget" data-fx-add-target title={target()}>{target()}</strong>
-        <span class="videoFxCatalogLive" data-fx-live-warning title={props.onAudition ? (ja() ? "「追加」は本番(PROGRAM)にもすぐ反映されます。「試す」はプレビューだけに表示し、本番映像は変わりません。" : "Add changes Program immediately. Try shows the effect on Preview only; Program stays unchanged.") : (ja() ? "「追加」は本番(PROGRAM)にもすぐ反映されます。" : "Add changes Program immediately.")}>{props.onAudition ? (ja() ? "試す＝プレビューのみ ／ 追加＝LIVE(本番にも反映)" : "Try = Preview only · Add = LIVE, affects Program") : (ja() ? "追加＝LIVE(本番にも反映)" : "Add = LIVE, affects Program")}</span>
+        <span class="videoFxCatalogLive" data-fx-live-warning title={props.onAudition ? (ja() ? "「追加」は本番(PROGRAM)にもすぐ反映されます。「試す」はプレビューだけに表示し、本番映像は変わりません。" : "Add changes Program immediately. Try shows the effect on Preview only; Program stays unchanged.") : (ja() ? "「追加」は本番(PROGRAM)にもすぐ反映されます。" : "Add changes Program immediately.")}>{props.onAudition ? (ja() ? "試す＝プレビュー／追加＝LIVE" : "Try = Preview · Add = LIVE") : (ja() ? "追加＝LIVE（本番に反映）" : "Add = LIVE (Program)")}</span>
         <Show when={auditioning()}>
           <span class="videoFxCatalogAuditioning" data-fx-auditioning>{ja() ? "試聴中: FXタブのA/Bで比較し、「本番へ反映」または「破棄」を選びます。" : "Auditioning on Preview. Compare A/B in the FX tab, then take or discard."}</span>
         </Show>
         <Show when={props.audition?.error()}>{(error) => <span class="videoFxCatalogProblem" role="alert" data-fx-audition-error>{auditionError(error())}</span>}</Show>
       </div>
-      <div class="videoFxCatalogActions">
-        <Show when={props.onImport}><button type="button" disabled={props.busy} onClick={props.onImport}>{ja() ? "ISFを読み込む" : "Import ISF"}</button></Show>
-        <Show when={props.onOpenFx}><button type="button" onClick={props.onOpenFx}>{ja() ? "チェーンへ" : "FX CHAIN"}</button></Show>
-      </div>
     </header>
     <div class="videoFxCatalogTools">
-      <label class="videoFxCatalogSearch"><span>{ja() ? "検索" : "SEARCH"}</span>
+      <label class="videoFxCatalogSearch"><span>{ja() ? "検索" : "Search"}</span>
         <input type="search" data-fx-catalog-search value={query()} placeholder={ja() ? "名前・種類・説明で検索" : "Name, category or description"}
           onInput={(event) => setQuery(event.currentTarget.value)} />
       </label>
@@ -97,6 +93,10 @@ export function VideoEffectBrowser(props: VideoEffectBrowserProps) {
         <For each={categories()}>{(item) => <button type="button" data-fx-category={item} aria-pressed={category() === item}
           onClick={() => { setCategory(item); setFiltersOpen(false); filterButton.focus(); }}>{fxCategoryLabel(item, props.locale)}</button>}</For>
       </div></Show>
+      <div class="videoFxCatalogActions">
+        <Show when={props.onImport}><button type="button" disabled={props.busy} onClick={props.onImport}>{ja() ? "ISFを読み込む" : "Import ISF"}</button></Show>
+        <Show when={props.onOpenFx}><button type="button" onClick={props.onOpenFx}>{ja() ? "チェーンへ" : "FX Chain"}</button></Show>
+      </div>
     </div>
     <div class="videoFxCatalogResults" role="list" aria-label={ja() ? "エフェクト一覧" : "Effects"}>
       <Show when={filtered().length > 0} fallback={<p class="videoFxCatalogEmpty">{ja() ? "条件に合うエフェクトがありません。検索語や種類を変えてください。" : "No effects match. Try another search or category."}</p>}>

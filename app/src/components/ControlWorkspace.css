@@ -22,7 +22,7 @@
   border-radius: 0;
   background: transparent;
   color: var(--control-muted);
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .app .layout.layoutTouch .touchControlDomainTabs button.active {
@@ -55,7 +55,7 @@
   border-radius: 0;
   background: transparent;
   color: var(--control-muted);
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .app .layout.layoutTouch .touchSurfaceModeToggle button.active {
@@ -109,7 +109,7 @@
   justify-items: start;
   padding-inline: 12px;
   color: var(--control-muted);
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .app .layout.layoutTouch .touchPlacedImage {
@@ -122,7 +122,7 @@
 .app .layout.layoutTouch .touchPlacedColor,
 .app .layout.layoutTouch .touchPlacedIncremental {
   color: var(--theme-text);
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .app .layout.layoutTouch .touchPlacedIncremental button {

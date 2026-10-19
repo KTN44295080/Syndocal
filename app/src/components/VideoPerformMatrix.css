@@ -83,7 +83,7 @@
   padding: 1px 4px;
   background: var(--theme-inset);
   font: inherit;
-  font-weight: 600;
+  font-weight: 400;
   line-height: 18px;
 }
 
@@ -153,7 +153,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: left;
-  font-weight: 700;
+  font-weight: 400;
   padding: 6px;
 }
 
@@ -330,13 +330,16 @@
 }
 
 /* Broadcast labels and tally bars use existing runtime classes and words. */
-.videoPerformMatrixCorner > strong,
-.videoPerformMatrixColumn,
 .videoPerformClipState {
   font-family: var(--theme-font-label);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: .04em;
+}
+.videoPerformMatrixCorner > strong,
+.videoPerformMatrixColumn {
+  font-family: var(--theme-font-ui);
+  font-weight: 400;
 }
 .videoPerformMatrix .videoPerformLayerName,
 .videoPerformMatrix .videoPerformClipTrigger,

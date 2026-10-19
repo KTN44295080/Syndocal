@@ -178,7 +178,7 @@
 .videoEditorEffectBrowser > header { display: flex; align-items: center; justify-content: space-between; min-height: 44px; font-size: 14px; margin-bottom: 8px; }
 .videoEditorEffectBrowser button { min-height: 44px; min-width: 44px; font-size: 14px; }
 .videoEditorEffectBrowser .videoFxBrowserSurface { height: 520px; max-height: 65vh; }
-.videoPerformInspectorBrowser > strong { color: var(--theme-text); font-family: var(--theme-font-label); letter-spacing: .06em; text-transform: uppercase; }
+.videoPerformInspectorBrowser > strong { color: var(--theme-text); font-family: var(--theme-font-ui); }
 .videoPerformInspectorBrowser > p { margin: 0; max-width: 62ch; line-height: 1.45; }
 .videoPerformInspectorClip .videoClipSlotInspectorEmbedded { position: static; z-index: auto; display: grid; gap: 8px; width: auto; max-height: none; overflow: visible; padding: 0; border: 0; box-shadow: none; background: transparent; }
 .videoPerformInspectorClip .videoClipSlotInspectorEmbedded > header { align-items: center; }
@@ -186,7 +186,7 @@
 .videoPerformLegend { max-width: min(760px, 90vw); max-height: 85vh; overflow: auto; padding: 24px; color: var(--theme-text); background: var(--theme-raised); border: 2px solid var(--theme-line-strong); font-size: 16px; }
 .videoPerformLegend::backdrop { background: #000a; }
 .videoPerformLegend dl { display: grid; grid-template-columns: auto 1fr; gap: 16px 24px; }
-.videoPerformLegend dt { font-weight: 700; }
+.videoPerformLegend dt { font-weight: 400; }
 .videoPerformLegend dd { margin: 0; }
 .videoPerformLegend button { min-height: 44px; }
 
@@ -228,10 +228,8 @@
 .videoPerformLayout .liveVideoMonitorStatus.error { color: var(--theme-on-error); }
 .videoPerformLayout .liveVideoMonitorStatus.starting { color: var(--theme-queued); }
 .videoPerformLayout :is(.videoPerformHealth > strong, .videoPerformInspectorBrowser > strong) {
-  font-family: var(--theme-font-label);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .04em;
+  font-family: var(--theme-font-ui);
+  font-weight: 400;
 }
 .videoPerformLayout [data-video-perform-take]:not(:disabled) {
   background-color: var(--theme-inset);

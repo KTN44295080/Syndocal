@@ -492,7 +492,8 @@ const clipHeaderStyles = cssBlock(styles, ".videoMixerPaneHeader", "clip pane he
 assert.equal(count(disclosureStyles, "position: relative;"), 1, "disclosure positioning must be scoped to the mixer clip header");
 assert.equal(count(disclosureStyles, "z-index: 1200;"), 1, "disclosure stacking must be scoped to the mixer clip header");
 assert.equal(count(disclosureSummaryStyles, "min-height: 29px;"), 1, "closed disclosure must fit the existing header content track");
-assert.equal(count(disclosureSummaryStyles, "font-size: 11px;"), 1, "disclosure typography must remain compact and existing");
+// Task 14 readability contract: interactive labels use the 14px control token (the former 11px was below the 13px floor).
+assert.equal(count(disclosureSummaryStyles, "font-size: var(--fs-control);"), 1, "disclosure typography must use the shared control size token");
 assert.equal(count(disclosureMarkerStyles, "display: none;"), 1, "disclosure marker hiding must be scoped to its summary");
 assert.equal(count(disclosureOpenStyles, "box-shadow: inset 2px 0 0 var(--ray-accent);"), 1, "disclosure open state must remain local");
 assert.equal(count(sourceSurfaceStyles, "position: absolute;"), 1, "opened source surface must overlay from the clip header");

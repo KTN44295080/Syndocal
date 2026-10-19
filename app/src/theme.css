@@ -11,9 +11,32 @@
   --r:0px; --r-sm:2px;
   --ico-w:1.8;
   --bar:5px;                /* tally bar thickness */
+  /* ---- Type roles ----------------------------------------------------------
+     chrome  condensed uppercase (Bahnschrift). ONLY: workspace and sub tabs, pane
+             titles, primary action keys (GO, TAKE, BLACKOUT, DMX/VID/ALL ...) and
+             status badges (LIVE, QUEUED ...). Nothing else, ever.
+     ui      everything else: list items, body text, field labels, secondary buttons,
+             counts, help text, inspector content. Segoe UI Variable / Segoe UI, then
+             Yu Gothic UI / Meiryo for Japanese, normal width and normal case.
+     number  tabular figures of the UI face (font-variant-numeric). The mono face is
+             kept only for readouts that need fixed cells: BPM and timecode.
+     Sizes   13px is the floor for any text (Japanese included); 14px for interactive
+             labels and list items; condensed chrome is never below 14px so it does not
+             read smaller than the 14px UI text beside it.
+     Weight  bold only for titles, the active/selected state and status badges. */
   --font-ui:"Segoe UI Variable Text","Segoe UI Variable","Segoe UI","Yu Gothic UI","Meiryo",sans-serif;
-  --font-label:"Bahnschrift SemiCondensed","Bahnschrift","Arial Narrow","Segoe UI Semibold","Yu Gothic UI","Meiryo",sans-serif;
+  --font-chrome:"Bahnschrift SemiCondensed","Bahnschrift","Arial Narrow","Segoe UI Semibold","Yu Gothic UI","Meiryo",sans-serif;
+  --font-label:var(--font-chrome);   /* legacy alias: chrome role only */
   --font-num:"Cascadia Mono",Consolas,monospace;
+  --fs-text:13px;       /* floor for any text */
+  --fs-control:14px;    /* interactive labels, list items */
+  --fs-chrome:14px;     /* condensed chrome floor */
+  --fs-title:16px;      /* pane titles */
+  --fw-text:400;
+  --fw-strong:600;      /* titles, active/selected state */
+  --fw-chrome:700;
+  --tracking-chrome:.04em;
+  --pane-bar:3px;       /* pane-title accent bar */
   /* optional fill patterns (only the colour-vision-safe theme sets these) */
   --pat-pgm:none; --pat-pvw:none; --pat-queued:none; --pat-error:none;
   --art-sat:1;              /* placeholder-thumbnail saturation (themes may tone it down) */
@@ -241,7 +264,8 @@
   --theme-on-latched: var(--latched-ink);
   --theme-focus: var(--focus);
   --theme-focus-inset: var(--focus-ring);
-  --theme-font-label: var(--font-label);
+  --theme-font-label: var(--font-chrome);
+  --theme-font-chrome: var(--font-chrome);
   --theme-font-ui: var(--font-ui);
   --theme-font-number: var(--font-num);
   --theme-key: var(--key);
@@ -259,8 +283,8 @@
   --theme-pattern-preview: var(--pat-pvw);
   --theme-pattern-queued: none;
   --theme-pattern-error: var(--pat-error);
-  --ui-label-size: 11px;
-  --ui-label-tracking: 0.065em;
+  --ui-label-size: var(--fs-text);
+  --ui-label-tracking: normal;
   --ui-label-color: var(--theme-dim);
   --ui-surface-app: var(--theme-bg);
   --ui-surface-panel: var(--theme-panel);

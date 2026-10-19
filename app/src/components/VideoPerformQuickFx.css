@@ -39,7 +39,7 @@
   border: 1px solid var(--theme-line-strong);
   background: var(--theme-inset);
   color: var(--theme-text);
-  font-weight: 700;
+  font-weight: 400;
   line-height: 30px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -210,10 +210,8 @@
   min-width: 0;
   overflow: hidden;
   color: var(--theme-muted);
-  font-family: var(--theme-font-label);
-  letter-spacing: 0.04em;
+  font-family: var(--theme-font-ui);
   text-overflow: ellipsis;
-  text-transform: uppercase;
   white-space: nowrap;
 }
 
