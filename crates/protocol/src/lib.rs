@@ -7900,6 +7900,21 @@ pub enum MidiControlMessage {
     /// direction (set = down) and bits 0-5 the step count. The mapped value
     /// moves from the target's current value instead of jumping to a position.
     RelativeControlChange,
+    /// Not a hardware message: a tempo-synchronized trigger source. The
+    /// mapping number selects a beat division from [`BEAT_DIVISION_BEATS`]
+    /// and the mapping channel is omitted. No MIDI input ever matches it; the
+    /// renderer's beat scheduler fires the mapped action instead.
+    BeatDivision,
+}
+
+/// Beat lengths selectable by a `BeatDivision` mapping, indexed by the mapping
+/// number: 1/4 beat, 1/2 beat, 1 beat, 2 beats, 1 bar (4 beats), 2 bars,
+/// 4 bars and 8 bars. The renderer mirrors this table.
+pub const BEAT_DIVISION_BEATS: [f64; 8] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0];
+
+/// Length in beats of the beat division selected by a mapping number.
+pub fn beat_division_beats(number: u8) -> Option<f64> {
+    BEAT_DIVISION_BEATS.get(usize::from(number)).copied()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -7974,6 +7989,57 @@ pub enum MidiControlAction {
     VideoMaster,
     VideoBlackout,
     ClearFixtureFlags,
+    /// Perform: queue one clip slot (the pad press). Targets the stable
+    /// `layer_id` and `clip_slot_id`, never a column index.
+    VideoClipSlotTrigger,
+    /// Perform: Take the queued clip of the selected layer.
+    VideoTake,
+    /// Perform: stop the clip playing on `layer_id`.
+    VideoLayerStop,
+    /// Perform: choose `layer_id`'s blend mode; the input position selects it.
+    VideoLayerBlendMode,
+    /// Perform: choose the Take transition type; the input position selects it.
+    VideoTransitionKind,
+    /// Perform: set the Take transition time over `low`..`high` (in the
+    /// transition's current unit).
+    VideoTransitionTime,
+    /// Perform: enable or bypass one effect stage, targeting the stable
+    /// `layer_id` and `isf_stage_id`.
+    VideoIsfStageEnabled,
+    /// Perform: drive one ISF control (`attribute` is its name) of the stage
+    /// `isf_stage_id`; `low`..`high` is the fraction of the control's range.
+    VideoIsfParam,
+}
+
+impl MidiControlAction {
+    /// Actions whose runtime owner is the renderer: the native input worker
+    /// only forwards the accepted input, and the renderer runs the same ticketed
+    /// commands the on-screen control runs.
+    pub fn is_renderer_routed(&self) -> bool {
+        matches!(
+            self,
+            Self::VideoClipSlotTrigger
+                | Self::VideoTake
+                | Self::VideoLayerStop
+                | Self::VideoLayerBlendMode
+                | Self::VideoTransitionKind
+                | Self::VideoTransitionTime
+                | Self::VideoIsfStageEnabled
+                | Self::VideoIsfParam
+        )
+    }
+
+    /// Renderer-routed actions that fire once per trigger. Only these can be
+    /// driven by a `BeatDivision` source.
+    pub fn is_renderer_routed_trigger(&self) -> bool {
+        matches!(
+            self,
+            Self::VideoClipSlotTrigger
+                | Self::VideoTake
+                | Self::VideoLayerStop
+                | Self::VideoIsfStageEnabled
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -7995,10 +8061,44 @@ pub struct MidiControlMapping {
     pub cue_point_index: Option<usize>,
     #[serde(default)]
     pub duration_ms: Option<u64>,
+    /// Stable clip-slot identity for `VideoClipSlotTrigger`. Omitted (and not
+    /// written) for every other action so existing projects keep their bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip_slot_id: Option<VideoClipSlotId>,
+    /// Stable effect-stage identity for `VideoIsfStageEnabled` and
+    /// `VideoIsfParam`. Omitted (and not written) for every other action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isf_stage_id: Option<VideoEffectStageId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feedback: Option<MidiControlFeedback>,
     pub low: f32,
     pub high: f32,
+}
+
+/// One accepted input for a renderer-routed action, forwarded to the renderer
+/// with the identities the mapping stored. `value` is the mapping's
+/// `low..high` range applied to the input position; `active` is the input's
+/// pressed state (a trigger edge or a switch level).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RendererRoutedInput {
+    pub action: MidiControlAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer_id: Option<VideoLayerId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip_slot_id: Option<VideoClipSlotId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isf_stage_id: Option<VideoEffectStageId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<String>,
+    /// Normalized 0..1 input position before the mapping range.
+    pub position: f32,
+    pub value: f32,
+    pub active: bool,
+    /// The input is a button press that flips the target instead of setting it
+    /// to `active`. Only stage enable switches driven by a note, program or
+    /// beat trigger use it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub toggle: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

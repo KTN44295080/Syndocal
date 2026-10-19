@@ -309,6 +309,7 @@ mod extensions;
 mod extensions_config;
 mod scene_edit_capture;
 mod midi_fader_input;
+mod midi_renderer_routed;
 #[cfg(test)]
 #[path = "output_managed_route_completion_tests.rs"]
 mod output_managed_route_completion_tests;
@@ -30616,6 +30617,35 @@ fn connect_midi_control(
                     }
                 }
             }
+            // Clip slots, Take, transition and effect-stage state belong to the
+            // renderer's ticketed commands. Forward the accepted input under the
+            // same project/callback fences; no engine command is issued here.
+            MidiControlEvent::RendererRouted(input) => {
+                let sequence = ui_sequence + 1;
+                let forwarded = run_if_installed_project_callback_epoch(
+                    &project_external_command_admission_for_worker,
+                    &callback_epoch_for_worker,
+                    captured_callback_epoch,
+                    &project_transaction_active_for_worker,
+                    &callback_installed_for_worker,
+                    || {
+                        app.emit(
+                            midi_renderer_routed::EVENT,
+                            midi_renderer_routed::Input {
+                                connection: ui_connection,
+                                sequence,
+                                input,
+                            },
+                        )
+                        .is_ok()
+                    },
+                )
+                .unwrap_or(false);
+                if forwarded {
+                    ui_sequence = sequence;
+                }
+                return;
+            }
         };
         if external_unversioned_semantic_command_requires_fail_closed(
             ExternalControlIngress::MidiControl,
@@ -31189,6 +31219,29 @@ fn validate_midi_control_mapping(
     if mapping.message == protocol::MidiControlMessage::PitchBend && mapping.number != 0 {
         return Err(format!("{owner} pitch bend mappings use number 0"));
     }
+    if mapping.message == protocol::MidiControlMessage::BeatDivision {
+        if mapping.channel.is_some() {
+            return Err(format!(
+                "{owner} beat division mappings have no MIDI channel"
+            ));
+        }
+        if protocol::beat_division_beats(mapping.number).is_none() {
+            return Err(format!(
+                "{owner} beat division must be 0-{}",
+                protocol::BEAT_DIVISION_BEATS.len() - 1
+            ));
+        }
+        if !mapping.action.is_renderer_routed_trigger() {
+            return Err(format!(
+                "{owner} a beat division can only fire a Perform trigger target"
+            ));
+        }
+        if mapping.feedback.is_some() {
+            return Err(format!(
+                "{owner} beat division mappings have no MIDI feedback"
+            ));
+        }
+    }
     if mapping.message == protocol::MidiControlMessage::RelativeControlChange
         && !io::midi::midi_action_is_continuous(&mapping.action)
     {
@@ -31242,6 +31295,11 @@ fn validate_midi_feedback_message(
     if message.message == protocol::MidiControlMessage::RelativeControlChange {
         return Err(format!(
             "{owner} MIDI feedback {state} cannot be a relative encoder message"
+        ));
+    }
+    if message.message == protocol::MidiControlMessage::BeatDivision {
+        return Err(format!(
+            "{owner} MIDI feedback {state} cannot be a beat division"
         ));
     }
     if message.message == protocol::MidiControlMessage::PitchBend && message.number != 0 {
@@ -31328,6 +31386,22 @@ fn validate_mapping_required_fields_for_midi(
         MidiControlAction::ClearFixtureFlags => {
             normalize_mapping_fixture_flag_kind(&mut mapping.attribute, owner)?;
         }
+        MidiControlAction::VideoClipSlotTrigger => {
+            require_mapping_id(mapping.layer_id, owner, "video layer")?;
+            require_mapping_id(mapping.clip_slot_id, owner, "clip slot")?;
+        }
+        MidiControlAction::VideoLayerStop | MidiControlAction::VideoLayerBlendMode => {
+            require_mapping_id(mapping.layer_id, owner, "video layer")?;
+        }
+        MidiControlAction::VideoIsfStageEnabled => {
+            require_mapping_id(mapping.layer_id, owner, "video layer")?;
+            require_mapping_id(mapping.isf_stage_id, owner, "effect stage")?;
+        }
+        MidiControlAction::VideoIsfParam => {
+            require_mapping_id(mapping.layer_id, owner, "video layer")?;
+            require_mapping_id(mapping.isf_stage_id, owner, "effect stage")?;
+            normalize_mapping_attribute(&mut mapping.attribute, owner)?;
+        }
         MidiControlAction::TriggerNextCue
         | MidiControlAction::TriggerPreviousCue
         | MidiControlAction::TimelinePlay
@@ -31344,7 +31418,10 @@ fn validate_mapping_required_fields_for_midi(
         | MidiControlAction::CueFadePause
         | MidiControlAction::Blackout
         | MidiControlAction::AllBlackout
-        | MidiControlAction::VideoBlackout => {}
+        | MidiControlAction::VideoBlackout
+        | MidiControlAction::VideoTake
+        | MidiControlAction::VideoTransitionKind
+        | MidiControlAction::VideoTransitionTime => {}
     }
     Ok(())
 }
@@ -114689,6 +114766,8 @@ pub(crate) mod tests {
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let dmx = DmxControlMapping {
             universe: 0,
@@ -114823,6 +114902,8 @@ pub(crate) mod tests {
             }),
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let osc_mapping = OscControlMapping {
             address: "/show/video_master".to_string(),
@@ -117802,6 +117883,8 @@ f 1 2 3
                     feedback: None,
                     low: 20.0,
                     high: 300.0,
+                    clip_slot_id: None,
+                    isf_stage_id: None,
                 },
                 MidiControlMapping {
                     channel: Some(0),
@@ -117820,6 +117903,8 @@ f 1 2 3
                     feedback: None,
                     low: 0.0,
                     high: 1.0,
+                    clip_slot_id: None,
+                    isf_stage_id: None,
                 },
             ],
         };
@@ -117900,6 +117985,8 @@ f 1 2 3
                 feedback: None,
                 low: 20.0,
                 high: 300.0,
+                clip_slot_id: None,
+                isf_stage_id: None,
             }],
             osc_mappings: vec![OscControlMapping {
                 address: "/touchosc/tap".to_string(),
@@ -118049,6 +118136,8 @@ f 1 2 3
                 }),
                 low: 0.0,
                 high: 1.0,
+                clip_slot_id: None,
+                isf_stage_id: None,
             },
             MidiControlMapping {
                 channel: None,
@@ -118067,6 +118156,8 @@ f 1 2 3
                 feedback: None,
                 low: 0.0,
                 high: 1.0,
+                clip_slot_id: None,
+                isf_stage_id: None,
             },
             MidiControlMapping {
                 channel: None,
@@ -118085,6 +118176,8 @@ f 1 2 3
                 feedback: None,
                 low: 0.0,
                 high: 1.0,
+                clip_slot_id: None,
+                isf_stage_id: None,
             },
             MidiControlMapping {
                 channel: None,
@@ -118103,6 +118196,8 @@ f 1 2 3
                 feedback: None,
                 low: 0.0,
                 high: 1.0,
+                clip_slot_id: None,
+                isf_stage_id: None,
             },
         ])
         .unwrap();
@@ -118137,6 +118232,8 @@ f 1 2 3
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         }])
         .unwrap_err();
         assert!(error.contains("channel"));
@@ -118167,6 +118264,8 @@ f 1 2 3
             }),
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         }])
         .unwrap_err();
         assert!(error.contains("feedback Off channel"));
@@ -118188,6 +118287,8 @@ f 1 2 3
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         }])
         .unwrap_err();
         assert!(error.contains("video layer"));
@@ -118209,11 +118310,318 @@ f 1 2 3
             feedback: None,
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         }])
         .unwrap_err();
         assert!(error.contains("Forward, Reverse, or Bounce"));
     }
 
+    fn perform_control_mapping(
+        action: MidiControlAction,
+        message: protocol::MidiControlMessage,
+        number: u8,
+    ) -> MidiControlMapping {
+        MidiControlMapping {
+            channel: Some(0),
+            message,
+            number,
+            action,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: None,
+            layer_id: Some(3),
+            output_id: None,
+            video_param: None,
+            cue_point_index: None,
+            duration_ms: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
+            feedback: None,
+            low: 0.0,
+            high: 1.0,
+        }
+    }
+
+    #[test]
+    fn perform_control_mappings_require_their_stable_identities() {
+        use protocol::{MidiControlMessage as Message, VideoClipSlotId, VideoEffectStageId};
+
+        let mut slot =
+            perform_control_mapping(MidiControlAction::VideoClipSlotTrigger, Message::NoteOn, 36);
+        let error = validate_midi_control_mappings(vec![slot.clone()]).unwrap_err();
+        assert!(error.contains("clip slot"), "{error}");
+        slot.clip_slot_id = Some(VideoClipSlotId(21));
+        assert_eq!(
+            validate_midi_control_mappings(vec![slot.clone()])
+                .unwrap()
+                .len(),
+            1
+        );
+        slot.layer_id = None;
+        assert!(validate_midi_control_mappings(vec![slot])
+            .unwrap_err()
+            .contains("video layer"));
+
+        let mut stage =
+            perform_control_mapping(MidiControlAction::VideoIsfStageEnabled, Message::NoteOn, 50);
+        assert!(validate_midi_control_mappings(vec![stage.clone()])
+            .unwrap_err()
+            .contains("effect stage"));
+        stage.isf_stage_id = Some(VideoEffectStageId(9));
+        assert_eq!(
+            validate_midi_control_mappings(vec![stage.clone()])
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let mut param =
+            perform_control_mapping(MidiControlAction::VideoIsfParam, Message::ControlChange, 22);
+        param.isf_stage_id = Some(VideoEffectStageId(9));
+        assert!(validate_midi_control_mappings(vec![param.clone()])
+            .unwrap_err()
+            .contains("attribute"));
+        param.attribute = Some("  amount ".to_string());
+        let normalized = validate_midi_control_mappings(vec![param]).unwrap();
+        assert_eq!(normalized[0].attribute.as_deref(), Some("amount"));
+
+        for action in [
+            MidiControlAction::VideoLayerStop,
+            MidiControlAction::VideoLayerBlendMode,
+        ] {
+            let mut mapping = perform_control_mapping(action, Message::ControlChange, 20);
+            assert_eq!(
+                validate_midi_control_mappings(vec![mapping.clone()])
+                    .unwrap()
+                    .len(),
+                1
+            );
+            mapping.layer_id = None;
+            assert!(validate_midi_control_mappings(vec![mapping])
+                .unwrap_err()
+                .contains("video layer"));
+        }
+        // Take and the transition controls are global and need no identity.
+        for action in [
+            MidiControlAction::VideoTake,
+            MidiControlAction::VideoTransitionKind,
+            MidiControlAction::VideoTransitionTime,
+        ] {
+            let mut mapping = perform_control_mapping(action, Message::ControlChange, 21);
+            mapping.layer_id = None;
+            assert_eq!(
+                validate_midi_control_mappings(vec![mapping]).unwrap().len(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn beat_division_mappings_accept_only_perform_triggers() {
+        use protocol::{MidiControlMessage as Message, VideoClipSlotId};
+
+        let beat = |action: MidiControlAction, number: u8| {
+            let mut mapping = perform_control_mapping(action, Message::BeatDivision, number);
+            mapping.channel = None;
+            mapping.clip_slot_id = Some(VideoClipSlotId(21));
+            mapping
+        };
+        for number in 0..8 {
+            assert!(validate_midi_control_mappings(vec![beat(
+                MidiControlAction::VideoClipSlotTrigger,
+                number
+            )])
+            .is_ok());
+        }
+        assert!(
+            validate_midi_control_mappings(vec![beat(MidiControlAction::VideoTake, 2)]).is_ok()
+        );
+        assert!(
+            validate_midi_control_mappings(vec![beat(MidiControlAction::VideoLayerStop, 2)])
+                .is_ok()
+        );
+
+        assert!(validate_midi_control_mappings(vec![beat(
+            MidiControlAction::VideoClipSlotTrigger,
+            8
+        )])
+        .unwrap_err()
+        .contains("beat division must be 0-7"));
+        // A continuous or engine-owned target cannot be driven by a beat.
+        for action in [
+            MidiControlAction::VideoLayerBlendMode,
+            MidiControlAction::VideoTransitionTime,
+            MidiControlAction::VideoIsfParam,
+            MidiControlAction::TriggerCue,
+            MidiControlAction::SetBpm,
+        ] {
+            assert!(
+                validate_midi_control_mappings(vec![beat(action.clone(), 2)])
+                    .unwrap_err()
+                    .contains("Perform trigger"),
+                "{action:?}"
+            );
+        }
+        let mut with_channel = beat(MidiControlAction::VideoTake, 2);
+        with_channel.channel = Some(0);
+        assert!(validate_midi_control_mappings(vec![with_channel])
+            .unwrap_err()
+            .contains("no MIDI channel"));
+        let mut with_feedback = beat(MidiControlAction::VideoTake, 2);
+        with_feedback.feedback = Some(protocol::MidiControlFeedback {
+            off: Some(MidiFeedbackMessage {
+                message: Message::NoteOn,
+                channel: 0,
+                number: 1,
+                value: 0,
+            }),
+            on: None,
+            unknown: None,
+        });
+        assert!(validate_midi_control_mappings(vec![with_feedback])
+            .unwrap_err()
+            .contains("no MIDI feedback"));
+        // A learned controller can never carry a beat as its feedback message.
+        let mut beat_feedback =
+            perform_control_mapping(MidiControlAction::VideoTake, Message::NoteOn, 40);
+        beat_feedback.feedback = Some(protocol::MidiControlFeedback {
+            off: Some(MidiFeedbackMessage {
+                message: Message::BeatDivision,
+                channel: 0,
+                number: 1,
+                value: 0,
+            }),
+            on: None,
+            unknown: None,
+        });
+        assert!(validate_midi_control_mappings(vec![beat_feedback])
+            .unwrap_err()
+            .contains("beat division"));
+    }
+
+    #[test]
+    fn perform_control_mapping_identities_keep_existing_project_bytes() {
+        use protocol::{MidiControlMessage as Message, VideoClipSlotId, VideoEffectStageId};
+
+        // A mapping from before the Perform targets existed has neither field and
+        // serializes without them, so unchanged projects keep their bytes.
+        let legacy: MidiControlMapping = serde_json::from_value(serde_json::json!({
+            "channel": 0,
+            "message": "ControlChange",
+            "number": 7,
+            "action": "LightingMaster",
+            "fixture_id": null,
+            "attribute": null,
+            "cue_id": null,
+            "layer_id": null,
+            "video_param": null,
+            "cue_point_index": null,
+            "low": 0.0,
+            "high": 1.0,
+        }))
+        .unwrap();
+        assert_eq!(legacy.clip_slot_id, None);
+        assert_eq!(legacy.isf_stage_id, None);
+        let written = serde_json::to_value(&legacy).unwrap();
+        assert!(written.get("clip_slot_id").is_none());
+        assert!(written.get("isf_stage_id").is_none());
+
+        // The Perform identities round-trip as plain stable ids.
+        let mut stage =
+            perform_control_mapping(MidiControlAction::VideoIsfParam, Message::ControlChange, 22);
+        stage.attribute = Some("amount".to_string());
+        stage.isf_stage_id = Some(VideoEffectStageId(9));
+        stage.clip_slot_id = Some(VideoClipSlotId(21));
+        let json = serde_json::to_value(&stage).unwrap();
+        assert_eq!(json["isf_stage_id"], 9);
+        assert_eq!(json["clip_slot_id"], 21);
+        assert_eq!(json["action"], "VideoIsfParam");
+        let restored: MidiControlMapping = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, stage);
+
+        let beat = serde_json::to_value(perform_control_mapping(
+            MidiControlAction::VideoTake,
+            Message::BeatDivision,
+            4,
+        ))
+        .unwrap();
+        assert_eq!(beat["message"], "BeatDivision");
+    }
+
+    #[test]
+    fn perform_control_mappings_round_trip_through_the_project_file() {
+        use protocol::{MidiControlMessage as Message, VideoClipSlotId, VideoEffectStageId};
+
+        let project = empty_project_file();
+        // Without a Perform target the project bytes carry neither identity key.
+        let legacy =
+            perform_control_mapping(MidiControlAction::VideoParam, Message::ControlChange, 7);
+        let mut legacy = legacy;
+        legacy.video_param = Some(VideoParam::Opacity);
+        let legacy_json = project_json_for_write_with_control_mappings_and_dj(
+            &project,
+            vec![legacy],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(!legacy_json.contains("clip_slot_id"));
+        assert!(!legacy_json.contains("isf_stage_id"));
+        assert!(!legacy_json.contains("BeatDivision"));
+
+        let mut slot =
+            perform_control_mapping(MidiControlAction::VideoClipSlotTrigger, Message::NoteOn, 36);
+        slot.clip_slot_id = Some(VideoClipSlotId(21));
+        let mut param =
+            perform_control_mapping(MidiControlAction::VideoIsfParam, Message::ControlChange, 22);
+        param.isf_stage_id = Some(VideoEffectStageId(9));
+        param.attribute = Some("amount".to_string());
+        let mut beat_take =
+            perform_control_mapping(MidiControlAction::VideoTake, Message::BeatDivision, 4);
+        beat_take.channel = None;
+        beat_take.layer_id = None;
+        let expected = vec![slot, param, beat_take];
+        let json = project_json_for_write_with_control_mappings_and_dj(
+            &project,
+            expected.clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(json.contains("\"clip_slot_id\":21") || json.contains("\"clip_slot_id\": 21"));
+        let persisted: Value = serde_json::from_str(&json).unwrap();
+        let (_, loaded) = project_and_control_mappings_from_value(persisted.clone()).unwrap();
+        assert_eq!(loaded.midi_mappings, expected);
+
+        // A stored mapping that lost the identity it needs is refused on load,
+        // never silently retargeted.
+        let mut missing_slot = persisted.clone();
+        missing_slot["midi_mappings"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("clip_slot_id");
+        assert!(project_and_control_mappings_from_value(missing_slot)
+            .unwrap_err()
+            .contains("clip slot"));
+        // A beat division may not carry a MIDI channel, and fails closed on an
+        // unknown division.
+        let mut beat_channel = persisted.clone();
+        beat_channel["midi_mappings"][2]["channel"] = json!(0);
+        assert!(project_and_control_mappings_from_value(beat_channel).is_err());
+        let mut beat_unknown = persisted.clone();
+        beat_unknown["midi_mappings"][2]["number"] = json!(8);
+        assert!(project_and_control_mappings_from_value(beat_unknown).is_err());
+        // The project schema itself is unchanged: version 1 stays the only
+        // accepted version and a future one is still rejected.
+        assert_eq!(persisted["version"], json!(PROJECT_FILE_VERSION));
+        let mut future = persisted;
+        future["version"] = json!(PROJECT_FILE_VERSION + 1);
+        assert!(project_and_control_mappings_from_value(future).is_err());
+    }
     #[test]
     fn control_mapping_validation_normalizes_external_osc_files() {
         let mappings = validate_osc_control_mappings(vec![
@@ -121335,6 +121743,8 @@ f 1 2 3
             }),
             low: 0.0,
             high: 1.0,
+            clip_slot_id: None,
+            isf_stage_id: None,
         };
         let osc_mapping = OscControlMapping {
             address: "/show/go".to_string(),

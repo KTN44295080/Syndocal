@@ -973,11 +973,23 @@ import {
 } from "./projectAuthorityRuntime";
 import {
   controlMappingTargetsFromElement,
+  controlMappingTargetsForMode,
   dmxMappingsFromLearnedControl,
+  midiMappingDrivesTarget,
   sameDmxSource,
   type ControlLearnMode,
   type ControlMappingTarget,
 } from "./controlMappingLearn";
+import {
+  beatDivisionLabel,
+  createBeatTriggerScheduler,
+  isPerformTriggerAction,
+  midiSourceDescription,
+  type PerformRoutedInput,
+} from "./controlMappingPerform";
+import { createPerformControlDispatcher } from "./performControlDispatcher";
+import { ControlAssignMenu, type ControlAssignment } from "./components/ControlAssignMenu";
+import type { ControlAssignRequest } from "./createControlLearnCapture";
 import {
   installUiLocalization,
   loadUiLocale,
@@ -2316,8 +2328,13 @@ export default function App() {
   const projectReadGuardIsCurrent = (guard: ReturnType<typeof captureProjectReadGuard>) =>
     guard.generation === projectReadGeneration
     && projectAuthorityTokenIsCurrent(guard.authority, projectMappingsAuthority());
+  // Accepted Perform input (clip slots, Take, transition, effect stages) is run
+  // by the performance dispatcher below; this forward reference keeps the single
+  // ticketed command path while the fader input is created first.
+  let routePerformInput: (input: PerformRoutedInput) => void = () => undefined;
   const midiFaderInput = createMidiFaderInput({
     projectEpoch: () => captureProjectAuthorityIdentity().project_epoch,
+    applyRouted: input => routePerformInput(input),
     apply: values => {
       if (!faderValueController.applyMidiInput(values)) return;
       const cueId = controlEditCueIdForWrite();
@@ -12329,11 +12346,16 @@ export default function App() {
     if (!isTauriRuntime()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    let unlistenRouted: (() => void) | undefined;
     void listen<unknown>("syndocal://midi-fader-input-v1", ({ payload }) => {
       if (!disposed) midiFaderInput.accept(payload);
     }).then((stop) => { if (disposed) stop(); else unlisten = stop; })
       .catch((error) => setMessage(String(error)));
-    onCleanup(() => { disposed = true; unlisten?.(); midiFaderInput.setConnection(null); });
+    void listen<unknown>("syndocal://midi-perform-control-v1", ({ payload }) => {
+      if (!disposed) midiFaderInput.acceptRouted(payload);
+    }).then((stop) => { if (disposed) stop(); else unlistenRouted = stop; })
+      .catch((error) => setMessage(String(error)));
+    onCleanup(() => { disposed = true; unlisten?.(); unlistenRouted?.(); midiFaderInput.setConnection(null); });
   });
   // Bootstrap reads capture reactive project/input signals synchronously.
   // They must run once: a tracked effect restarts hydration on each mapping ACK
@@ -18261,6 +18283,8 @@ export default function App() {
     updateMidiMapping,
     learnMidiControl,
     learnMidiControlForTargets,
+    assignBeatDivisionForTargets,
+    removeMidiAssignments,
     saveMidiMappings,
     loadMidiMappings,
     connectMidiControl,
@@ -18475,7 +18499,7 @@ export default function App() {
     clearControlLearnSelection();
     setControlLearnModeState(mode);
     if (mode === "midi") {
-      setMessage("MIDI Learn: select a pink control, then move or press the MIDI control.");
+      setMessage("MIDI Learn: select a pink control, then move or press the MIDI control. Right-click a control to choose a beat division.");
       if (midiInputs().length === 0) void refreshMidiInputs();
     } else if (mode === "osc") {
       setMessage("OSC Learn: select a pink control, then send its OSC message.");
@@ -18485,6 +18509,22 @@ export default function App() {
       setMessage("Control Learn closed. Existing mappings remain active.");
     }
   };
+  const [controlAssignRequest, setControlAssignRequest] = createSignal<ControlAssignRequest | null>(null);
+  const closeControlAssignMenu = () => setControlAssignRequest(null);
+  // Leaving Learn closes the source menu with it.
+  createEffect(() => { if (controlLearnMode() === null) setControlAssignRequest(null); });
+  const controlAssignments = (): ControlAssignment[] => {
+    const request = controlAssignRequest();
+    if (!request) return [];
+    return midiMappings()
+      .filter((mapping) => request.targets.some((target) => midiMappingDrivesTarget(mapping, target)))
+      .map((mapping) => ({
+        mapping,
+        kind: mapping.message === "BeatDivision" ? "Beat division" as const : "MIDI" as const,
+        detail: mapping.message === "BeatDivision" ? beatDivisionLabel(mapping.number) : midiSourceDescription(mapping),
+        beat: mapping.message === "BeatDivision",
+      }));
+  };
   const disposeControlLearnCapture = installControlLearnCapture({
     mode: controlLearnMode,
     busy: controlLearnBusy,
@@ -18492,9 +18532,20 @@ export default function App() {
     targets: controlMappingTargetsFromElement,
     select: selectControlLearnElement,
     message: setMessage,
-    learn: (mode, targets) => mode === "midi"
-      ? learnMidiControlForTargets(targets)
-      : mode === "osc" ? learnOscControlForTargets(targets) : learnDmxControlForTargets(targets),
+    assign: (request) => {
+      // Source choice is a MIDI feature: OSC and DMX bind controllers only.
+      if (request.mode === "midi") setControlAssignRequest(request);
+    },
+    learn: (mode, targets) => {
+      if (mode === "midi") return learnMidiControlForTargets(targets);
+      // Perform controls are owned by the renderer and have no OSC/DMX binding.
+      const shared = controlMappingTargetsForMode(mode, targets);
+      if (shared.length === 0) {
+        setMessage("This control can only be mapped with MIDI.");
+        return Promise.resolve(false);
+      }
+      return mode === "osc" ? learnOscControlForTargets(shared) : learnDmxControlForTargets(shared);
+    },
   });
   onCleanup(() => {
     disposeControlLearnCapture();
@@ -21786,6 +21837,64 @@ export default function App() {
       await stopVideoLayerAudioMonitor(layerId);
     }
   };
+  // Perform MIDI targets and beat-division triggers run the same functions the
+  // on-screen pad, Take button, selects and FX controls call.
+  const runLiveFxCommand = async (layerId: number, action: () => Promise<unknown> | unknown) => {
+    // A live FX command drops itself while another is in flight; wait a moment
+    // so a controller's newest value is not lost to a running edit.
+    for (let attempt = 0; attempt < 25 && fxLiveSession.busy(); attempt++) {
+      await new Promise<void>((done) => window.setTimeout(done, 40));
+    }
+    await fxLiveSession.run(layerId, async () => { await action(); });
+  };
+  const performDispatcher = createPerformControlDispatcher({
+    layers: () => snapshot().video.layers,
+    effectCatalog: videoEffectCatalog,
+    clipRuntime: (layerId) => videoClipRuntime().layers.find((runtime) => runtime.layer_id === layerId) ?? null,
+    takeEnabled: () => {
+      const runtime = selectedVideoClipSlotRuntime();
+      return runtime?.transition != null || runtime?.queued_slot_id != null;
+    },
+    selectLayer: selectVideoClipSlotLayer,
+    selectSlot: selectVideoClipSlot,
+    queueSlot: queueVideoClipSlot,
+    take: takeSelectedVideoClipSlot,
+    stopLayer: (layerId) => stopVideoClipFromGrid(layerId, videoOutputFadeMs()),
+    setBlendMode: setVideoLayerBlendMode,
+    transitionKind: videoClipTakeKind,
+    transitionDurationMilliunits: videoClipTakeDurationMilliunits,
+    transitionLocked: () => Boolean(selectedVideoClipSlotRuntime()?.transition),
+    setTransitionKind: setVideoClipTakeKind,
+    setTransitionDurationMilliunits: (value) => setVideoClipTakeDurationMilliunits(
+      Math.max(1, Math.min(600_000, Math.round(value || 1))),
+    ),
+    setIsfStageEnabled: (layerId, index, enabled) =>
+      runLiveFxCommand(layerId, () => setVideoLayerIsfEffectEnabled(layerId, index, enabled)),
+    setIsfControl: (layerId, index, name, value) =>
+      runLiveFxCommand(layerId, () => setVideoLayerIsfControl(layerId, index, name, value)),
+    triggerIsfEvent: triggerVideoLayerIsfEvent,
+    report: setMessage,
+  });
+  routePerformInput = (input) => { void performDispatcher.dispatch(input); };
+  // Beat-division mappings fire from the project clock. Only the main window
+  // runs the clock: a pop-out pane would fire every trigger a second time.
+  const beatTriggers = createBeatTriggerScheduler({
+    mappings: midiMappings,
+    dispatch: (input) => { void performDispatcher.dispatch(input); },
+    suspended: () => controlLearnMode() !== null || controlLearnBusy(),
+  });
+  createEffect(() => {
+    const clock = snapshot().clock;
+    if (paneWindow) return;
+    beatTriggers.observe(clock);
+  });
+  onMount(() => {
+    if (paneWindow) return;
+    // Between snapshots the clock is extrapolated, so a division fires close to
+    // its boundary rather than up to one snapshot period (250 ms) late.
+    const timer = window.setInterval(() => beatTriggers.advance(), 25);
+    onCleanup(() => window.clearInterval(timer));
+  });
   const updateAutoVj = async (
     command: "set_auto_vj_config" | "set_auto_vj_armed" | "set_auto_vj_hold",
     args: Record<string, unknown>,
@@ -27324,6 +27433,30 @@ export default function App() {
         </dialog>
       </Show>
       <InAppDialogHost locale={uiLocale} />
+      <Show when={controlAssignRequest()}>
+        {(request) => (
+          <ControlAssignMenu
+            x={request().x}
+            y={request().y}
+            label={request().targets[0]?.label ?? ""}
+            beatEligible={request().targets.length > 0
+              && request().targets.every((target) => isPerformTriggerAction(target.midi_action ?? target.action))}
+            assignments={controlAssignments()}
+            onLearn={() => { const learn = request().learn; closeControlAssignMenu(); learn(); }}
+            onBeat={(division) => {
+              const targets = request().targets;
+              closeControlAssignMenu();
+              void assignBeatDivisionForTargets(targets, division);
+            }}
+            onRemove={(assignment) => {
+              const label = request().targets[0]?.label ?? "";
+              closeControlAssignMenu();
+              void removeMidiAssignments([assignment.mapping as MidiControlMapping], label);
+            }}
+            onDismiss={closeControlAssignMenu}
+          />
+        )}
+      </Show>
       <Show when={pendingPatchGroupRegistration()}>
         {(pending) => (
           <dialog
@@ -28383,6 +28516,7 @@ export default function App() {
           performContext={{
             get runtimes() { return videoClipRuntime().layers; },
             get keyboardEnabled() { return !controlLearnMode() && operatorLockMode() === null; },
+            get controlLearnActive() { return controlLearnMode() !== null; },
             onOpenEditor: () => selectControlMode("mixer"),
             layout: {
               get topRatio() { return performTopSplitRatio(); },

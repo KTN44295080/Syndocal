@@ -26,6 +26,9 @@ export interface VideoPerformLayoutState {
 export interface VideoPerformContext {
   runtimes: VideoClipLayerRuntimeSummary[];
   keyboardEnabled: boolean;
+  /** A Learn mode is selecting controls. A disabled button never reports a
+   * pointer, so Take stays enabled for Learn (Learn swallows its click). */
+  controlLearnActive?: boolean;
   onOpenEditor: () => void;
   layout?: VideoPerformLayoutState;
   /** The existing Clip Inspector, rendered in-flow for the Inspector's Clip tab. */
@@ -173,10 +176,12 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
             <section class="videoPerformTransition" data-video-perform-region="transition" aria-label="Performance transition">
               <div class="videoPerformTransitionRow">
                 <label><span class="videoPerformFieldLabel">Transition</span><select data-video-perform-transition-kind value={props.clipSlotBank.transitionKind}
+                  {...controlMappingTargetData({ action: "VideoTransitionKind", label: "Transition type" })}
                   disabled={Boolean(props.clipSlotBank.runtime?.transition)} onInput={event => props.clipSlotBank.onSetTransitionKind(event.currentTarget.value as typeof props.clipSlotBank.transitionKind)}>
                   <For each={["Cut", "Crossfade", "Dip", "Wipe", "Luma", "Displacement", "Blur", "Glitch", "Custom"]}>{kind => <option value={kind}>{kind}</option>}</For>
                 </select></label>
                 <label class="videoPerformDuration"><span class="videoPerformFieldLabel">Time</span><input type="number" data-video-perform-transition-duration min="0.001" max="600" step="0.001"
+                  {...controlMappingTargetData({ action: "VideoTransitionTime", label: "Transition time", low: 0.1, high: 10 })}
                   value={props.clipSlotBank.transitionDurationMilliunits / 1000}
                   disabled={Boolean(props.clipSlotBank.runtime?.transition)}
                   onChange={event => { const value = Number(event.currentTarget.value); if (Number.isFinite(value) && value > 0) props.clipSlotBank.onSetTransitionDurationMilliunits(value * 1000); }} />
@@ -189,8 +194,9 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
               <div class="videoPerformTakeRow">
                 <VideoStagePreviewButton layer={props.clipSlotBank.layer} previewLayerId={props.clipGrid.previewLayerId}
                   backendAvailable={props.clipGrid.previewBackendAvailable} busy={props.clipGrid.previewBusy} onStagePreview={props.clipGrid.onStagePreview} />
-                <button class="primary" data-video-perform-take data-video-clip-slot-take disabled={!props.clipSlotTake.enabled}
-                  onClick={() => void props.clipSlotTake.onTake()}>{props.clipSlotTake.label}</button>
+                <button class="primary" data-video-perform-take data-video-clip-slot-take disabled={!props.clipSlotTake.enabled && !props.performContext?.controlLearnActive}
+                  {...controlMappingTargetData({ action: "VideoTake", label: "Take" })}
+                  onClick={() => { if (props.clipSlotTake.enabled) void props.clipSlotTake.onTake(); }}>{props.clipSlotTake.label}</button>
               </div>
             </section>
             <section class="videoPerformMaster" aria-label="Performance master">
@@ -300,7 +306,8 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
       <p>Right-click or long-press a clip for its options. Inspect and Clip… in the matrix corner act on the selected clip; Inspect shows a thumbnail only.</p>
       <p>The P button stages the current layer in Preview; the P key queues column 20.</p>
       <p>Shortcuts pause while editing a value, a dialog is open, or MIDI Learn is active.</p>
-      <p>Clip, Take, blend, transition and ISF stage MIDI targets are not supported by the current control model.</p>
+      <p>In MIDI Learn, select a pink control, then move or press the hardware control. Clips, Take, Stop, blend, transition type and time, effect stages and effect parameters are all learnable.</p>
+      <p>In MIDI Learn, right-click a control to choose its source: MIDI Learn, or a beat division for triggers.</p>
       <button onClick={() => legend.close()}>Close</button>
     </dialog>
   </section>;

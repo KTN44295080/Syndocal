@@ -2676,10 +2676,12 @@ mod tests {
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
         const REMOTE_OPERATION_COUNT: usize =
             REMOTE_INPUT_EVENT_COUNT + REMOTE_CLIENT_REQUEST_COUNT + REMOTE_WIRE_OPERATION_COUNT;
-        const MIDI_CONTROL_MESSAGE_COUNT: usize = 6;
-        const MIDI_CONTROL_ACTION_COUNT: usize = 52;
+        // BeatDivision, the eight Perform actions and the renderer-routed
+        // event each add one inventoried MIDI source.
+        const MIDI_CONTROL_MESSAGE_COUNT: usize = 7;
+        const MIDI_CONTROL_ACTION_COUNT: usize = 60;
         const MIDI_CLOCK_EVENT_COUNT: usize = 6;
-        const MIDI_CONTROL_EVENT_COUNT: usize = 48;
+        const MIDI_CONTROL_EVENT_COUNT: usize = 49;
         const OSC_CONTROL_ACTION_COUNT: usize = 47;
         const OSC_INPUT_EVENT_COUNT: usize = 47;
         const DMX_INPUT_PROTOCOL_COUNT: usize = 2;
@@ -2697,7 +2699,7 @@ mod tests {
         // add two more of each. Native output cadence health adds one read-only
         // Tauri source and one frontend invocation source.
         const FRONTEND_INVOKE_COUNT: usize = 505;
-        assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 210);
+        assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 220);
         assert_eq!(
             registry.operations.len(),
             FROZEN_TAURI_ROUTE_ADMISSION_COUNT
@@ -2706,7 +2708,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1701);
+        assert_eq!(registry.operations.len(), 1711);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -3103,7 +3105,7 @@ mod tests {
         // `ResetShowSpoutOutputsExactPublished` source.
         const ENGINE_COUNT: usize = 285;
         const REMOTE_COUNT: usize = 116;
-        const MIDI_OSC_DMX_COUNT: usize = 210;
+        const MIDI_OSC_DMX_COUNT: usize = 220;
         const FRONTEND_COUNT: usize = 505;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
@@ -3111,8 +3113,8 @@ mod tests {
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1701);
-        assert_eq!(SOURCE_TOTAL, 1734);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1711);
+        assert_eq!(SOURCE_TOTAL, 1744);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 76);
 
@@ -3540,7 +3542,10 @@ mod tests {
         // playback-layer read, not an external operation.
         // Output-health adds one local native read; its frontend source is
         // already included in the aliases above.
-        assert_eq!(unclassified.len(), 1148);
+        // The Perform MIDI actions, the beat-division message and the
+        // renderer-routed event are inventoried sources, not classified
+        // external operations.
+        assert_eq!(unclassified.len(), 1158);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -4304,11 +4309,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both native and frontend sources for generator create/update.
-        assert_eq!(legacy.operations.len(), 1701);
+        assert_eq!(legacy.operations.len(), 1711);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1701);
+        assert_eq!(operations.len(), 1711);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

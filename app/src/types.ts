@@ -178,7 +178,10 @@ export type MidiControlMessage =
   /** 14-bit DAW / Mackie Control fader; the mapping number is 0. */
   | "PitchBend"
   /** Endless encoder CC (Mackie V-Pot): steps from the current value. */
-  | "RelativeControlChange";
+  | "RelativeControlChange"
+  /** A tempo trigger, not a controller message: the number picks an entry of
+   * `beatDivisionBeats`. Only Perform trigger targets accept it. */
+  | "BeatDivision";
 
 export interface MidiFeedbackMessage {
   message: MidiControlMessage;
@@ -245,7 +248,17 @@ export type MidiControlAction =
   | "AllBlackout"
   | "VideoMaster"
   | "VideoBlackout"
-  | "ClearFixtureFlags";
+  | "ClearFixtureFlags"
+  /** The Perform actions below are MIDI-only; the renderer runs the same
+   * ticketed commands as the on-screen control. */
+  | "VideoClipSlotTrigger"
+  | "VideoTake"
+  | "VideoLayerStop"
+  | "VideoLayerBlendMode"
+  | "VideoTransitionKind"
+  | "VideoTransitionTime"
+  | "VideoIsfStageEnabled"
+  | "VideoIsfParam";
 
 export interface MidiControlMapping {
   channel?: number | null;
@@ -261,6 +274,10 @@ export interface MidiControlMapping {
   video_param?: VideoParam | null;
   cue_point_index?: number | null;
   duration_ms?: number | null;
+  /** Stable clip-slot id for `VideoClipSlotTrigger`; never a column index. */
+  clip_slot_id?: number | null;
+  /** Stable effect-stage id for `VideoIsfStageEnabled` / `VideoIsfParam`. */
+  isf_stage_id?: number | null;
   feedback?: MidiControlFeedback | null;
   low: number;
   high: number;

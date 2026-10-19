@@ -48,6 +48,43 @@ for (const [name,inputName,outputs,expectedName] of [
 ]){const f=harness({outputs,inputName}),fw=f.controller.learnMidiControlForTargets([sceneTarget]);await waitForLearn(f);f.finish(learned);assert.equal(await fw,true,name);const fb=f.calls.find(c=>c.command==='connect_midi_feedback');assert.equal(fb?.args.expectedOutputName??null,expectedName,name);if(!expectedName)assert.ok(f.messages.at(-1).includes('select a matching MIDI output'),name);}
 console.log('PASS: scene toggle/Flash feedback creation, exact or Windows-paired output auto-connect, missing/ambiguous output rejection and nonfatal feedback failure');
 
+// Perform targets: Learn keeps their stable ids, and a beat division is a mapping like any other.
+const clipTarget={action:'VideoClipSlotTrigger',label:'Layer 1 clip 2',layer_id:1,clip_slot_id:102};
+const stageTarget={action:'VideoIsfStageEnabled',label:'Layer 1 FX 1',layer_id:1,isf_stage_id:900};
+const paramTarget={action:'VideoIsfParam',label:'Layer 1 gain',layer_id:1,isf_stage_id:900,attribute:'gain'};
+const perform=harness(),performWork=perform.controller.learnMidiControlForTargets([clipTarget]);await waitForLearn(perform);perform.finish({...learned,message:'NoteOn'});assert.equal(await performWork,true);
+assert.deepEqual([perform.mappings.at(-1).action,perform.mappings.at(-1).layer_id,perform.mappings.at(-1).clip_slot_id],['VideoClipSlotTrigger',1,102],'Learn stores the stable clip slot id');
+assert.equal(perform.mappings.at(-1).feedback,undefined,'Perform targets echo nothing back to the controller');
+const beat=harness();assert.equal(beat.connected,true);
+assert.equal(await beat.controller.assignBeatDivisionForTargets([clipTarget,stageTarget],4),true);
+const beatMappings=beat.mappings.filter(m=>m.message==='BeatDivision');
+assert.deepEqual(beatMappings.map(m=>[m.action,m.number,m.channel,m.clip_slot_id??null,m.isf_stage_id??null]),[['VideoClipSlotTrigger',4,null,102,null],['VideoIsfStageEnabled',4,null,null,900]]);
+assert.equal(beat.mappings[0].action,'LightingMaster','existing mappings are kept');
+assert.equal(beat.calls.filter(c=>c.command==='connect_midi_control').length,1,'a connected worker is re-seated on the new list');
+assert.deepEqual(beat.calls.find(c=>c.command==='connect_midi_control').args.mappings,beat.mappings);
+assert.equal(beat.connected,true);
+assert.ok(beat.messages.some(m=>m.includes('Assigned Layer 1 clip 2 to every 1 bar')));
+await beat.controller.assignBeatDivisionForTargets([clipTarget],2);
+assert.deepEqual(beat.mappings.filter(m=>m.message==='BeatDivision'&&m.action==='VideoClipSlotTrigger').map(m=>m.number),[2],'one tempo source per target: a new division replaces the old one');
+assert.equal(beat.mappings.filter(m=>m.action==='VideoIsfStageEnabled').length,1);
+assert.equal(await beat.controller.assignBeatDivisionForTargets([paramTarget],2),false,'a continuous target cannot take a beat');
+assert.ok(beat.messages.at(-1).includes('only trigger'));
+assert.equal(beat.mappings.some(m=>m.action==='VideoIsfParam'),false);
+const removable=beat.mappings.filter(m=>m.message==='BeatDivision');
+assert.equal(await beat.controller.removeMidiAssignments(removable,'Layer 1 clip 2'),true);
+assert.equal(beat.mappings.some(m=>m.message==='BeatDivision'),false);
+assert.deepEqual(beat.mappings.map(m=>m.action),['LightingMaster']);
+const offline=harness();await offline.controller.disconnectMidiControl();const before=offline.calls.length;
+assert.equal(await offline.controller.assignBeatDivisionForTargets([clipTarget],5),true);
+assert.equal(offline.calls.slice(before).some(c=>c.command==='connect_midi_control'),false,'a disconnected input is left disconnected');
+assert.equal(offline.mappings.at(-1).number,5);
+const sole=harness();await sole.controller.assignBeatDivisionForTargets([clipTarget],3);await sole.controller.removeMidiAssignments(sole.mappings.filter(m=>m.message==='BeatDivision'),'x');
+assert.ok(sole.mappings.length>0,'the controller mapping stayed');
+const busy=harness(),busyWork=busy.controller.learnMidiControlForTargets([clipTarget]);await waitForLearn(busy);
+assert.equal(await busy.controller.assignBeatDivisionForTargets([clipTarget],2),false,'no assignment edit while a Learn is listening');
+busy.finish(null);await busyWork;
+console.log('PASS: Perform Learn keeps stable ids; beat division assign/replace/remove edit the same mapping list and re-seat a connected input');
+
 const notified=harness({notifyConnection:true});await notified.controller.connectMidiControl();assert.equal(notified.connections.length,1);assert.equal(notified.connections[0].input_session,41);
 const invalidIdentity=harness({notifyConnection:true,connectionStatus:{schema_version:2,project_epoch:3,input_session:41}});await invalidIdentity.controller.connectMidiControl();assert.equal(invalidIdentity.connected,false);assert.equal(invalidIdentity.connections.length,0);assert.ok(invalidIdentity.messages.some(m=>m.includes("identity was invalid")));
 console.log("PASS: MIDI input event connection identity is published only after valid native ACK");

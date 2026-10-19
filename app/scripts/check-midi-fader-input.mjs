@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import ts from "../node_modules/typescript/lib/typescript.js";
+const modules = new Map();
+// Sibling modules (for example the Perform routing decoder) load from source too.
 const load = async path => {
-  const source = await fs.readFile(new URL(path, import.meta.url), "utf8");
+  const url = new URL(path, import.meta.url);
+  if (modules.has(url.href)) return modules.get(url.href);
+  const source = await fs.readFile(url, "utf8");
   const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  const exports = {}; Function("exports", js)(exports); return exports;
+  const exports = {}; modules.set(url.href, exports);
+  const required = {};
+  for (const [, name] of js.matchAll(/require\("(\.[^"]+)"\)/g)) required[name] = await load(new URL(name + ".ts", url).href);
+  Function("exports", "require", js)(exports, name => required[name]); return exports;
 };
 const { createMidiFaderInput, midiFaderConnection } = await load("../src/midiFaderInput.ts");
 const { createFaderValueController } = await load("../src/createFaderValueController.ts");

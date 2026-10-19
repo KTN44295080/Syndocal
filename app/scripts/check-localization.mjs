@@ -1099,7 +1099,7 @@ async function collectTsx(directory) {
 await collectTsx(sourceRoot);
 
 const localeInvariantText = new Set([
-  "Syndocal", "Syndocal Background", "Syndocal Foreground", "Background Video2 Camera", "Foreground Video 1", "SAFE", "DMX", "MIDI", "OSC", "RDM", "ISF", "NDI", "Spout", "Syphon", "HAP", "FFmpeg",
+  "Syndocal", "Syndocal Background", "Syndocal Foreground", "Background Video2 Camera", "Foreground Video 1", "SAFE", "DMX", "MIDI", "MIDI Learn", "OSC", "RDM", "ISF", "NDI", "Spout", "Syphon", "HAP", "FFmpeg",
   "GO", "SET", "FLASH", "EDIT", "EDIT:", "LIVE", "BLIND", "HTP", "LTP", "RGB", "BPM", "PULSE", "PATCH", "A", "B", "R", "G", "X", "Y", "Z", "Pan", "Tilt",
   "Dimmer", "Color", "Position", "Beam", "Speed", "Size", "Phase",
   "Sine", "Cosine", "Triangle", "Saw", "Square", "Random", "Perlin", "Rainbow",

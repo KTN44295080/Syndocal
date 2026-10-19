@@ -23,6 +23,8 @@ import type {
   VideoParam,
 } from "./types";
 import {
+  beatDivisionMappingsFromTargets,
+  midiMappingDrivesTarget,
   midiMappingsFromLearnedControl,
   oscMappingsFromLearnedControl,
   sameMidiSource,
@@ -30,6 +32,7 @@ import {
   type ControlMappingTarget,
   midiContinuousActions,
 } from "./controlMappingLearn";
+import { beatDivisionLabel } from "./controlMappingPerform";
 import {
   projectAuthorityLearnContinuation,
   runAfterProjectAuthorityFlush,
@@ -525,6 +528,52 @@ export function createControlInputController(options: ControlInputControllerOpti
     } finally { midiLearnInFlight = false; options.onMidiLearnBusy?.(false); }
   };
 
+  /** Edit the mapping list outside Learn (a beat-division assignment or removal).
+   * The native input worker is fenced to the exact saved list, so a connected
+   * worker is re-seated on the new one; the renderer then keeps receiving
+   * routed Perform input. */
+  const editMidiMappingsAndReseat = async (
+    edit: (current: MidiControlMapping[]) => MidiControlMapping[],
+    message: string,
+  ): Promise<boolean> => {
+    if (midiLearnInFlight) return false;
+    const wasConnected = options.midiControlConnected();
+    options.setMidiMappings(edit);
+    if (wasConnected) {
+      if (options.midiMappings().length > 0) await connectMidiControl();
+      else await disconnectMidiControl();
+    }
+    options.setMessage(message);
+    return true;
+  };
+
+  /** Fire the target on a tempo division instead of a controller message. */
+  const assignBeatDivisionForTargets = async (targets: readonly ControlMappingTarget[], divisionNumber: number) => {
+    const assigned = beatDivisionMappingsFromTargets(targets, divisionNumber);
+    if (assigned.length === 0) {
+      reportMessage("A beat division can only trigger a clip, Take, Stop or an effect stage.");
+      return false;
+    }
+    // One tempo source per target: choosing another division replaces it.
+    return editMidiMappingsAndReseat(
+      (current) => [
+        ...current.filter((mapping) => !(mapping.message === "BeatDivision"
+          && targets.some((target) => midiMappingDrivesTarget(mapping, target)))),
+        ...assigned,
+      ],
+      `Assigned ${targets[0].label} to every ${beatDivisionLabel(divisionNumber)}.`,
+    );
+  };
+
+  /** Remove stored assignments (a MIDI controller or a beat division) by identity. */
+  const removeMidiAssignments = async (removed: readonly MidiControlMapping[], label: string) => {
+    if (removed.length === 0) return false;
+    return editMidiMappingsAndReseat(
+      (current) => current.filter((mapping) => !removed.includes(mapping)),
+      `Removed ${removed.length} assignment(s) from ${label}.`,
+    );
+  };
+
   const saveMidiMappings = async () => {
     try {
       const path = await options.invoke<string | null>("save_midi_mappings", { mappings: options.midiMappings() });
@@ -928,6 +977,8 @@ export function createControlInputController(options: ControlInputControllerOpti
     updateMidiMapping,
     learnMidiControl,
     learnMidiControlForTargets,
+    assignBeatDivisionForTargets,
+    removeMidiAssignments,
     saveMidiMappings,
     loadMidiMappings,
     connectMidiControl,
