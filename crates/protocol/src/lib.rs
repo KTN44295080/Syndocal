@@ -1990,7 +1990,7 @@ pub fn validate_engine_ready_video_media_assets(video: &VideoSnapshot) -> Result
 /// Validate authored clip slots while still permitting a pre-T2 legacy layer
 /// with no bank. This is suitable before the explicit in-memory migration.
 pub fn validate_authored_video_clip_slots(video: &VideoSnapshot) -> Result<(), String> {
-    validate_video_clip_slots(video, false)
+    validate_video_clip_slots(video, false, false)
 }
 
 /// Validate the T2 form consumed by the runtime. Every media-backed layer has
@@ -1998,7 +1998,7 @@ pub fn validate_authored_video_clip_slots(video: &VideoSnapshot) -> Result<(), S
 /// `media_asset_id` remain projections of that default slot.
 pub fn validate_engine_ready_video_clip_slots(video: &VideoSnapshot) -> Result<(), String> {
     validate_engine_ready_video_media_assets(video)?;
-    validate_video_clip_slots(video, true)
+    validate_video_clip_slots(video, true, false)
 }
 
 /// Validate runtime-local identities and queue state without requiring an
@@ -2124,7 +2124,26 @@ pub fn validate_video_layer_transition_runtime(
     runtime: &VideoLayerTransitionRuntimeSnapshot,
     video: &VideoSnapshot,
 ) -> Result<(), String> {
-    validate_authored_video_effect_chains(video)?;
+    validate_video_layer_transition_runtime_impl(runtime, video, false)
+}
+
+/// Same validation for a *rendered* (live) snapshot, whose layers may project
+/// a non-default active/incoming clip slot after a Take. The render, monitor,
+/// recording and FX-audition paths all consume the rendered form, so they
+/// must not require the authored default-slot projection.
+pub fn validate_rendered_video_layer_transition_runtime(
+    runtime: &VideoLayerTransitionRuntimeSnapshot,
+    video: &VideoSnapshot,
+) -> Result<(), String> {
+    validate_video_layer_transition_runtime_impl(runtime, video, true)
+}
+
+fn validate_video_layer_transition_runtime_impl(
+    runtime: &VideoLayerTransitionRuntimeSnapshot,
+    video: &VideoSnapshot,
+    live_slot_projection: bool,
+) -> Result<(), String> {
+    validate_video_effect_chains(video, false, live_slot_projection)?;
     let layers: BTreeMap<VideoLayerId, &VideoLayerSummary> =
         video.layers.iter().map(|layer| (layer.id, layer)).collect();
     let compositions: BTreeMap<CompositionId, &CompositionSummary> = video
@@ -2393,6 +2412,7 @@ pub fn normalize_legacy_video_effect_chains(
             validate_layer_effect_chain_projection(
                 &candidate.layers[layer_index],
                 &candidate.effect_chains[index],
+                false,
             )?;
             reconcile_clip_override_effect_ids(
                 &mut candidate.layers[layer_index],
@@ -2466,18 +2486,19 @@ pub fn normalize_legacy_video_effect_chains(
 }
 
 pub fn validate_authored_video_effect_chains(video: &VideoSnapshot) -> Result<(), String> {
-    validate_video_effect_chains(video, false)
+    validate_video_effect_chains(video, false, false)
 }
 
 pub fn validate_engine_ready_video_effect_chains(video: &VideoSnapshot) -> Result<(), String> {
-    validate_video_effect_chains(video, true)
+    validate_video_effect_chains(video, true, false)
 }
 
 fn validate_video_effect_chains(
     video: &VideoSnapshot,
     require_projection: bool,
+    live_slot_projection: bool,
 ) -> Result<(), String> {
-    validate_authored_video_clip_slots(video)?;
+    validate_video_clip_slots(video, false, live_slot_projection)?;
     if video.effect_chains.len() > VIDEO_EFFECT_PROJECT_MAX_CHAINS {
         return Err(format!(
             "Video project exceeds {VIDEO_EFFECT_PROJECT_MAX_CHAINS} effect chains"
@@ -2663,7 +2684,7 @@ fn validate_video_effect_chains(
             ));
         }
         if let Some(chain) = layer_chain {
-            validate_layer_effect_chain_projection(layer, chain)?;
+            validate_layer_effect_chain_projection(layer, chain, live_slot_projection)?;
             validate_clip_override_effect_ids(layer, chain, require_projection)?;
         } else if require_projection
             && layer
@@ -2951,9 +2972,13 @@ fn projected_legacy_isf(
     Ok(Some(root))
 }
 
+/// A rendered (live) layer applies the active slot's effect overrides to its
+/// legacy ISF projection, so `ignore_control_values` compares everything except
+/// control values; the authored form still requires an exact projection.
 fn validate_layer_effect_chain_projection(
     layer: &VideoLayerSummary,
     chain: &VideoEffectChainSummary,
+    ignore_control_values: bool,
 ) -> Result<(), String> {
     if chain.scope != (VideoEffectScope::Layer { layer_id: layer.id }) {
         return Err(format!(
@@ -2961,13 +2986,35 @@ fn validate_layer_effect_chain_projection(
             layer.id
         ));
     }
-    if projected_legacy_isf(chain)? != layer.isf_effect {
+    let projected = projected_legacy_isf(chain)?;
+    let matches = if ignore_control_values {
+        isf_effect_without_control_values(projected)
+            == isf_effect_without_control_values(layer.isf_effect.clone())
+    } else {
+        projected == layer.isf_effect
+    };
+    if !matches {
         return Err(format!(
             "Video layer {} legacy ISF projection diverges from canonical chain",
             layer.id
         ));
     }
     Ok(())
+}
+
+fn isf_effect_without_control_values(
+    effect: Option<VideoIsfEffectSummary>,
+) -> Option<VideoIsfEffectSummary> {
+    effect.map(|mut effect| {
+        let stages = std::iter::once(&mut effect.controls)
+            .chain(effect.stack.iter_mut().map(|stage| &mut stage.controls));
+        for controls in stages {
+            for control in controls.iter_mut() {
+                control.value = [0.0; 4];
+            }
+        }
+        effect
+    })
 }
 
 fn reconcile_clip_override_effect_ids(
@@ -3360,9 +3407,14 @@ fn validate_video_media_asset_catalog(
     Ok(())
 }
 
+/// `live_slot_projection` selects the rendered-snapshot form: while a
+/// non-default slot is active, the layer's `media_asset_id`/`source` mirror
+/// that active slot (the decoder's live input), not the authored default.
+/// The authored form (`false`) still requires the default-slot projection.
 fn validate_video_clip_slots(
     video: &VideoSnapshot,
     require_slot_banks: bool,
+    live_slot_projection: bool,
 ) -> Result<(), String> {
     // Validate the catalog projection first, while preserving the legacy
     // allowance for a missing layer asset reference in non-engine-ready input.
@@ -3468,11 +3520,31 @@ fn validate_video_clip_slots(
                 layer.id, default_slot_id.0
             )
         })?;
-        if layer.media_asset_id != Some(default_slot.media_asset_id) {
-            return Err(format!(
-                "Video layer {} media asset projection does not match its default clip slot",
-                layer.id
-            ));
+        let projection_matches = if live_slot_projection {
+            // Rendered snapshots project the live (active/incoming) slot.
+            // Every live slot comes from this layer's own bank, so the
+            // projection must still resolve to one of its slots' assets.
+            layer.media_asset_id.is_some_and(|asset_id| {
+                layer
+                    .clip_slots
+                    .iter()
+                    .any(|slot| slot.media_asset_id == asset_id)
+            })
+        } else {
+            layer.media_asset_id == Some(default_slot.media_asset_id)
+        };
+        if !projection_matches {
+            return Err(if live_slot_projection {
+                format!(
+                    "Video layer {} live media asset projection does not match any clip slot in its bank",
+                    layer.id
+                )
+            } else {
+                format!(
+                    "Video layer {} media asset projection does not match its default clip slot",
+                    layer.id
+                )
+            });
         }
     }
     Ok(())
@@ -15746,6 +15818,47 @@ mod tests {
     }
 
     #[test]
+    fn rendered_transition_runtime_validation_accepts_a_non_default_live_slot_projection() {
+        let mut layer = media_asset_test_layer(1, "Layer", "C:/show/a.mp4");
+        layer.media_asset_id = Some(10);
+        layer.clip_slots = vec![clip_slot_test_slot(20, 10), clip_slot_test_slot(21, 11)];
+        layer.default_clip_slot_id = Some(super::VideoClipSlotId(20));
+        let authored = super::VideoSnapshot {
+            layers: vec![layer],
+            media_assets: vec![
+                media_asset_test_asset(10, "A", "C:/show/a.mp4"),
+                media_asset_test_asset(11, "B", "C:/show/b.mp4"),
+                media_asset_test_asset(12, "C", "C:/show/c.mp4"),
+            ],
+            ..super::VideoSnapshot::default()
+        };
+        let runtime = super::VideoLayerTransitionRuntimeSnapshot::default();
+        super::validate_video_layer_transition_runtime(&runtime, &authored).unwrap();
+        super::validate_rendered_video_layer_transition_runtime(&runtime, &authored).unwrap();
+
+        // After a Take of slot 21 the rendered layer mirrors the live slot.
+        let mut rendered = authored.clone();
+        rendered.layers[0].media_asset_id = Some(11);
+        rendered.layers[0].source = rendered.media_assets[1].source.clone();
+        assert!(
+            super::validate_video_layer_transition_runtime(&runtime, &rendered)
+                .unwrap_err()
+                .contains("does not match its default clip slot")
+        );
+        super::validate_rendered_video_layer_transition_runtime(&runtime, &rendered).unwrap();
+
+        // The live projection must still resolve inside the layer's own bank.
+        let mut outside_bank = authored;
+        outside_bank.layers[0].media_asset_id = Some(12);
+        outside_bank.layers[0].source = outside_bank.media_assets[2].source.clone();
+        assert!(
+            super::validate_rendered_video_layer_transition_runtime(&runtime, &outside_bank)
+                .unwrap_err()
+                .contains("does not match any clip slot in its bank")
+        );
+    }
+
+    #[test]
     fn video_clip_slot_validation_rejects_identity_ranges_and_invalid_local_data() {
         let mut layer = media_asset_test_layer(1, "Layer", "C:/show/a.mp4");
         layer.media_asset_id = Some(10);
@@ -17739,6 +17852,54 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<super::SubmasterSummary>(&encoded).unwrap(),
             live
+        );
+    }
+
+    #[test]
+    fn rendered_transition_runtime_validation_accepts_active_slot_effect_override_values() {
+        let mut layer = media_asset_test_layer(7, "Layer FX", "C:/show/fx.mp4");
+        layer.isf_effect = Some(clip_slot_test_effect());
+        layer.media_asset_id = Some(10);
+        layer.clip_slots = vec![clip_slot_test_slot(20, 10), clip_slot_test_slot(21, 11)];
+        layer.default_clip_slot_id = Some(super::VideoClipSlotId(20));
+        layer.clip_slots[1].effect_overrides = vec![super::VideoClipEffectOverrideSummary {
+            effect_id: None,
+            stage_index: 0,
+            control_name: "amount".to_string(),
+            value: [0.9, 0.0, 0.0, 0.0],
+        }];
+        let mut authored = super::VideoSnapshot {
+            layers: vec![layer],
+            media_assets: vec![
+                media_asset_test_asset(10, "A", "C:/show/fx.mp4"),
+                media_asset_test_asset(11, "B", "C:/show/b.mp4"),
+            ],
+            ..super::VideoSnapshot::default()
+        };
+        super::normalize_legacy_video_effect_chains(&mut authored).unwrap();
+        let runtime = super::VideoLayerTransitionRuntimeSnapshot::default();
+        super::validate_video_layer_transition_runtime(&runtime, &authored).unwrap();
+
+        // Take of slot 21: the rendered layer mirrors its asset and the
+        // engine applies the slot's override to the legacy ISF projection.
+        let mut rendered = authored.clone();
+        rendered.layers[0].media_asset_id = Some(11);
+        rendered.layers[0].source = rendered.media_assets[1].source.clone();
+        rendered.layers[0].isf_effect.as_mut().unwrap().controls[0].value = [0.9, 0.0, 0.0, 0.0];
+        assert!(
+            super::validate_video_layer_transition_runtime(&runtime, &rendered)
+                .unwrap_err()
+                .contains("default clip slot")
+        );
+        super::validate_rendered_video_layer_transition_runtime(&runtime, &rendered).unwrap();
+
+        // Only control values may differ: structural drift is still rejected.
+        let mut drifted = rendered;
+        drifted.layers[0].isf_effect.as_mut().unwrap().label = "Other".to_string();
+        assert!(
+            super::validate_rendered_video_layer_transition_runtime(&runtime, &drifted)
+                .unwrap_err()
+                .contains("legacy ISF projection diverges")
         );
     }
 

@@ -8,8 +8,8 @@ use std::{
 };
 
 use protocol::{
-    hidden_console_command::hidden_command, validate_video_layer_transition_runtime, ClockSnapshot,
-    CompositionId, CompositionSummary, MachineOutputRole, TimelineId, Transform2D,
+    hidden_console_command::hidden_command, validate_rendered_video_layer_transition_runtime,
+    ClockSnapshot, CompositionId, CompositionSummary, MachineOutputRole, TimelineId, Transform2D,
     VideoBackendState, VideoBackendStatus, VideoBlendMode, VideoClipRuntimeSnapshot,
     VideoClipSlotId, VideoColorAdjust, VideoCuePointSummary, VideoEffectChainId,
     VideoEffectChainSummary, VideoEffectId, VideoEffectKind, VideoEffectScope, VideoEffectStageId,
@@ -8629,7 +8629,7 @@ fn apply_video_layer_transition_weights(
     runtime: &VideoLayerTransitionRuntimeSnapshot,
     plan: &mut CompositionPlan,
 ) -> Result<(), VideoPreviewError> {
-    validate_video_layer_transition_runtime(runtime, snapshot)
+    validate_rendered_video_layer_transition_runtime(runtime, snapshot)
         .map_err(VideoPreviewError::InvalidLayerTransition)?;
     for active in &runtime.buses {
         let Some(bus) = snapshot
@@ -17776,6 +17776,125 @@ mod tests {
         assert_eq!(renderer.output_last_valid_frames.len(), 1);
         assert_eq!(renderer.output_last_valid_frames[0].frame, cached_fresh);
         assert!(renderer.last_output_render_error().is_some());
+    }
+
+    #[test]
+    fn transition_render_paths_accept_a_non_default_live_clip_slot_projection() {
+        let default_source = VideoSourceSummary {
+            kind: VideoSourceKind::File,
+            path: Some("default.mp4".to_string()),
+            name: None,
+            codec: None,
+            metadata: None,
+        };
+        let live_source = VideoSourceSummary {
+            path: Some("live.mp4".to_string()),
+            ..default_source.clone()
+        };
+        let slot = |id: u64, media_asset_id: u64| protocol::VideoClipSlotSummary {
+            id: VideoClipSlotId(id),
+            media_asset_id,
+            in_point_ms: 0,
+            out_point_ms: None,
+            loop_mode: protocol::VideoClipLoopMode::Once,
+            speed: 1.0,
+            cue_points: Vec::new(),
+            launch_quantization: protocol::VideoClipLaunchQuantization::Immediate,
+            effect_overrides: Vec::new(),
+        };
+        let asset = |id: u64, source: &VideoSourceSummary| protocol::MediaAssetSummary {
+            id,
+            label: format!("Asset {id}"),
+            source: source.clone(),
+            content_hash: None,
+            byte_size: None,
+        };
+        // A rendered snapshot after Take of the non-default slot 21: the
+        // layer mirrors the live slot while its default stays slot 20.
+        let mut layer = c1_test_layer(1, VideoBlendMode::Normal);
+        layer.source = live_source.clone();
+        layer.media_asset_id = Some(101);
+        layer.clip_slots = vec![slot(20, 100), slot(21, 101)];
+        layer.default_clip_slot_id = Some(VideoClipSlotId(20));
+        let mut snapshot = c1_test_snapshot(vec![layer]);
+        snapshot.media_assets = vec![asset(100, &default_source), asset(101, &live_source)];
+        let clip_runtime = VideoClipRuntimeSnapshot {
+            layers: vec![protocol::VideoClipLayerRuntimeSummary {
+                layer_id: 1,
+                active_slot_id: Some(VideoClipSlotId(21)),
+                ..protocol::VideoClipLayerRuntimeSummary::default()
+            }],
+            ..VideoClipRuntimeSnapshot::default()
+        };
+        let transition_runtime = VideoLayerTransitionRuntimeSnapshot::default();
+        let context = VideoEffectRenderContext {
+            clip_runtime: &clip_runtime,
+            project_render_epoch: 905,
+        };
+        let plan = build_video_output_render_plan(&snapshot, 80).unwrap();
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider {
+                pixels: HashMap::from([(1, [20, 40, 60, 255])]),
+                fail: false,
+            },
+        );
+
+        let expected = vec![20, 40, 60, 255];
+        assert_eq!(
+            renderer
+                .render_output_with_effects_and_transitions(
+                    &snapshot,
+                    context,
+                    &transition_runtime,
+                    80
+                )
+                .unwrap()
+                .data,
+            expected
+        );
+        assert_eq!(
+            renderer
+                .render_output_preview_with_effects_and_transitions(
+                    &snapshot,
+                    context,
+                    &transition_runtime,
+                    80,
+                    plan.width,
+                    plan.height,
+                )
+                .unwrap()
+                .data,
+            expected
+        );
+        assert_eq!(
+            renderer
+                .prepare_output_artistic_frame_with_effects_and_transitions(
+                    &snapshot,
+                    context,
+                    &transition_runtime,
+                    &plan,
+                    plan.width,
+                    plan.height,
+                )
+                .unwrap()
+                .data,
+            expected
+        );
+        let evidenced = renderer
+            .prepare_output_artistic_render_result_preview_with_effects_and_transitions(
+                &snapshot,
+                context,
+                &transition_runtime,
+                80,
+                plan.width,
+                plan.height,
+            )
+            .unwrap();
+        assert_eq!(
+            evidenced.evidence.freshness,
+            VideoOutputRenderFreshness::Fresh
+        );
     }
 
     #[test]

@@ -94826,6 +94826,60 @@ mod tests {
     }
 
     #[test]
+    fn rendered_transition_runtime_validates_after_non_default_cut_and_crossfade_takes() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        let assert_monitor_projection_valid = |runtime: &EngineRuntime| {
+            let rendered = runtime.video_snapshot();
+            let transitions = runtime.video_layer_transition_runtime_snapshot();
+            protocol::validate_rendered_video_layer_transition_runtime(&transitions, &rendered)
+                .expect("rendered snapshot must validate for the render/monitor path");
+            // The persisted/authored form is still strictly default-projected.
+            let authored = runtime.build_persistence_snapshot().authored_video.unwrap();
+            validate_video_layer_transition_runtime(&transitions, &authored).unwrap();
+        };
+        assert_monitor_projection_valid(&runtime);
+
+        // Cut to the non-default slot: the rendered layer now mirrors slot 21.
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(21))
+            .unwrap();
+        runtime.launch_video_clip_slot(1, None).unwrap();
+        assert_eq!(runtime.video_snapshot().layers[0].media_asset_id, Some(11));
+        assert!(validate_video_layer_transition_runtime(
+            &runtime.video_layer_transition_runtime_snapshot(),
+            &runtime.video_snapshot(),
+        )
+        .unwrap_err()
+        .contains("does not match its default clip slot"));
+        assert_monitor_projection_valid(&runtime);
+
+        // Crossfade back to the default, then forward again, validating the
+        // rendered projection at the start, middle and completion.
+        for target in [VideoClipSlotId(20), VideoClipSlotId(21)] {
+            runtime.queue_video_clip_slot(1, target).unwrap();
+            runtime
+                .launch_video_clip_slot_with_transition(
+                    1,
+                    None,
+                    VideoClipTakeKind::Crossfade,
+                    1_000,
+                )
+                .unwrap();
+            assert_monitor_projection_valid(&runtime);
+            runtime.advance_video_layers(Duration::from_millis(400));
+            assert_monitor_projection_valid(&runtime);
+            runtime.advance_video_layers(Duration::from_millis(700));
+            assert_eq!(
+                runtime.video_layers[0].active_clip_slot_id,
+                Some(target),
+                "crossfade completes onto the requested slot"
+            );
+            assert_monitor_projection_valid(&runtime);
+        }
+        assert_eq!(runtime.video_snapshot().layers[0].media_asset_id, Some(11));
+    }
+
+    #[test]
     fn video_clip_slot_default_mutations_preserve_nondefault_rendered_take() {
         let mut runtime = clip_slot_engine_test_runtime();
         runtime
