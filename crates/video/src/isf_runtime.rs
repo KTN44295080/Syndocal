@@ -635,6 +635,7 @@ pub fn isf_effect_from_prepared(
                 maximum: control.maximum,
                 labels: control.labels.clone(),
                 values: control.values.clone(),
+                tempo_sync: None,
             })
             .collect(),
         stack: Vec::new(),
