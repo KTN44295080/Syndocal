@@ -41,7 +41,7 @@ export function LiveVideoOutputHealthReadout(props: {
         class="liveVideoPerformanceBudget"
         classList={{ warning: performance().warning !== null }}
         data-output-performance-budget
-        title="Prepare p95 measures frame preparation, including decode. Display GPU composition and presentation, output transport, and pacing sleep are excluded. Budget is one frame at the target rate."
+        title="Prepare p95 is the 95th percentile of up to 600 recent successful frame preparations, including decode. Display GPU composition and presentation, output transport, and pacing sleep are excluded. Budget is one frame at the target rate."
       >
         <span>Prepare p95</span>
         <span data-no-localize>{performance().renderP95Ms?.toFixed(1) ?? "—"} / {performance().budgetMs?.toFixed(1) ?? "—"} ms</span>

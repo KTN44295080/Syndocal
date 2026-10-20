@@ -14,8 +14,10 @@ export function createLiveVideoOutputHealthController(options: {
   let disposed = false;
   let inFlight = false;
   let timer: number | null = null;
+  let expiryTimer: number | null = null;
   const recentMissed = createRecentMissedTracker();
   const clearTimer = () => { if (timer !== null) window.clearTimeout(timer); timer = null; };
+  const clearExpiry = () => { if (expiryTimer !== null) window.clearTimeout(expiryTimer); expiryTimer = null; };
   const canRun = () => !disposed && options.backendAvailable() && !hidden();
   const schedule = (delay: number) => {
     clearTimer();
@@ -25,19 +27,30 @@ export function createLiveVideoOutputHealthController(options: {
     timer = null;
     if (inFlight || !canRun()) return;
     const requestGeneration = generation;
+    let expired = false;
     inFlight = true;
-    try {
-      const next = await options.invoke<LiveVideoOutputHealth[]>("get_live_video_output_health");
-      if (disposed || requestGeneration !== generation) return;
-      setOutputs(recentMissed(performance.now(), next));
-      setError(null);
-    } catch {
+    // A hung query must not leave old preparation numbers advertising headroom.
+    // Expire only the UI evidence; keep the request single-flight until it settles.
+    expiryTimer = window.setTimeout(() => {
+      expiryTimer = null;
+      expired = true;
       if (disposed || requestGeneration !== generation) return;
       setOutputs(recentMissed(performance.now(), []));
       setError("Output health unavailable");
+    }, 1_000);
+    try {
+      const next = await options.invoke<LiveVideoOutputHealth[]>("get_live_video_output_health");
+      if (expired || disposed || requestGeneration !== generation) return;
+      setOutputs(recentMissed(performance.now(), next));
+      setError(null);
+    } catch {
+      if (expired || disposed || requestGeneration !== generation) return;
+      setOutputs(recentMissed(performance.now(), []));
+      setError("Output health unavailable");
     } finally {
+      clearExpiry();
       inFlight = false;
-      schedule(requestGeneration === generation ? 1_000 : 0);
+      schedule(!expired && requestGeneration === generation ? 1_000 : 0);
     }
   };
   const visibility = () => setHidden(document.hidden);
@@ -45,12 +58,12 @@ export function createLiveVideoOutputHealthController(options: {
   createEffect(() => {
     options.backendAvailable(); hidden();
     generation += 1;
-    clearTimer();
-    if (!options.backendAvailable()) { setOutputs([]); setError(null); }
+    clearTimer(); clearExpiry();
+    if (!options.backendAvailable() || hidden()) { setOutputs([]); setError(null); }
     schedule(0);
   });
   onCleanup(() => {
-    disposed = true; generation += 1; clearTimer();
+    disposed = true; generation += 1; clearTimer(); clearExpiry();
     document.removeEventListener("visibilitychange", visibility);
   });
   return { outputs, error };

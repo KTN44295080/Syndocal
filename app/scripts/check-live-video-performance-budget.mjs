@@ -41,7 +41,13 @@ for (const renderSampleCount of [15.5, Infinity, NaN, -1]) {
 for (const renderTimeP95Ms of [undefined, NaN, Infinity, -1]) {
   assert.equal(assess({ ...output, renderTimeP95Ms }).renderP95Ms, null, "missing/invalid telemetry never becomes zero rendering time");
 }
-for (const lastFrameAgeMs of [null, NaN, -1]) assert.equal(assess({ ...output, lastFrameAgeMs }).renderP95Ms, null);
+for (const lastFrameAgeMs of [null, NaN, -1, Infinity, -Infinity]) {
+  const invalid = assess({ ...output, lastFrameAgeMs });
+  assert.equal(invalid.renderP95Ms, null);
+  assert.equal(invalid.warning, null, "invalid age cannot establish an observed stall");
+}
+assert.equal(assess({ ...output, lastFrameAgeMs: 1_000 }).renderP95Ms, 9.8, "freshness boundary is inclusive");
+assert.equal(assess({ ...output, lastFrameAgeMs: 1_000.001 }).warning, "Output stalled");
 for (const targetFps of [0, -60, NaN, Infinity, Number.MIN_VALUE]) assert.equal(assess({ ...output, targetFps }).budgetMs, null);
 assert.equal(assess({ ...output, targetFps: 30, renderTimeP95Ms: 20 }).warning, null, "budget follows configured cadence");
 assert.equal(assess({ ...output, renderTimeP95Ms: undefined, recentMissedFrames: 7 }).warning, "Output missing frames", "observed deficit does not depend on render telemetry");

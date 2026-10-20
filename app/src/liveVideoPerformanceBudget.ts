@@ -10,9 +10,10 @@ export function liveVideoPerformanceBudget(output: LiveVideoOutputHealth) {
     ? 1_000 / output.targetFps : null;
   const budgetMs = requestedBudgetMs !== null && Number.isFinite(requestedBudgetMs) && requestedBudgetMs > 0
     ? requestedBudgetMs : null;
-  const stale = output.lastFrameAgeMs !== null && output.lastFrameAgeMs > 1_000;
-  const fresh = output.lastFrameAgeMs !== null && Number.isFinite(output.lastFrameAgeMs)
-    && output.lastFrameAgeMs >= 0 && !stale;
+  const validAge = output.lastFrameAgeMs !== null && Number.isFinite(output.lastFrameAgeMs)
+    && output.lastFrameAgeMs >= 0;
+  const stale = validAge && output.lastFrameAgeMs! > 1_000;
+  const fresh = validAge && !stale;
   const measured = fresh && Number.isInteger(output.renderSampleCount)
     && (output.renderSampleCount ?? 0) >= performanceBudgetMinimumSamples
     && output.renderTimeP95Ms !== undefined && Number.isFinite(output.renderTimeP95Ms)
