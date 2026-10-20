@@ -26,8 +26,6 @@ import {
 } from "../controlMappingLearn";
 import { CueLiveModifierStrip } from "./CueLiveModifierStrip";
 import type { FullBankAuthoritySnapshot } from "../bankAuthority";
-import { confirmDialog } from "../inAppDialog";
-import { deleteTouchPageDialog, removeTouchControlDialog } from "../inAppDialogCopy";
 
 type TouchSurfaceMode = "edit" | "live";
 
@@ -218,7 +216,6 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
   const removePage = async () => {
     const page = activePage();
     if (!page || surface().pages.length <= 1) return;
-    if (!await confirmDialog(deleteTouchPageDialog(page.label))) return;
     const pages = surface().pages.filter((candidate) => candidate.id !== page.id);
     setSelectedPageId(pages[0]?.id ?? 1);
     setSelectedControlId(null);
@@ -227,7 +224,7 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
 
   const removeSelectedControl = async () => {
     const control = selectedControl();
-    if (!control || !await confirmDialog(removeTouchControlDialog(control.label))) return;
+    if (!control) return;
     updateActivePage((page) => ({
       ...page,
       controls: page.controls.filter((candidate) => candidate.id !== control.id),

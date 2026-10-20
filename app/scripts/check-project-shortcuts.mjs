@@ -609,7 +609,7 @@ for (const [workspace, mode, domDialogOpen, inAppDialogOpen, expectedCalls] of [
 const performDeskSource = await readFile(path.join(appRoot, "src", "components", "VideoPerformDesk.tsx"), "utf8");
 assert.match(performDeskSource, /event\.ctrlKey && event\.shiftKey && event\.code === "KeyB"[\s\S]{0,160}blackout\.click\(\)/, "Perform Ctrl+Shift+B activates the guarded Blackout key itself");
 assert.match(appSource, /setVideoBlackout: requestPerformVideoBlackout/, "the global V shortcut shares the guarded Perform request");
-assert.match(appSource, /const requestPerformVideoBlackout = async[\s\S]*?const drive = await readOutputDrive\(\);[\s\S]*?drive\.kind === "blocked"[\s\S]*?return;[\s\S]*?confirmDialog\(blackoutDialog\(enabled\)\)/, "Standby is explained before the confirmation can open");
+assert.match(appSource, /const requestPerformVideoBlackout = async[\s\S]*?const drive = await readOutputDrive\(\);[\s\S]*?drive\.kind === "blocked"[\s\S]*?return;[\s\S]*?return setVideoBlackout\(enabled\);/, "Standby is explained in-app; otherwise Blackout acts at once");
 assert.match(appSource, /checkOutputDrive: readOutputDrive/, "B / V / Ctrl+Shift+B all converge on the controller's output-authority check");
 
 console.log(`project/app shortcuts: ${matrixCases} matrix cases; App=30 reachable kinds; ProjectFile=3 reachable kinds; source manifest byte-exact`);

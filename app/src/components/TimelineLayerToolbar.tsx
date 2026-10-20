@@ -126,6 +126,10 @@ export function TimelineLayerToolbar(props: TimelineLayerToolbarProps) {
     const firstTarget = orderedLayers().find((candidate) =>
       candidate.id !== layer.id && candidate.kind === layer.kind && !candidate.locked);
     setReassignTargetLayerId(firstTarget?.id ?? null);
+    if (pendingRemoveEventCount() === 0) {
+      confirmRemoval();
+      return;
+    }
     if (!removeDialog?.open) removeDialog?.showModal();
   };
 

@@ -63,8 +63,6 @@ export function MappingGroupRibbon(props: MappingGroupRibbonProps) {
   const [creating, setCreating] = createSignal(false);
   const [createDraft, setCreateDraft] = createSignal("");
   const [contextMenu, setContextMenu] = createSignal<GroupContextMenu | null>(null);
-  const [deleteTargetId, setDeleteTargetId] = createSignal<string | null>(null);
-  let deleteDialog: HTMLDialogElement | undefined;
 
   const groupForId = (groupId: string) => props.groupRows.find((group) => group.groupId === groupId);
   const focusInput = (input: HTMLInputElement) => queueMicrotask(() => {
@@ -94,16 +92,10 @@ export function MappingGroupRibbon(props: MappingGroupRibbonProps) {
     setCreateDraft("");
     if (label) await props.onCreateGroup(label);
   };
+  // Delete acts at once; the status line offers Undo.
   const requestDelete = (groupId: string) => {
     setContextMenu(null);
-    setDeleteTargetId(groupId);
-    if (!deleteDialog?.open) deleteDialog?.showModal();
-  };
-  const confirmDelete = async () => {
-    const groupId = deleteTargetId();
-    deleteDialog?.close();
-    setDeleteTargetId(null);
-    if (groupId) await props.onDeleteGroup(groupId);
+    void props.onDeleteGroup(groupId);
   };
   const closeContextMenu = (event: PointerEvent) => {
     if ((event.target as Element | null)?.closest("[data-group-context-menu]")) return;
@@ -266,24 +258,6 @@ export function MappingGroupRibbon(props: MappingGroupRibbonProps) {
           );
         }}
       </Show>
-      <dialog
-        ref={deleteDialog}
-        class="mappingGroupDeleteDialog"
-        data-group-delete-dialog
-        aria-labelledby="group-delete-title"
-        onClose={() => setDeleteTargetId(null)}
-      >
-        <form method="dialog" onSubmit={(event) => event.preventDefault()}>
-          <h3 id="group-delete-title">Delete group?</h3>
-          <p>
-            Remove {groupForId(deleteTargetId() ?? "")?.label ?? "this group"} from all fixtures?
-          </p>
-          <div class="dialogActions">
-            <button type="button" onClick={() => deleteDialog?.close()}>Cancel</button>
-            <button type="button" class="danger" onClick={() => void confirmDelete()}>Delete</button>
-          </div>
-        </form>
-      </dialog>
     </div>
   );
 }

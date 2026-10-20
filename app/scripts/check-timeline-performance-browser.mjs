@@ -1564,26 +1564,10 @@ try {
     assert.equal(await evaluate(client, `(() => {
       const button = [...document.querySelectorAll('.timelineItemContextMenu button')]
         .find((candidate) => candidate.textContent?.trim() === 'Delete selected');
-      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
-      button.click();
-      return true;
-    })()`), true);
-    const deleteDialog = await waitFor(() => evaluate(client, `(() => {
-      const dialog = document.querySelector('[data-timeline-item-remove-dialog]');
-      if (!(dialog instanceof HTMLDialogElement) || !dialog.open) return null;
-      const rect = dialog.getBoundingClientRect();
-      const buttons = [...dialog.querySelectorAll('button')].filter((button) => button.getBoundingClientRect().height > 0);
-      return {
-        rect: [rect.width, rect.height],
-        text: dialog.textContent ?? '',
-        short: buttons.filter((button) => button.getBoundingClientRect().height < 43.5).length,
-      };
-    })()`), "linked delete confirmation");
-    assert.ok(deleteDialog.rect[0] > 0 && deleteDialog.rect[1] > 0, "linked delete alert dialog is visibly mounted");
-    assert.match(deleteDialog.text, /2\s+selected Timeline item\(s\)/);
-    assert.match(deleteDialog.text, /Linked group members/);
-    assert.equal(deleteDialog.short, 0, "linked delete alert dialog preserves 44px actions");
-    await evaluate(client, "document.querySelector('[data-timeline-item-remove-dialog]')?.close()");
+      // Delete acts at once (Undo restores it); keep the selection for the steps below.
+      return button instanceof HTMLButtonElement && !button.disabled;
+    })()`), true, "linked selection can be deleted");
+    await evaluate(client, `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
     if (viewport.width === 1280) {
       await evaluate(client, `(() => {
         window.__syndocalTimelineLaneMoveFixtureCalls = [];

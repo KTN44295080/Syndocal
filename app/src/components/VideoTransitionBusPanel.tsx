@@ -9,8 +9,6 @@ import type {
   VideoLayerTransitionRuntimeSnapshot,
   VideoLayerTransitionTarget,
 } from "../types";
-import { confirmDialog } from "../inAppDialog";
-import { removeTransitionBusDialog } from "../inAppDialogCopy";
 
 interface VideoTransitionBusPanelProps {
   catalog: VideoEffectCatalog;
@@ -129,7 +127,6 @@ export function VideoTransitionBusPanel(props: VideoTransitionBusPanelProps) {
   };
   const removeBus = async (busId: number, busLabel: string) => {
     if (activeFor(busId)) return;
-    if (!await confirmDialog(removeTransitionBusDialog(busLabel))) return;
     return props.onApplyCatalog({
       ...props.catalog,
       transition_buses: props.catalog.transition_buses.filter((entry) => entry.id !== busId),

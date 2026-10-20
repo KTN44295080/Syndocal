@@ -97,8 +97,6 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
     left: number;
     top: number;
   } | null>(null);
-  const [bankDeleteRequest, setBankDeleteRequest] = createSignal<CueListSummary | null>(null);
-  const [sceneDeleteRequest, setSceneDeleteRequest] = createSignal<CueSummary | null>(null);
   const [bankDragId, setBankDragId] = createSignal<number | null>(null);
   const [bankDropTargetId, setBankDropTargetId] = createSignal<number | null>(null);
   const [dropTargetColumnId, setDropTargetColumnId] = createSignal<string | null>(null);
@@ -112,8 +110,6 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
   let bankContextMenuInvoker: HTMLElement | null = null;
   let sceneContextMenuElement: HTMLDivElement | undefined;
   let sceneContextMenuInvoker: HTMLElement | null = null;
-  let bankDeleteDialogElement: HTMLDialogElement | undefined;
-  let sceneDeleteDialogElement: HTMLDialogElement | undefined;
   let preferredBankId: string | null = null;
   let dragPointer: {
     pointerId: number;
@@ -190,8 +186,6 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
     // would discard both the draft and the actionable inline failure.
     setBankContextMenu(null);
     setSceneContextMenu(null);
-    setBankDeleteRequest(null);
-    setSceneDeleteRequest(null);
     setBankDragId(null);
     setBankDropTargetId(null);
     setDropTargetColumnId(null);
@@ -298,27 +292,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
     closeContextMenu();
     if (!bank || cueLists().length <= 1 || !props.onRemoveCueList) return;
     selectCueList(bank.id);
-    setBankDeleteRequest(bank);
-  };
-  const confirmContextDelete = async () => {
-    const target = bankDeleteRequest();
-    if (!target || !props.onRemoveCueList) return;
-    const result = await props.onRemoveCueList(target.id, true);
-    // Keep the confirmation open when the authoritative backend rejects or
-    // loses the mutation. Closing here would falsely imply that the Bank and
-    // its scenes were deleted and would also discard the user's retry path.
-    if (result === false) {
-      queueMicrotask(() => bankDeleteDialogElement
-        ?.querySelector<HTMLButtonElement>("[data-scene-matrix-delete-confirm]")
-        ?.focus());
-      return;
-    }
-    setBankDeleteRequest(null);
-    bankDeleteDialogElement?.close();
-  };
-  const cancelContextDelete = () => {
-    setBankDeleteRequest(null);
-    bankDeleteDialogElement?.close();
+    void props.onRemoveCueList(bank.id, true);
   };
   const requestSceneContextMenu = (event: MouseEvent | KeyboardEvent, cue: CueSummary) => {
     event.preventDefault();
@@ -379,24 +353,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
   const requestContextSceneDelete = () => {
     const cue = sceneContextCue();
     closeSceneContextMenu(false);
-    if (cue && props.onRemoveCue) setSceneDeleteRequest(cue);
-  };
-  const confirmContextSceneDelete = async () => {
-    const cue = sceneDeleteRequest();
-    if (!cue || !props.onRemoveCue) return;
-    const result = await props.onRemoveCue(cue.id, true);
-    if (result === false) {
-      queueMicrotask(() => sceneDeleteDialogElement
-        ?.querySelector<HTMLButtonElement>("[data-scene-matrix-scene-delete-confirm]")
-        ?.focus());
-      return;
-    }
-    setSceneDeleteRequest(null);
-    sceneDeleteDialogElement?.close();
-  };
-  const cancelContextSceneDelete = () => {
-    setSceneDeleteRequest(null);
-    sceneDeleteDialogElement?.close();
+    if (cue && props.onRemoveCue) void props.onRemoveCue(cue.id, true);
   };
   const handleContextMenuKeyDown = (
     event: KeyboardEvent & { currentTarget: HTMLDivElement },
@@ -1428,123 +1385,6 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
           </For>
         </div>
       </div>
-      <Show when={bankDeleteRequest()}>
-        {(request) => (
-          <dialog
-            ref={(dialog) => {
-              bankDeleteDialogElement = dialog;
-              queueMicrotask(() => {
-                if (!dialog.open) dialog.showModal();
-                dialog.querySelector<HTMLButtonElement>("[data-scene-matrix-delete-cancel]")?.focus();
-              });
-            }}
-            class="protectedCloseDialog"
-            data-scene-matrix-delete-dialog
-            role="alertdialog"
-            aria-labelledby="scene-matrix-delete-title"
-            aria-describedby="scene-matrix-delete-detail"
-            onCancel={(event) => {
-              event.preventDefault();
-              cancelContextDelete();
-            }}
-          >
-            <section class="protectedCloseFrame">
-              <header>
-                <span>REMOVE BANK</span>
-                <strong data-no-localize>{request().label}</strong>
-              </header>
-              <div class="protectedCloseBody">
-                <div class="protectedCloseMark" aria-hidden="true">!</div>
-                <div>
-                  <h2 id="scene-matrix-delete-title" class="textBalance">Delete this bank?</h2>
-                  <p id="scene-matrix-delete-detail" class="textPretty">
-                    <strong data-scene-matrix-delete-scene-count>
-                      {stableCues.filter((cue) => cue.cue_list_id === request().id).length} scenes
-                    </strong>{" "}
-                    in {request().label} will be deleted.
-                  </p>
-                </div>
-              </div>
-              <div class="protectedCloseActions">
-                <button type="button" data-scene-matrix-delete-cancel onClick={cancelContextDelete}>
-                  Cancel
-                </button>
-                <button type="button" class="danger" data-scene-matrix-delete-confirm onClick={() => void confirmContextDelete()}>
-                  Delete bank
-                </button>
-              </div>
-            </section>
-          </dialog>
-        )}
-      </Show>
-      <Show when={sceneDeleteRequest()}>
-        {(request) => {
-          const impact = () => props.cueRemovalImpact?.(request().id) ?? {
-            linkedPlacements: 0,
-            incomingJumps: 0,
-          };
-          return (
-            <dialog
-              ref={(dialog) => {
-                sceneDeleteDialogElement = dialog;
-                queueMicrotask(() => {
-                  if (!dialog.open) dialog.showModal();
-                  dialog.querySelector<HTMLButtonElement>("[data-scene-matrix-scene-delete-cancel]")?.focus();
-                });
-              }}
-              class="protectedCloseDialog"
-              data-scene-matrix-scene-delete-dialog
-              role="alertdialog"
-              aria-labelledby="scene-matrix-scene-delete-title"
-              aria-describedby="scene-matrix-scene-delete-detail"
-              onCancel={(event) => {
-                event.preventDefault();
-                cancelContextSceneDelete();
-              }}
-            >
-              <section class="protectedCloseFrame">
-                <header>
-                  <span>REMOVE SCENE</span>
-                  <strong data-no-localize>{request().label}</strong>
-                </header>
-                <div class="protectedCloseBody">
-                  <div class="protectedCloseMark" aria-hidden="true">!</div>
-                  <div>
-                    <h2 id="scene-matrix-scene-delete-title" class="textBalance">Delete this scene?</h2>
-                    <p id="scene-matrix-scene-delete-detail" class="textPretty">
-                      <strong data-scene-matrix-scene-delete-placement-count>
-                        {impact().linkedPlacements} Timeline placement{impact().linkedPlacements === 1 ? "" : "s"}
-                      </strong>{" "}
-                      and{" "}
-                      <strong data-scene-matrix-scene-delete-jump-count>
-                        {impact().incomingJumps} incoming jump{impact().incomingJumps === 1 ? "" : "s"}
-                      </strong>{" "}
-                      reference this scene.
-                    </p>
-                  </div>
-                </div>
-                <div class="protectedCloseActions">
-                  <button
-                    type="button"
-                    data-scene-matrix-scene-delete-cancel
-                    onClick={cancelContextSceneDelete}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    class="danger"
-                    data-scene-matrix-scene-delete-confirm
-                    onClick={() => void confirmContextSceneDelete()}
-                  >
-                    Delete scene
-                  </button>
-                </div>
-              </section>
-            </dialog>
-          );
-        }}
-      </Show>
     </section>
   );
 }
