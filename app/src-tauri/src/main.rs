@@ -118163,19 +118163,14 @@ f 1 2 3
         let frame = renderer
             .render_output_preview(&snapshot.video, 1, 64, 36)
             .expect("sample output should render through the native-output reference boundary");
+        // The sample's only layer is an NDI source with no sender here. A
+        // no-signal NDI input renders transparent, never the debug placeholder.
         assert!(
             frame
                 .data
                 .chunks_exact(4)
-                .any(|pixel| pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0),
-            "sample output should contain non-black video pixels"
-        );
-        assert!(
-            frame
-                .data
-                .chunks_exact(4)
-                .any(|pixel| pixel[0] != 255 || pixel[1] != 255 || pixel[2] != 255),
-            "sample output should not be a solid white frame"
+                .all(|pixel| pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0),
+            "no-signal NDI sample output should stay black instead of a placeholder"
         );
     }
 
