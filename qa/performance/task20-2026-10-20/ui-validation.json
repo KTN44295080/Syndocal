@@ -1,0 +1,901 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-20T09:46:54.513499+00:00",
+  "review": "Main-checkout agent visually inspected all nine images. These are post-observation UI/native-image checks, not timed FPS samples or physical scanout proof.",
+  "reviewedImageManifestSha256": "ac9423cec518ed2be76bc52fabac894a9b4a3b082466229cd0152aa64a0e6e0d",
+  "cases": [
+    {
+      "tag": "h264-1080p30-3l-display-0fx-normal",
+      "executableSha256": "a1e0ae6519bb3558d2b473fc9d68b9a2487ab6ac55ec8e5bbacf1bb375ef869d",
+      "locales": [
+        {
+          "locale": "en",
+          "text": "Display #1\nOutput\n60.0fps\nMissed (10 s)\n0\nPrepare p95\n2.0 / 16.7 ms",
+          "viewport": {
+            "width": 1280,
+            "height": 752
+          },
+          "bounds": {
+            "x": 488.046875,
+            "y": 507,
+            "width": 256.796875,
+            "height": 37
+          },
+          "leaves": [
+            {
+              "text": "Display #1",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 488.046875,
+                "y": 507,
+                "width": 64.328125,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "Output",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 556.375,
+                "y": 507,
+                "width": 44.125,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "60.0fps",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 604.5,
+                "y": 507,
+                "width": 44.234375,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "Missed (10 s)",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 652.734375,
+                "y": 507,
+                "width": 80.5625,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "0",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 737.296875,
+                "y": 507,
+                "width": 7.546875,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "Prepare p95",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 488.046875,
+                "y": 525.5,
+                "width": 74.734375,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "2.0 / 16.7 ms",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 566.78125,
+                "y": 525.5,
+                "width": 78.7734375,
+                "height": 18.5
+              }
+            }
+          ],
+          "allLeavesWithinReadout": true,
+          "screenshot": {
+            "name": "after-h264-1080p30-3l-display-0fx-normal-en.png",
+            "bytes": 363872,
+            "width": 2560,
+            "height": 1504,
+            "sha256": "88686209298cc7706c890bb358e4e4f9b548b269dacf52d7cb6338eb558bd6a9",
+            "pngChunks": [
+              "IHDR",
+              "iCCP",
+              "IDAT",
+              "IEND"
+            ]
+          }
+        },
+        {
+          "locale": "ja",
+          "text": "Display #1\n出力\n60.0fps\n直近10秒の欠落\n0\nフレーム準備 p95\n1.8 / 16.7 ms",
+          "viewport": {
+            "width": 1280,
+            "height": 752
+          },
+          "bounds": {
+            "x": 488.2109375,
+            "y": 507,
+            "width": 256.6328125,
+            "height": 37
+          },
+          "leaves": [
+            {
+              "text": "Display #1",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 488.2109375,
+                "y": 507,
+                "width": 64.328125,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "出力",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 556.5390625,
+                "y": 507,
+                "width": 28,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "60.0fps",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 588.5390625,
+                "y": 507,
+                "width": 44.234375,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "直近10秒の欠落",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 636.7734375,
+                "y": 507,
+                "width": 96.5234375,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "0",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 737.296875,
+                "y": 507,
+                "width": 7.546875,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "フレーム準備 p95",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 488.2109375,
+                "y": 525.5,
+                "width": 94.65625,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "1.8 / 16.7 ms",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 586.8671875,
+                "y": 525.5,
+                "width": 78.7734375,
+                "height": 18.5
+              }
+            }
+          ],
+          "allLeavesWithinReadout": true,
+          "screenshot": {
+            "name": "after-h264-1080p30-3l-display-0fx-normal-ja.png",
+            "bytes": 374973,
+            "width": 2560,
+            "height": 1504,
+            "sha256": "9567d2642384bb8823908cee5c9588669911de86cc544144b1e66ecae57ed1fe",
+            "pngChunks": [
+              "IHDR",
+              "iCCP",
+              "IDAT",
+              "IEND"
+            ]
+          }
+        }
+      ],
+      "nativeDisplay": {
+        "name": "after-h264-1080p30-3l-display-0fx-normal-native-display.png",
+        "bytes": 653105,
+        "width": 1920,
+        "height": 1080,
+        "sha256": "7ade27396dd5e38fb0245cde47917dbfce1876a8a5842b51a9303f8382c8bac2",
+        "pngChunks": [
+          "IHDR",
+          "sRGB",
+          "gAMA",
+          "pHYs",
+          "IDAT",
+          "IEND"
+        ],
+        "primaryOnly": true,
+        "fullyVisibleClient": true,
+        "afterMeasurement": true,
+        "nonBlackSampleFraction": 0.9975490196078431
+      }
+    },
+    {
+      "tag": "h264-1080p30-3l-spout-0fx-normal",
+      "executableSha256": "a1e0ae6519bb3558d2b473fc9d68b9a2487ab6ac55ec8e5bbacf1bb375ef869d",
+      "locales": [
+        {
+          "locale": "en",
+          "text": "Display #1\nOutput\n59.9fps\nMissed (10 s)\n1\nPrepare p95\n1.4 / 16.7 ms\nSpout #2\nOutput\n59.9fps\nMissed (10 s)\n1\nPrepare p95\n9.4 / 16.7 ms",
+          "viewport": {
+            "width": 1280,
+            "height": 752
+          },
+          "bounds": {
+            "x": 231.3828125,
+            "y": 507,
+            "width": 513.4609375,
+            "height": 37
+          },
+          "leaves": [
+            {
+              "text": "Display #1",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 231.3828125,
+                "y": 507,
+                "width": 64.328125,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "Output",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 299.7109375,
+                "y": 507,
+                "width": 44.125,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "59.9fps",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 347.8359375,
+                "y": 507,
+                "width": 44.234375,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "Missed (10 s)",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 396.0703125,
+                "y": 507,
+                "width": 80.5625,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "1",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 480.6328125,
+                "y": 507,
+                "width": 7.546875,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "Prepare p95",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 231.3828125,
+                "y": 525.5,
+                "width": 74.734375,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "1.4 / 16.7 ms",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 310.1171875,
+                "y": 525.5,
+                "width": 78.7734375,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "Spout #2",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 496.1796875,
+                "y": 507,
+                "width": 56.1953125,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "Output",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 556.375,
+                "y": 507,
+                "width": 44.125,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "59.9fps",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 604.5,
+                "y": 507,
+                "width": 44.234375,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "Missed (10 s)",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 652.734375,
+                "y": 507,
+                "width": 80.5625,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "1",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 737.296875,
+                "y": 507,
+                "width": 7.546875,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "Prepare p95",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 496.1796875,
+                "y": 525.5,
+                "width": 74.734375,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "9.4 / 16.7 ms",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 574.9140625,
+                "y": 525.5,
+                "width": 78.7734375,
+                "height": 18.5
+              }
+            }
+          ],
+          "allLeavesWithinReadout": true,
+          "screenshot": {
+            "name": "after-h264-1080p30-3l-spout-0fx-normal-en.png",
+            "bytes": 354566,
+            "width": 2560,
+            "height": 1504,
+            "sha256": "fa5cfabfd709d7b2f0272cb17476f0ee6de31aa7c9928002a9032c2ca1995e64",
+            "pngChunks": [
+              "IHDR",
+              "iCCP",
+              "IDAT",
+              "IEND"
+            ]
+          }
+        },
+        {
+          "locale": "ja",
+          "text": "Display #1\n出力\n59.9fps\n直近10秒の欠落\n1\nフレーム準備 p95\n1.4 / 16.7 ms\nSpout #2\n出力\n59.9fps\n直近10秒の欠落\n1\nフレーム準備 p95\n9.2 / 16.7 ms",
+          "viewport": {
+            "width": 1280,
+            "height": 752
+          },
+          "bounds": {
+            "x": 231.7109375,
+            "y": 507,
+            "width": 513.1328125,
+            "height": 37
+          },
+          "leaves": [
+            {
+              "text": "Display #1",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 231.7109375,
+                "y": 507,
+                "width": 64.328125,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "出力",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 300.0390625,
+                "y": 507,
+                "width": 28,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "59.9fps",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 332.0390625,
+                "y": 507,
+                "width": 44.234375,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "直近10秒の欠落",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 380.2734375,
+                "y": 507,
+                "width": 96.5234375,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "1",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 480.796875,
+                "y": 507,
+                "width": 7.546875,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "フレーム準備 p95",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 231.7109375,
+                "y": 525.5,
+                "width": 94.65625,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "1.4 / 16.7 ms",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 330.3671875,
+                "y": 525.5,
+                "width": 78.7734375,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "Spout #2",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 496.34375,
+                "y": 507,
+                "width": 56.1953125,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "出力",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 556.5390625,
+                "y": 507,
+                "width": 28,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "59.9fps",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 588.5390625,
+                "y": 507,
+                "width": 44.234375,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "直近10秒の欠落",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 636.7734375,
+                "y": 507,
+                "width": 96.5234375,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "1",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 737.296875,
+                "y": 507,
+                "width": 7.546875,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "フレーム準備 p95",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 496.34375,
+                "y": 525.5,
+                "width": 94.65625,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "9.2 / 16.7 ms",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 595,
+                "y": 525.5,
+                "width": 78.7734375,
+                "height": 18.5
+              }
+            }
+          ],
+          "allLeavesWithinReadout": true,
+          "screenshot": {
+            "name": "after-h264-1080p30-3l-spout-0fx-normal-ja.png",
+            "bytes": 391613,
+            "width": 2560,
+            "height": 1504,
+            "sha256": "4aa5557b8d7efafa0bcefb24f91b8551a18ea37f88a89e2fea71d54e6637ecdd",
+            "pngChunks": [
+              "IHDR",
+              "iCCP",
+              "IDAT",
+              "IEND"
+            ]
+          }
+        }
+      ],
+      "nativeDisplay": {
+        "name": "after-h264-1080p30-3l-spout-0fx-normal-native-display.png",
+        "bytes": 592862,
+        "width": 1920,
+        "height": 1080,
+        "sha256": "5902a67341aa99486f8626c2d9419c07aee9ce3666a136f59a04c57c2424f04b",
+        "pngChunks": [
+          "IHDR",
+          "sRGB",
+          "gAMA",
+          "pHYs",
+          "IDAT",
+          "IEND"
+        ],
+        "primaryOnly": true,
+        "fullyVisibleClient": true,
+        "afterMeasurement": true,
+        "nonBlackSampleFraction": 0.9985294117647059
+      }
+    },
+    {
+      "tag": "h264-1080p30-3l-display-3fx-normal",
+      "executableSha256": "a1e0ae6519bb3558d2b473fc9d68b9a2487ab6ac55ec8e5bbacf1bb375ef869d",
+      "locales": [
+        {
+          "locale": "en",
+          "text": "Display #1\nOutput\n5.3fps\nMissed (10 s)\n552\nPrepare p95\n412.1 / 16.7 ms\nFrames missed",
+          "viewport": {
+            "width": 1280,
+            "height": 752
+          },
+          "bounds": {
+            "x": 477.359375,
+            "y": 507,
+            "width": 267.484375,
+            "height": 37
+          },
+          "leaves": [
+            {
+              "text": "Display #1",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 477.359375,
+                "y": 507,
+                "width": 64.328125,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "Output",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 545.6875,
+                "y": 507,
+                "width": 44.125,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "5.3fps",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 593.8125,
+                "y": 507,
+                "width": 36.6875,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "Missed (10 s)",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 634.5,
+                "y": 507,
+                "width": 80.5625,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "552",
+              "fontPx": 14,
+              "color": "rgb(255, 180, 0)",
+              "bounds": {
+                "x": 719.0625,
+                "y": 507,
+                "width": 24.1640625,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "Prepare p95",
+              "fontPx": 14,
+              "color": "rgb(255, 180, 0)",
+              "bounds": {
+                "x": 477.359375,
+                "y": 525.5,
+                "width": 74.734375,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "412.1 / 16.7 ms",
+              "fontPx": 14,
+              "color": "rgb(255, 180, 0)",
+              "bounds": {
+                "x": 556.09375,
+                "y": 525.5,
+                "width": 93.8671875,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "Frames missed",
+              "fontPx": 14,
+              "color": "rgb(255, 180, 0)",
+              "bounds": {
+                "x": 653.9609375,
+                "y": 525.5,
+                "width": 90.8828125,
+                "height": 18.5
+              }
+            }
+          ],
+          "allLeavesWithinReadout": true,
+          "screenshot": {
+            "name": "after-h264-1080p30-3l-display-3fx-normal-en.png",
+            "bytes": 320921,
+            "width": 2560,
+            "height": 1504,
+            "sha256": "db87d71cdf4db9759f7f5f91e9f392b96788b25f50dd00bc3d7b63485be4ba37",
+            "pngChunks": [
+              "IHDR",
+              "iCCP",
+              "IDAT",
+              "IEND"
+            ]
+          }
+        },
+        {
+          "locale": "ja",
+          "text": "Display #1\n出力\n5.3fps\n直近10秒の欠落\n560\nフレーム準備 p95\n412.1 / 16.7 ms\nフレーム欠落",
+          "viewport": {
+            "width": 1280,
+            "height": 752
+          },
+          "bounds": {
+            "x": 479.140625,
+            "y": 507,
+            "width": 265.703125,
+            "height": 37
+          },
+          "leaves": [
+            {
+              "text": "Display #1",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 479.140625,
+                "y": 507,
+                "width": 64.328125,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "出力",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 547.46875,
+                "y": 507,
+                "width": 28,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "5.3fps",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 579.46875,
+                "y": 507,
+                "width": 36.6875,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "直近10秒の欠落",
+              "fontPx": 14,
+              "color": "rgb(245, 247, 249)",
+              "bounds": {
+                "x": 620.15625,
+                "y": 507,
+                "width": 96.5234375,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "560",
+              "fontPx": 14,
+              "color": "rgb(255, 180, 0)",
+              "bounds": {
+                "x": 720.6796875,
+                "y": 507,
+                "width": 24.1640625,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "フレーム準備 p95",
+              "fontPx": 14,
+              "color": "rgb(255, 180, 0)",
+              "bounds": {
+                "x": 479.140625,
+                "y": 525.5,
+                "width": 94.65625,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "412.1 / 16.7 ms",
+              "fontPx": 14,
+              "color": "rgb(255, 180, 0)",
+              "bounds": {
+                "x": 577.796875,
+                "y": 525.5,
+                "width": 93.8671875,
+                "height": 18.5
+              }
+            },
+            {
+              "text": "フレーム欠落",
+              "fontPx": 14,
+              "color": "rgb(255, 180, 0)",
+              "bounds": {
+                "x": 675.6640625,
+                "y": 525.5,
+                "width": 67.4921875,
+                "height": 18.5
+              }
+            }
+          ],
+          "allLeavesWithinReadout": true,
+          "screenshot": {
+            "name": "after-h264-1080p30-3l-display-3fx-normal-ja.png",
+            "bytes": 344591,
+            "width": 2560,
+            "height": 1504,
+            "sha256": "2c1b7c678782846b2b414cbce053e87ae0fa221c788643d75d5d1d62c58e683c",
+            "pngChunks": [
+              "IHDR",
+              "iCCP",
+              "IDAT",
+              "IEND"
+            ]
+          }
+        }
+      ],
+      "nativeDisplay": {
+        "name": "after-h264-1080p30-3l-display-3fx-normal-native-display.png",
+        "bytes": 599354,
+        "width": 1920,
+        "height": 1080,
+        "sha256": "4a4784fae807a85bc2b09ad7969f15349eb5de7c9c1cb491cfdace33f667988b",
+        "pngChunks": [
+          "IHDR",
+          "sRGB",
+          "gAMA",
+          "pHYs",
+          "IDAT",
+          "IEND"
+        ],
+        "primaryOnly": true,
+        "fullyVisibleClient": true,
+        "afterMeasurement": true,
+        "nonBlackSampleFraction": 0.9995098039215686
+      }
+    }
+  ]
+}

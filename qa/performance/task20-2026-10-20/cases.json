@@ -1,0 +1,626 @@
+[
+  {
+    "tag": "h264-1080p30-1l-display-0fx-normal",
+    "layers": 1,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-2160p30-1l-display-0fx-normal",
+    "layers": 1,
+    "source": "h264_2160p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "hap-1080p30-1l-display-0fx-normal",
+    "layers": 1,
+    "source": "hap_1080p30.mov",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "dxv-1080p30-1l-display-0fx-normal",
+    "layers": 1,
+    "source": "dxv_1080p30.mov",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-3l-display-0fx-normal",
+    "layers": 3,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-2160p30-3l-display-0fx-normal",
+    "layers": 3,
+    "source": "h264_2160p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "hap-1080p30-3l-display-0fx-normal",
+    "layers": 3,
+    "source": "hap_1080p30.mov",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "dxv-1080p30-3l-display-0fx-normal",
+    "layers": 3,
+    "source": "dxv_1080p30.mov",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-6l-display-0fx-normal",
+    "layers": 6,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-2160p30-6l-display-0fx-normal",
+    "layers": 6,
+    "source": "h264_2160p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "hap-1080p30-6l-display-0fx-normal",
+    "layers": 6,
+    "source": "hap_1080p30.mov",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "dxv-1080p30-6l-display-0fx-normal",
+    "layers": 6,
+    "source": "dxv_1080p30.mov",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-8l-display-0fx-normal",
+    "layers": 8,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-2160p30-8l-display-0fx-normal",
+    "layers": 8,
+    "source": "h264_2160p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "hap-1080p30-8l-display-0fx-normal",
+    "layers": 8,
+    "source": "hap_1080p30.mov",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "dxv-1080p30-8l-display-0fx-normal",
+    "layers": 8,
+    "source": "dxv_1080p30.mov",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-12l-display-0fx-normal",
+    "layers": 12,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-2160p30-12l-display-0fx-normal",
+    "layers": 12,
+    "source": "h264_2160p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "hap-1080p30-12l-display-0fx-normal",
+    "layers": 12,
+    "source": "hap_1080p30.mov",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "dxv-1080p30-12l-display-0fx-normal",
+    "layers": 12,
+    "source": "dxv_1080p30.mov",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-16l-display-0fx-normal",
+    "layers": 16,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-2160p30-16l-display-0fx-normal",
+    "layers": 16,
+    "source": "h264_2160p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "hap-1080p30-16l-display-0fx-normal",
+    "layers": 16,
+    "source": "hap_1080p30.mov",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "dxv-1080p30-16l-display-0fx-normal",
+    "layers": 16,
+    "source": "dxv_1080p30.mov",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-1l-display4k-0fx-normal",
+    "layers": 1,
+    "source": "h264_1080p30.mp4",
+    "output": "display4k",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-1l-spout-0fx-normal",
+    "layers": 1,
+    "source": "h264_1080p30.mp4",
+    "output": "spout",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-1l-ndi-0fx-normal",
+    "layers": 1,
+    "source": "h264_1080p30.mp4",
+    "output": "ndi",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-3l-display4k-0fx-normal",
+    "layers": 3,
+    "source": "h264_1080p30.mp4",
+    "output": "display4k",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-3l-spout-0fx-normal",
+    "layers": 3,
+    "source": "h264_1080p30.mp4",
+    "output": "spout",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-3l-ndi-0fx-normal",
+    "layers": 3,
+    "source": "h264_1080p30.mp4",
+    "output": "ndi",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-6l-display4k-0fx-normal",
+    "layers": 6,
+    "source": "h264_1080p30.mp4",
+    "output": "display4k",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-6l-spout-0fx-normal",
+    "layers": 6,
+    "source": "h264_1080p30.mp4",
+    "output": "spout",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-6l-ndi-0fx-normal",
+    "layers": 6,
+    "source": "h264_1080p30.mp4",
+    "output": "ndi",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-8l-display4k-0fx-normal",
+    "layers": 8,
+    "source": "h264_1080p30.mp4",
+    "output": "display4k",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-8l-spout-0fx-normal",
+    "layers": 8,
+    "source": "h264_1080p30.mp4",
+    "output": "spout",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-8l-ndi-0fx-normal",
+    "layers": 8,
+    "source": "h264_1080p30.mp4",
+    "output": "ndi",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-12l-display4k-0fx-normal",
+    "layers": 12,
+    "source": "h264_1080p30.mp4",
+    "output": "display4k",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-12l-spout-0fx-normal",
+    "layers": 12,
+    "source": "h264_1080p30.mp4",
+    "output": "spout",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-12l-ndi-0fx-normal",
+    "layers": 12,
+    "source": "h264_1080p30.mp4",
+    "output": "ndi",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-16l-display4k-0fx-normal",
+    "layers": 16,
+    "source": "h264_1080p30.mp4",
+    "output": "display4k",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-16l-spout-0fx-normal",
+    "layers": 16,
+    "source": "h264_1080p30.mp4",
+    "output": "spout",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-16l-ndi-0fx-normal",
+    "layers": 16,
+    "source": "h264_1080p30.mp4",
+    "output": "ndi",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-1l-display-1fx-normal",
+    "layers": 1,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 1,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-1l-display-3fx-normal",
+    "layers": 1,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 3,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-3l-display-1fx-normal",
+    "layers": 3,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 1,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-3l-display-3fx-normal",
+    "layers": 3,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 3,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-6l-display-1fx-normal",
+    "layers": 6,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 1,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-6l-display-3fx-normal",
+    "layers": 6,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 3,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-8l-display-1fx-normal",
+    "layers": 8,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 1,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-8l-display-3fx-normal",
+    "layers": 8,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 3,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-12l-display-1fx-normal",
+    "layers": 12,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 1,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-12l-display-3fx-normal",
+    "layers": 12,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 3,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-16l-display-1fx-normal",
+    "layers": 16,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 1,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-16l-display-3fx-normal",
+    "layers": 16,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 3,
+    "blend": "Normal",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-3l-display-0fx-add",
+    "layers": 3,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Add",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-3l-display-0fx-multiply",
+    "layers": 3,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Multiply",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-3l-display-0fx-screen",
+    "layers": 3,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Screen",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-3l-display-0fx-overlay",
+    "layers": 3,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Overlay",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-3l-display-0fx-subtract",
+    "layers": 3,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Subtract",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-3l-display-0fx-difference",
+    "layers": 3,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Difference",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-3l-display-0fx-lighten",
+    "layers": 3,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Lighten",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-3l-display-0fx-darken",
+    "layers": 3,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Darken",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-3l-display-0fx-softlight",
+    "layers": 3,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "SoftLight",
+    "cpu": false
+  },
+  {
+    "tag": "h264-1080p30-3l-display-0fx-normal-cpu",
+    "layers": 3,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": true
+  },
+  {
+    "tag": "h264-1080p30-8l-display-0fx-normal-cpu",
+    "layers": 8,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": true
+  },
+  {
+    "tag": "h264-1080p30-16l-display-0fx-normal-cpu",
+    "layers": 16,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": true
+  },
+  {
+    "tag": "h264-1080p30-3l-display-groups",
+    "layers": 3,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false,
+    "groups": true
+  },
+  {
+    "tag": "h264-1080p30-8l-display-groups",
+    "layers": 8,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false,
+    "groups": true
+  },
+  {
+    "tag": "h264-1080p30-16l-display-groups",
+    "layers": 16,
+    "source": "h264_1080p30.mp4",
+    "output": "display",
+    "fx": 0,
+    "blend": "Normal",
+    "cpu": false,
+    "groups": true
+  }
+]

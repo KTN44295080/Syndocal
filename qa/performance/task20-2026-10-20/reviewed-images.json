@@ -1,0 +1,38 @@
+[
+  {
+    "name": "after-h264-1080p30-3l-display-0fx-normal-en.png",
+    "sha256": "88686209298cc7706c890bb358e4e4f9b548b269dacf52d7cb6338eb558bd6a9"
+  },
+  {
+    "name": "after-h264-1080p30-3l-display-0fx-normal-ja.png",
+    "sha256": "9567d2642384bb8823908cee5c9588669911de86cc544144b1e66ecae57ed1fe"
+  },
+  {
+    "name": "after-h264-1080p30-3l-display-0fx-normal-native-display.png",
+    "sha256": "7ade27396dd5e38fb0245cde47917dbfce1876a8a5842b51a9303f8382c8bac2"
+  },
+  {
+    "name": "after-h264-1080p30-3l-spout-0fx-normal-en.png",
+    "sha256": "fa5cfabfd709d7b2f0272cb17476f0ee6de31aa7c9928002a9032c2ca1995e64"
+  },
+  {
+    "name": "after-h264-1080p30-3l-spout-0fx-normal-ja.png",
+    "sha256": "4aa5557b8d7efafa0bcefb24f91b8551a18ea37f88a89e2fea71d54e6637ecdd"
+  },
+  {
+    "name": "after-h264-1080p30-3l-spout-0fx-normal-native-display.png",
+    "sha256": "5902a67341aa99486f8626c2d9419c07aee9ce3666a136f59a04c57c2424f04b"
+  },
+  {
+    "name": "after-h264-1080p30-3l-display-3fx-normal-en.png",
+    "sha256": "db87d71cdf4db9759f7f5f91e9f392b96788b25f50dd00bc3d7b63485be4ba37"
+  },
+  {
+    "name": "after-h264-1080p30-3l-display-3fx-normal-ja.png",
+    "sha256": "2c1b7c678782846b2b414cbce053e87ae0fa221c788643d75d5d1d62c58e683c"
+  },
+  {
+    "name": "after-h264-1080p30-3l-display-3fx-normal-native-display.png",
+    "sha256": "4a4784fae807a85bc2b09ad7969f15349eb5de7c9c1cb491cfdace33f667988b"
+  }
+]
