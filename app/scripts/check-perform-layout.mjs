@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer as createTcpServer } from "node:net";
+import { reserveBrowserCheckPort } from "./browser-check-ports.mjs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -232,20 +232,22 @@ const results = [];
 let currentCase = "startup";
 try {
   await mkdir(evidenceDir, { recursive: true });
-  const reservation = createTcpServer();
-  await new Promise((done, reject) => { reservation.once("error", reject); reservation.listen(0, "127.0.0.1", done); });
-  const vitePort = reservation.address().port;
-  await new Promise((done, reject) => reservation.close((error) => error ? reject(error) : done()));
+  const vitePort = await reserveBrowserCheckPort("SYNDOCAL_VIEWPORT_VITE_PORT");
   server = await createServer({ root: appRoot, cacheDir: resolve(evidenceDir, "vite-cache"), server: { host: "127.0.0.1", port: vitePort, strictPort: true }, clearScreen: false, plugins: [focusFixturePlugin] });
   await server.listen();
   await server.environments.client.depsOptimizer?.scanProcessing;
   await server.transformRequest("/src/App.tsx");
   const origin = server.resolvedUrls.local[0];
+  const port = await reserveBrowserCheckPort("SYNDOCAL_CDP_PORT");
   profile = await mkdtemp(join(tmpdir(), "syndocal-perform-check-"));
-  browser = spawn(browserPath, ["--headless=new", "--disable-gpu", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--no-first-run", "--no-default-browser-check", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
+  browser = spawn(browserPath, ["--headless=new", "--disable-gpu", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--no-first-run", "--no-default-browser-check", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
   browser.on("error", (error) => { console.error(error); process.exitCode = 1; });
-  const port = await waitFor(async () => Number((await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]), "owned browser debugger");
-  const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+  const targets = await waitFor(async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1000) });
+    if (!response.ok) return null;
+    const candidates = await response.json();
+    return candidates.some((target) => target.type === "page") ? candidates : null;
+  }, "owned browser debugger");
   let pageTarget = targets.find((target) => target.type === "page");
   cdp = new Cdp();
   await cdp.connect(pageTarget.webSocketDebuggerUrl);
@@ -907,11 +909,22 @@ try {
     await cdp.send("Browser.close").catch(() => {});
     cdp.socket.close();
   }
-  if (browser && browser.exitCode === null) {
-    try { await waitFor(() => browser.exitCode !== null || browser.signalCode !== null, "owned browser exit", 5_000); }
-    catch { browser.kill(); }
+  let browserExitError;
+  if (browser && browser.exitCode === null && browser.signalCode === null) {
+    const exited = () => browser.exitCode !== null || browser.signalCode !== null;
+    try {
+      await waitFor(exited, "owned browser exit", 5_000);
+    } catch {
+      try {
+        browser.kill();
+        await waitFor(exited, "owned browser exit after forced termination", 5_000);
+      } catch (error) {
+        browserExitError = error;
+      }
+    }
   }
-  if (server) await server.close();
+  await server?.close();
+  if (browserExitError) throw browserExitError;
   if (profile) {
     // Verify the final absolute target before recursively removing our profile.
     const profileTarget = resolve(profile);

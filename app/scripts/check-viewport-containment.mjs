@@ -3181,7 +3181,14 @@ async function measurePersistentBand(client, label) {
       visiblePersistentBandCount: visibleElements('.mappingPersistentWorkspaceBand').length,
       visiblePersistentGroupsCount: visibleElements('[data-persistent-band-part="groups"]').length,
       visiblePersistentStageCount: visibleElements('[data-persistent-band-part="stage"]').length,
-      visiblePersistentSelectionContextCount: visibleElements('[data-persistent-band-part="selections"], .mappingSetupContextContent').length,
+      visiblePersistentSelectionContextCount: visibleElements('[data-persistent-band-part="selections"]').length,
+      setupSelectionOwnerUnique: (() => {
+        const owners = visibleElements('[data-persistent-band-part="selections"]');
+        const contents = visibleElements('.mappingSetupContextContent');
+        return owners.length === 1 && contents.length === 1 &&
+          contents[0].closest('[data-persistent-band-part="selections"]') === owners[0] &&
+          owners[0].closest('[data-workspace-pane="lower-right"]') !== null;
+      })(),
       visiblePersistentContextCount: visibleElements('[data-persistent-band-part="context"]').length,
       visibleControlStageSelectionListCount: visibleElements('[data-control-stage-selection-list]').length,
       visibleWorkspaceSplitterCount: visibleElements('[data-workspace-splitter]').length,
@@ -3198,7 +3205,7 @@ async function measurePersistentBand(client, label) {
       persistentBandRects: {
         groups: measuredRect('[data-persistent-band-part="groups"]'),
         stage: measuredRect('[data-workspace-pane="lower-left"]'),
-        selections: measuredRect('[data-persistent-band-part="selections"], .mappingSetupContextContent'),
+        selections: measuredRect('[data-persistent-band-part="selections"]'),
         context: measuredRect('[data-workspace-pane="lower-right"]'),
       },
       workspacePaneRects: {
@@ -3293,7 +3300,7 @@ async function measureTimelinePaneExpansionState(client) {
     const liveMixerCenterSpread = liveMixerChildCenters.length > 0
       ? Math.max(...liveMixerChildCenters) - Math.min(...liveMixerChildCenters)
       : Number.POSITIVE_INFINITY;
-    const timelineFrame = [...document.querySelectorAll('.timelineShowSurface > .timelineOverviewFrame')].find(isVisible);
+    const timelineFrame = [...document.querySelectorAll('.timelineShowSurface .timelineEditorWithNavigator > .timelineOverviewFrame')].find(isVisible);
     const timelineFrameStyle = timelineFrame ? getComputedStyle(timelineFrame) : null;
     const timelineFaders = [...document.querySelectorAll('.controlContextPane > .faders')].find(isVisible);
     const timelineShowSurface = [...document.querySelectorAll('.timelineShowSurface')].find(isVisible);
@@ -3346,14 +3353,9 @@ async function measureTimelinePaneExpansionState(client) {
       ':scope > .topbarProject > strong',
       ':scope > .topbarProject > span',
       ':scope > .status',
-      ':scope > .status > .bpmReadout',
-      ':scope > .status > .bpmReadout > small',
-      ':scope > .status > .bpmReadout > strong',
-      ':scope > .status > .pill',
-      // .tickMetric / .outputMetric were consolidated into the .pill status
-      // indicator (its title now carries Engine tick/jitter/bytes + DMX
-      // success/output counts). The removed master cluster leaves 10
-      // topbar background drag surfaces.
+      ':scope > .status > .topbarTools > .topbarToolsPopover > section > .pill',
+      // Output status moved into Tools; BPM now opens an editor, so neither
+      // its root nor its descendants may initiate a window drag.
     ];
     const missingTopbarDragRegionSelectors = requiredTopbarDragRegionSelectors.filter((selector) => {
       const element = selector === ':scope' ? topbar : topbar?.querySelector(selector);
@@ -3384,7 +3386,7 @@ async function measureTimelinePaneExpansionState(client) {
       persistentBandRects: {
         groups: measuredRect('[data-persistent-band-part="groups"]'),
         stage: measuredRect('[data-workspace-pane="lower-left"]'),
-        selections: measuredRect('[data-persistent-band-part="selections"], .mappingSetupContextContent'),
+        selections: measuredRect('[data-persistent-band-part="selections"]'),
         context: measuredRect('[data-workspace-pane="lower-right"]'),
       },
       workspaceSplitterRects: {
@@ -3403,7 +3405,7 @@ async function measureTimelinePaneExpansionState(client) {
       timelinePaneExpanded: band?.classList.contains('timelinePaneExpanded') ?? false,
       timelinePaneExpandToggleVisible: isVisible(toggle),
       timelinePaneExpandToggleNamed: Boolean(toggle?.getAttribute('aria-label')),
-      timelineLaneFrameRect: measuredRect('.timelineShowSurface > .timelineOverviewFrame'),
+      timelineLaneFrameRect: measuredRect('.timelineShowSurface .timelineEditorWithNavigator > .timelineOverviewFrame'),
       timelineLaneScrollportRect: measuredRect('[data-timeline-layer-scrollport]'),
       timelinePanelRect: measuredRect('[data-timeline-arranger-upper] .timelinePanel'),
       timelineShowSurfaceRect: measuredRect('[data-timeline-arranger-upper] .timelineShowSurface'),
@@ -3473,9 +3475,10 @@ async function measureTimelinePaneExpansionState(client) {
           (topbar?.querySelectorAll('[data-tauri-drag-region]').length ?? 0),
         requiredTopbarDragRegionSurfaceCount: requiredTopbarDragRegionSelectors.length,
         missingTopbarDragRegionSelectors,
-        interactiveDragRegionCount: topbar?.querySelectorAll(
-          'button[data-tauri-drag-region], input[data-tauri-drag-region], select[data-tauri-drag-region], textarea[data-tauri-drag-region], label[data-tauri-drag-region], [role="menu"][data-tauri-drag-region], [role="menuitem"][data-tauri-drag-region], [role="dialog"][data-tauri-drag-region]'
-        ).length ?? 0,
+        interactiveDragRegionCount: [...(topbar?.querySelectorAll('[data-tauri-drag-region]') ?? [])]
+          .filter((element) => element.closest(
+            'button, input, select, textarea, label, summary, [role="menu"], [role="menuitem"], [role="dialog"], .topbarBpmControl'
+          )).length,
         windowControlsRect,
         windowControlCount: windowControlButtons.length,
         windowControlActions: windowControlButtons.map((button) => button.getAttribute('data-window-control')),
@@ -3718,9 +3721,8 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
       normalDensity.interactiveDragRegionCount === 0
     )],
     ['t25ETopbarEmptySurfaceMapIsComplete', () => Boolean(
-      // One background drag surface disappeared with the two removed header
-      // sliders: 10 required surfaces is the new exact contract.
-      normalDensity.requiredTopbarDragRegionSurfaceCount === 10 &&
+      // Six inert chrome surfaces plus the output status inside Tools.
+      normalDensity.requiredTopbarDragRegionSurfaceCount === 7 &&
       normalDensity.missingTopbarDragRegionSelectors?.length === 0
     )],
     ['t25EWindowControlsExistInRequiredOrder', () => Boolean(
@@ -4552,6 +4554,7 @@ async function measureStageSettingsState(client) {
       stageSubTabCount: setupModeLabels.filter((label) => label === 'Stage').length,
       setupModePatchActive: Boolean(document.querySelector('.layoutSetup.setupMode-patch')),
       setupModeIoActive: Boolean(document.querySelector('.layoutSetup.setupMode-io')),
+      setupModeAuthorityActive: Boolean(document.querySelector('.layoutSetup.setupMode-authority')),
       setupModeMappingActive: Boolean(document.querySelector('.layoutSetup.setupMode-mapping')),
       legacyExpansionMarkerCount: document.querySelectorAll(
         '.mappingWorkspaceExpanded, [data-mapping-workspace-expanded], [data-mapping-expanded-stage-config]'
@@ -4571,7 +4574,7 @@ async function measureStageSettingsState(client) {
       persistentBandRects: {
         groups: measuredRect('[data-persistent-band-part="groups"]'),
         stage: measuredRect('[data-workspace-pane="lower-left"]'),
-        selections: measuredRect('[data-persistent-band-part="selections"], .mappingSetupContextContent, [data-control-stage-selection-list]'),
+        selections: measuredRect('[data-persistent-band-part="selections"], [data-control-stage-selection-list]'),
         context: measuredRect('[data-workspace-pane="lower-right"]'),
       },
       horizontalSplitterRect: measuredRect('[data-workspace-splitter="upper-lower"]'),
@@ -4638,6 +4641,8 @@ async function runStageSettingsCheck(client, viewport) {
     )
   );
   const setupStates = [collapsed, opened, oldStageShortcut, video, io, restored, mappingLinkReturn];
+  const bandStates = [collapsed, opened, video, restored, mappingLinkReturn];
+  const fullPageStates = [oldStageShortcut, io];
   const stageSettingsConditions = [
     ["stageSetupAreaTabAbsent", () => collapsed.stageAreaTabCount === 0],
     ["stageSetupSubTabAbsent", () => collapsed.stageSubTabCount === 0],
@@ -4659,9 +4664,9 @@ async function runStageSettingsCheck(client, viewport) {
       Boolean(collapsed.persistentBandRects.selections && collapsed.persistentBandRects.context) &&
       collapsed.persistentBandRects.selections.x >= collapsed.persistentBandRects.context.x - 1],
     ["setupFixedBandRectsPresentAcrossSubtabs", () =>
-      [collapsed, opened, oldStageShortcut, video, io, restored, mappingLinkReturn].every(fixedPartsPresent)],
+      bandStates.every(fixedPartsPresent)],
     ["setupFixedBandRectsStableAcrossSubtabsWithinHalfPixel", () =>
-      [opened, oldStageShortcut, video, io, restored, mappingLinkReturn].every(fixedPartsStable)],
+      bandStates.every(fixedPartsStable)],
     ["selectionContextStaysContainedAcrossSubtabs", () =>
       [collapsed, opened, oldStageShortcut, video, io, restored].every((state) => {
         const selections = state.persistentBandRects.selections;
@@ -4677,10 +4682,15 @@ async function runStageSettingsCheck(client, viewport) {
         );
       })],
     ["setupKeepsBothFixedSplittersAcrossSubtabs", () =>
-      [collapsed, opened, oldStageShortcut, video, io, restored, mappingLinkReturn]
-        .every((state) => Boolean(state.horizontalSplitterRect && state.verticalSplitterRect))],
+      bandStates.every((state) => Boolean(state.horizontalSplitterRect && state.verticalSplitterRect))],
+    ["setupIoAndSecurityOwnTheFullWorkspace", () =>
+      io.setupModeIoActive && oldStageShortcut.setupModeAuthorityActive &&
+      fullPageStates.every((state) =>
+        Object.values(state.persistentBandRects).every((rect) => rect === null) &&
+        !state.horizontalSplitterRect && !state.verticalSplitterRect &&
+        state.disclosureCount === 0 && state.documentAndAppScrollZero)],
     ["removedStageShortcutCannotReachExpandedState", () =>
-      oldStageShortcut.legacyExpansionMarkerCount === 0 && fixedPartsPresent(oldStageShortcut)],
+      oldStageShortcut.legacyExpansionMarkerCount === 0 && oldStageShortcut.setupModeAuthorityActive],
     ["controlStageLinkReturnsToFixedSetupPatchBand", () =>
       mappingLinkReturn.setupModePatchActive &&
       mappingLinkReturn.legacyExpansionMarkerCount === 0 &&
@@ -10047,7 +10057,17 @@ async function measure(client, label) {
       visiblePersistentBandCount: visibleCount('.mappingPersistentWorkspaceBand'),
       visiblePersistentGroupsCount: visibleCount('[data-persistent-band-part="groups"]'),
       visiblePersistentStageCount: visibleCount('[data-persistent-band-part="stage"]'),
-      visiblePersistentSelectionContextCount: visibleCount('[data-persistent-band-part="selections"], .mappingSetupContextContent'),
+      visiblePersistentSelectionContextCount: visibleCount('[data-persistent-band-part="selections"]'),
+      setupSelectionOwnerUnique: (() => {
+        const owners = visibleElements('[data-persistent-band-part="selections"]');
+        const contents = visibleElements('.mappingSetupContextContent');
+        return owners.length === 1 && contents.length === 1 &&
+          contents[0].closest('[data-persistent-band-part="selections"]') === owners[0] &&
+          owners[0].closest('[data-workspace-pane="lower-right"]') !== null;
+      })(),
+      setupFullPageMode: document.querySelector('.layoutSetup.setupMode-io') ? 'io'
+        : document.querySelector('.layoutSetup.setupMode-authority') ? 'authority' : '',
+      visibleSetupIoOwnerCount: visibleCount('.layoutSetup.setupMode-io [data-io-connection-deck]'),
       visiblePersistentContextCount: visibleCount('[data-persistent-band-part="context"]'),
       visibleEditDomainUpperPanelCount: visibleCount('.editDomainUpperPanel'),
       visibleEditTimelinePreviewCount: visibleCount('[data-edit-timeline-preview]'),
@@ -10192,7 +10212,7 @@ async function measure(client, label) {
       persistentBandRects: {
         groups: measuredRect('[data-persistent-band-part="groups"]'),
         stage: measuredRect('[data-workspace-pane="lower-left"]'),
-        selections: measuredRect('[data-persistent-band-part="selections"], .mappingSetupContextContent'),
+        selections: measuredRect('[data-persistent-band-part="selections"]'),
         context: measuredRect('[data-workspace-pane="lower-right"]'),
       },
       workspacePaneRects: {
@@ -10560,6 +10580,9 @@ async function measure(client, label) {
       patchProfileBrowserLastControlReachable: lastVisibleControlReachableWhenScrolled(
         '[data-patch-profile-browser-scroll]',
         'button, summary',
+      ),
+      patchProfileImportTargetBounds: measuredRect(
+        '[data-patch-profile-browser-scroll] > [data-profile-import-disclosure] > summary'
       ),
       visiblePatchLoadedProfileSummaryCount: visibleCount('.setupMode-patch .loadedProfileSummaryPanel'),
       visiblePatchProfileEmptyGuidanceCount: visibleCount('[data-patch-profile-empty]'),
@@ -11208,12 +11231,16 @@ async function measure(client, label) {
       visibleSceneBlockWorkspaceCount: visibleCount('.sceneBlockWorkspace'),
       sceneBlockRowCount: document.querySelectorAll('.sceneBlockRow').length,
       visibleSceneBlockRowCount: visibleCount('.sceneBlockRow'),
-      timelineSceneBlockCount: document.querySelectorAll('.timelineOverview .timelineMarker.sceneBlock').length,
-      timelinePointEventCount: document.querySelectorAll('.timelineOverview .timelineMarker.pointEvent').length,
+      timelineSceneBlockCount: document.querySelectorAll('.timelineOverview .timelineMarker[data-timeline-event-kind="scene-block"]').length,
+      timelinePointEventCount: document.querySelectorAll('.timelineOverview .timelineMarker[data-timeline-event-kind="legacy-point-unsupported"]').length,
+      timelineLegacyPointMigrationExplicit: [...document.querySelectorAll(
+        '.timelineOverview .timelineMarker[data-timeline-event-kind="legacy-point-unsupported"]'
+      )].every((marker) => marker.getAttribute('data-timeline-authored-duration-ms') === '0' &&
+        marker.querySelector('title')?.textContent?.includes('unsupported legacy point; migrate to a Scene Block')),
       timelineActiveSceneBlockCount: document.querySelector('.timelineHeaderMeta.executingLive')
-        ? document.querySelectorAll('.timelineOverview .timelineMarker.sceneBlock.underPlayhead').length : 0,
+        ? document.querySelectorAll('.timelineOverview .timelineMarker[data-timeline-event-kind="scene-block"].underPlayhead').length : 0,
       timelineActivePointEventCount: document.querySelector('.timelineHeaderMeta.executingLive')
-        ? document.querySelectorAll('.timelineOverview .timelineMarker.pointEvent.underPlayhead').length : 0,
+        ? document.querySelectorAll('.timelineOverview .timelineMarker[data-timeline-event-kind="legacy-point-unsupported"].underPlayhead').length : 0,
       sceneBlockLaneScopeHintCount: [...document.querySelectorAll('.sceneBlockLaneScopeHint')]
         .filter((node) => (node.textContent || '').trim() === 'FULL CUE' && (node.title || '').includes('full linked Cue fires')).length,
       sceneBlockPlaybackJumpHintCount: [...document.querySelectorAll('.sceneBlockPlaybackJumpHint')]
@@ -12262,6 +12289,7 @@ function hasExpectedSceneBlocks(result) {
     result.visibleSceneBlockRowCount === 0 &&
     result.timelineSceneBlockCount === 2 &&
     result.timelinePointEventCount === 1 &&
+    result.timelineLegacyPointMigrationExplicit === true &&
     // The generic sample is not executing a live Timeline run. Under-playhead
     // state is covered by the focused executing fixture, so it must fail closed
     // here instead of fabricating an active Scene Block.
@@ -12402,6 +12430,15 @@ function expectsPersistentWorkspaceBand(result) {
 function hasExpectedPersistentWorkspaceBand(result) {
   if (!expectsPersistentWorkspaceBand(result)) return true;
   const rects = result.persistentBandRects ?? {};
+  // I/O owns the full Setup workspace, including the live-audio scenario.
+  if (result.label.startsWith("setup-io-")) {
+    return result.setupFullPageMode === "io" && result.visibleSetupIoOwnerCount === 1 &&
+      result.visiblePersistentBandCount === 0 && result.visiblePersistentGroupsCount === 0 &&
+      result.visiblePersistentStageCount === 0 && result.visiblePersistentContextCount === 0 &&
+      result.visiblePersistentSelectionContextCount === 0 && result.visibleWorkspaceSplitterCount === 0 &&
+      (!result.label.startsWith("setup-io-audio-live-") ||
+        (result.liveAudioAcceptancePassed === true && result.visibleLiveAudioInputBarCount === 1));
+  }
   const timelineSurface =
     result.label.startsWith("control-live-") &&
     !result.label.startsWith("control-live-scene-settings-");
@@ -12438,7 +12475,9 @@ function hasExpectedPersistentWorkspaceBand(result) {
     result.visibleControlStagePanelCount === 0 && result.visibleControlStageCount === 0
   );
   const expectedSelectionSurfacePresent =
-    result.visiblePersistentSelectionContextCount === 1;
+    result.visiblePersistentSelectionContextCount === 1 &&
+    ((!result.label.startsWith("setup-") && !result.label.startsWith("persistent-band-invariance-")) ||
+      result.setupSelectionOwnerUnique === true);
   return (
     result.visiblePersistentBandCount === 1 &&
     result.visiblePersistentGroupsCount === 1 &&
@@ -12573,7 +12612,7 @@ function hasExpectedControlModeSurface(result) {
     (
       result.controlSharedHeaderRowCount !== 1 ||
       result.controlSharedHeaderHeight <= 0 ||
-      result.controlSharedHeaderHeight > 36 ||
+      Math.abs(result.controlSharedHeaderHeight - 44) > 0.5 ||
       result.visibleEditDomainUpperPanelCount !== 1 ||
       result.visibleLiveControlPanelCount !== 0 ||
       result.visibleVideoControlPanelCount !== 0 ||
@@ -13300,6 +13339,19 @@ function hasExpectedSetupSurface(result) {
   // #63: setup-library-/setup-profiles- phases removed - both surfaces merged
   // into the self-contained Patch surface (browser tree, workbench entry, and
   // armed-profile summary asserted by the setup-patch family).
+  if (result.label.startsWith("setup-io-audio-live-")) {
+    return (
+      result.ioUnifiedSurfaceCount === 1 &&
+      result.ioSubTabBarCount === 0 && result.ioSubTabButtonCount === 0 &&
+      result.ioConnectionCardCount === 7 &&
+      JSON.stringify(result.ioConnectionCardIds) === JSON.stringify(["dmx", "audio", "midi", "osc", "web", "sync", "dj"]) &&
+      result.ioActiveConnectionId === "audio" && result.ioVisibleZoneCount === 1 &&
+      JSON.stringify(result.ioVisibleZoneNames) === JSON.stringify(["audio"]) &&
+      result.ioAllZoneRectsPositive && result.ioActiveZoneVisibleControlCount > 0 &&
+      result.visibleLiveAudioInputBarCount === 1 && result.liveAudioAcceptancePassed === true &&
+      result.ioDocumentAndAppScrollZero && hasExpectedPersistentWorkspaceBand(result)
+    );
+  }
   if (result.label.startsWith("setup-io-")) {
     return (
       result.ioUnifiedSurfaceCount === 1 &&
@@ -13360,6 +13412,8 @@ function hasExpectedSetupSurface(result) {
       result.patchProfileRowHeights.every((height) => height >= 24 && height <= 28) &&
       ["auto", "scroll"].includes(result.patchProfileBrowserOverflowY) &&
       result.patchProfileBrowserLastControlReachable &&
+      result.patchProfileImportTargetBounds?.width >= 43.5 &&
+      result.patchProfileImportTargetBounds?.height >= 43.5 &&
       result.visiblePatchLoadedProfileSummaryCount === 0 &&
       result.visiblePatchProfileEmptyGuidanceCount === 0 &&
       result.visiblePatchAutoButtonCount === 0 &&
@@ -18080,7 +18134,7 @@ async function runViewport(client, viewport, { recycleForLayeredTimeline = null 
       const liveAudioAcceptance = await runLiveAudioAcceptance(
         client,
         "en",
-        `control-mixer-live-${viewport.width}x${viewport.height}`,
+        `setup-io-audio-live-${viewport.width}x${viewport.height}`,
       );
       results.push(liveAudioAcceptance.liveContainment);
       // Live-audio acceptance is owned by Setup > I/O > Audio and leaves
@@ -23560,117 +23614,172 @@ async function exerciseSceneMatrixCrossBankMoveAndUndo(client) {
   };
 }
 
-// B4: the authoritative 32-slot bank is the primary Clip surface of the fixed
-// Video authoring domain and must keep all stable pad identities within its own
-// scrollport. The older live-mixer/transport consumers are intentionally not
-// mounted in this source-preparation surface; Control/Touch owns performance
-// controls. This keeps the three-screen editor contract small and explicit.
+// B4: all 32 authored slots stay reachable inside the full Edit Video mixer.
+// Its preview, output/layer controls and disclosures are intentional owners;
+// the lower preview/inspector remain part of the shared authoring workspace.
 async function runVjBankViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
-    width: viewport.width,
-    height: viewport.height,
-    deviceScaleFactor: 1,
-    mobile: false,
+    width: viewport.width, height: viewport.height, deviceScaleFactor: 1, mobile: false,
   });
   await navigateToReadyApp(client, fixtureUrl("vj-bank"));
-  await waitForClientCondition(
-    client,
+  await waitForClientCondition(client,
     "document.querySelectorAll('[data-video-clip-slot-bank=edit] .videoClipSlotPad').length === 32",
-    "VJ 32-slot bank pads",
-  );
+    "VJ 32-slot bank pads");
   await sleep(120);
   const containment = await measure(client, `vj-bank-${viewport.width}x${viewport.height}`);
-  const b4Bank = await evaluatePageFunction(client, () => {
+  const surface = await evaluatePageFunction(client, async () => {
     const app = document.querySelector('.app');
-    const bank = document.querySelector('[data-video-clip-slot-bank="edit"]');
+    const upper = document.querySelector('#edit-domain-panel-mixer.videoControlPanelMixer');
+    const bank = upper?.querySelector('[data-video-clip-slot-bank="edit"]');
     const grid = bank?.querySelector('.videoClipSlotBankGrid');
     if (!(app instanceof HTMLElement) || !(bank instanceof HTMLElement) || !(grid instanceof HTMLElement)) {
-      return { present: false };
+      return { b4Bank: { present: false }, currentSurface: {} };
     }
-    const pads = [...grid.querySelectorAll('.videoClipSlotPad')];
-    const bankRect = bank.getBoundingClientRect();
-    const columns = getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length;
-    const undersizedTargets = [...bank.querySelectorAll('button, input, select')].filter((target) => {
-      const rect = target.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0 && rect.height < 43.5;
-    }).length;
-    const before = { windowX: window.scrollX, windowY: window.scrollY, appTop: app.scrollTop, appLeft: app.scrollLeft };
-    bank.scrollTop = Math.max(0, bank.scrollHeight - bank.clientHeight);
-    const terminal = pads.at(-1)?.getBoundingClientRect();
-    const after = { windowX: window.scrollX, windowY: window.scrollY, appTop: app.scrollTop, appLeft: app.scrollLeft };
-    const terminalReachable = Boolean(terminal)
-      && terminal.left >= bankRect.left - 1 && terminal.right <= bankRect.right + 1
-      && terminal.top >= bankRect.top - 1 && terminal.bottom <= bankRect.bottom + 1;
-    bank.scrollTop = 0;
-    return {
-      present: true,
-      count: pads.length,
-      identities: pads.map((pad) => Number(pad.getAttribute('data-video-clip-slot-index'))),
-      columns,
-      overflowY: getComputedStyle(bank).overflowY,
-      terminalReachable,
-      undersizedTargets,
-      outerScrollStable: JSON.stringify(before) === JSON.stringify(after),
-      documentFixed: document.documentElement.scrollWidth === document.documentElement.clientWidth
-        && document.documentElement.scrollHeight === document.documentElement.clientHeight
-        && app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight,
-    };
-  });
-  const currentSurface = await evaluatePageFunction(client, () => {
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
       const rect = element.getBoundingClientRect();
       const style = getComputedStyle(element);
-      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      return element.checkVisibility() && rect.width > 0 && rect.height > 0 &&
+        style.display !== 'none' && style.visibility !== 'hidden';
     };
-    const upper = document.querySelector('[data-video-media-library="true"]');
-    const lowerLeft = document.querySelector('[data-edit-video-preview]');
-    const lowerRight = document.querySelector('[data-edit-video-inspector]');
-    const hiddenMixerConsumers = [
-      '.videoMixerTopPane',
-      '[data-mixer-drawer-toggle]',
-      '.videoMixerContextPane',
-      '.videoClipLegacyTransport',
-      '.videoClipGridPanel',
-    ].filter((selector) => [...document.querySelectorAll(selector)].some(visible));
+    // Reach through each actual scroll owner, and intersect every clipping
+    // ancestor. A bank-only rectangle would miss a clipped mixer column.
+    const reachable = (target) => {
+      if (!visible(target)) return false;
+      const ancestors = [];
+      for (let element = target.parentElement; element; element = element.parentElement) ancestors.push(element);
+      const saved = ancestors.map((element) => [element, element.scrollLeft, element.scrollTop]);
+      for (let pass = 0; pass < 3; pass += 1) {
+        for (const element of ancestors) {
+          const style = getComputedStyle(element);
+          const bounds = element.getBoundingClientRect();
+          const rect = target.getBoundingClientRect();
+          if (/(auto|scroll)/.test(style.overflowY)) {
+            if (rect.bottom > bounds.bottom - 1) element.scrollTop += rect.bottom - bounds.bottom + 1;
+            else if (rect.top < bounds.top + 1) element.scrollTop -= bounds.top - rect.top + 1;
+          }
+          if (/(auto|scroll)/.test(style.overflowX)) {
+            if (rect.right > bounds.right - 1) element.scrollLeft += rect.right - bounds.right + 1;
+            else if (rect.left < bounds.left + 1) element.scrollLeft -= bounds.left - rect.left + 1;
+          }
+        }
+      }
+      const bounds = ancestors.filter((element) => {
+        const style = getComputedStyle(element);
+        return /(auto|scroll|hidden|clip)/.test(style.overflowX + ' ' + style.overflowY);
+      }).reduce((bounds, element) => {
+        const rect = element.getBoundingClientRect();
+        return {left: Math.max(bounds.left, rect.left), right: Math.min(bounds.right, rect.right),
+          top: Math.max(bounds.top, rect.top), bottom: Math.min(bounds.bottom, rect.bottom)};
+      }, {left: 0, top: 0, right: innerWidth, bottom: innerHeight});
+      const rect = target.getBoundingClientRect();
+      const result = rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1 &&
+        rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1;
+      saved.forEach(([element, left, top]) => { element.scrollLeft = left; element.scrollTop = top; });
+      return result;
+    };
+    const nextFrame = () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+    const outerScroll = () => ({windowX: window.scrollX, windowY: window.scrollY, appTop: app.scrollTop, appLeft: app.scrollLeft});
+    const before = outerScroll();
+    const pads = [...grid.querySelectorAll('.videoClipSlotPad')];
+    const columns = getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length;
+    const undersizedTargets = [...bank.querySelectorAll('button, input, select')].filter((target) => {
+      const rect = target.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && (rect.height < 43.5 || rect.width < 43.5);
+    }).length;
+    const overlappingPadActions = pads.filter((pad) => {
+      const primary = pad.querySelector('.videoClipSlotPrimary')?.getBoundingClientRect();
+      const actions = pad.querySelector('.videoClipSlotPadActions')?.getBoundingClientRect();
+      return primary && actions && primary.bottom > actions.top + 0.5;
+    }).length;
+    const terminalReachable = reachable(pads.at(-1));
+    const disclosures = [];
+    for (const [selector, contentSelector] of [
+      ['[data-media-library-rail]', '.videoMediaLibrarySurface'],
+      ['.videoClipLegacyTransport', '.videoClipGridPanel'],
+    ]) {
+      const disclosure = upper.querySelector(selector);
+      const summary = disclosure?.querySelector(':scope > summary');
+      const initiallyOpen = disclosure?.open;
+      const toggleReachable = reachable(summary);
+      summary?.click();
+      await nextFrame();
+      const content = disclosure?.querySelector(contentSelector);
+      const controls = [...(content?.querySelectorAll('button, input, select') ?? [])].filter(visible);
+      const opened = disclosure?.open === true && visible(content);
+      const lastControlReachable = controls.length > 0 && reachable(controls.at(-1));
+      summary?.click();
+      await nextFrame();
+      disclosures.push({selector, toggleReachable, opened, lastControlReachable,
+        restored: disclosure?.open === initiallyOpen});
+    }
+    for (const [id, panelSelector] of [
+      ['audio-in', '.liveAudioInputBar'], ['auto-vj', '.autoVjStrip'], ['reactive', '.audioReactiveVjStrip'],
+    ]) {
+      const toggle = upper.querySelector('[data-mixer-drawer-toggle="' + id + '"]');
+      const initiallyExpanded = toggle?.getAttribute('aria-expanded');
+      const toggleReachable = reachable(toggle);
+      toggle?.click();
+      await nextFrame();
+      const panel = upper.querySelector(panelSelector);
+      const controls = [...(panel?.querySelectorAll('button, input, select') ?? [])].filter(visible);
+      const opened = toggle?.getAttribute('aria-expanded') === 'true' && visible(panel);
+      const lastControlReachable = controls.length > 0 && reachable(controls.at(-1));
+      const empty = panel?.querySelector('.audioReactiveVjEmpty');
+      const emptyGuidanceReachable = id === 'reactive' && controls.length === 0 &&
+        panel?.querySelectorAll('.audioReactiveVjRow').length === 0 &&
+        empty?.textContent?.includes('No audio mappings') === true && reachable(empty);
+      toggle?.click();
+      await nextFrame();
+      disclosures.push({selector: id, toggleReachable, opened, lastControlReachable,
+        controlCount: controls.length, emptyGuidanceReachable,
+        restored: toggle?.getAttribute('aria-expanded') === initiallyExpanded});
+    }
     return {
-      upperLibrary: visible(upper),
-      mediaRail: visible(upper?.querySelector('[data-media-library-rail]')),
-      bank: visible(upper?.querySelector('[data-video-clip-slot-bank="edit"]')),
-      lowerLeftPreview: visible(lowerLeft),
-      lowerRightInspector: visible(lowerRight),
-      hiddenMixerConsumers,
+      b4Bank: {
+        present: true, count: pads.length,
+        identities: pads.map((pad) => Number(pad.getAttribute('data-video-clip-slot-index'))),
+        columns, overflowY: getComputedStyle(bank).overflowY, terminalReachable,
+        undersizedTargets, overlappingPadActions,
+        outerScrollStable: JSON.stringify(before) === JSON.stringify(outerScroll()),
+        documentFixed: document.documentElement.scrollWidth === document.documentElement.clientWidth &&
+          document.documentElement.scrollHeight === document.documentElement.clientHeight &&
+          app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight,
+      },
+      currentSurface: {
+        upperMixer: visible(upper), bank: visible(bank),
+        mediaRail: visible(upper.querySelector('[data-media-library-rail]')),
+        liveMonitors: visible(upper.querySelector('.videoMixerTopPane')),
+        outputAndLayers: visible(upper.querySelector('.videoMixerContextPane')),
+        lowerLeftPreview: visible(document.querySelector('[data-edit-video-preview]')),
+        lowerRightInspector: visible(document.querySelector('[data-edit-video-inspector]')),
+        disclosures,
+      },
     };
   });
+  const {b4Bank, currentSurface} = surface;
   const conditions = [
-    ["vjBankPrimaryThirtyTwoStableSlots", () =>
-      b4Bank.present && b4Bank.count === 32 &&
+    ["vjBankPrimaryThirtyTwoStableSlots", () => b4Bank.present && b4Bank.count === 32 &&
       b4Bank.identities.every((identity, index) => identity === index)],
-    ["vjBankPrimaryUsesInternalResponsiveGrid", () =>
-      b4Bank.columns >= 2 && b4Bank.columns <= 8 &&
+    ["vjBankPrimaryUsesInternalResponsiveGrid", () => b4Bank.columns >= 2 && b4Bank.columns <= 8 &&
       b4Bank.overflowY === "auto" && b4Bank.terminalReachable],
-    ["vjBankPrimaryPreservesTargetsAndOuterFrame", () =>
-      b4Bank.undersizedTargets === 0 && b4Bank.outerScrollStable && b4Bank.documentFixed],
-    ["vjBankUsesTheFixedThreeScreenVideoSurface", () =>
-      currentSurface.upperLibrary && currentSurface.mediaRail && currentSurface.bank &&
+    ["vjBankPrimaryPreservesTargetsAndOuterFrame", () => b4Bank.undersizedTargets === 0 &&
+      b4Bank.overlappingPadActions === 0 && b4Bank.outerScrollStable && b4Bank.documentFixed],
+    ["vjBankUsesTheFullVideoAuthoringSurface", () => currentSurface.upperMixer && currentSurface.mediaRail &&
+      currentSurface.bank && currentSurface.liveMonitors && currentSurface.outputAndLayers &&
       currentSurface.lowerLeftPreview && currentSurface.lowerRightInspector],
-    ["vjBankDoesNotMountHiddenMixerConsumers", () => currentSurface.hiddenMixerConsumers.length === 0],
+    ["vjBankMixerDisclosuresRemainReachable", () => currentSurface.disclosures?.length === 5 &&
+      currentSurface.disclosures.every((entry) =>
+        entry.toggleReachable && entry.opened && (entry.lastControlReachable || entry.emptyGuidanceReachable) && entry.restored)],
     ["vjBankContained", () => isContained(containment)],
   ];
   const failedChecks = conditions.filter(([, check]) => !check()).map(([name]) => name);
   return {
-    viewport,
-    label: `vj-bank-${viewport.width}x${viewport.height}`,
-    passed: failedChecks.length === 0,
-    failedChecks,
-    pads: [b4Bank.count, b4Bank.columns, b4Bank.undersizedTargets],
-    b4Bank,
-    currentSurface,
-    padGeometry: {
-      gridHeight: containment.videoClipGridClientHeight,
-      firstPad: containment.videoClipFirstPadBounds,
-      grid: containment.videoClipGridBounds,
-    },
+    viewport, label: `vj-bank-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0, failedChecks,
+    pads: [b4Bank.count, b4Bank.columns, b4Bank.undersizedTargets], b4Bank, currentSurface,
+    padGeometry: {gridHeight: containment.videoClipGridClientHeight,
+      firstPad: containment.videoClipFirstPadBounds, grid: containment.videoClipGridBounds},
     containment: {
       document: [containment.documentScrollWidth, containment.documentClientWidth, containment.documentScrollHeight, containment.documentClientHeight],
       app: [containment.appScrollWidth, containment.appClientWidth, containment.appScrollHeight, containment.appClientHeight],
@@ -27631,7 +27740,7 @@ async function finishSceneSettingsSaveCapture(client) {
     // Installing the capture makes the app "Tauri-backed", so its 1 s read-only status timers start to
     // fire into it. As in the other command captures of this checker, those polls are recorded apart
     // (and must all be known polls) so the exact-sequence assertion covers only the save's own commands.
-    const background = new Set(["remote_control_status", "get_dj_link_machine_status", "list_dj_link_wired_candidates"]);
+    const background = new Set(["remote_control_status", "get_dj_link_machine_status", "list_dj_link_wired_candidates", "get_output_ownership_status", "query_output_lease_authority_v1"]);
     capture.backgroundCommands = capture.commands.filter((command) => background.has(command));
     capture.commands = capture.commands.filter((command) => !background.has(command));
     return capture;
@@ -33550,6 +33659,119 @@ async function runSceneBlockOverlapViewport(client, viewport) {
   };
 }
 
+async function readAndRestoreSceneBlockStart(client, eventId, restoreMs) {
+  await setTimelineToolsDisclosureOpen(client, true);
+  await openSceneBlockBrowser(client);
+  await clickVisibleSelector(client, '[data-scene-block-view-toggle="list"]');
+  await evaluatePageFunction(client, (eventId) => {
+    const search = document.querySelector('.sceneBlockRowSearch');
+    if (!(search instanceof HTMLInputElement)) throw new Error("Scene Block List search is missing.");
+    search.value = "#" + eventId;
+    search.dispatchEvent(new Event("input", {bubbles: true}));
+  }, eventId);
+  const rowSelector = `.sceneBlockRow[data-scene-block-id="${eventId}"]`;
+  await waitForClientCondition(client, `document.querySelector(${JSON.stringify(rowSelector)}) !== null`, "authored Scene Block row");
+  const readSaved = () => evaluatePageFunction(client, (selector) => {
+    const row = document.querySelector(selector);
+    const input = row?.querySelector('.sceneBlockRowFields input[type="number"]');
+    const save = row?.querySelector('.sceneBlockRowActions .primary');
+    return {
+      startMs: input instanceof HTMLInputElement ? Number(input.value) : null,
+      clean: row?.getAttribute('data-dirty') === 'false' &&
+        !row.classList.contains('dirty') && !row.querySelector('.sceneBlockUnsavedBadge') &&
+        save instanceof HTMLButtonElement && save.disabled,
+    };
+  }, rowSelector);
+  const saved = await readSaved();
+  await evaluatePageFunction(client, async ({selector, restoreMs}) => {
+    const row = document.querySelector(selector);
+    const input = row?.querySelector('.sceneBlockRowFields input[type="number"]');
+    if (!(input instanceof HTMLInputElement)) throw new Error("Raw Scene Block start input is missing.");
+    input.value = String(restoreMs);
+    input.dispatchEvent(new Event("input", {bubbles: true}));
+    await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+    const save = document.querySelector(selector)?.querySelector('.sceneBlockRowActions .primary');
+    if (save instanceof HTMLButtonElement && !save.disabled) save.click();
+  }, {selector: rowSelector, restoreMs});
+  await waitForClientCondition(client, `(() => {
+    const row = document.querySelector(${JSON.stringify(rowSelector)});
+    return row?.getAttribute('data-dirty') === 'false' &&
+      Number(row.querySelector('.sceneBlockRowFields input[type="number"]')?.value) === ${restoreMs} &&
+      row.querySelector('.sceneBlockRowActions .primary')?.disabled === true;
+  })()`, "restored authored Scene Block start");
+  const restored = await readSaved();
+  await evaluatePageFunction(client, () => {
+    const search = document.querySelector('.sceneBlockRowSearch');
+    search.value = "";
+    search.dispatchEvent(new Event("input", {bubbles: true}));
+  });
+  await closeSceneBlockDrawer(client);
+  await setTimelineToolsDisclosureOpen(client, false);
+  return {saved, restored};
+}
+
+async function sceneBlockDragGeometry(client, eventId) {
+  return await evaluatePageFunction(client, async (eventId) => {
+    const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="' + eventId + '"]');
+    const body = marker?.querySelector('.timelineSceneBlockBody');
+    const scrollport = marker?.closest('[data-timeline-layer-scrollport]');
+    const svg = marker?.ownerSVGElement;
+    if (!marker || !body || !svg || !(scrollport instanceof HTMLElement)) return null;
+    const before = body.getBoundingClientRect();
+    const pane = scrollport.getBoundingClientRect();
+    if (before.bottom > pane.bottom - 8) scrollport.scrollTop += before.bottom - pane.bottom + 8;
+    else if (before.top < pane.top + 8) scrollport.scrollTop -= pane.top - before.top + 8;
+    await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+    const rect = body.getBoundingClientRect();
+    const svgRect = svg.getBoundingClientRect();
+    const bounds = scrollport.getBoundingClientRect();
+    const left = Math.max(rect.left + 8, svgRect.left + 8, bounds.left + 8, 8);
+    const right = Math.min(rect.right - 8, svgRect.right - 68, bounds.right - 68, innerWidth - 68);
+    const x = Math.min(Math.max(rect.left + rect.width / 2, left), right);
+    const y = rect.top + 5; // Upper move band, clear of resize handles.
+    const hit = document.elementFromPoint(x, y);
+    const label = marker.querySelector('.timelineSceneBlockLabel');
+    return {
+      x, y, left: rect.left, startMs: Number(marker.getAttribute('data-timeline-start-ms')),
+      hitMarkerId: hit?.closest('.timelineMarker')?.getAttribute('data-timeline-event-id') ?? '',
+      pointInsideVisibleBody: right >= left && y > Math.max(0, bounds.top, svgRect.top) &&
+        y < Math.min(innerHeight, bounds.bottom, svgRect.bottom),
+      touchAction: getComputedStyle(marker).touchAction,
+      labelFontSize: label ? parseFloat(getComputedStyle(label).fontSize) : 0,
+      labelWithinBody: Boolean(label && label.getBBox().x + label.getBBox().width <=
+        body.getBBox().x + body.getBBox().width + 0.5),
+    };
+  }, eventId);
+}
+
+async function runSceneBlockCommitDrag(client, eventId, pointerType) {
+  const geometry = await sceneBlockDragGeometry(client, eventId);
+  assert.ok(geometry?.pointInsideVisibleBody && geometry.hitMarkerId === String(eventId),
+    `Scene Block ${eventId} ${pointerType} drag must hit its visible move band: ${JSON.stringify(geometry)}`);
+  const readPreview = () => evaluatePageFunction(client, (eventId) => {
+    const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="' + eventId + '"]');
+    const body = marker?.querySelector('.timelineSceneBlockBody');
+    return {x: body?.getBoundingClientRect().left ?? null,
+      startMs: marker ? Number(marker.getAttribute('data-timeline-preview-start-ms')) : null};
+  }, eventId);
+  const dispatch = (type, offset, buttons) => client.send("Input.dispatchMouseEvent", {
+    type, x: geometry.x + offset, y: geometry.y, button: "left", buttons, clickCount: 1, pointerType,
+  });
+  await dispatch("mousePressed", 0, 1);
+  await dispatch("mouseMoved", 2, 1);
+  const tiny = await readPreview();
+  await dispatch("mouseMoved", 60, 1);
+  const preview = await readPreview();
+  await dispatch("mouseReleased", 60, 0);
+  await client.evaluate("new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))");
+  // Moving a zero-start block later can overflow the eight visible rails.
+  // Verify exact authored milliseconds and clean state in List, then restore
+  // the same block before the independent mouse/pen gesture.
+  const authored = await readAndRestoreSceneBlockStart(client, eventId, geometry.startMs);
+  const restoredGeometry = await sceneBlockDragGeometry(client, eventId);
+  return {pointerType, geometry, tiny, preview, ...authored, restoredGeometry};
+}
+
 async function runSceneBlockLargeViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -33569,89 +33791,109 @@ async function runSceneBlockLargeViewport(client, viewport) {
   // exercise a row-select and an Enter-commit edit, then switch to the legacy
   // List view so every pre-T3 expectation below runs against the paged list.
   const finderStats = await client.evaluate(`(async () => {
-    const raf2 = () => new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
-    const split = document.querySelector('[data-scene-block-finder-split]');
-    const inspector = document.querySelector('[data-scene-block-inspector]');
+    const raf2 = () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+    const inspector = () => document.querySelector('[data-scene-block-inspector]');
     const rows = [...document.querySelectorAll('.sceneBlockFinderRow')];
     const firstRow = rows[0] ?? null;
+    const split = document.querySelector('[data-scene-block-finder-split]');
     const splitVisible = Boolean(split && split.getBoundingClientRect().width > 0);
-    const inspectorVisible = Boolean(inspector && inspector.getBoundingClientRect().width > 0);
+    const inspectorVisible = Boolean(inspector() && inspector().getBoundingClientRect().width > 0);
+    const snapSelect = document.querySelector('.timelineSnapControls select');
+    const originalSnapMode = snapSelect instanceof HTMLSelectElement ? snapSelect.value : null;
+    const snapState = () => document.querySelector('[data-timeline-snap-state]')
+      ?.getAttribute('data-timeline-grid-quantize-state');
+    const selectSnap = async (mode) => {
+      if (!(snapSelect instanceof HTMLSelectElement) || mode === null) return false;
+      snapSelect.value = mode;
+      snapSelect.dispatchEvent(new Event('input', {bubbles: true}));
+      await raf2();
+      return snapSelect.value === mode && snapState() === mode;
+    };
+    const cleanInspector = () => !document.querySelector('[data-scene-block-inspector-dirty]');
+    const commitInput = async (selector, value) => {
+      const input = inspector()?.querySelector(selector);
+      if (!(input instanceof HTMLInputElement)) return false;
+      input.focus();
+      input.value = String(value);
+      input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+      await raf2(); await raf2();
+      return document.activeElement !== input;
+    };
+    const savedStamp = (id) => document.querySelector(
+      '.sceneBlockFinderRow[data-scene-block-id="' + id + '"] .sceneBlockFinderStamp'
+    )?.textContent?.trim();
+    const readExactSavedStart = async (id) => {
+      document.querySelector('[data-scene-block-view-toggle="list"]')?.click();
+      await raf2(); await raf2();
+      const row = document.querySelector('.sceneBlockRow[data-scene-block-id="' + id + '"]');
+      const input = row?.querySelector('.sceneBlockRowFields input[type="number"]');
+      const result = {
+        startMs: input instanceof HTMLInputElement ? Number(input.value) : null,
+        clean: row?.getAttribute('data-dirty') === 'false' && !row.classList.contains('dirty') &&
+          !row.querySelector('.sceneBlockUnsavedBadge') &&
+          row.querySelector('.sceneBlockRowActions .primary')?.disabled === true,
+      };
+      document.querySelector('[data-scene-block-view-toggle="finder"]')?.click();
+      await raf2(); await raf2();
+      return result;
+    };
     let rowSelected = false;
     let inspectorShowsRow = false;
     let inspectorStepCountLabel = '';
     let startCommitApplied = false;
+    let startRestored = false;
     let dirtyChipAfterCommit = true;
+    let exactStartSnapOff = false;
     let sourceOffsetFieldPresent = false;
     let sourceOffsetCommitApplied = false;
     let sourceOffsetDirtyCleared = false;
+    let savedStart = null;
     if (firstRow) {
       firstRow.click();
       await raf2(); await raf2();
       rowSelected = firstRow.classList.contains('selected');
       const rowId = firstRow.getAttribute('data-scene-block-id') ?? '';
-      inspectorShowsRow = Boolean(inspector?.textContent?.includes('#' + rowId));
-      inspectorStepCountLabel = (inspector?.querySelector('[data-scene-block-step-count]')?.textContent || '').trim();
-      const startInput = inspector?.querySelector('[data-scene-block-inspector-start]');
-      const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="' + rowId + '"]');
-      const beforeStartMs = Number(marker?.getAttribute('data-timeline-start-ms'));
-      if (startInput instanceof HTMLInputElement && Number.isFinite(beforeStartMs)) {
-        const targetMs = beforeStartMs + 250;
-        startInput.focus();
-        startInput.value = String(targetMs);
-        startInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-        startInput.blur();
-        startInput.dispatchEvent(new Event('blur'));
-        await raf2(); await raf2();
-        const afterStartMs = Number(document
-          .querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="' + rowId + '"]')
-          ?.getAttribute('data-timeline-start-ms'));
-        startCommitApplied = afterStartMs === targetMs;
-        dirtyChipAfterCommit = !document.querySelector('[data-scene-block-inspector-dirty]');
-        // Restore the original start so the untouched-list expectations hold.
-        startInput.focus();
-        startInput.value = String(beforeStartMs);
-        startInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-        startInput.blur();
-        startInput.dispatchEvent(new Event('blur'));
-        await raf2(); await raf2();
+      inspectorShowsRow = Boolean(inspector()?.textContent?.includes('#' + rowId));
+      inspectorStepCountLabel = (inspector()?.querySelector('[data-scene-block-step-count]')?.textContent || '').trim();
+      // 07622a50 changed the default from Off to Grid (500 ms). Preserve the
+      // exact Enter-commit contract explicitly, without changing snap behavior.
+      exactStartSnapOff = await selectSnap('Off');
+      const beforeStamp = savedStamp(rowId);
+      if (exactStartSnapOff && beforeStamp === '0:00.00') {
+        const entered = await commitInput('[data-scene-block-inspector-start]', 250);
+        const afterStamp = savedStamp(rowId);
+        dirtyChipAfterCommit = cleanInspector();
+        // Overflowed blocks have no canvas marker. List exposes exact authored
+        // milliseconds and clean Save state; Finder's display alone rounds.
+        savedStart = await readExactSavedStart(rowId);
+        startCommitApplied = entered && afterStamp === '0:00.25' &&
+          savedStart.startMs === 250 && savedStart.clean;
+        const restored = await commitInput('[data-scene-block-inspector-start]', 0);
+        const restoredStamp = savedStamp(rowId);
+        const restoredStart = await readExactSavedStart(rowId);
+        startRestored = restored && restoredStamp === beforeStamp &&
+          restoredStart.startMs === 0 && restoredStart.clean && cleanInspector();
       }
-      const sourceOffsetInput = inspector?.querySelector('[data-scene-block-inspector-source-offset]');
+      const sourceOffsetInput = inspector()?.querySelector('[data-scene-block-inspector-source-offset]');
       sourceOffsetFieldPresent = sourceOffsetInput instanceof HTMLInputElement;
       if (sourceOffsetInput instanceof HTMLInputElement) {
         const beforeOffsetMs = Number(sourceOffsetInput.value);
         const targetOffsetMs = beforeOffsetMs + 100;
-        sourceOffsetInput.focus();
-        sourceOffsetInput.value = String(targetOffsetMs);
-        sourceOffsetInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-        sourceOffsetInput.blur();
-        sourceOffsetInput.dispatchEvent(new Event('blur'));
-        await raf2(); await raf2();
-        sourceOffsetCommitApplied = Number(inspector
+        const entered = await commitInput('[data-scene-block-inspector-source-offset]', targetOffsetMs);
+        sourceOffsetCommitApplied = entered && Number(inspector()
           ?.querySelector('[data-scene-block-inspector-source-offset]')?.value) === targetOffsetMs;
-        sourceOffsetDirtyCleared = !document.querySelector('[data-scene-block-inspector-dirty]');
-        const restoredOffsetInput = inspector?.querySelector('[data-scene-block-inspector-source-offset]');
-        if (restoredOffsetInput instanceof HTMLInputElement) {
-          restoredOffsetInput.focus();
-          restoredOffsetInput.value = String(beforeOffsetMs);
-          restoredOffsetInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-          restoredOffsetInput.blur();
-          restoredOffsetInput.dispatchEvent(new Event('blur'));
-          await raf2(); await raf2();
-        }
+        sourceOffsetDirtyCleared = cleanInspector();
+        await commitInput('[data-scene-block-inspector-source-offset]', beforeOffsetMs);
       }
     }
+    const snapModeRestored = await selectSnap(originalSnapMode);
+    startRestored = startRestored && snapModeRestored;
     return {
-      splitVisible,
-      inspectorVisible,
-      finderRowCount: rows.length,
-      rowSelected,
-      inspectorShowsRow,
-      inspectorStepCountLabel,
-      startCommitApplied,
-      dirtyChipAfterCommit,
-      sourceOffsetFieldPresent,
-      sourceOffsetCommitApplied,
-      sourceOffsetDirtyCleared,
+      splitVisible, inspectorVisible, finderRowCount: rows.length,
+      rowSelected, inspectorShowsRow, inspectorStepCountLabel,
+      originalSnapMode, exactStartSnapOff, snapModeRestored, savedStart,
+      startCommitApplied, startRestored, dirtyChipAfterCommit,
+      sourceOffsetFieldPresent, sourceOffsetCommitApplied, sourceOffsetDirtyCleared,
     };
   })()`);
   await client.evaluate(`document.querySelector('[data-scene-block-view-toggle="list"]')?.click()`);
@@ -33699,6 +33941,27 @@ async function runSceneBlockLargeViewport(client, viewport) {
     window.__syndocalPauseSceneBlockFixtureChurn?.();
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
   })()`);
+  const population = await evaluatePageFunction(client, () => {
+    const markers = [...document.querySelectorAll('.timelineMarker[data-timeline-event-kind="scene-block"]')];
+    const blockStat = [...document.querySelectorAll('.sceneBlockStats > span')]
+      .find((stat) => stat.querySelector('small')?.textContent?.trim() === 'Blocks');
+    const layers = [...new Set(markers.map((marker) => marker.getAttribute('data-timeline-layer-id')))]
+      .map((id) => ({
+        id,
+        rails: markers.filter((marker) => marker.getAttribute('data-timeline-layer-id') === id)
+          .map((marker) => Number(marker.getAttribute('data-timeline-overlap-rail'))).sort((a, b) => a - b),
+        railCounts: markers.filter((marker) => marker.getAttribute('data-timeline-layer-id') === id)
+          .map((marker) => Number(marker.getAttribute('data-timeline-overlap-rail-count'))),
+      }));
+    const clusters = [...document.querySelectorAll('.timelineOverlapCluster[data-overlap-badge-kind="overlap"]')]
+      .map((cluster) => ({
+        track: cluster.getAttribute('data-overlap-track'),
+        count: Number(cluster.getAttribute('data-overlap-count')),
+        members: (cluster.getAttribute('data-overlap-members') || '').split(',').map(Number),
+      }));
+    return {authoredCount: Number(blockStat?.querySelector('strong')?.textContent),
+      renderedCount: markers.length, layers, clusters};
+  });
   const activeTransitionStats = await client.evaluate(`(async () => {
     const overview = document.querySelector('.timelineOverview');
     const markersBefore = [...document.querySelectorAll('.timelineMarker.sceneBlock')];
@@ -33776,141 +34039,30 @@ async function runSceneBlockLargeViewport(client, viewport) {
   await closeSceneBlockDrawer(client);
   await setTimelineToolsDisclosureOpen(client, false);
   await sleep(80);
-  const dragGeometry = await client.evaluate(`(() => {
-    const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="500"]');
-    const body = marker?.querySelector('.timelineSceneBlockBody');
-    const svg = marker?.ownerSVGElement;
-    if (!marker || !body || !svg) return null;
-    const rect = body.getBoundingClientRect();
-    const svgRect = svg.getBoundingClientRect();
-    return {
-      x: rect.left + rect.width / 2,
-      // T4 zone contract: upper band (0-14px of the 28px block) center = Move;
-      // the vertical center sits exactly on the move/select band boundary, so
-      // aim a quarter of the height down to land inside the move zone.
-      y: rect.top + 5,
-      svgWidth: svgRect.width,
-    };
-  })()`);
-  let markerDragStats = null;
-  if (dragGeometry) {
-    const markerX = () => client.evaluate(`(() => {
-      const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="500"]');
-      const body = marker?.querySelector('.timelineSceneBlockBody');
-      return body ? body.getBoundingClientRect().left : null;
-    })()`);
-    const initialX = await markerX();
-    await client.send('Input.dispatchMouseEvent', {
-      type: 'mousePressed',
-      x: dragGeometry.x,
-      y: dragGeometry.y,
-      button: 'left',
-      buttons: 1,
-      clickCount: 1,
-    });
-    await client.send('Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x: dragGeometry.x + 2,
-      y: dragGeometry.y,
-      button: 'left',
-      buttons: 1,
-    });
-    const tinyMoveX = await markerX();
-    await client.send('Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x: dragGeometry.x + 60,
-      y: dragGeometry.y,
-      button: 'left',
-      buttons: 1,
-    });
-    const committedMoveX = await markerX();
-    await client.send('Input.dispatchMouseEvent', {
-      type: 'mouseReleased',
-      x: dragGeometry.x + 60,
-      y: dragGeometry.y,
-      button: 'left',
-      buttons: 0,
-      clickCount: 1,
-    });
-    await client.evaluate(`new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)))`);
-    const settledMouseX = await markerX();
-    const nonMouseInitialX = await markerX();
-    const nonMouseGeometry = await client.evaluate(`(() => {
-      const body = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="500"] .timelineSceneBlockBody');
-      if (!body) return null;
-      const rect = body.getBoundingClientRect();
-      // T4 zone contract: aim the upper move band, same as the mouse drag.
-      return { x: rect.left + rect.width / 2, y: rect.top + 5 };
-    })()`);
-    const markerTouchAction = await client.evaluate(`(() => {
-      const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="500"]');
-      return marker ? getComputedStyle(marker).touchAction : '';
-    })()`);
-    const nonMouseHitTarget = await client.evaluate(`(({ x, y }) => {
-      const hit = document.elementFromPoint(x, y);
-      const marker = hit?.closest?.('.timelineMarker.sceneBlock');
-      return {
-        tag: hit?.tagName ?? '',
-        className: hit?.getAttribute?.('class') ?? '',
-        markerId: marker?.getAttribute('data-timeline-event-id') ?? '',
-      };
-    })(${JSON.stringify(nonMouseGeometry ?? dragGeometry)})`);
-    await client.send('Input.dispatchMouseEvent', {
-      type: 'mousePressed',
-      x: nonMouseGeometry?.x ?? dragGeometry.x,
-      y: nonMouseGeometry?.y ?? dragGeometry.y,
-      button: 'left',
-      buttons: 1,
-      clickCount: 1,
-      pointerType: 'pen',
-    });
-    await client.send('Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x: (nonMouseGeometry?.x ?? dragGeometry.x) - 2,
-      y: nonMouseGeometry?.y ?? dragGeometry.y,
-      button: 'left',
-      buttons: 1,
-      pointerType: 'pen',
-    });
-    const nonMouseTinyMoveX = await markerX();
-    await client.send('Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x: (nonMouseGeometry?.x ?? dragGeometry.x) - 60,
-      y: nonMouseGeometry?.y ?? dragGeometry.y,
-      button: 'left',
-      buttons: 1,
-      pointerType: 'pen',
-    });
-    const nonMouseCommittedMoveX = await markerX();
-    await client.send('Input.dispatchMouseEvent', {
-      type: 'mouseReleased',
-      x: (nonMouseGeometry?.x ?? dragGeometry.x) - 60,
-      y: nonMouseGeometry?.y ?? dragGeometry.y,
-      button: 'left',
-      buttons: 0,
-      clickCount: 1,
-      pointerType: 'pen',
-    });
-    await client.evaluate(`new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)))`);
-    const settledNonMouseX = await markerX();
-    markerDragStats = {
-      initialX,
-      tinyMoveX,
-      committedMoveX,
-      expectedCommittedX: initialX + 60,
-      settledMouseX,
-      markerTouchAction,
-      nonMouseHitTarget,
-      nonMousePointerType: 'pen',
-      nonMouseInitialX,
-      nonMouseTinyMoveX,
-      nonMouseCommittedMoveX,
-      expectedNonMouseCommittedX: nonMouseInitialX - 60,
-      settledNonMouseX,
-    };
-  }
+  const mouseDrag = await runSceneBlockCommitDrag(client, 500, "mouse");
+  const penDrag = await runSceneBlockCommitDrag(client, 500, "pen");
+  const markerDragStats = {
+    initialX: mouseDrag.geometry.left, tinyMoveX: mouseDrag.tiny.x,
+    committedMoveX: mouseDrag.preview.x, expectedCommittedX: mouseDrag.geometry.left + 60,
+    mouseHitTarget: mouseDrag.geometry.hitMarkerId,
+    mouseCommitSaved: mouseDrag.saved.clean && mouseDrag.preview.startMs > mouseDrag.geometry.startMs &&
+      mouseDrag.saved.startMs === Math.round(mouseDrag.preview.startMs),
+    mouseRestored: mouseDrag.restored.clean && mouseDrag.restored.startMs === mouseDrag.geometry.startMs &&
+      Math.abs(mouseDrag.restoredGeometry.left - mouseDrag.geometry.left) < 2,
+    markerTouchAction: mouseDrag.geometry.touchAction,
+    nonMousePointerType: penDrag.pointerType,
+    nonMouseHitTarget: {markerId: penDrag.geometry.hitMarkerId},
+    nonMouseInitialX: penDrag.geometry.left, nonMouseTinyMoveX: penDrag.tiny.x,
+    nonMouseCommittedMoveX: penDrag.preview.x, expectedNonMouseCommittedX: penDrag.geometry.left + 60,
+    nonMouseCommitSaved: penDrag.saved.clean && penDrag.preview.startMs > penDrag.geometry.startMs &&
+      penDrag.saved.startMs === Math.round(penDrag.preview.startMs),
+    nonMouseRestored: penDrag.restored.clean && penDrag.restored.startMs === penDrag.geometry.startMs &&
+      Math.abs(penDrag.restoredGeometry.left - penDrag.geometry.left) < 2,
+    labelFontSize: mouseDrag.geometry.labelFontSize, labelWithinBody: mouseDrag.geometry.labelWithinBody,
+    mouseDrag, penDrag,
+  };
   const markerBlockPropertiesStats = await client.evaluate(`(async () => {
-    const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="493"]');
+    const marker = document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="1"]');
     marker?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     const drawer = document.querySelector('[data-timeline-context-drawer-panel="block"]');
@@ -33920,9 +34072,14 @@ async function runSceneBlockLargeViewport(client, viewport) {
       drawerOpen: Boolean(drawer),
       browserMode: drawer?.classList.contains('timelineBlockBrowserDrawer') ?? null,
       inspectorOnly: Boolean(inspector),
-      inspectorShows493: (inspector?.textContent || '').includes('#493'),
+      inspectorShows1: (inspector?.textContent || '').includes('#1'),
+      selectedMarkerRenderedLast: [...document.querySelectorAll('.timelineOverview .timelineMarker')]
+        .at(-1)?.getAttribute('data-timeline-event-id') === '1',
     };
   })()`);
+  // Selecting a real marker seeks to its start; restore the stopped clock
+  // before the independent time-readout and List contracts.
+  await client.evaluate("window.__syndocalSetSceneBlockFixtureState(1000, false)");
   await setTimelineToolsDisclosureOpen(client, true);
   await sleep(80);
   await openSceneBlockBrowser(client);
@@ -33946,7 +34103,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
       return rect.top >= Math.max(0, listRect.top, workspaceRect.top) - 1 &&
         rect.bottom <= Math.min(window.innerHeight, listRect.bottom, workspaceRect.bottom) + 1;
     };
-    const firstSelectionRow = document.querySelector('.sceneBlockRow.selected[data-scene-block-id="493"]');
+    const firstSelectionRow = document.querySelector('.sceneBlockRow.selected[data-scene-block-id="1"]');
     const firstMarkerRevealVisible = rowVisible(firstSelectionRow);
     const firstButton = [...document.querySelectorAll('.sceneBlockPager button')]
       .find((button) => (button.textContent || '').trim() === 'First');
@@ -34039,8 +34196,6 @@ async function runSceneBlockLargeViewport(client, viewport) {
       firstMarkerRevealVisible,
       repeatedSelectionVisible,
       cueIdentitySearchReached500,
-      selectedMarkerRenderedLast: [...document.querySelectorAll('.timelineOverview .timelineMarker')]
-        .at(-1)?.getAttribute('data-timeline-event-id') === '493',
       cleanSaveDisabled,
       dirtyClassVisible,
       dirtyBadgeVisible,
@@ -34379,14 +34534,20 @@ async function runSceneBlockLargeViewport(client, viewport) {
   const cueContainment = await measure(client, `scene-block-large-cues-${viewport.width}x${viewport.height}`);
   const role = viewportRole(viewport);
   const requiresFullScaleVisualSignoff = role !== "compact-fallback";
-  // T2: the two-band scene block adds ~1000 SVG nodes at the 500-block stress
-  // fixture (per-block identity band + duration <text>), lengthening the
-  // getComputedStyle-forced reflow during the live transition. The maximized
-  // desk roles now share the 2000ms budget already used by the similarly sized
-  // extended-ceiling viewport (which reflows more pixels and stays green).
+  // Preserve the existing transition budgets while proving all 500 authored
+  // blocks through the bounded overlap rails and complete cluster membership.
   const activeTransitionBudgetMs = role === "compact-fallback" ? 4_000 : 2_000;
   const __sblConditions = [
-    ['showStats.overviewBlockCount === 500', () => Boolean(showStats.overviewBlockCount === 500)],
+    ['population.authoredCount === 500', () => population.authoredCount === 500],
+    ['population.completeOverlapMembership', () => population.clusters.length === 2 &&
+      JSON.stringify(population.clusters.map((cluster) => cluster.track).sort()) === JSON.stringify(['Lighting', 'Video']) &&
+      population.clusters.every((cluster) => cluster.count === 250 && cluster.members.length === 250) &&
+      population.clusters.flatMap((cluster) => cluster.members).sort((a, b) => a - b)
+        .every((id, index) => id === index + 1)],
+    ['population.eightVisibleRailsPerLayer', () => population.renderedCount === 16 &&
+      showStats.overviewBlockCount === population.renderedCount && population.layers.length === 2 &&
+      population.layers.every((layer) => JSON.stringify(layer.rails) === JSON.stringify([0, 1, 2, 3, 4, 5, 6, 7]) &&
+        layer.railCounts.every((count) => count === 8))],
     ['showStats.overviewLoopLineCount <= 400', () => Boolean(showStats.overviewLoopLineCount <= 400)],
     ['showStats.overviewNodeCount < 3_500', () => Boolean(showStats.overviewNodeCount < 3_500)],
     ['idleMutationStats.records === 0', () => Boolean(idleMutationStats.records === 0)],
@@ -34394,7 +34555,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
     ['idleMutationStats.removedNodes === 0', () => Boolean(idleMutationStats.removedNodes === 0)],
     ['idleMutationStats.classAttributeMutations === 0', () => Boolean(idleMutationStats.classAttributeMutations === 0)],
     ['activeTransitionStats !== null', () => Boolean(activeTransitionStats !== null)],
-    ['activeTransitionStats.activeCount === 500', () => Boolean(activeTransitionStats.activeCount === 500)],
+    ['activeTransitionStats.activeCount === population.renderedCount', () => activeTransitionStats.activeCount === population.renderedCount],
     ['activeTransitionStats.liveRowCount > 0', () => Boolean(activeTransitionStats.liveRowCount > 0)],
     ['activeTransitionStats.liveMarkerVisual.overviewExecutingLive', () => Boolean(activeTransitionStats.liveMarkerVisual.overviewExecutingLive)],
     ['activeTransitionStats.liveMarkerVisual.operatorPlaying', () => Boolean(activeTransitionStats.liveMarkerVisual.operatorPlaying)],
@@ -34407,7 +34568,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
     ['activeTransitionStats.liveMarkerVisual.strokeDasharray !== activeTransitionStats.stoppedMa', () => Boolean(activeTransitionStats.liveMarkerVisual.strokeDasharray !== activeTransitionStats.stoppedMarkerVisual.strokeDasharray)],
     ['activeTransitionStats.stoppedMarkerVisual.strokeDasharray !== "none"', () => Boolean(activeTransitionStats.stoppedMarkerVisual.strokeDasharray !== 'none')],
     ['activeTransitionStats.stoppedActiveCount === 0', () => Boolean(activeTransitionStats.stoppedActiveCount === 0)],
-    ['activeTransitionStats.stoppedUnderPlayheadCount === 500', () => Boolean(activeTransitionStats.stoppedUnderPlayheadCount === 500)],
+    ['activeTransitionStats.stoppedUnderPlayheadCount === population.renderedCount', () => activeTransitionStats.stoppedUnderPlayheadCount === population.renderedCount],
     ['activeTransitionStats.stoppedLiveRowCount === 0', () => Boolean(activeTransitionStats.stoppedLiveRowCount === 0)],
     ['activeTransitionStats.childListMutations === 0', () => Boolean(activeTransitionStats.childListMutations === 0)],
     ['activeTransitionStats.addedNodes === 0', () => Boolean(activeTransitionStats.addedNodes === 0)],
@@ -34422,6 +34583,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
     ['finderStats.inspectorShowsRow', () => Boolean(finderStats?.inspectorShowsRow)],
     ['finderStats.inspectorStepCountLabel === "3 Static step(s)"', () => Boolean(finderStats?.inspectorStepCountLabel === '3 Static step(s)')],
     ['finderStats.startCommitApplied', () => Boolean(finderStats?.startCommitApplied)],
+    ['finderStats.startRestored', () => Boolean(finderStats?.startRestored)],
     ['finderStats.dirtyChipAfterCommit', () => Boolean(finderStats?.dirtyChipAfterCommit)],
     ['finderStats.sourceOffsetFieldPresent', () => Boolean(finderStats?.sourceOffsetFieldPresent)],
     ['finderStats.sourceOffsetCommitApplied', () => Boolean(finderStats?.sourceOffsetCommitApplied)],
@@ -34429,18 +34591,22 @@ async function runSceneBlockLargeViewport(client, viewport) {
     ['markerDragStats !== null', () => Boolean(markerDragStats !== null)],
     ['Math.abs(markerDragStats.tinyMoveX - markerDragStats.initialX) < 1', () => Boolean(Math.abs(markerDragStats.tinyMoveX - markerDragStats.initialX) < 1)],
     ['Math.abs(markerDragStats.committedMoveX - markerDragStats.expectedCommittedX) < 2', () => Boolean(Math.abs(markerDragStats.committedMoveX - markerDragStats.expectedCommittedX) < 2)],
-    ['Math.abs(markerDragStats.settledMouseX - markerDragStats.committedMoveX) < 2', () => Boolean(Math.abs(markerDragStats.settledMouseX - markerDragStats.committedMoveX) < 2)],
+    ['markerDragStats.mouseHitsVisibleBlock', () => markerDragStats.mouseHitTarget === '500'],
+    ['markerDragStats.mouseCommitSaved', () => markerDragStats.mouseCommitSaved],
+    ['markerDragStats.mouseRestored', () => markerDragStats.mouseRestored],
+    ['markerDragStats.labelReadableBeforeEditing', () => markerDragStats.labelFontSize >= 13 && markerDragStats.labelWithinBody],
     ['markerDragStats.markerTouchAction === "none"', () => Boolean(markerDragStats.markerTouchAction === 'none')],
     ['markerDragStats.nonMousePointerType === "pen"', () => Boolean(markerDragStats.nonMousePointerType === 'pen')],
     ['markerDragStats.nonMouseHitTarget.markerId === "500"', () => Boolean(markerDragStats.nonMouseHitTarget.markerId === '500')],
     ['Math.abs(markerDragStats.nonMouseTinyMoveX - markerDragStats.nonMouseInitialX) < 1', () => Boolean(Math.abs(markerDragStats.nonMouseTinyMoveX - markerDragStats.nonMouseInitialX) < 1)],
     ['Math.abs(markerDragStats.nonMouseCommittedMoveX - markerDragStats.expectedNonMouseCommitte', () => Boolean(Math.abs(markerDragStats.nonMouseCommittedMoveX - markerDragStats.expectedNonMouseCommittedX) < 2)],
-    ['Math.abs(markerDragStats.settledNonMouseX - markerDragStats.nonMouseCommittedMoveX) < 2', () => Boolean(Math.abs(markerDragStats.settledNonMouseX - markerDragStats.nonMouseCommittedMoveX) < 2)],
-    ['markerBlockPropertiesStats.selectedEventId === 493', () => Boolean(markerBlockPropertiesStats.selectedEventId === 493)],
+    ['markerDragStats.nonMouseCommitSaved', () => markerDragStats.nonMouseCommitSaved],
+    ['markerDragStats.nonMouseRestored', () => markerDragStats.nonMouseRestored],
+    ['markerBlockPropertiesStats.selectedEventId === 1', () => Boolean(markerBlockPropertiesStats.selectedEventId === 1)],
     ['markerBlockPropertiesStats.drawerOpen', () => Boolean(markerBlockPropertiesStats.drawerOpen)],
     ['markerBlockPropertiesStats.browserMode === false', () => Boolean(markerBlockPropertiesStats.browserMode === false)],
     ['markerBlockPropertiesStats.inspectorOnly', () => Boolean(markerBlockPropertiesStats.inspectorOnly)],
-    ['markerBlockPropertiesStats.inspectorShows493', () => Boolean(markerBlockPropertiesStats.inspectorShows493)],
+    ['markerBlockPropertiesStats.inspectorShows1', () => Boolean(markerBlockPropertiesStats.inspectorShows1)],
     ['showStats.beforeRowCount <= 12', () => Boolean(showStats.beforeRowCount <= 12)],
     ['showStats.afterRowCount <= 12', () => Boolean(showStats.afterRowCount <= 12)],
     ['showStats.sourceOptionCount === 0', () => Boolean(showStats.sourceOptionCount === 0)],
@@ -34453,7 +34619,7 @@ async function runSceneBlockLargeViewport(client, viewport) {
     ['showStats.reachedLastBlock', () => Boolean(showStats.reachedLastBlock)],
     ['(!requiresFullScaleVisualSignoff || showStats.repeatedSelectionVisible)', () => Boolean((!requiresFullScaleVisualSignoff || showStats.repeatedSelectionVisible))],
     ['showStats.cueIdentitySearchReached500', () => Boolean(showStats.cueIdentitySearchReached500)],
-    ['showStats.selectedMarkerRenderedLast', () => Boolean(showStats.selectedMarkerRenderedLast)],
+    ['markerBlockPropertiesStats.selectedMarkerRenderedLast', () => Boolean(markerBlockPropertiesStats.selectedMarkerRenderedLast)],
     ['showStats.cleanSaveDisabled', () => Boolean(showStats.cleanSaveDisabled)],
     ['showStats.dirtyClassVisible', () => Boolean(showStats.dirtyClassVisible)],
     ['showStats.dirtyBadgeVisible', () => Boolean(showStats.dirtyBadgeVisible)],
@@ -34463,12 +34629,12 @@ async function runSceneBlockLargeViewport(client, viewport) {
     ['showStats.globalSaveBlocked', () => Boolean(showStats.globalSaveBlocked)],
     ['showStats.cleanAfterRevert', () => Boolean(showStats.cleanAfterRevert)],
     ['showStats.overviewBackgroundFits', () => Boolean(showStats.overviewBackgroundFits)],
-    ['(!requiresFullScaleVisualSignoff || showStats.renderedBlockLabelFontSize >= 9)', () => Boolean((!requiresFullScaleVisualSignoff || showStats.renderedBlockLabelFontSize >= 9))],
+    ['showStats.renderedBlockLabelFontSize >= 13', () => showStats.renderedBlockLabelFontSize >= 13],
     ['showStats.longLabelWithinBody', () => Boolean(showStats.longLabelWithinBody)],
     ['showStats.sharedJumpPickerCount === 0', () => Boolean(showStats.sharedJumpPickerCount === 0)],
-    ['showStats.fieldLabelFontSize >= 10', () => Boolean(showStats.fieldLabelFontSize >= 10)],
-    ['showStats.semanticHintFontSize >= 9', () => Boolean(showStats.semanticHintFontSize >= 9)],
-    ['showStats.columnGuideFontSize >= 9', () => Boolean(showStats.columnGuideFontSize >= 9)],
+    ['showStats.fieldLabelFontSize >= 13', () => Boolean(showStats.fieldLabelFontSize >= 13)],
+    ['showStats.semanticHintFontSize >= 13', () => Boolean(showStats.semanticHintFontSize >= 13)],
+    ['showStats.columnGuideFontSize >= 13', () => Boolean(showStats.columnGuideFontSize >= 13)],
     ['showStats.timeLabel.includes(" / ")', () => Boolean(showStats.timeLabel.includes(' / '))],
     ['showStats.timeTitle.startsWith("1000 / ")', () => Boolean(showStats.timeTitle.startsWith('1000 / '))],
     ['showStats.timeTitle.endsWith(" ms")', () => Boolean(showStats.timeTitle.endsWith(' ms'))],
@@ -34546,6 +34712,8 @@ async function runSceneBlockLargeViewport(client, viewport) {
   return {
     label: `scene-block-large-${viewport.width}x${viewport.height}`,
     passed,
+    failedConditions,
+    population,
     showStats,
     idleMutationStats,
     activeTransitionStats,
@@ -41148,7 +41316,7 @@ async function main() {
         vjBankResults.push(result);
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
-          `pads=${result.pads.join("/")} surface=${result.currentSurface.upperLibrary ? "fixed-three-screen" : "missing"} ` +
+          `pads=${result.pads.join("/")} surface=${result.currentSurface.upperMixer ? "full-video-authoring" : "missing"} ` +
           `failed=${JSON.stringify(result.failedChecks)}`,
         );
       }
@@ -41708,7 +41876,7 @@ async function main() {
     }
     for (const result of vjBankResults) {
       console.log(
-        `${result.passed ? "pass" : "fail"} ${result.label} pads=${result.pads.join("/")} surface=${result.currentSurface.upperLibrary ? "fixed-three-screen" : "missing"} failed=${JSON.stringify(result.failedChecks)}`,
+        `${result.passed ? "pass" : "fail"} ${result.label} pads=${result.pads.join("/")} surface=${result.currentSurface.upperMixer ? "full-video-authoring" : "missing"} failed=${JSON.stringify(result.failedChecks)}`,
       );
     }
     for (const result of liveEditTypeResults) {
@@ -41892,7 +42060,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Lighting fixture-type check(s), ${patchDndFailures.length} PATCH DnD check(s), ${patchGdtfShareFailures.length} PATCH GDTF Share check(s), ${patchEmptyStateFailures.length} PATCH empty-state check(s), ${fixtureGroupsFailures.length} fixture group operation check(s), ${blindFailures.length} BLIND editing check(s), ${sceneSettingsFailures.length} Scene Settings check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${stageSettingsFailures.length} stage settings check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${vjBankFailures.length} VJ bank check(s), ${liveEditTypeFailures.length} Lighting fixture-type check(s), ${patchDndFailures.length} PATCH DnD check(s), ${patchGdtfShareFailures.length} PATCH GDTF Share check(s), ${patchEmptyStateFailures.length} PATCH empty-state check(s), ${fixtureGroupsFailures.length} fixture group operation check(s), ${blindFailures.length} BLIND editing check(s), ${sceneSettingsFailures.length} Scene Settings check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${stageSettingsFailures.length} stage settings check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {
