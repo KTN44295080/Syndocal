@@ -25,6 +25,23 @@ export const djLinkMachineBlockReasonText = (reason: string): string => ({
 }[reason] ?? "DJ Link is blocked until its machine authority can be verified.");
 
 const japaneseText: Record<string, string> = {
+  "Group canvas": "グループキャンバス",
+  "Group transform canvas": "グループ変形用キャンバス",
+  "Group canvas is not visible.": "グループキャンバスが表示されていません。",
+  "Refresh group preview": "グループのプレビューを更新",
+  "Drag inside to move; drag corners to scale; drag the round handle to rotate. Shift locks aspect or snaps rotation to 15°. Arrow keys nudge; Shift moves 10×; Escape cancels.": "枠の内側をドラッグして移動、四隅で拡縮、丸いハンドルで回転します。Shiftで縦横比を固定、または15°刻みに回転します。矢印キーで微調整、Shift併用で10倍移動、Escapeで取り消します。",
+  "Move group": "グループを移動",
+  "Rotate group": "グループを回転",
+  "Scale group from top left": "グループの左上から拡縮",
+  "Scale group from top right": "グループの右上から拡縮",
+  "Scale group from bottom right": "グループの右下から拡縮",
+  "Scale group from bottom left": "グループの左下から拡縮",
+  "Composition bounds; preview refreshes after applying a transform.": "枠はコンポジションの範囲です。変形の適用後にプレビューを更新します。",
+  "Group preview unavailable. Refresh to try again.": "グループのプレビューを取得できません。更新ボタンで再試行してください。",
+  "Project changed during the gesture. Try again.": "操作中にプロジェクトが変更されました。もう一度操作してください。",
+  "Group transform was not applied. Try again.": "グループの変形を適用できませんでした。もう一度操作してください。",
+  "Group preview composition no longer exists": "プレビュー対象のコンポジションが見つかりません",
+
   "The group, its FX and transitions that require it are removed. Its layers remain in the composition.": "グループとそのFX、グループを必要とするトランジションを削除します。レイヤーはコンポジションに残ります。",
   "Layer groups": "レイヤーグループ",
   "Group enabled": "グループを有効にする",

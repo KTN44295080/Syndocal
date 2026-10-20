@@ -1649,6 +1649,10 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       if (!silent) options.setMessage("Updated video preview diagnostics.");
     } catch (error) { options.setMessage(String(error)); }
   };
+  const loadVideoGroupCanvasPreview = async (compositionId: number, width: number, height: number) => {
+    const frame = await options.invoke<VideoFrame>("get_debug_video_preview", { compositionId, width, height });
+    return videoFrameToDataUrl(frame);
+  };
   const renderDebugVideoPreview = async () => {
     try {
       const frame = await options.invoke<VideoFrame>("get_debug_video_preview", { width: 64, height: 36 });
@@ -1887,7 +1891,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     moveVideoLayerIsfEffect, removeVideoLayerIsfEffect, setVideoLayerIsfEffectEnabled,
     resetVideoLayerIsfEffect, setVideoLayerIsfControl, triggerVideoLayerIsfEvent,
     applyVideoEffectCatalog, importVideoEffectScopeIsf, applyVideoEffectPreset, removeVideoEffectChain,
-    renderDebugVideoPreview, loadVideoLayerThumbnail, loadMediaAssetThumbnail, beginMediaAssetPreview, loadMediaAssetPreviewFrame, endMediaAssetPreview, refreshVideoPreviewDiagnostics,
+    loadVideoGroupCanvasPreview, renderDebugVideoPreview, loadVideoLayerThumbnail, loadMediaAssetThumbnail, beginMediaAssetPreview, loadMediaAssetPreviewFrame, endMediaAssetPreview, refreshVideoPreviewDiagnostics,
     refreshVideoOutputRenderPlans, refreshVideoOutputWindowStatuses, refreshSnapshotAndVideoOutputRenderPlans,
     refreshVideoRuntimeStatus, refreshExternalVideoTransportStatus, refreshExternalVideoIoPlans, syncExternalVideoTransports,
     renderDebugVideoOutputPreview, setVideoLayerState, setVideoLayerTransform, setVideoLayerColor,
