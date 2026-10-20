@@ -6,6 +6,11 @@ use std::{
 use serde::{de, Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
+mod video_isf_image_bindings;
+pub use video_isf_image_bindings::{
+    validate_video_isf_image_bindings, validate_video_isf_image_graph,
+    MAX_VIDEO_ISF_IMAGE_BINDINGS, MAX_VIDEO_ISF_IMAGE_DEPENDENCY_DEPTH,
+};
 mod video_generator;
 pub use video_generator::VideoGenerator;
 pub mod network_dmx_routes;
@@ -925,6 +930,22 @@ pub struct VideoIsfControlSummary {
     pub tempo_sync: Option<VideoIsfTempoSync>,
 }
 
+/// An authored source for one named ISF image input.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum VideoIsfImageSource {
+    None {},
+    Layer { layer_id: VideoLayerId },
+    Imported { path: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(deny_unknown_fields)]
+pub struct VideoIsfImageBinding {
+    pub name: String,
+    pub source: VideoIsfImageSource,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VideoIsfEffectStageSummary {
     pub enabled: bool,
@@ -938,6 +959,9 @@ pub struct VideoIsfEffectStageSummary {
     pub categories: Vec<String>,
     #[serde(default)]
     pub controls: Vec<VideoIsfControlSummary>,
+    /// Named image overrides. Older projects omit this field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub image_bindings: Vec<VideoIsfImageBinding>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -953,6 +977,9 @@ pub struct VideoIsfEffectSummary {
     pub categories: Vec<String>,
     #[serde(default)]
     pub controls: Vec<VideoIsfControlSummary>,
+    /// Named image overrides. Older projects omit this field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub image_bindings: Vec<VideoIsfImageBinding>,
     /// Additional single-pass effects evaluated after this effect. Keeping the
     /// first stage in the legacy object preserves `.sdc v1` compatibility while
     /// allowing newer projects to serialize an ordered GPU effect stack.
@@ -2522,6 +2549,7 @@ pub fn normalize_legacy_video_effect_chains(
                     description: stage.description,
                     categories: stage.categories,
                     controls: stage.controls,
+                    image_bindings: stage.image_bindings,
                     stack: Vec::new(),
                 }),
         );
@@ -2565,11 +2593,13 @@ pub fn normalize_legacy_video_effect_chains(
 }
 
 pub fn validate_authored_video_effect_chains(video: &VideoSnapshot) -> Result<(), String> {
-    validate_video_effect_chains(video, false, false)
+    validate_video_effect_chains(video, false, false)?;
+    validate_video_isf_image_graph(video)
 }
 
 pub fn validate_engine_ready_video_effect_chains(video: &VideoSnapshot) -> Result<(), String> {
-    validate_video_effect_chains(video, true, false)
+    validate_video_effect_chains(video, true, false)?;
+    validate_video_isf_image_graph(video)
 }
 
 fn validate_video_effect_chains(
@@ -3107,6 +3137,7 @@ fn projected_legacy_isf(
             description: effect.description,
             categories: effect.categories,
             controls: effect.controls,
+            image_bindings: effect.image_bindings,
         })
         .collect();
     Ok(Some(root))
@@ -15845,6 +15876,7 @@ mod tests {
 
     fn clip_slot_test_effect() -> super::VideoIsfEffectSummary {
         super::VideoIsfEffectSummary {
+            image_bindings: Vec::new(),
             enabled: true,
             label: "Color".to_string(),
             source: std::sync::Arc::from("/* test */"),
@@ -16330,6 +16362,7 @@ mod tests {
         layer.default_clip_slot_id = Some(super::VideoClipSlotId(20));
         let mut effect = clip_slot_test_effect();
         effect.stack.push(super::VideoIsfEffectStageSummary {
+            image_bindings: Vec::new(),
             enabled: true,
             label: "Stack Color".to_string(),
             source: std::sync::Arc::from("/* stack test */"),

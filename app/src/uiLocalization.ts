@@ -25,6 +25,19 @@ export const djLinkMachineBlockReasonText = (reason: string): string => ({
 }[reason] ?? "DJ Link is blocked until its machine authority can be verified.");
 
 const japaneseText: Record<string, string> = {
+  "Image inputs": "画像入力",
+  "None (transparent)": "なし（透明）",
+  "Imported still": "読み込み画像",
+  "Missing layer": "レイヤーが見つかりません",
+  "Would create a cycle": "循環するため選択不可",
+  "Image path relative to the shader": "シェーダーからの画像の相対パス",
+  "Use a PNG or JPEG inside the shader folder. Subfolders are allowed.": "シェーダーのフォルダー内にあるPNGまたはJPEGを使ってください。サブフォルダーも指定できます。",
+  "Apply image": "画像を適用",
+  "Choose a relative PNG or JPEG path without parent folders.": "上位フォルダーを参照しない、PNGまたはJPEGの相対パスを指定してください。",
+  "Import the shader from a file to bind a still image.": "静止画像を割り当てるには、シェーダーをファイルから読み込んでください。",
+  "This generator ignores the layer image and uses the layer render size.": "このジェネレーターはレイヤーの元画像を使わず、レイヤーの描画サイズで生成します。",
+  "At most four image inputs are supported.": "画像入力は最大4つまで対応しています。",
+  "Layer inputs use the output after Clip and Layer FX, before group or composition processing.": "レイヤー入力には、クリップ・レイヤーFX適用後、グループ・コンポジション処理前の出力を使います。",
   "Group canvas": "グループキャンバス",
   "Group transform canvas": "グループ変形用キャンバス",
   "Group canvas is not visible.": "グループキャンバスが表示されていません。",

@@ -1,4 +1,4 @@
-# ISF support matrix — T23 — 2026-10-20
+# ISF support matrix — T23 / T32 — 2026-10-20
 
 ## Scope and conclusion
 
@@ -6,7 +6,7 @@ This audit covers the ISF filter path in `crates/video`, its native import/valid
 
 T23 adds ordered multi-pass rendering, named targets, persistent feedback, RGBA32Float targets, bounded per-frame dimension expressions, and shader-relative PNG/JPEG imports. Point2D, color and event controls already existed; their actual rendered output is now covered by small fixtures. Image helpers now use each sampled texture's dimensions.
 
-The work is isolated to branch `task23-isf` in `wt-task23`, based on `036a268c01e7a6dcf8b41830e99e4593f2922817`. No application, native harness, release build, push or merge is part of this evidence.
+T32 extends this baseline on branch `task32-isf-date-images` in `wt-task32`, based on `7fe67b00`. T23 evidence below is historical; T32 validation is recorded separately at the end of this document. No application, native harness, release build, push or merge is part of the T32 worktree evidence.
 
 ### Official comparison sources
 
@@ -21,7 +21,7 @@ Sources were inspected on 2026-10-19/20 UTC. The status column describes the res
 
 ## Passes, targets and resources
 
-| Feature | Status after T23 | Implemented behavior and remaining boundary | Evidence |
+| Feature | Current status | Implemented behavior and remaining boundary | Evidence |
 | --- | --- | --- | --- |
 | Ordered `PASSES` | Supported, bounded | One shader runs once per declared pass, in order. Missing/empty PASSES becomes one ordinary pass. The declared image input remains the stage's input across all passes; named targets expose earlier pass results. Maximum 16 passes. | S1/S5; `isf_runtime.rs:644`; `isf_pass_runtime.rs:163`; fixture `multipass.fs`. |
 | Named `TARGET` | Partially supported | Each distinct name has separate read/write textures. A pass reads its previous front and writes the opposite texture; later passes see the new front. Names must be safe and unique across inputs, targets and imports. Reusing the same TARGET name in multiple pass declarations is rejected. | `isf_runtime.rs:506`; `isf_pass_runtime.rs:163`; multipass and invalid-metadata tests. |
@@ -35,26 +35,26 @@ Sources were inspected on 2026-10-19/20 UTC. The status column describes the res
 | IMPORTED path forms | Partially supported | Accepts child paths using either separator. Absolute paths, URLs, parent traversal, alternate streams and canonical paths escaping the shader folder are rejected. The ISF reference permits parent-relative paths; this host intentionally requires resources to remain in the shader folder. | S1; `isf_resources.rs:465`; path rejection tests. |
 | Resource identity and reload | Partially supported | Prepared-cache identity includes source text and source path, so identical shaders in different pack directories load their own images. GPU history fingerprints include decoded image contents. Existing cached assets are not watched for file changes; a source/path change or a fresh renderer/reload is needed to guarantee re-decoding. Imported bytes are not embedded into project files. | `lib.rs:6311`; `isf_runtime.rs:506`; distinct-pack cache test at `isf_completeness_tests.rs:207`. |
 
-All short Rust paths in this document are relative to `crates/video/src/` unless an `app/` prefix is present.
+All short Rust paths in this document are relative to `crates/video/src/` unless an `app/` prefix is present. T23 line references are historical baseline locations; the T32 section names current source files and regression entry points.
 
 ### Resource bounds
 
-- Maximum 16 passes, 16 total sampled textures (the one image input plus targets/imports), and 16 scalar/vector controls.
+- Maximum 16 passes, 16 total sampled textures (dynamic images plus targets/imports), four dynamic image declarations and 16 scalar/vector controls. Additional layer dependencies are limited to 32 links (33 layers).
 - Dimension expressions: at most 1,024 ASCII bytes, 256 AST nodes and 32 nested parse levels.
 - Imported images: at most 15, at most 16 MiB per encoded file, at most 8,192 pixels per axis, and at most 64 MiB of combined decoded RGBA per prepared shader. The total-texture limit can reduce the available import count.
-- The prepared-shader cache and pipeline cache each retain at most 64 entries. Pipeline identity includes WGSL hash, target format and texture count. Persistent/import GPU instance resources are retained in a 64-entry LRU pool.
-- Main texture/readback accounting is capped at 256 MiB per stage and 512 MiB across the pool and current encoder. Accounting includes both target textures, imports, every separately allocated unnamed intermediate, host upload/ping/pong and padded readback. Anonymous allocations accumulate until submission completes; a cache hit recalculates their cost for the current host size. Driver overhead and small pipeline/uniform allocations are outside this texture/readback estimate.
+- Metadata imports and bound stills share the decoded-byte and import-count limits. The prepared-shader cache and pipeline cache each retain at most 64 entries. Pipeline identity includes WGSL hash, target format and texture count. Persistent/import GPU instance resources are retained in a 64-entry LRU pool.
+- Stage-owned texture accounting is capped at 256 MiB per stage: both target textures, imports, additional dynamic images and every separately allocated unnamed intermediate. The 512 MiB global limit additionally covers the shared host upload/ping/pong textures and padded readback across the resource pool and current encoder. Anonymous allocations accumulate until submission completes; a cache hit recalculates their cost for the current host size. Driver overhead and small pipeline/uniform allocations are outside this texture/readback estimate.
 - LRU eviction, a failed stage that loses its resource state, changed target dimensions, changed shader/resource fingerprint, a new renderer, or a new project namespace can reset feedback. A failed submitted stack cannot publish new history. This is bounded live-renderer state, not project-persisted feedback.
 
 The main checks and allocation ownership are in `isf_pass_runtime.rs:128`, `:163`, `:430`, and `:464`. Resource decode bounds are in `isf_resources.rs:9` and `:465`.
 
 ## Input types
 
-ISF defines nine input kinds (S1). The filter API still requires exactly one dynamic image input.
+ISF defines nine input kinds (S1). T32 accepts zero through four dynamic image declarations. By default, an image named exactly `inputImage` receives the host frame even when it is not first in INPUTS; if absent, the first declared image does. The parameter editor exposes the other image declarations; unbound additional images are transparent. Explicit project/API bindings can override the primary input.
 
 | Input kind | Status | Behavior and limits | Evidence |
 | --- | --- | --- | --- |
-| `image` | Partially supported | Exactly one host frame. Multiple dynamic image inputs, native ISF transition inputs and zero-image generators are rejected. Imported images and pass targets do not count as that required dynamic input. | `isf_runtime.rs:506`; existing rejection and built-in tests. |
+| `image` | Supported, bounded | Zero through four dynamic images. Named additional inputs bind to a stable layer output ID, a shader-relative PNG/JPEG still, or transparent none. Layer references use dependency order and reject direct/indirect cycles and missing IDs. Existing one-image shaders keep their host input. Native transition conventions are not automatically assigned. | S1; `isf_runtime.rs`; `isf_layer_inputs.rs`; `isf_layer_binding_tests.rs`. |
 | `float` | Supported | Existing defaults/ranges and per-frame control resolution remain. Bounded values become float uniforms. | `isf_runtime.rs:759`, `:832`; threshold GPU regression; all 14 built-ins compile. |
 | `bool` | Supported | Existing control value becomes a GLSL boolean using the established threshold. | `isf_runtime.rs:832`; parameter-model and built-in checks. |
 | `long` | Partially supported | Existing integer controls and enumerated values/labels work; storage is a float control slot before GLSL int conversion, so arbitrary full-width integer precision is not guaranteed. | `isf_runtime.rs:759`, `:832`; FX parameter and built-in checks. |
@@ -70,6 +70,16 @@ The existing live publication exposes an `AudioSpectrumPoint`, up to 16 reactive
 
 Native publication converts analyzer output into those reactive features in `app/src-tauri/src/main.rs:48376` and `:48416`. The video effect context at `lib.rs:188` carries clip runtime and project epoch, not an audio texture feed. ISF's audio contract has channel rows and sample/FFT columns (S1). A faithful implementation therefore needs a new publication and renderer ownership path with explicit generation, channel and lifetime semantics. There is no clean existing texture hook in these inspected seams. T23 preserves the explicit unsupported result and the existing Audio FFT control alternative.
 
+## T32 image binding and generator behavior
+
+Image bindings are authored as `image_bindings: [{name, source}]` on each ISF effect/stage. The source is `{kind: "none"}`, `{kind: "layer", layer_id}`, or `{kind: "imported", path}`. Missing fields deserialize to an empty list and empty lists are omitted, preserving older project data. Layer IDs, not bank indexes or display labels, own references. Existing effect replacement/preset/save paths carry the bindings; no extra Tauri route is introduced.
+
+A sampled layer is its current Clip/transition/Layer-FX result before group/composition transformations and compositing. A dependency can be outside the visible composition. It is prepared before consumers, using shared frame ownership. Every render clears its binding map; a removed layer, an unavailable frame or a dependency stage fault produces an explicit error instead of exposing an old binding. Pipeline identity remains shader/layout based; resource identity additionally includes authored bindings and imported contents, so retargeting a binding invalidates feedback without resetting it whenever live image pixels change.
+
+A zero-image generator runs as an ordinary layer effect that ignores the incoming frame. Its RENDERSIZE comes from the actual host frame supplied at that effect scope (or a declared pass size); output/Preview requests use their requested host dimensions. This work does not add a new native ISF source kind: use an existing generator/source layer as its host. Imported stills retain the T23 shader-folder containment and decode limits; projects store relative paths, not embedded image bytes. Assets are not watched continuously for content changes.
+
+Layer bindings are resolved on snapshot-backed output, Preview and layer-thumbnail paths. Scheduling follows the actual composition/output scope; groups must be enabled and visible, and LayerBus dependencies are included only for active runtime buses with visible members. A shared layer does not pull in unrelated compositions. Thumbnails resolve layer/clip dependencies only. The older keyed-input mix API has no authored layer-output context and gives a specific unavailable-context error. Timeline Follow layer bindings are rejected at authored/engine-ready admission because its standalone combine API has no unambiguous layer context. None and imported stills remain usable in those APIs. Custom vertex stages stay explicitly rejected: the fixed fullscreen vertex path has no custom varying or vertex-init contract, and adding one would exceed this bounded fragment-host change. ISF audio/audioFFT work is owned by T27 and is unchanged here.
+
 ## Sampling helpers and standard variables
 
 | Feature | Status | Resulting contract | Evidence |
@@ -84,7 +94,7 @@ Native publication converts analyzer output into those reactive features in `app
 | `TIME` | Partially supported | Host-supplied nonnegative seconds, unchanged across a chain's passes. Production uses the frame's media PTS, rather than introducing a separate shader-start clock. | S3; `lib.rs:6360`; `isf_runtime.rs:921`. |
 | `TIMEDELTA` | Partially supported | Host-supplied nonnegative delta, unchanged across passes. Production uses frame duration; it does not force the first shader frame to zero or measure wall-clock time since the preceding render. | S3; same uniform/caller evidence. |
 | `FRAMEINDEX` | Partially supported | Preserves the existing runtime-wide chain counter. All passes/stages of a stage-local chain see the same value; a nonempty stage-local chain advances once even if all stages fail. It is not an independent counter starting at zero for each newly imported document/instance. | S3; `isf_runtime.rs:197`, `:264`; frame-index and C1 topology regressions. |
-| `DATE` | Unsupported | No date/time uniform is injected; use produces a shader diagnostic. DATE is reserved against input-name collision. | S3; `isf_runtime.rs:727`, `:832`. |
+| `DATE` | Supported with an explicit host clock convention | A vec4 contains UTC year, month 1..12, day and fractional seconds within the day. Live time is captured once for a render and shared across its stages/passes. `set_isf_date_override` freezes/injects values for deterministic rendering. The recording parent captures DATE into each request; the worker replays that value. | S3; `isf_runtime.rs`; `isf_layer_inputs.rs`; `app/src-tauri/src/video_recording_renderer_process.rs`. |
 | `isf_FragNormCoord` / `gl_FragCoord` | Partially supported | Existing fullscreen vertex and wgpu pixel-coordinate convention remain. The host keeps its established top-left image convention; ISF describes bottom-left normalized origin. No orientation conversion was introduced into the parity-sensitive path. | S3; fullscreen vertex in `isf_runtime.rs`, wrapper at `:832`. |
 
 ## Vertex stages, GLSL and host behavior
@@ -119,7 +129,7 @@ Fixture directory: `crates/video/src/isf_fixtures/`. Image assets are generated 
 | Fixed pass dimensions / host resize | Host 16→8→16 with fixed 16×16 targets preserves red history 1→2→3 and recalculates transient bytes 0→1024→0. |
 | Public renderer isolation | Composition/output scopes, Preview/output namespaces, legacy output/Preview/thumbnails and epoch changes are exercised through public render methods. |
 
-## Validation and review
+## T23 baseline validation and review
 
 The final Rust acceptance runs used the debug profile through `pcargo-here.cmd`, with the worktree as CWD and **CARGO_TARGET_DIR removed**, following the corrected handoff. Earlier shared-target output is not acceptance evidence.
 
@@ -137,3 +147,40 @@ Local validation logs are under `target/t23-validation/`; browser evidence is un
 An independent read-only agent reviewed supplied scheduler and renderer identity code. It identified anonymous-pass allocation accounting and cache-hit transient-cost refresh; both were fixed and regression-tested. The final bounded review has no remaining blocking finding in those supplied areas. Root reviewed the resource loader, expression parser, GPU descriptors, namespace entry points and native path propagation. The independent reviewer did not run commands or review every resource-loader detail. Claude's independent native review remains required before merging.
 
 No `syndocal.exe`, native/real-app harness, release build, push or merge was run. Live output pacing, physical display/Spout delivery, native file-dialog interaction, real-world pack benchmarking and complete ISF conformance are outside this validation.
+
+## T32 rendered fixtures and validation
+
+T32 adds these deterministic checks on top of the historical T23 baseline:
+
+| Fixture / regression | Result or invariant |
+| --- | --- |
+| `date.fs` | Injected `[2026,10,20,43200.25]` produces RGBA `[26,10,20,64]` in both passes and across changed media TIME. Changing the injected date produces `[30,12,1,128]`; nonfinite and invalid calendar values fail before GPU execution. |
+| `generator.fs` | An 8x4 host produces `[128,64,191,255]` regardless of host pixel contents, preserving the host dimensions and frame metadata. |
+| `two_images.fs` | A blue primary plus a red overlay produces `[128,0,128,255]`. Unbound overlay produces `[0,0,128,128]`; a 1x1 overlay reports its own IMG_SIZE. `inputImage` wins even when declared after the overlay. |
+| Current layer output and faults | Layer references sample post-Clip/Layer-FX pixels, survive list reorder, and refresh after binding changes. Missing sources, cycles, depth overflow, missing current frames and failed dependency stages produce explicit diagnostics. Stage-local faults preserve the current diagnostic frame with Error evidence; LastValid remains reserved for renders that cannot produce a frame. |
+| Scope and parity | Composition/Output binding pixels agree between Preview and Output. Thumbnails keep layer-only scope. Shared layers do not import unrelated composition dependencies; idle/invisible LayerBus configuration does not add dependencies. Existing C1 CPU/GPU and last-valid behavior remains covered. |
+| Persistence and admission | Old JSON keeps its original shape. Layer/Imported/None bindings round-trip, follow moved stages and survive native sanitization. Ambiguous source payloads are rejected. Deleting a referenced source is atomic and rejected; deleting its consumer and owned chains succeeds. Dormant authored chains and presets participate in validation. |
+| Resource lifetime | Dynamic frame changes retain feedback, authored binding changes invalidate it, explicit primary None is transparent, and RGBA/BGRA secondary inputs share conversion behavior. Missing, unsafe and invalid imported stills are rejected using T23 bounds. An invalid dynamic input is followed by a successful render to check failure cleanup. |
+
+Completed debug checks through `pcargo-here.cmd`, with CARGO_TARGET_DIR unset and temporary test files inside this worktree:
+
+- `cargo test -p protocol isf -- --test-threads=1`: **11 passed, 0 failed, 0 ignored**.
+- `cargo test -p engine isf -- --test-threads=1`: **20 passed, 0 failed, 0 ignored**.
+- `cargo test -p video isf -- --test-threads=1`: **59 passed, 0 failed, 0 ignored**; the known-pixel GPU tests require an adapter and ran.
+- `cargo test -p video c1_ -- --test-threads=1`: **26 passed, 0 failed, 0 ignored**, including RGBA/BGRA/BC1/BC3/BC7 compositor parity.
+- TypeScript `tsc --noEmit`, `check-fx-catalog.mjs` and `check-fx-parameters.mjs`: passed. Catalog coverage includes 14 built-ins and **37 bilingual rejection fixtures**.
+- Complete existing plus T32 `check-fx-ux-browser.mjs`: passed on Vite **5480** / CDP **9480**. Covers None/layer/still selection, stable IDs, relative-path validation, one explicit Apply write, rejected/no-op write restoration, generator hints, EN/JA and two themes. Controls are at least 44px tall with at least 14px text.
+- `check-localization.mjs`: **4162/4162 (100%)**, zero unprotected user-data labels.
+
+Rust logs are under `target/t32-validation/`. T32 browser screenshots were inspected under `target/qa/t32-isf-images/`; the final post-hint-cleanup browser run wrote refreshed evidence under `target/qa/fx-ux-12/`. These ignored artifacts remain worktree evidence, not committed source files.
+
+Independent read-only reviews covered low-level GPU resource ownership, binding resolution and render scope, native sanitization/recording IPC, atomic engine deletion, and frontend documentation. Review findings led to required-current-frame validation, upload cleanup, a root-order-independent depth bound, explicit scope scheduling, authoritative UI write confirmation and strict None deserialization. No blocking finding remained in the reviewed implementation after those corrections. Native application/physical-output acceptance remains with the main agent.
+
+### T32 final workspace and native unit gates
+
+- `cargo check --workspace`: passed, **zero warnings**.
+- `cargo test -p syndocal isf_image_binding_native_tests -- --test-threads=1`: **2 passed, 0 failed, 0 ignored**. CPU-only shader preparation checks authored-name rejection, native sanitization, stack projection and JSON round-trip.
+- `cargo test -p syndocal render_request_keeps_external_frame_bytes_binary -- --test-threads=1`: **1 passed, 0 failed, 0 ignored**. The actual SRF1 envelope retains captured DATE and binary image bytes; a header without DATE receives the deterministic epoch fallback, and an unknown field is rejected.
+- All seven final Rust commands above completed with **zero warnings**. Changed Rust files use UTF-8 without BOM and LF. New files and owned hunks were formatted; final staged `git diff --check` passed.
+
+The native tests ran only the filtered Rust test runner. No Syndocal application session, native/real-app harness, native-gate, build-nobundle, release build, push or merge was run. Physical output/Spout, live pacing and native file-dialog acceptance remain outside this worktree's validation.

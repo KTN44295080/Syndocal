@@ -537,6 +537,7 @@ fn isf_effect() -> VideoIsfEffectSummary {
         description: None,
         categories: Vec::new(),
         controls: Vec::new(),
+        image_bindings: Vec::new(),
         stack: Vec::new(),
     }
 }

@@ -34,6 +34,9 @@ pub(crate) struct RecordingRenderRequest {
     pub(crate) transition_runtime: protocol::VideoLayerTransitionRuntimeSnapshot,
     pub(crate) project_render_epoch: u64,
     pub(crate) bpm: f32,
+    /// Captured with the live request; replay never reads the worker clock.
+    #[serde(default = "default_recording_isf_date")]
+    pub(crate) isf_date: [f32; 4],
     pub(crate) output_id: protocol::VideoOutputId,
     pub(crate) width: u32,
     pub(crate) height: u32,
@@ -51,6 +54,7 @@ struct RecordingRenderRequestHeader<'a> {
     transition_runtime: &'a protocol::VideoLayerTransitionRuntimeSnapshot,
     project_render_epoch: u64,
     bpm: f32,
+    isf_date: [f32; 4],
     output_id: protocol::VideoOutputId,
     width: u32,
     height: u32,
@@ -65,6 +69,8 @@ struct RecordingRenderRequestHeaderOwned {
     transition_runtime: protocol::VideoLayerTransitionRuntimeSnapshot,
     project_render_epoch: u64,
     bpm: f32,
+    #[serde(default = "default_recording_isf_date")]
+    isf_date: [f32; 4],
     output_id: protocol::VideoOutputId,
     width: u32,
     height: u32,
@@ -81,6 +87,10 @@ struct RecordingInjectedFrameHeader {
     duration_ms: u64,
     format: video::VideoPixelFormat,
     data_len: u32,
+}
+
+fn default_recording_isf_date() -> [f32; 4] {
+    [1970.0, 1.0, 1.0, 0.0]
 }
 
 pub(crate) struct RecordingRendererProcess {
@@ -276,6 +286,7 @@ pub(crate) fn run_worker() -> Result<(), String> {
                     .collect(),
             );
         renderer.frame_provider_mut().set_bpm(Some(request.bpm));
+        renderer.set_isf_date_override(Some(request.isf_date));
         let never_cancelled = || false;
         let result = renderer.render_output_preview_with_effects_and_transitions_cancellable(
             &request.video,
@@ -327,6 +338,9 @@ fn write_payload(writer: &mut impl Write, payload: &[u8]) -> io::Result<()> {
 /// render request JSON, but carry those bytes in one binary trailer instead of
 /// expanding every pixel into a JSON number array on every recording frame.
 fn encode_render_request(request: &RecordingRenderRequest) -> Result<Vec<u8>, String> {
+    if request.isf_date.iter().any(|value| !value.is_finite()) {
+        return Err("Recording renderer DATE uniform is invalid".to_string());
+    }
     let mut frame_bytes = 0usize;
     let mut injected_frames = Vec::with_capacity(request.injected_frames.len());
     for frame in &request.injected_frames {
@@ -351,6 +365,7 @@ fn encode_render_request(request: &RecordingRenderRequest) -> Result<Vec<u8>, St
         transition_runtime: &request.transition_runtime,
         project_render_epoch: request.project_render_epoch,
         bpm: request.bpm,
+        isf_date: request.isf_date,
         output_id: request.output_id,
         width: request.width,
         height: request.height,
@@ -426,6 +441,7 @@ fn decode_render_request(payload: &[u8]) -> Result<RecordingRenderRequest, Strin
         transition_runtime: header.transition_runtime,
         project_render_epoch: header.project_render_epoch,
         bpm: header.bpm,
+        isf_date: header.isf_date,
         output_id: header.output_id,
         width: header.width,
         height: header.height,
@@ -595,6 +611,7 @@ mod tests {
             transition_runtime: protocol::VideoLayerTransitionRuntimeSnapshot::default(),
             project_render_epoch: 4,
             bpm: 120.0,
+            isf_date: [2026.0, 10.0, 20.0, 1234.5],
             output_id: 2,
             width: 1,
             height: 1,
@@ -609,11 +626,43 @@ mod tests {
             }],
         };
         let encoded = encode_render_request(&request).unwrap();
+        assert_eq!(
+            decode_render_request(&encoded).unwrap().isf_date,
+            request.isf_date
+        );
+        let mut legacy = serde_json::to_value(&request).unwrap();
+        legacy.as_object_mut().unwrap().remove("isf_date");
+        let legacy: RecordingRenderRequest = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.isf_date, default_recording_isf_date());
         assert!(encoded.windows(4).any(|window| window == [0, 17, 255, 255]));
         assert!(!encoded.windows(4).any(|window| window == [48, 49, 55, 44]));
         assert_eq!(
             decode_render_request(&encoded).unwrap().injected_frames,
             request.injected_frames
         );
+        let header_start = REQUEST_MAGIC.len() + 4;
+        let header_len = u32::from_le_bytes(
+            encoded[REQUEST_MAGIC.len()..header_start]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let header_end = header_start + header_len;
+        let mut legacy_header: serde_json::Value =
+            serde_json::from_slice(&encoded[header_start..header_end]).unwrap();
+        legacy_header.as_object_mut().unwrap().remove("isf_date");
+        let with_header = |header: &serde_json::Value| {
+            let json = serde_json::to_vec(header).unwrap();
+            let mut payload = Vec::new();
+            payload.extend_from_slice(REQUEST_MAGIC);
+            payload.extend_from_slice(&(json.len() as u32).to_le_bytes());
+            payload.extend_from_slice(&json);
+            payload.extend_from_slice(&encoded[header_end..]);
+            payload
+        };
+        let legacy_request = decode_render_request(&with_header(&legacy_header)).unwrap();
+        assert_eq!(legacy_request.isf_date, default_recording_isf_date());
+        assert_eq!(legacy_request.injected_frames, request.injected_frames);
+        legacy_header["unexpected"] = serde_json::json!(true);
+        assert!(decode_render_request(&with_header(&legacy_header)).is_err());
     }
 }

@@ -327,6 +327,7 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
             transition_runtime: output_preview.snapshot.video_transition_runtime.clone(),
             project_render_epoch: output_preview.project_render_epoch,
             bpm: output_preview.snapshot.clock.bpm,
+            isf_date: video::isf_date_now(),
             output_id,
             width,
             height,

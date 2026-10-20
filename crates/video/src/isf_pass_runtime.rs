@@ -1,13 +1,13 @@
 //! Pass scheduling and GPU resource ownership for the ISF runtime.
 //! Every named buffer has separate read/write textures. Feedback is owned by
 //! an effect instance, never by a compiled shader or by a control value.
-use std::{collections::BTreeMap, sync::mpsc};
+use std::{borrow::Cow, collections::BTreeMap, sync::mpsc};
 use wgpu::util::DeviceExt;
 
 use super::{
     convert_frame_to_rgba8, isf_uniform_data, runtime_error, runtime_from_composite_error,
-    source_hash, IsfGpuPipeline, IsfGpuRuntime, IsfInstanceKey, IsfRuntimeError, PreparedIsfShader,
-    VideoFrame, VideoPixelFormat, ISF_GPU_PIPELINE_CAPACITY,
+    source_hash, IsfGpuPipeline, IsfGpuRuntime, IsfInstanceKey, IsfRuntimeError, IsfStageInputs,
+    PreparedIsfShader, VideoFrame, VideoPixelFormat, ISF_GPU_PIPELINE_CAPACITY,
 };
 
 const RESOURCE_CACHE_CAPACITY: usize = 64;
@@ -93,6 +93,7 @@ struct StageResources {
     sizes: Vec<(u32, u32)>,
     targets: Vec<TargetBuffer>,
     imports: Vec<GpuImage>,
+    bound_images: Vec<GpuImage>,
     bytes: u64,
     transient_bytes: u64,
     last_used: u64,
@@ -128,10 +129,11 @@ impl IsfGpuRuntime {
     pub(super) fn render_pass_stack(
         &mut self,
         frame: &VideoFrame,
-        stages: &[(&PreparedIsfShader, &[[f32; 4]])],
+        stages: &[IsfStageInputs<'_>],
         time_seconds: f32,
         time_delta_seconds: f32,
         frame_index: u32,
+        date: [f32; 4],
         keys: &[IsfInstanceKey],
     ) -> Result<VideoFrame, IsfRuntimeError> {
         self.last_stack_stage_count = stages.len();
@@ -147,8 +149,18 @@ impl IsfGpuRuntime {
             time_seconds,
             time_delta_seconds,
             frame_index,
+            date,
             keys,
         );
+        // Failed validation can leave write_texture staging uploads pending.
+        // Submit and drain them so repeated failures cannot retain unbounded uploads.
+        let cleanup_failure = if result.is_err() {
+            self.queue.submit(std::iter::empty::<wgpu::CommandBuffer>());
+            self.device.poll(wgpu::PollType::wait()).err()
+        } else {
+            None
+        };
+        // Always balance both scopes, including a failed cleanup wait.
         let validation = pollster::block_on(self.device.pop_error_scope());
         let allocation = pollster::block_on(self.device.pop_error_scope());
         if let Some(error) = validation.or(allocation) {
@@ -157,16 +169,25 @@ impl IsfGpuRuntime {
             }
             return Err(runtime_error(format!("ISF GPU pass failed: {error}")));
         }
+        if let Some(error) = cleanup_failure {
+            for key in keys {
+                self.resources.entries.remove(key);
+            }
+            return Err(runtime_error(format!(
+                "ISF GPU upload cleanup failed: {error}"
+            )));
+        }
         result
     }
 
     fn render_pass_stack_inner(
         &mut self,
         frame: &VideoFrame,
-        stages: &[(&PreparedIsfShader, &[[f32; 4]])],
+        stages: &[IsfStageInputs<'_>],
         time_seconds: f32,
         time_delta_seconds: f32,
         frame_index: u32,
+        date: [f32; 4],
         keys: &[IsfInstanceKey],
     ) -> Result<VideoFrame, IsfRuntimeError> {
         if keys.len() != stages.len() {
@@ -188,9 +209,9 @@ impl IsfGpuRuntime {
         self.evict_resources_for(baseline_bytes);
         let expected_len = frame.width as usize * frame.height as usize * 4;
         let rgba = if frame.format == VideoPixelFormat::Rgba8 {
-            frame.clone()
+            Cow::Borrowed(frame)
         } else {
-            convert_frame_to_rgba8(frame).map_err(runtime_from_composite_error)?
+            Cow::Owned(convert_frame_to_rgba8(frame).map_err(runtime_from_composite_error)?)
         };
         if rgba.data.len() != expected_len {
             return Err(runtime_error(
@@ -235,8 +256,10 @@ impl IsfGpuRuntime {
         let mut current = input;
         let mut pending_states = Vec::new();
         let mut pending_bytes = baseline_bytes;
-        for (stage_index, ((shader, controls), key)) in stages.iter().zip(keys).enumerate() {
-            let texture_count = 1
+        for (stage_index, (stage, key)) in stages.iter().zip(keys).enumerate() {
+            let shader = stage.shader;
+            let controls = stage.controls;
+            let texture_count = shader.image_input_names.len()
                 + shader
                     .passes
                     .iter()
@@ -263,8 +286,66 @@ impl IsfGpuRuntime {
             for float in formats {
                 self.ensure_pass_pipeline(&shader.wgsl, texture_count, float)?;
             }
-            let mut state =
-                self.take_stage_resources(shader, controls, frame, key, pending_bytes)?;
+            let needs_transparent =
+                shader
+                    .image_input_names
+                    .iter()
+                    .enumerate()
+                    .any(|(index, name)| {
+                        !shader.bound_images.iter().any(|image| &image.name == name)
+                            && !stage.images.iter().any(|image| image.name == name.as_str())
+                            && (index != 0 || shader.image_binding_names.contains(name))
+                    });
+            let dynamic_bytes = self.dynamic_image_bytes(stage, needs_transparent)?;
+            // Validate and convert every CPU input before taking cached state or
+            // uploading any secondary texture.
+            let dynamic_rgba = stage
+                .images
+                .iter()
+                .map(|input| {
+                    let image = input.frame;
+                    let rgba = if image.format == VideoPixelFormat::Rgba8 {
+                        Cow::Borrowed(image)
+                    } else {
+                        Cow::Owned(
+                            convert_frame_to_rgba8(image).map_err(runtime_from_composite_error)?,
+                        )
+                    };
+                    if rgba.data.len() != image.width as usize * image.height as usize * 4 {
+                        return Err(runtime_error(
+                            "ISF image input byte length does not match its dimensions",
+                        ));
+                    }
+                    Ok(rgba)
+                })
+                .collect::<Result<Vec<_>, IsfRuntimeError>>()?;
+            let mut state = self.take_stage_resources(
+                shader,
+                controls,
+                frame,
+                key,
+                pending_bytes,
+                dynamic_bytes,
+            )?;
+            let dynamic_images = dynamic_rgba
+                .iter()
+                .map(|rgba| {
+                    let gpu = GpuImage::new(
+                        &self.device,
+                        rgba.width,
+                        rgba.height,
+                        false,
+                        "Syndocal ISF image input",
+                    );
+                    gpu.upload_rgba(&self.queue, &rgba.data);
+                    gpu
+                })
+                .collect::<Vec<_>>();
+            let transparent = needs_transparent.then(|| {
+                let image = GpuImage::new(&self.device, 1, 1, false, "Syndocal ISF unbound image");
+                image.upload_rgba(&self.queue, &[0, 0, 0, 0]);
+                image
+            });
             for target in &state.targets {
                 if !target.persistent || !state.has_history {
                     clear_image(&mut encoder, &target.images[target.front]);
@@ -293,9 +374,28 @@ impl IsfGpuRuntime {
                     )
                 };
                 let mut sampled = Vec::with_capacity(texture_count);
-                // The declared image input always denotes the stage input.
-                // Only named targets expose results of earlier passes.
-                sampled.push(&stage_input.view);
+                for (index, name) in shader.image_input_names.iter().enumerate() {
+                    let image = if let Some(bound) = shader
+                        .bound_images
+                        .iter()
+                        .position(|image| &image.name == name)
+                    {
+                        &state.bound_images[bound]
+                    } else if let Some(dynamic) = stage
+                        .images
+                        .iter()
+                        .position(|image| image.name == name.as_str())
+                    {
+                        &dynamic_images[dynamic]
+                    } else if index == 0 && !shader.image_binding_names.contains(name) {
+                        &stage_input
+                    } else {
+                        transparent
+                            .as_ref()
+                            .ok_or_else(|| runtime_error("ISF unbound image texture is missing"))?
+                    };
+                    sampled.push(&image.view);
+                }
                 for target in &state.targets {
                     sampled.push(&target.images[target.front].view);
                 }
@@ -307,6 +407,7 @@ impl IsfGpuRuntime {
                     time_delta_seconds,
                     frame_index,
                     pass_index,
+                    date,
                     controls,
                 );
                 self.encode_pass(
@@ -333,6 +434,7 @@ impl IsfGpuRuntime {
                     time_delta_seconds,
                     frame_index,
                     0,
+                    date,
                     &[],
                 );
                 self.encode_pass(
@@ -427,6 +529,72 @@ impl IsfGpuRuntime {
         })
     }
 
+    fn dynamic_image_bytes(
+        &self,
+        stage: &IsfStageInputs<'_>,
+        needs_transparent: bool,
+    ) -> Result<u64, IsfRuntimeError> {
+        for (name, layer_id) in &stage.shader.required_layer_images {
+            if !stage.images.iter().any(|input| input.name == name.as_str()) {
+                return Err(runtime_error(format!(
+                    "ISF image input layer {layer_id} is unavailable in this render context for '{name}'"
+                )));
+            }
+        }
+        if stage.images.len() > stage.shader.image_input_names.len() {
+            return Err(runtime_error(
+                "ISF image input count exceeds declared inputs",
+            ));
+        }
+        let mut names = std::collections::HashSet::new();
+        let mut bytes = if needs_transparent { 4 } else { 0 };
+        for input in stage.images {
+            if !stage
+                .shader
+                .image_input_names
+                .iter()
+                .any(|name| name.as_str() == input.name)
+            {
+                return Err(runtime_error(format!(
+                    "ISF image input '{}' is not declared",
+                    input.name
+                )));
+            }
+            if !names.insert(input.name) {
+                return Err(runtime_error(format!(
+                    "ISF image input '{}' is duplicated",
+                    input.name
+                )));
+            }
+            if stage
+                .shader
+                .bound_images
+                .iter()
+                .any(|image| image.name == input.name)
+            {
+                return Err(runtime_error(format!(
+                    "ISF image input '{}' already has an imported still",
+                    input.name
+                )));
+            }
+            let frame = input.frame;
+            self.validate_pass_size(frame.width, frame.height)?;
+            let required = u64::from(frame.width) * u64::from(frame.height) * 4;
+            if frame.format == VideoPixelFormat::Rgba8 && frame.data.len() as u64 != required {
+                return Err(runtime_error(
+                    "ISF image input byte length does not match its dimensions",
+                ));
+            }
+            bytes += required;
+            if bytes > MAX_STAGE_RESOURCE_BYTES {
+                return Err(runtime_error(
+                    "ISF image inputs exceed the GPU buffer memory budget",
+                ));
+            }
+        }
+        Ok(bytes)
+    }
+
     fn evict_resources_for(&mut self, reserved_bytes: u64) {
         while self.resources.entries.len() > RESOURCE_CACHE_CAPACITY
             || self
@@ -468,10 +636,11 @@ impl IsfGpuRuntime {
         frame: &VideoFrame,
         key: &IsfInstanceKey,
         pending_bytes: u64,
+        dynamic_bytes: u64,
     ) -> Result<StageResources, IsfRuntimeError> {
         let mut sizes = Vec::with_capacity(shader.passes.len());
         let mut bytes = 0_u64;
-        let mut transient_bytes = 0_u64;
+        let mut transient_bytes = dynamic_bytes;
         for pass in &shader.passes {
             let width = match &pass.width {
                 Some(expression) => expression
@@ -494,7 +663,7 @@ impl IsfGpuRuntime {
             }
             sizes.push((width, height));
         }
-        for image in &shader.imported_images {
+        for image in shader.imported_images.iter().chain(&shader.bound_images) {
             self.validate_pass_size(image.width, image.height)?;
             bytes += u64::from(image.width) * u64::from(image.height) * 4;
         }
@@ -562,11 +731,27 @@ impl IsfGpuRuntime {
                 gpu
             })
             .collect();
+        let bound_images = shader
+            .bound_images
+            .iter()
+            .map(|image| {
+                let gpu = GpuImage::new(
+                    &self.device,
+                    image.width,
+                    image.height,
+                    false,
+                    "Syndocal ISF bound still",
+                );
+                gpu.upload_rgba(&self.queue, &image.rgba);
+                gpu
+            })
+            .collect();
         Ok(StageResources {
             fingerprint: shader.fingerprint,
             sizes,
             targets,
             imports,
+            bound_images,
             bytes,
             transient_bytes,
             last_used,
@@ -582,12 +767,15 @@ impl IsfGpuRuntime {
         delta: f32,
         frame: u32,
         pass: usize,
+        date: [f32; 4],
         controls: &[[f32; 4]],
     ) -> wgpu::Buffer {
         self.device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Syndocal ISF pass uniforms"),
-                contents: &isf_uniform_data(width, height, time, delta, frame, pass, controls),
+                contents: &isf_uniform_data(
+                    width, height, time, delta, frame, pass, date, controls,
+                ),
                 usage: wgpu::BufferUsages::UNIFORM,
             })
     }

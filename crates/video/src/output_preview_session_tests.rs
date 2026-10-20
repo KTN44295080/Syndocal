@@ -183,10 +183,10 @@ fn output_preview_sessions_invalid_other_output_transition_does_not_block_curren
     let mut renderer =
         VideoPreviewRenderer::with_frame_provider(VideoRuntimeConfig::default(), provider);
     renderer
-        .prepare_frames_with_effects(&snapshot, &runtime, 1, &[8], 32, 18)
+        .prepare_frames_with_effects(&snapshot, &runtime, 1, &[8], 32, 18, None)
         .unwrap();
     assert!(matches!(
-        renderer.prepare_frames_with_effects(&snapshot, &runtime, 1, &[9], 32, 18),
+        renderer.prepare_frames_with_effects(&snapshot, &runtime, 1, &[9], 32, 18, None),
         Err(VideoPreviewError::MissingTransitionSlot { layer_id: 9, .. })
     ));
     assert_eq!(renderer.frame_provider().decoder().opens, 1);

@@ -6,6 +6,7 @@ import type {
   VideoIsfEffectStageSummary,
   VideoIsfEffectSummary,
   VideoIsfStageError,
+  VideoLayerSummary,
 } from "../types";
 import { replaceFxStage } from "../fxParameterModel";
 import { moveFxStageTo } from "../fxAuditionModel";
@@ -23,6 +24,7 @@ interface VideoIsfEffectPanelProps {
   onApplyEffectCatalog?: (catalog: VideoEffectCatalog) => unknown | Promise<unknown>;
   liveSession?: FxLiveSession;
   layerId: number;
+  availableLayers?: readonly VideoLayerSummary[];
   layerLabel?: string;
   compact?: boolean;
   effect?: VideoIsfEffectSummary | null;
@@ -301,7 +303,7 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
           <Show when={stage().description}>
             {(description) => <p class="fieldHint">{description()}</p>}
           </Show>
-          <VideoFxParameterEditor stage={stage()} identity={`${props.layerId}:${selectedStageIndex()}`} busy={eventPulseBusy()} locale={props.locale} bpm={props.bpm}
+          <VideoFxParameterEditor availableLayers={props.availableLayers} stage={stage()} identity={`${props.layerId}:${selectedStageIndex()}`} busy={eventPulseBusy()} locale={props.locale} bpm={props.bpm}
             projectEpoch={props.projectEpoch} layerId={props.layerId} liveSession={props.liveSession}
             effectCatalog={props.effectCatalog} onApplyEffectCatalog={props.onApplyEffectCatalog}
             onSetStage={(replacement) => {

@@ -215,6 +215,7 @@ mod tests {
                             categories: vec![],
                             stack: vec![],
                             controls: vec![control("amount"), control("speed")],
+                            image_bindings: Vec::new(),
                         },
                     },
                 },
