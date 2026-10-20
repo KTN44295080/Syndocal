@@ -549,6 +549,11 @@ control_plane_variant_inventory!(
     VideoTransitionTime => MidiControlAction::VideoTransitionTime,
     VideoIsfStageEnabled => MidiControlAction::VideoIsfStageEnabled,
     VideoIsfParam => MidiControlAction::VideoIsfParam,
+    VideoGroupOpacity => MidiControlAction::VideoGroupOpacity,
+    VideoGroupSolo => MidiControlAction::VideoGroupSolo,
+    VideoGroupBypass => MidiControlAction::VideoGroupBypass,
+    VideoGroupBlendMode => MidiControlAction::VideoGroupBlendMode,
+    VideoGroupEnabled => MidiControlAction::VideoGroupEnabled,
 );
 
 control_plane_variant_inventory!(
@@ -1201,7 +1206,12 @@ fn feedback_value_for_mapping(
         | MidiControlAction::VideoTransitionKind
         | MidiControlAction::VideoTransitionTime
         | MidiControlAction::VideoIsfStageEnabled
-        | MidiControlAction::VideoIsfParam => None,
+        | MidiControlAction::VideoIsfParam
+        | MidiControlAction::VideoGroupOpacity
+        | MidiControlAction::VideoGroupSolo
+        | MidiControlAction::VideoGroupBypass
+        | MidiControlAction::VideoGroupBlendMode
+        | MidiControlAction::VideoGroupEnabled => None,
         MidiControlAction::VideoParam => {
             let layer_id = mapping.layer_id?;
             let param = mapping.video_param.as_ref()?;
@@ -2118,9 +2128,18 @@ fn event_from_mapping(
                 false,
             ))
         }
-        MidiControlAction::VideoIsfStageEnabled => {
-            mapping.layer_id?;
-            mapping.isf_stage_id?;
+        MidiControlAction::VideoIsfStageEnabled
+        | MidiControlAction::VideoGroupSolo
+        | MidiControlAction::VideoGroupBypass
+        | MidiControlAction::VideoGroupEnabled => {
+            if mapping.action.is_video_group() {
+                mapping
+                    .video_group_id
+                    .filter(|id| (1..=9_007_199_254_740_991).contains(&id.0))?;
+            } else {
+                mapping.layer_id?;
+                mapping.isf_stage_id?;
+            }
             if matches!(
                 mapping.message,
                 MidiControlMessage::NoteOn
@@ -2140,6 +2159,18 @@ fn event_from_mapping(
                     false,
                 ))
             }
+        }
+        MidiControlAction::VideoGroupOpacity | MidiControlAction::VideoGroupBlendMode => {
+            mapping
+                .video_group_id
+                .filter(|id| (1..=9_007_199_254_740_991).contains(&id.0))?;
+            Some(renderer_routed_event(
+                mapping,
+                message,
+                ranged_value,
+                midi_message_enabled(message),
+                false,
+            ))
         }
         MidiControlAction::VideoIsfParam => {
             mapping.layer_id?;
@@ -2171,6 +2202,7 @@ fn renderer_routed_event(
         layer_id: mapping.layer_id,
         clip_slot_id: mapping.clip_slot_id,
         isf_stage_id: mapping.isf_stage_id,
+        video_group_id: mapping.video_group_id,
         control: if mapping.action == MidiControlAction::VideoIsfParam {
             mapping.attribute.clone()
         } else {
@@ -2331,6 +2363,7 @@ mod tests {
             high: 65_535.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         }
     }
 
@@ -2718,6 +2751,7 @@ mod tests {
             duration_ms: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             feedback: None,
             low: 0.0,
             high: 1.0,
@@ -2746,6 +2780,7 @@ mod tests {
             duration_ms: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             feedback: None,
             low: 0.0,
             high: 1.0,
@@ -2774,6 +2809,7 @@ mod tests {
             duration_ms: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             feedback: None,
             low: 0.0,
             high: 1.0,
@@ -3178,6 +3214,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         assert_eq!(
             events_from_midi_message(&[0x90, 60, 127], &[mapping.clone()]),
@@ -3239,6 +3276,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let next = MidiControlMapping {
             audio: None,
@@ -3260,6 +3298,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let previous = MidiControlMapping {
             audio: None,
@@ -3281,6 +3320,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
 
         assert_eq!(
@@ -3320,6 +3360,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
 
         assert_eq!(
@@ -3354,6 +3395,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
 
         assert_eq!(
@@ -3391,6 +3433,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
 
         assert_eq!(
@@ -3421,6 +3464,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
 
         assert_eq!(
@@ -3452,6 +3496,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let bpm_sync_param = MidiControlMapping {
             audio: None,
@@ -3473,6 +3518,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let hot_jump = MidiControlMapping {
             audio: None,
@@ -3494,6 +3540,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let cue_previous = MidiControlMapping {
             audio: None,
@@ -3515,6 +3562,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let cue_next = MidiControlMapping {
             audio: None,
@@ -3536,6 +3584,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let cue_add = MidiControlMapping {
             audio: None,
@@ -3557,6 +3606,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let cue_remove = MidiControlMapping {
             audio: None,
@@ -3578,6 +3628,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let layer_enabled = MidiControlMapping {
             audio: None,
@@ -3599,6 +3650,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let layer_solo = MidiControlMapping {
             audio: None,
@@ -3620,6 +3672,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let loop_toggle = MidiControlMapping {
             audio: None,
@@ -3641,6 +3694,7 @@ mod tests {
             high: 2_000.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let layer_fade = MidiControlMapping {
             audio: None,
@@ -3662,6 +3716,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
 
         assert_eq!(
@@ -3824,6 +3879,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let opacity = MidiControlMapping {
             audio: None,
@@ -3845,6 +3901,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let fade = MidiControlMapping {
             audio: None,
@@ -3866,6 +3923,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let mapping_field = MidiControlMapping {
             audio: None,
@@ -3887,6 +3945,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let stage_mapping_field = MidiControlMapping {
             audio: None,
@@ -3908,6 +3967,7 @@ mod tests {
             high: 1000.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let mapping_preset = MidiControlMapping {
             audio: None,
@@ -3929,6 +3989,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let blackout = MidiControlMapping {
             audio: None,
@@ -3950,6 +4011,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
 
         assert_eq!(
@@ -4083,6 +4145,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
 
         assert_eq!(
@@ -4162,6 +4225,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
 
         assert_eq!(
@@ -4219,6 +4283,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let seek = MidiControlMapping {
             audio: None,
@@ -4240,6 +4305,7 @@ mod tests {
             high: 127_000.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let beat_previous = MidiControlMapping {
             audio: None,
@@ -4261,6 +4327,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let beat_next = MidiControlMapping {
             audio: None,
@@ -4282,6 +4349,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let set_bpm = MidiControlMapping {
             audio: None,
@@ -4303,6 +4371,7 @@ mod tests {
             high: 300.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let tap_bpm = MidiControlMapping {
             audio: None,
@@ -4324,6 +4393,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let loop_toggle = MidiControlMapping {
             number: 26,
@@ -4411,6 +4481,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let pause = MidiControlMapping {
             audio: None,
@@ -4432,6 +4503,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
 
         let master_events = events_from_midi_message(&[0xb0, 11, 64], &[master]);
@@ -4474,6 +4546,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
 
         let events = events_from_midi_message(&[0xb0, 10, 64], std::slice::from_ref(&mapping));
@@ -4520,6 +4593,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
 
         let events = events_from_midi_message(&[0xb0, 13, 64], std::slice::from_ref(&mapping));
@@ -4653,6 +4727,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let video_blackout = MidiControlMapping {
             audio: None,
@@ -4674,6 +4749,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let all_blackout = MidiControlMapping {
             audio: None,
@@ -4695,6 +4771,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let clear_fixture_flags = MidiControlMapping {
             audio: None,
@@ -4716,6 +4793,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let mut clear_solo_flags = clear_fixture_flags.clone();
         clear_solo_flags.number = 34;
@@ -4781,6 +4859,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
 
         assert_eq!(
@@ -4811,6 +4890,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let cue_list_snapshot = EngineSnapshot {
             cue_lists: vec![protocol::CueListSummary {
@@ -4862,6 +4942,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         mapping.feedback = Some(protocol::MidiControlFeedback {
             off: Some(MidiFeedbackMessage {
@@ -4932,6 +5013,7 @@ mod tests {
                 high: 1.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             },
             MidiControlMapping {
                 audio: None,
@@ -4953,6 +5035,7 @@ mod tests {
                 high: 1.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             },
             MidiControlMapping {
                 audio: None,
@@ -4974,6 +5057,7 @@ mod tests {
                 high: 300.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             },
             MidiControlMapping {
                 audio: None,
@@ -4995,6 +5079,7 @@ mod tests {
                 high: 1.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             },
         ];
 
@@ -5035,6 +5120,7 @@ mod tests {
                 high: 1.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             },
             MidiControlMapping {
                 audio: None,
@@ -5056,6 +5142,7 @@ mod tests {
                 high: 1.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             },
             MidiControlMapping {
                 audio: None,
@@ -5077,6 +5164,7 @@ mod tests {
                 high: 1.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             },
         ];
 
@@ -5122,6 +5210,7 @@ mod tests {
                 high: 1.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             },
             MidiControlMapping {
                 audio: None,
@@ -5143,6 +5232,7 @@ mod tests {
                 high: 120_000.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             },
         ];
 
@@ -5308,6 +5398,7 @@ mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let (sender, receiver) = mpsc::channel();
         let _input = connect_midi_control(input.index, vec![mapping], move |event| {
@@ -5369,3 +5460,7 @@ mod learn_wait_tests {
         assert_eq!(observations.get(), 2);
     }
 }
+
+#[cfg(test)]
+#[path = "video_group_midi_tests.rs"]
+mod video_group_midi_tests;

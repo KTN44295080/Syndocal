@@ -155,9 +155,16 @@ mod tests {
     }
 
     fn prepare(harness: &MediaAssetA6CommandHarness) -> RuntimeRequest {
+        prepare_mapping(harness, mapping())
+    }
+
+    fn prepare_mapping(
+        harness: &MediaAssetA6CommandHarness,
+        mapping: MidiControlMapping,
+    ) -> RuntimeRequest {
+        let mapping_id = mapping.audio.as_ref().unwrap().id.clone();
         let mut coordinator = harness.state.project_coordinator.lock().unwrap();
-        coordinator.mappings.midi_mappings =
-            validate_midi_control_mappings(vec![mapping()]).unwrap();
+        coordinator.mappings.midi_mappings = validate_midi_control_mappings(vec![mapping]).unwrap();
         let checkpoint =
             reconcile_project_checkpoint_for_coordinator(&harness.state, &mut coordinator).unwrap();
         RuntimeRequest {
@@ -169,7 +176,7 @@ mod tests {
             audio_generation: 27,
             feature_sequence: 1,
             values: vec![MappedValue {
-                mapping_id: "audio-master-27".to_string(),
+                mapping_id,
                 value: 0.5,
             }],
         }
@@ -241,6 +248,99 @@ mod tests {
             before,
         );
         assert_eq!(checkpoint.project.snapshot.video.master_opacity, 1.0);
+    }
+
+    #[test]
+    fn audio_group_runtime_uses_typed_target_without_authoring_opacity_or_history() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let engine = &harness.state.engine;
+        let layer_id = engine.allocate_video_layer_id();
+        engine
+            .send(EngineCommand::AddVideoLayer {
+                layer_id,
+                label: "Audio group layer".to_string(),
+                source: protocol::VideoSourceSummary {
+                    kind: protocol::VideoSourceKind::File,
+                    path: Some("memory://audio-group-27.mp4".to_string()),
+                    name: None,
+                    codec: Some("H264".to_string()),
+                    metadata: None,
+                },
+            })
+            .unwrap();
+        let authored = engine
+            .persistence_snapshot()
+            .unwrap()
+            .authored_video
+            .unwrap();
+        let composition_id = authored
+            .compositions
+            .iter()
+            .find(|composition| composition.layer_ids.contains(&layer_id))
+            .unwrap()
+            .id;
+        let group_id = protocol::VideoLayerGroupId(27);
+        engine
+            .apply_video_effect_catalog(
+                authored.effect_chains,
+                authored.effect_presets,
+                vec![protocol::VideoLayerGroupSummary {
+                    id: group_id,
+                    label: "Audio group".to_string(),
+                    composition_id,
+                    layer_ids: vec![layer_id],
+                    opacity: 0.7,
+                    ..Default::default()
+                }],
+            )
+            .unwrap();
+        let mut group_mapping = mapping();
+        group_mapping.action = protocol::MidiControlAction::VideoGroupOpacity;
+        group_mapping.video_group_id = Some(group_id);
+        let request = prepare_mapping(&harness, group_mapping.clone());
+        let before = {
+            let coordinator = harness.state.project_coordinator.lock().unwrap();
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+                coordinator.history_generation,
+                coordinator.publication_generation,
+                coordinator.history.undo.len(),
+                coordinator.history.redo.len(),
+            )
+        };
+        publish_frame(&harness, 1);
+        apply(&harness.state, "media-asset-a6", request).unwrap();
+        assert_eq!(engine.snapshot().video.layer_groups[0].opacity, 0.5);
+        assert_eq!(engine.snapshot_for_ui().video.layer_groups[0].opacity, 0.7);
+        assert_eq!(
+            engine
+                .persistence_snapshot()
+                .unwrap()
+                .authored_video
+                .unwrap()
+                .layer_groups[0]
+                .opacity,
+            0.7,
+        );
+        let mut coordinator = harness.state.project_coordinator.lock().unwrap();
+        let checkpoint =
+            reconcile_project_checkpoint_for_coordinator(&harness.state, &mut coordinator).unwrap();
+        assert_eq!(checkpoint.hash, before.2);
+        assert_eq!(coordinator.mappings.midi_mappings, vec![group_mapping]);
+        assert_eq!(
+            (
+                coordinator.epoch,
+                coordinator.revision,
+                coordinator.checkpoint_hash.clone(),
+                coordinator.history_generation,
+                coordinator.publication_generation,
+                coordinator.history.undo.len(),
+                coordinator.history.redo.len(),
+            ),
+            before,
+        );
     }
 
     #[test]

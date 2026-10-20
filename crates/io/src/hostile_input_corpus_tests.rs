@@ -610,6 +610,7 @@ fn osc_mappings() -> Vec<OscControlMapping> {
             layer_id: Some(1),
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             output_id: Some(2),
             video_param: Some(VideoParam::Opacity),
             cue_point_index: Some(0),

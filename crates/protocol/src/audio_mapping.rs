@@ -66,33 +66,46 @@ pub struct AudioControlRuntimeValue {
 pub fn audio_control_target(
     mapping: &MidiControlMapping,
 ) -> Result<Option<AudioControlTarget>, String> {
+    // Video groups use the shared typed target from T28. The interim T27
+    // string group_id shape never shipped on main and is not a project format.
+    if mapping.group_id.is_some() {
+        return Err("Audio mappings cannot use a lighting group id".to_string());
+    }
+    if mapping.video_group_id.is_some() && mapping.action != MidiControlAction::VideoGroupOpacity {
+        return Err("Audio video group id requires the group opacity action".to_string());
+    }
     let nonzero = |id: Option<u64>| {
         id.filter(|id| *id != 0)
             .ok_or_else(|| "Audio mapping requires a stable nonzero layer id".to_string())
     };
     match mapping.action {
-        MidiControlAction::VideoParam if mapping.video_param == Some(VideoParam::Opacity) => {
-            if let Some(group) = mapping.group_id.as_ref() {
-                if mapping.layer_id.is_some() {
-                    return Err(
-                        "Audio opacity mapping cannot target both a layer and a group".to_string(),
-                    );
-                }
-                let id = group
-                    .parse::<u64>()
-                    .ok()
-                    .filter(|id| *id != 0)
-                    .ok_or_else(|| {
-                        "Audio group opacity requires a stable nonzero group id".to_string()
-                    })?;
-                Ok(Some(AudioControlTarget::GroupOpacity {
-                    group_id: crate::VideoLayerGroupId(id),
-                }))
-            } else {
-                Ok(Some(AudioControlTarget::LayerOpacity {
-                    layer_id: nonzero(mapping.layer_id)?,
-                }))
+        MidiControlAction::VideoGroupOpacity => {
+            let group_id = mapping
+                .video_group_id
+                .filter(|id| (1..=9_007_199_254_740_991).contains(&id.0))
+                .ok_or_else(|| {
+                    "Audio group opacity requires a positive safe integer video group id"
+                        .to_string()
+                })?;
+            if mapping.layer_id.is_some()
+                || mapping.clip_slot_id.is_some()
+                || mapping.isf_stage_id.is_some()
+                || mapping.attribute.is_some()
+                || mapping.fixture_id.is_some()
+                || mapping.cue_id.is_some()
+                || mapping.output_id.is_some()
+                || mapping.video_param.is_some()
+                || mapping.cue_point_index.is_some()
+                || mapping.duration_ms.is_some()
+            {
+                return Err("Audio group opacity cannot mix target identities".to_string());
             }
+            Ok(Some(AudioControlTarget::GroupOpacity { group_id }))
+        }
+        MidiControlAction::VideoParam if mapping.video_param == Some(VideoParam::Opacity) => {
+            Ok(Some(AudioControlTarget::LayerOpacity {
+                layer_id: nonzero(mapping.layer_id)?,
+            }))
         }
         MidiControlAction::VideoLayerFade => Ok(Some(AudioControlTarget::LayerOpacity {
             layer_id: nonzero(mapping.layer_id)?,
@@ -255,18 +268,74 @@ mod tests {
     }
 
     #[test]
-    fn audio_group_opacity_resolves_stable_group_id() {
+    fn audio_group_opacity_roundtrips_the_shared_typed_target() {
         let mut group = mapping();
+        group.action = MidiControlAction::VideoGroupOpacity;
         group.layer_id = None;
-        group.group_id = Some("12".to_string());
+        group.video_param = None;
+        group.video_group_id = Some(crate::VideoLayerGroupId(12));
         validate_audio_control_mapping(&group).unwrap();
+        let encoded = serde_json::to_value(&group).unwrap();
+        assert_eq!(encoded["action"], "VideoGroupOpacity");
+        assert_eq!(encoded["video_group_id"], 12);
+        assert!(encoded["group_id"].is_null());
+        let decoded: MidiControlMapping = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded, group);
         assert_eq!(
-            audio_control_target(&group).unwrap(),
+            audio_control_target(&decoded).unwrap(),
             Some(AudioControlTarget::GroupOpacity {
                 group_id: crate::VideoLayerGroupId(12)
-            })
+            }),
         );
-        group.layer_id = Some(1);
-        assert!(validate_audio_control_mapping(&group).is_err());
+    }
+
+    #[test]
+    fn audio_group_opacity_rejects_unsafe_ids_aliases_and_mixed_targets() {
+        let mut group = mapping();
+        group.action = MidiControlAction::VideoGroupOpacity;
+        group.layer_id = None;
+        group.video_param = None;
+        group.video_group_id = Some(crate::VideoLayerGroupId(12));
+        let valid = serde_json::to_value(&group).unwrap();
+        for (field, value) in [
+            ("video_group_id", serde_json::json!(null)),
+            ("video_group_id", serde_json::json!(0)),
+            (
+                "video_group_id",
+                serde_json::json!(9_007_199_254_740_992_u64),
+            ),
+            ("layer_id", serde_json::json!(1)),
+            ("clip_slot_id", serde_json::json!(1)),
+            ("isf_stage_id", serde_json::json!(1)),
+            ("attribute", serde_json::json!("opacity")),
+            ("fixture_id", serde_json::json!(1)),
+            ("group_id", serde_json::json!("12")),
+            ("cue_id", serde_json::json!(1)),
+            ("output_id", serde_json::json!(1)),
+            ("video_param", serde_json::json!("Opacity")),
+            ("cue_point_index", serde_json::json!(0)),
+            ("duration_ms", serde_json::json!(100)),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[field] = value;
+            let invalid: MidiControlMapping = serde_json::from_value(invalid).unwrap();
+            assert!(validate_audio_control_mapping(&invalid).is_err(), "{field}");
+        }
+        group.video_group_id = Some(crate::VideoLayerGroupId(9_007_199_254_740_991));
+        validate_audio_control_mapping(&group).unwrap();
+        for action in [
+            MidiControlAction::VideoMaster,
+            MidiControlAction::VideoGroupSolo,
+            MidiControlAction::VideoGroupBypass,
+            MidiControlAction::VideoGroupBlendMode,
+            MidiControlAction::VideoGroupEnabled,
+        ] {
+            group.action = action;
+            assert!(validate_audio_control_mapping(&group).is_err());
+        }
+        let mut interim = mapping();
+        interim.layer_id = None;
+        interim.group_id = Some("12".to_string());
+        assert!(validate_audio_control_mapping(&interim).is_err());
     }
 }

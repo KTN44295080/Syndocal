@@ -74,6 +74,24 @@ const removable=beat.mappings.filter(m=>m.message==='BeatDivision');
 assert.equal(await beat.controller.removeMidiAssignments(removable,'Layer 1 clip 2'),true);
 assert.equal(beat.mappings.some(m=>m.message==='BeatDivision'),false);
 assert.deepEqual(beat.mappings.map(m=>m.action),['LightingMaster']);
+// Group Learn keeps video identities separate and removes only the selected group.
+const groupTargets=['VideoGroupOpacity','VideoGroupSolo','VideoGroupBypass','VideoGroupBlendMode','VideoGroupEnabled'].map(action=>({action,label:'Group A '+action,video_group_id:41}));
+const groupLearn=harness(),groupWork=groupLearn.controller.learnMidiControlForTargets(groupTargets);
+await waitForLearn(groupLearn);groupLearn.finish(learned);assert.equal(await groupWork,true);
+assert.deepEqual(groupLearn.mappings.slice(1).map(m=>[m.action,m.video_group_id]),groupTargets.map(t=>[t.action,41]));
+assert.ok(groupLearn.mappings.slice(1).every(m=>m.group_id===null&&m.feedback===undefined),'video groups neither target lighting groups nor echo feedback');
+const groupBeat=harness();
+const groupSolo={action:'VideoGroupSolo',label:'Group A solo',video_group_id:41};
+const otherGroupSolo={...groupSolo,label:'Group B solo',video_group_id:42};
+assert.equal(await groupBeat.controller.assignBeatDivisionForTargets([groupSolo,otherGroupSolo],2),true);
+await groupBeat.controller.assignBeatDivisionForTargets([{...groupSolo,label:'Renamed Group A'}],3);
+assert.deepEqual(groupBeat.mappings.filter(m=>m.message==='BeatDivision').map(m=>[m.video_group_id,m.number]).sort(),[[41,3],[42,2]],'reassignment follows id, not label or position');
+const firstGroupAssignments=groupBeat.mappings.filter(m=>m.video_group_id===41);
+assert.equal(await groupBeat.controller.removeMidiAssignments(firstGroupAssignments,'Renamed Group A'),true);
+assert.deepEqual(groupBeat.mappings.filter(m=>m.message==='BeatDivision').map(m=>m.video_group_id),[42],'removing one group assignment preserves its neighbor');
+assert.equal(await groupBeat.controller.assignBeatDivisionForTargets([groupTargets[0],groupTargets[3]],2),false,'opacity and blend cannot take trigger divisions');
+console.log('PASS: group Learn, reconnect, stable-id beat reassignment and selective removal');
+
 // A re-seat that fails says why and is not reported as an assignment that worked.
 const failing=harness({connectFailure:true});
 assert.equal(await failing.controller.assignBeatDivisionForTargets([clipTarget],4),false);
@@ -202,7 +220,18 @@ for (const disconnected of [false, true]) {
   assert.ok(crossing.messages.at(-1).includes("Project changed"));
 }
 const { controlMappingTargetLabel } = load(resolve(root, "controlMappingLabels.ts"));
-assert.equal(controlMappingTargetLabel({ ...audioTarget, layer_id: null, group_id: "27" }), "Video Group 27 Opacity");
+const audioGroupTarget = { action: "VideoGroupOpacity", video_group_id: 27, label: "Group opacity" };
+assert.equal(controlMappingTargetLabel(audioGroupTarget), "Video Group 27 opacity");
+const audioGroupEdit = harness();
+assert.equal(await audioGroupEdit.controller.assignAudioForTargets([audioGroupTarget], audioSettings), true);
+const groupAudioId = audioGroupEdit.mappings.find(mapping => mapping.message === "Audio").audio.id;
+assert.equal(await audioGroupEdit.controller.assignAudioForTargets([audioGroupTarget], { ...audioSettings, gain: 3 }), true);
+assert.equal(audioGroupEdit.mappings.find(mapping => mapping.message === "Audio").audio.id, groupAudioId);
+assert.equal(await audioGroupEdit.controller.assignAudioForTargets([{ ...audioGroupTarget, video_group_id: 28 }], audioSettings), true);
+const groupAssignments = audioGroupEdit.mappings.filter(mapping => mapping.message === "Audio");
+assert.deepEqual(groupAssignments.map(mapping => mapping.video_group_id), [27, 28]);
+assert.equal(groupAssignments[0].audio.id, groupAudioId);
+assert.notEqual(groupAssignments[1].audio.id, groupAudioId);
 console.log("PASS: Audio stable assignment identity, trusted ACK, queued/in-flight project replacement, MIDI reseat fencing and group target label");
 
 

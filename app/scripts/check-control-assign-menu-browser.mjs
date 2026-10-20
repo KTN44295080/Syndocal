@@ -24,6 +24,10 @@ try {
 import { createSignal } from 'solid-js';
 import { render } from 'solid-js/web';
 import { ControlAssignMenu } from '/src/components/ControlAssignMenu';
+import { VideoGroupInspector } from '/src/components/VideoGroupInspector';
+import { installControlLearnCapture } from '/src/createControlLearnCapture';
+import { controlMappingTargetsFromElement, controlMappingTargetsForMode } from '/src/controlMappingLearn';
+import { audioTargetIsEligible } from '/src/audioControlMapping';
 import { installUiLocalization } from '/src/uiLocalization';
 import '/src/theme.css';
 import '/src/styles.css';
@@ -31,12 +35,31 @@ const calls = [];
 window.proof = { calls, windowEscapes: 0 };
 window.addEventListener('keydown', (event) => { if (event.key === 'Escape') window.proof.windowEscapes++; });
 const query = new URLSearchParams(location.search);
-const [state, setState] = createSignal({ x: Number(query.get('x') ?? 300), y: Number(query.get('y') ?? 200), eligible: true, audioEligible: false, audioTrigger: false, assignments: [
+const [state, setState] = createSignal({ x: Number(query.get('x') ?? 300), y: Number(query.get('y') ?? 200), label: 'Layer 1 clip 2', eligible: true, audioEligible: false, audioTrigger: false, assignments: [
   { mapping: { id: 'cc' }, kind: 'MIDI', detail: 'CC 21 · ch 3', beat: false },
   { mapping: { id: 'beat' }, kind: 'Beat division', detail: '1 bar', beat: true },
 ] });
 window.proof.set = (next) => setState({ ...state(), ...next });
-render(() => <div style="min-height:100vh"><button id="outside" type="button">Outside</button><ControlAssignMenu x={state().x} y={state().y} label="Layer 1 clip 2" beatEligible={state().eligible} audioEligible={state().audioEligible} audioTrigger={state().audioTrigger} assignments={state().assignments}
+const group = { id: 57, label: 'Group 57', composition_id: 1, layer_ids: [], enabled: true,
+  opacity: 0.75, blend_mode: 'Normal', solo: false, bypassed: false, transform: null };
+const effects = { catalog: { effect_chains: [], effect_presets: [], layer_groups: [group], transition_buses: [] },
+  compositions: [], outputs: [], busy: false, onApplyCatalog: () => calls.push('ordinary-group-edit'),
+  onImportIsf: () => {}, onApplyPreset: () => {}, onRemoveChain: () => {} };
+window.proof.groupMenu = () => {
+  const targets = controlMappingTargetsFromElement(document.querySelector('[data-video-group-opacity="57"]'));
+  setState({ ...state(), label: targets[0].label, eligible: false,
+    audioEligible: targets.length > 0 && targets.every(audioTargetIsEligible), audioTrigger: false, assignments: [] });
+  return targets;
+};
+let groupMode = null, groupBusy = false;
+window.proof.groupMode = value => { groupMode = value; };
+installControlLearnCapture({
+  mode: () => groupMode, busy: () => groupBusy, setBusy: value => { groupBusy = value; },
+  targets: element => controlMappingTargetsForMode(groupMode ?? 'midi', controlMappingTargetsFromElement(element)),
+  select: () => {}, message: message => calls.push({ message }),
+  learn: async (mode, targets) => { calls.push({ groupLearn: mode, targets }); },
+});
+render(() => <div style="min-height:100vh"><button id="outside" type="button">Outside</button><VideoGroupInspector group={group} effects={effects} /><ControlAssignMenu x={state().x} y={state().y} label={state().label} beatEligible={state().eligible} audioEligible={state().audioEligible} audioTrigger={state().audioTrigger} assignments={state().assignments}
   onAudio={(settings) => calls.push({ audio: settings })} onLearn={() => calls.push('learn')} onBeat={(division) => calls.push('beat:' + division)} onRemove={(assignment) => calls.push('remove:' + assignment.mapping.id)} onDismiss={() => calls.push('dismiss')} /></div>, document.body);
 let locale = 'en';
 const localization = installUiLocalization(document.body, () => locale);
@@ -167,9 +190,37 @@ window.proof.locale = (value) => { locale = value; localization.refresh(); };
     await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
     results.push({ width, height, divisions: divisions.length, contrasts });
   }
+  // The production group range supplies one canonical target to all source paths.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('http://127.0.0.1:' + port + '/assign-proof');
+  await page.locator('[data-video-group-opacity="57"]').waitFor();
+  const groupTargets = await page.evaluate(() => window.proof.groupMenu());
+  assert.equal(groupTargets.length, 1);
+  assert.equal(groupTargets[0].action, 'VideoGroupOpacity');
+  assert.equal(groupTargets[0].video_group_id, 57);
+  assert.equal(groupTargets[0].group_id ?? null, null);
+  assert.equal(Object.hasOwn(groupTargets[0], 'audio_only'), false);
+  const groupMenu = page.locator('[data-control-assign-menu]');
+  assert.equal(await groupMenu.locator('[data-control-assign-learn]').isVisible(), true);
+  assert.equal(await groupMenu.locator('[data-control-assign-audio]').isVisible(), true);
+  assert.equal(await groupMenu.locator('[data-control-assign-beat]').count(), 0);
+  assert.equal(await page.locator('[data-video-group-inspector] [data-control-map-unsupported]').count(), 0);
+  for (const mode of ['midi', 'osc', 'dmx']) {
+    await page.evaluate(value => window.proof.groupMode(value), mode);
+    await page.locator('[data-video-group-opacity="57"]').dispatchEvent('pointerdown', { button: 0, bubbles: true });
+    await page.waitForFunction(value => window.proof.calls.some(call => call?.groupLearn === value), mode);
+    const learned = (await calls()).filter(call => call?.groupLearn);
+    assert.equal(learned.length, 1);
+    assert.equal(learned[0].groupLearn, mode);
+    assert.equal(learned[0].targets.length, 1);
+    assert.equal(learned[0].targets[0].action, 'VideoGroupOpacity');
+    assert.equal(learned[0].targets[0].video_group_id, 57);
+  }
+  await page.evaluate(() => window.proof.groupMode(null));
+  results.push({ canonicalGroup: 57, sources: ['MIDI', 'OSC', 'DMX', 'Audio'] });
   assert.deepEqual(errors, []);
   await writeFile(resolve(artifacts, 'report.json'), JSON.stringify({ passed: true, results, errors, physicalMidi: false, nativeWindow: false }, null, 2));
-  console.log('PASS: Learn source menu at 1280x720 and 375x640; eight beat divisions, stable callbacks, keyboard, Escape/outside dismissal, viewport clamp, Audio settings/EN-JA/form keys, 8-theme contrast; ' + artifacts);
+  console.log('PASS: Learn source menu at 1280x720 and 375x640; eight beat divisions, stable callbacks, keyboard, Escape/outside dismissal, viewport clamp, Audio settings/EN-JA/form keys, canonical group MIDI/OSC/DMX/Audio, 8-theme contrast; ' + artifacts);
 } catch (error) {
   if (page && !page.isClosed()) {
     await page.screenshot({ path: resolve(artifacts, 'failure.png') }).catch(() => {});

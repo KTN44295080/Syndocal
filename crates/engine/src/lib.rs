@@ -3947,6 +3947,15 @@ pub struct SafetyBlackoutReleasePublicationCompletion {
     outcome: Arc<Mutex<Option<SafetyBlackoutReleaseDisposition>>>,
 }
 
+/// Ephemeral exact-source fence carried only by an already authorized Preview Take.
+/// It never participates in project persistence or ordinary clip launch.
+#[derive(Debug, Clone)]
+pub struct VideoClipPreviewTakeGuard {
+    pub layer_source: VideoSourceSummary,
+    pub slot: VideoClipSlotSummary,
+    pub asset: MediaAssetSummary,
+}
+
 // Keep the command definition and the AI0 inventory in the same declarative
 // source.  Adding a variant here automatically adds it to the internal,
 // fail-closed inventory; no source parsing or manually maintained mirror is
@@ -5329,6 +5338,7 @@ define_engine_command! {
         slot_id: Option<VideoClipSlotId>,
         transition_kind: VideoClipTakeKind,
         transition_duration: VideoClipTakeDuration,
+        preview_guard: Option<VideoClipPreviewTakeGuard>,
         expires_at: Instant,
         admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
@@ -10958,12 +10968,47 @@ impl EngineHandle {
         transition_kind: VideoClipTakeKind,
         transition_duration: VideoClipTakeDuration,
     ) -> Result<(), String> {
+        self.launch_video_clip_slot_guarded_published(
+            layer_id,
+            slot_id,
+            transition_kind,
+            transition_duration,
+            None,
+        )
+    }
+
+    pub fn launch_video_clip_slot_from_preview_published(
+        &self,
+        layer_id: VideoLayerId,
+        slot_id: VideoClipSlotId,
+        transition_kind: VideoClipTakeKind,
+        transition_duration: VideoClipTakeDuration,
+        guard: VideoClipPreviewTakeGuard,
+    ) -> Result<(), String> {
+        self.launch_video_clip_slot_guarded_published(
+            layer_id,
+            Some(slot_id),
+            transition_kind,
+            transition_duration,
+            Some(guard),
+        )
+    }
+
+    fn launch_video_clip_slot_guarded_published(
+        &self,
+        layer_id: VideoLayerId,
+        slot_id: Option<VideoClipSlotId>,
+        transition_kind: VideoClipTakeKind,
+        transition_duration: VideoClipTakeDuration,
+        preview_guard: Option<VideoClipPreviewTakeGuard>,
+    ) -> Result<(), String> {
         self.video_clip_slot_command_published(|expires_at, admission, ack| {
             EngineCommand::LaunchVideoClipSlotPublished {
                 layer_id,
                 slot_id,
                 transition_kind,
                 transition_duration,
+                preview_guard,
                 expires_at,
                 admission,
                 ack,
@@ -30187,15 +30232,17 @@ impl EngineRuntime {
                 slot_id,
                 transition_kind,
                 transition_duration,
+                preview_guard,
                 expires_at,
                 admission,
                 ack,
             } => self.apply_video_clip_slot_published(expires_at, admission, ack, |runtime| {
-                runtime.launch_video_clip_slot_with_transition_timing(
+                runtime.launch_video_clip_slot_with_preview_guard(
                     layer_id,
                     slot_id,
                     transition_kind,
                     transition_duration,
+                    preview_guard.as_ref(),
                 )
             }),
             EngineCommand::SeekVideoClipSlotPublished {
@@ -50145,6 +50192,7 @@ impl EngineRuntime {
         )
     }
 
+    #[cfg(test)]
     fn launch_video_clip_slot_with_transition_timing(
         &mut self,
         layer_id: VideoLayerId,
@@ -50152,6 +50200,39 @@ impl EngineRuntime {
         transition_kind: VideoClipTakeKind,
         transition_duration: VideoClipTakeDuration,
     ) -> Result<(), String> {
+        self.launch_video_clip_slot_with_preview_guard(
+            layer_id,
+            requested_slot_id,
+            transition_kind,
+            transition_duration,
+            None,
+        )
+    }
+
+    fn launch_video_clip_slot_with_preview_guard(
+        &mut self,
+        layer_id: VideoLayerId,
+        requested_slot_id: Option<VideoClipSlotId>,
+        transition_kind: VideoClipTakeKind,
+        transition_duration: VideoClipTakeDuration,
+        preview_guard: Option<&VideoClipPreviewTakeGuard>,
+    ) -> Result<(), String> {
+        let audition_exact = preview_guard.is_some();
+        if let Some(guard) = preview_guard {
+            let layer = self.video_layers.iter().find(|layer| layer.id == layer_id)
+                .ok_or_else(|| format!("Preview layer {layer_id} was removed before Take"))?;
+            if requested_slot_id != Some(guard.slot.id)
+                || guard.slot.media_asset_id != guard.asset.id
+                || layer.source != guard.layer_source
+                || !layer.clip_slots.iter().any(|slot| slot == &guard.slot)
+                || !self.media_assets.iter().any(|asset| asset == &guard.asset)
+            {
+                return Err("Preview clip or source changed before Take; audition it again".to_string());
+            }
+            if layer.clip_take_transition.is_some() {
+                return Err("Preview Take cannot interrupt an active clip transition".to_string());
+            }
+        }
         if self
             .video_layers
             .iter()
@@ -50205,7 +50286,7 @@ impl EngineRuntime {
                 .find(|layer| layer.id == layer_id)
                 .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
             let slot_id = match (requested_slot_id, layer.queued_clip_slot_id) {
-                (Some(requested), Some(queued)) if requested != queued => {
+                (Some(requested), Some(queued)) if !audition_exact && requested != queued => {
                     return Err(format!(
                         "Video layer {layer_id} has queued slot {} but launch requested slot {}; cancel or launch the queued slot first",
                         queued.0, requested.0
@@ -69556,6 +69637,7 @@ mod tests {
             slot_id: Some(VideoClipSlotId(1)),
             transition_kind: VideoClipTakeKind::Cut,
             transition_duration: VideoClipTakeDuration::milliseconds(0),
+            preview_guard: None,
             expires_at: Instant::now() + Duration::from_secs(1),
             admission: ProjectSnapshotLoadAdmission::new(),
             ack: launch_ack,
@@ -94656,6 +94738,187 @@ mod tests {
         runtime
     }
 
+    fn clip_preview_test_guard(runtime: &EngineRuntime, slot_id: u64) -> VideoClipPreviewTakeGuard {
+        let layer = &runtime.video_layers[0];
+        let slot = layer
+            .clip_slots
+            .iter()
+            .find(|slot| slot.id == VideoClipSlotId(slot_id))
+            .unwrap();
+        let asset = runtime
+            .media_assets
+            .iter()
+            .find(|asset| asset.id == slot.media_asset_id)
+            .unwrap();
+        VideoClipPreviewTakeGuard {
+            layer_source: layer.source.clone(),
+            slot: slot.clone(),
+            asset: asset.clone(),
+        }
+    }
+
+    #[test]
+    fn video_clip_preview_take_published_uses_exact_slot_over_queue_without_persisting() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        let authored = runtime.build_persistence_snapshot().authored_video.unwrap();
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(20))
+            .unwrap();
+        let guard = clip_preview_test_guard(&runtime, 21);
+        assert!(runtime
+            .launch_video_clip_slot(1, Some(VideoClipSlotId(21)))
+            .is_err());
+        assert_eq!(
+            runtime.video_layers[0].queued_clip_slot_id,
+            Some(VideoClipSlotId(20))
+        );
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::LaunchVideoClipSlotPublished {
+            layer_id: 1,
+            slot_id: Some(VideoClipSlotId(21)),
+            transition_kind: VideoClipTakeKind::Cut,
+            transition_duration: VideoClipTakeDuration::milliseconds(0),
+            preview_guard: Some(guard),
+            expires_at: Instant::now() + Duration::from_secs(5),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(receiver.recv().unwrap().is_ok());
+        assert_eq!(
+            runtime.video_layers[0].active_clip_slot_id,
+            Some(VideoClipSlotId(21))
+        );
+        assert_eq!(runtime.video_layers[0].queued_clip_slot_id, None);
+        assert_eq!(runtime.video_layers[0].state.position_ms, 999);
+        assert_eq!(
+            runtime.build_persistence_snapshot().authored_video.unwrap(),
+            authored
+        );
+    }
+
+    #[test]
+    fn video_clip_preview_take_actor_rejects_changed_identity_before_any_mutation() {
+        for change in 0..5 {
+            let mut runtime = clip_slot_engine_test_runtime();
+            runtime.media_assets[1].content_hash = Some(protocol::MediaContentHash {
+                algorithm: protocol::MediaHashAlgorithm::Sha256,
+                hex: "a".repeat(64),
+            });
+            runtime.media_assets[1].byte_size = Some(100);
+            runtime
+                .queue_video_clip_slot(1, VideoClipSlotId(20))
+                .unwrap();
+            let guard = clip_preview_test_guard(&runtime, 21);
+            let mut requested = VideoClipSlotId(21);
+            match change {
+                0 => runtime.video_layers[0].source.path = Some("replacement.mp4".to_string()),
+                1 => runtime.video_layers[0].clip_slots[1].in_point_ms = 300,
+                2 => runtime.media_assets[1].byte_size = Some(12_345),
+                3 => {
+                    runtime.video_layers[0].clip_slots.remove(1);
+                }
+                _ => requested = VideoClipSlotId(20),
+            }
+            let authored = runtime.build_persistence_snapshot().authored_video.unwrap();
+            let rendered = runtime.video_snapshot();
+            let truth = runtime.video_clip_runtime_snapshot();
+            let published = RwLock::new(runtime.build_snapshot(0));
+            let (ack, receiver) = mpsc::sync_channel(1);
+            runtime.apply_command(EngineCommand::LaunchVideoClipSlotPublished {
+                layer_id: 1,
+                slot_id: Some(requested),
+                transition_kind: VideoClipTakeKind::Cut,
+                transition_duration: VideoClipTakeDuration::milliseconds(0),
+                preview_guard: Some(guard),
+                expires_at: Instant::now() + Duration::from_secs(5),
+                admission: ProjectSnapshotLoadAdmission::new(),
+                ack,
+            });
+            runtime.publish_pending_command_acks(0, &published);
+            assert!(receiver
+                .recv()
+                .unwrap()
+                .unwrap_err()
+                .contains("changed before Take"));
+            assert_eq!(runtime.video_snapshot(), rendered);
+            assert_eq!(runtime.video_clip_runtime_snapshot(), truth);
+            assert_eq!(
+                runtime.build_persistence_snapshot().authored_video.unwrap(),
+                authored
+            );
+        }
+    }
+
+    #[test]
+    fn video_clip_preview_take_cannot_reverse_or_cut_an_active_transition() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        runtime
+            .launch_video_clip_slot(1, Some(VideoClipSlotId(20)))
+            .unwrap();
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(21))
+            .unwrap();
+        runtime
+            .launch_video_clip_slot_with_transition(1, None, VideoClipTakeKind::Crossfade, 1_000)
+            .unwrap();
+        let guard = clip_preview_test_guard(&runtime, 20);
+        let before = runtime.video_clip_runtime_snapshot();
+        for kind in [VideoClipTakeKind::Cut, VideoClipTakeKind::Crossfade] {
+            let error = runtime
+                .launch_video_clip_slot_with_preview_guard(
+                    1,
+                    Some(VideoClipSlotId(20)),
+                    kind,
+                    VideoClipTakeDuration::milliseconds(1_000),
+                    Some(&guard),
+                )
+                .unwrap_err();
+            assert!(error.contains("active clip transition"));
+            assert_eq!(runtime.video_clip_runtime_snapshot(), before);
+        }
+    }
+
+    #[test]
+    fn video_clip_preview_take_keeps_canonical_quantization_for_the_exact_slot() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        runtime.video_layers[0].clip_slots[1].launch_quantization =
+            VideoClipLaunchQuantization::NextBeat;
+        runtime
+            .queue_video_clip_slot(1, VideoClipSlotId(20))
+            .unwrap();
+        let authored = runtime.build_persistence_snapshot().authored_video.unwrap();
+        let active = runtime.video_layers[0].active_clip_slot_id;
+        let guard = clip_preview_test_guard(&runtime, 21);
+        runtime
+            .launch_video_clip_slot_with_preview_guard(
+                1,
+                Some(VideoClipSlotId(21)),
+                VideoClipTakeKind::Cut,
+                VideoClipTakeDuration::milliseconds(0),
+                Some(&guard),
+            )
+            .unwrap();
+        assert_eq!(runtime.video_layers[0].active_clip_slot_id, active);
+        assert_eq!(
+            runtime.video_layers[0].queued_clip_slot_id,
+            Some(VideoClipSlotId(21))
+        );
+        assert_eq!(
+            runtime.video_layers[0]
+                .pending_clip_launch
+                .as_ref()
+                .unwrap()
+                .slot_id,
+            VideoClipSlotId(21)
+        );
+        assert_eq!(
+            runtime.build_persistence_snapshot().authored_video.unwrap(),
+            authored
+        );
+    }
+
     #[test]
     fn video_clip_slot_runtime_queue_launch_and_persistence_are_separate() {
         let mut runtime = clip_slot_engine_test_runtime();
@@ -95466,6 +95729,7 @@ mod tests {
             slot_id: Some(VideoClipSlotId(21)),
             transition_kind: VideoClipTakeKind::Cut,
             transition_duration: VideoClipTakeDuration::milliseconds(0),
+            preview_guard: None,
             expires_at: Instant::now() + Duration::from_secs(1),
             admission: ProjectSnapshotLoadAdmission::new(),
             ack,
@@ -137156,6 +137420,7 @@ mod tests {
             slot_id: Some(VideoClipSlotId(22)),
             transition_kind: VideoClipTakeKind::Cut,
             transition_duration: VideoClipTakeDuration::milliseconds(0),
+            preview_guard: None,
             expires_at: Instant::now() + Duration::from_secs(1),
             admission: ProjectSnapshotLoadAdmission::new(),
             ack,

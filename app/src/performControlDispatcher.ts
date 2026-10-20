@@ -17,6 +17,7 @@ import type {
   VideoEffectCatalog,
   VideoIsfControlSummary,
   VideoIsfEffectStageSummary,
+  VideoGroupControlPatch,
   VideoLayerSummary,
 } from "./types";
 
@@ -69,12 +70,17 @@ export function isfControlValueAt(control: VideoIsfControlSummary, fraction: num
 
 export type PerformDispatchOutcome =
   | { handled: true }
-  | { handled: false; reason: "missing-layer" | "missing-slot" | "missing-stage" | "missing-control"
+  | { handled: false; reason: "missing-layer" | "missing-slot" | "missing-stage" | "missing-control" | "missing-group" | "blocked"
     | "nothing-queued" | "transition-running" | "unchanged" | "unsupported" };
 
 export interface PerformControlDispatcherDeps {
   layers: () => readonly VideoLayerSummary[];
   effectCatalog: () => VideoEffectCatalog | undefined;
+  /** Group patches share the catalog's ticketed commit path. The callback
+   * rechecks the input lease after preflight before constructing its request. */
+  patchGroup: (groupId: number, patch: VideoGroupControlPatch, isCurrent: () => boolean) => Promise<unknown>;
+  /** Learn and modal dialogs suspend incoming and queued Perform commands. */
+  inputSuspended?: () => boolean;
   clipRuntime: (layerId: number) => VideoClipLayerRuntimeSummary | null;
   /** The identity of the open project. A queued command never runs on another one. */
   projectEpoch: () => number;
@@ -113,6 +119,8 @@ export interface PerformControlDispatcherDeps {
  * remains a ticketed project revision; consecutive values share the native idle
  * Undo window. The controller stream is thinned to this rate (newest value wins). */
 export const isfParamCommitSpacingMs = 200;
+/** Thin full catalog group updates while keeping the most recent value. */
+export const groupControlCommitSpacingMs = 200;
 
 const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 
@@ -198,6 +206,9 @@ export function createPerformControlDispatcher(deps: PerformControlDispatcherDep
   const layerById = (layerId: number | null | undefined) =>
     layerId === null || layerId === undefined ? undefined : deps.layers().find((layer) => layer.id === layerId);
 
+  const groupById = (groupId: number | null | undefined) =>
+    groupId == null ? undefined : deps.effectCatalog()?.layer_groups.find((group) => group.id === groupId);
+
   type ResolvedStage =
     | { ok: false; reason: "missing-layer" | "missing-stage" }
     | { ok: true; layer: VideoLayerSummary; index: number; stage: VideoIsfEffectStageSummary };
@@ -215,8 +226,10 @@ export function createPerformControlDispatcher(deps: PerformControlDispatcherDep
 
   const dispatch = (input: PerformRoutedInput): Promise<PerformDispatchOutcome> => {
     const projectEpoch = deps.projectEpoch();
-    const stillCurrent = () => deps.projectEpoch() === projectEpoch && (input.sourceIsCurrent?.() ?? true);
+    const stillCurrent = () => deps.projectEpoch() === projectEpoch && (input.sourceIsCurrent?.() ?? true)
+      && !deps.inputSuspended?.();
     const inThisProject = (task: Task): Task => () => stillCurrent() ? task() : undefined;
+    if (deps.inputSuspended?.()) return Promise.resolve({ handled: false, reason: "blocked" });
     if (!stillCurrent()) return Promise.resolve({ handled: false, reason: "unsupported" });
     switch (input.action) {
       case "VideoClipSlotTrigger": {
@@ -265,6 +278,39 @@ export function createPerformControlDispatcher(deps: PerformControlDispatcherDep
         intentValidity.set(key, stillCurrent);
         return lanes.latest(key, inThisProject(() => deps.setBlendMode(layer.id, mode)), { onIdle: () => { intents.delete(key); intentValidity.delete(key); } })
           .then(() => handled);
+      }
+      case "VideoGroupOpacity":
+      case "VideoGroupSolo":
+      case "VideoGroupBypass":
+      case "VideoGroupBlendMode":
+      case "VideoGroupEnabled": {
+        const group = groupById(input.video_group_id);
+        if (!group) return Promise.resolve({ handled: false, reason: "missing-group" });
+        if (!Number.isFinite(input.value)) return Promise.resolve({ handled: false, reason: "unsupported" });
+        const field: keyof VideoGroupControlPatch = input.action === "VideoGroupOpacity" ? "opacity"
+          : input.action === "VideoGroupBlendMode" ? "blend_mode"
+            : input.action === "VideoGroupSolo" ? "solo"
+              : input.action === "VideoGroupBypass" ? "bypassed" : "enabled";
+        const key = `group:${group.id}:${field}`;
+        const base = hasCurrentIntent(key) ? intents.get(key) : group[field];
+        const value = field === "opacity" ? clamp01(input.value)
+          : field === "blend_mode" ? performBlendModes[selectorIndex(input.value, performBlendModes.length)]
+            : input.toggle ? !base : input.active;
+        if (base === value) return Promise.resolve(unchanged);
+        intents.set(key, value);
+        intentValidity.set(key, stillCurrent);
+        // All fields/groups replace the same catalog. Serialize across them,
+        // then resolve the stable id and patch fresh state just before commit.
+        return lanes.latest(key, inThisProject(() => lanes.ordered("group-catalog", inThisProject(async () => {
+          const idle = await deps.fxIdle();
+          if (!stillCurrent() || !idle) return;
+          const fresh = groupById(group.id);
+          if (!fresh || fresh[field] === value) return;
+          await deps.patchGroup(group.id, { [field]: value }, stillCurrent);
+        }))), {
+          spacingMs: groupControlCommitSpacingMs,
+          onIdle: () => { intents.delete(key); intentValidity.delete(key); },
+        }).then(() => handled);
       }
       case "VideoTransitionKind": {
         if (deps.transitionLocked()) return Promise.resolve({ handled: false, reason: "transition-running" });

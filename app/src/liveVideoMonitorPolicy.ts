@@ -22,7 +22,7 @@ export function saveLiveVideoMonitorQuality(quality: LiveVideoMonitorQuality): v
 
 export interface LiveVideoOutputHealth {
   outputId: number;
-  kind: "display" | "spout" | "ndi";
+  kind: "display" | "spout" | "syphon" | "ndi";
   deliveredFps: number;
   frameTimeP50Ms: number;
   frameTimeP95Ms: number;

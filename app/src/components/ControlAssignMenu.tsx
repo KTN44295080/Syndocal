@@ -22,7 +22,6 @@ export interface ControlAssignMenuProps {
   beatEligible: boolean;
   audioEligible?: boolean;
   audioTrigger?: boolean;
-  midiEligible?: boolean;
   audioLow?: number;
   audioHigh?: number;
   onAudio?: (settings: AudioAssignmentSettings) => void;
@@ -87,9 +86,7 @@ export function ControlAssignMenu(props: ControlAssignMenuProps) {
         <span class="controlAssignMenuKicker">Assign source</span>
         <strong data-no-localize title={props.label}>{props.label}</strong>
       </header>
-      <Show when={props.midiEligible !== false}>
-        <button type="button" role="menuitem" data-control-assign-learn onClick={() => props.onLearn()}>MIDI Learn</button>
-      </Show>
+      <button type="button" role="menuitem" data-control-assign-learn onClick={() => props.onLearn()}>MIDI Learn</button>
       <Show when={props.audioEligible && props.onAudio}>
         <AudioControlAssign trigger={props.audioTrigger === true} low={props.audioLow} high={props.audioHigh}
           onAssign={(settings) => props.onAudio?.(settings)} />

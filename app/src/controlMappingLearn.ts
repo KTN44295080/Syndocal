@@ -36,10 +36,10 @@ export interface ControlMappingTarget {
   clip_slot_id?: number | null;
   /** Stable effect-stage id (`VideoIsfStageEnabled` / `VideoIsfParam`). */
   isf_stage_id?: number | null;
+  /** Stable video group id, never a strip position or lighting group id. */
+  video_group_id?: number | null;
   /** Explicitly transport-specific targets may opt out of OSC/DMX. */
   midi_only?: boolean;
-  /** Audio-only group opacity does not add hardware group actions. */
-  audio_only?: boolean;
   /** Event controls keep their existing hardware trigger behavior. */
   audio_disabled?: boolean;
   low?: number;
@@ -55,11 +55,11 @@ export const controlMappingTargetsForMode = (
   targets: readonly ControlMappingTarget[],
 ): ControlMappingTarget[] => mode === "midi"
   ? [...targets]
-  : targets.filter((target) => !target.midi_only && !target.audio_only);
+  : targets.filter((target) => !target.midi_only);
 
 const sharedTargets = (targets: readonly ControlMappingTarget[]): SharedControlMappingTarget[] =>
   targets.filter((target): target is SharedControlMappingTarget =>
-    !target.midi_only && !target.audio_only);
+    !target.midi_only);
 
 type ControlMappingDataAttributes = {
   "data-control-map-target"?: string;
@@ -133,6 +133,7 @@ export const controlMappingTargetKey = (target: ControlMappingTarget) => JSON.st
   duration_ms: target.duration_ms ?? null,
   clip_slot_id: target.clip_slot_id ?? null,
   isf_stage_id: target.isf_stage_id ?? null,
+  video_group_id: target.video_group_id ?? null,
 });
 
 const mappingFieldsForTarget = (target: SharedControlMappingTarget) => ({
@@ -152,6 +153,8 @@ const mappingFieldsForTarget = (target: SharedControlMappingTarget) => ({
     ? { clip_slot_id: target.clip_slot_id } : {}),
   ...(target.isf_stage_id !== null && target.isf_stage_id !== undefined
     ? { isf_stage_id: target.isf_stage_id } : {}),
+  ...(target.video_group_id !== null && target.video_group_id !== undefined
+    ? { video_group_id: target.video_group_id } : {}),
 });
 
 /** The persisted fields of a MIDI mapping. Perform ids are written only when the
@@ -173,7 +176,7 @@ const midiMappingFieldsForTarget = (target: ControlMappingTarget): Omit<MidiCont
 export const midiMappingsFromLearnedControl = (
   targets: readonly ControlMappingTarget[],
   learned: LearnedMidiControl,
-): MidiControlMapping[] => targets.filter((target) => !target.audio_only).map((target) => ({
+): MidiControlMapping[] => targets.map((target) => ({
   channel: learned.channel,
   message: learned.message,
   number: learned.number,
@@ -214,7 +217,8 @@ export const midiMappingDrivesTarget = (mapping: MidiControlMapping, target: Con
     && (mapping.video_param ?? null) === (fields.video_param ?? null)
     && (mapping.cue_point_index ?? null) === (fields.cue_point_index ?? null)
     && (mapping.clip_slot_id ?? null) === (fields.clip_slot_id ?? null)
-    && (mapping.isf_stage_id ?? null) === (fields.isf_stage_id ?? null);
+    && (mapping.isf_stage_id ?? null) === (fields.isf_stage_id ?? null)
+    && (mapping.video_group_id ?? null) === (fields.video_group_id ?? null);
 };
 
 export const oscMappingsFromLearnedControl = (

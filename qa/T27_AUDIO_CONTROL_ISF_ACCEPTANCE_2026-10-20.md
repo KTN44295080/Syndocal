@@ -1,5 +1,7 @@
 # T27 Audio control mapping and ISF audio acceptance — 2026-10-20
 
+This records the original T27 checkpoint `a570f487`. The subsequent canonical group-target unification, current-main merge and full validation are documented in [T27b main integration](T27B_MAIN_INTEGRATION_2026-10-20.md).
+
 ## Scope and checkpoint
 
 Implemented only T27 in `C:\Users\janua\AppData\Local\SyndocalDev\wt-task27` on `task27-audio-mapping`, based on `e1d72e2306620d9c64454abf426ded50c1261f4d`. The commit containing this note is the checkpoint; its hash is recorded in the external `task27-result.md` handoff.

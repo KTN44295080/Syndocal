@@ -206,6 +206,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "list_ltc_input_devices_v1",
   "list_midi_inputs",
   "list_midi_outputs",
+  "list_ndi_sources_v1",
   "list_project_backups",
   "list_serial_ports",
   "list_video_camera_profiles",

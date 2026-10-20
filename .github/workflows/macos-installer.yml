@@ -100,6 +100,22 @@ jobs:
           node --test app/scripts/test-macos-artifact.mjs app/scripts/test-macos-artifact-report.mjs app/scripts/test-macos-artifact-acceptance.mjs app/scripts/test-macos-artifact-identity.mjs app/scripts/test-macos-artifact-workflow.mjs | tee target/qa/macos-artifact/tests.tap
           node --test app/scripts/test-installer-lifecycle-policy.mjs tools/distribution/test-macos-cleanup.mjs | tee target/qa/macos-artifact/installer-lifecycle-tests.tap
 
+      - name: Prepare pinned Syphon framework
+        run: |
+          mkdir -p target/qa/macos-artifact
+          set -o pipefail
+          bash app/scripts/prepare-syphon.sh 2>&1 | tee target/qa/macos-artifact/syphon-framework-build.txt
+          cp target/syphon/source-receipt.txt target/qa/macos-artifact/syphon-source-receipt.txt
+
+      - name: Compile macOS Syphon and test platform-independent output policy
+        env:
+          RUSTFLAGS: -D warnings
+        run: |
+          set -o pipefail
+          cargo check --workspace --all-targets --locked 2>&1 | tee target/qa/macos-artifact/syphon-workspace-check.txt
+          cargo test -p syndocal --bin syndocal syphon_ --locked -- --test-threads=1 2>&1 | tee target/qa/macos-artifact/syphon-policy-tests.txt
+          node app/scripts/check-syphon-output-ui.mjs | tee target/qa/macos-artifact/syphon-ui-tests.txt
+
       - name: Test macOS USB-DMX identity and output lifecycle
         run: |
           set -o pipefail
@@ -155,6 +171,15 @@ jobs:
           bash app/scripts/bundle-macos-runtime.sh \
             target/release/bundle/macos/Syndocal.app \
             target/release/bundle/dmg
+
+      - name: Verify bundled Syphon framework and notices
+        run: |
+          app_path=target/release/bundle/macos/Syndocal.app
+          test -f "$app_path/Contents/Frameworks/Syphon.framework/Syphon"
+          test -f "$app_path/Contents/Frameworks/Syphon.framework/Resources/default.metallib"
+          test -f "$app_path/Contents/Resources/licenses/Syphon-BSD.txt"
+          otool -L "$app_path/Contents/MacOS/syndocal" | grep -F '@rpath/Syphon.framework/'
+          codesign --verify --deep --strict "$app_path"
 
       - name: Validate application extracted from final DMG
         id: validate

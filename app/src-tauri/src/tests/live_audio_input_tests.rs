@@ -10418,6 +10418,7 @@ mod live_audio_input_tests {
         launch_video_clip_slot_authoritative_command_impl(
             &harness.state,
             VideoClipSlotLaunchRequest {
+                preview_generation: None,
                 layer_id,
                 slot_id: Some(slot_id),
                 transition_kind: VideoClipTakeKind::Cut,
@@ -10901,6 +10902,7 @@ mod live_audio_input_tests {
         )
         .expect("queue C2 incoming slot");
         let request = VideoClipSlotLaunchRequest {
+            preview_generation: None,
             layer_id,
             slot_id: None,
             transition_kind: VideoClipTakeKind::Wipe,
@@ -10978,6 +10980,7 @@ mod live_audio_input_tests {
         launch_video_clip_slot_authoritative_command_impl(
             &harness.state,
             VideoClipSlotLaunchRequest {
+                preview_generation: None,
                 layer_id,
                 slot_id: Some(anchor_slot_id),
                 transition_kind: VideoClipTakeKind::Cut,

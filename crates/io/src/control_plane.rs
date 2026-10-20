@@ -345,10 +345,10 @@ mod tests {
     #[test]
     fn midi_osc_dmx_families_are_exact_unique_and_fail_closed() {
         const MIDI_CONTROL_MESSAGE_COUNT: usize = 8;
-        const MIDI_CONTROL_ACTION_COUNT: usize = 60;
+        const MIDI_CONTROL_ACTION_COUNT: usize = 65;
         const MIDI_CLOCK_EVENT_COUNT: usize = 6;
         const MIDI_CONTROL_EVENT_COUNT: usize = 49;
-        const OSC_CONTROL_ACTION_COUNT: usize = 55;
+        const OSC_CONTROL_ACTION_COUNT: usize = 60;
         const OSC_INPUT_EVENT_COUNT: usize = 48;
         const DMX_INPUT_PROTOCOL_COUNT: usize = 2;
         const DMX_INPUT_EVENT_COUNT: usize = 2;
@@ -375,7 +375,7 @@ mod tests {
         assert_eq!(osc_input_event_variant_count(), OSC_INPUT_EVENT_COUNT);
         assert_eq!(dmx_input_protocol_variant_count(), DMX_INPUT_PROTOCOL_COUNT);
         assert_eq!(dmx_input_event_variant_count(), DMX_INPUT_EVENT_COUNT);
-        assert_eq!(TOTAL_COUNT, 230);
+        assert_eq!(TOTAL_COUNT, 240);
 
         let families = [
             (

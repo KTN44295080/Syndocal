@@ -21,6 +21,7 @@ fn mapping(action: OscControlAction) -> OscControlMapping {
         layer_id: Some(4),
         clip_slot_id,
         isf_stage_id,
+        video_group_id: None,
         output_id: None,
         video_param: None,
         cue_point_index: None,
@@ -267,4 +268,132 @@ fn network_perform_legacy_mappings_keep_their_serialized_shape() {
     let dmx: DmxControlMapping = serde_json::from_value(old_dmx.clone()).unwrap();
     assert!(dmx.clip_slot_id.is_none() && dmx.isf_stage_id.is_none());
     assert_eq!(serde_json::to_value(dmx).unwrap(), old_dmx);
+}
+
+const VIDEO_GROUP_ACTIONS: [&str; 5] = [
+    "VideoGroupOpacity",
+    "VideoGroupSolo",
+    "VideoGroupBypass",
+    "VideoGroupBlendMode",
+    "VideoGroupEnabled",
+];
+
+fn video_group_mapping(action: &str) -> OscControlMapping {
+    serde_json::from_value(serde_json::json!({
+        "address": "/groups/control", "action": action,
+        "video_group_id": 41, "low": 0.25, "high": 0.75
+    }))
+    .unwrap()
+}
+
+fn video_group_dmx_mapping(action: &str) -> DmxControlMapping {
+    let mut json = serde_json::to_value(video_group_mapping(action)).unwrap();
+    let object = json.as_object_mut().unwrap();
+    object.remove("address");
+    object.insert("universe".to_string(), serde_json::json!(2));
+    object.insert("channel".to_string(), serde_json::json!(25));
+    serde_json::from_value(json).unwrap()
+}
+
+#[test]
+fn network_video_group_all_actions_forward_only_stable_group_identity() {
+    for action in VIDEO_GROUP_ACTIONS {
+        let mapping = video_group_mapping(action);
+        for position in [0.0f32, 0.5, 1.0] {
+            let input = mapped(&mapping, vec![OscType::Float(position)]).unwrap();
+            assert_eq!(serde_json::to_value(&input.action).unwrap(), action);
+            assert_eq!(input.video_group_id, Some(protocol::VideoLayerGroupId(41)));
+            assert_eq!(input.layer_id, None);
+            assert_eq!(input.clip_slot_id, None);
+            assert_eq!(input.isf_stage_id, None);
+            assert_eq!(input.control, None);
+            assert_eq!(input.position, position);
+            assert_eq!(input.value, 0.25 + 0.5 * position);
+            assert_eq!(input.active, position > 0.0);
+            assert!(!input.toggle);
+        }
+    }
+}
+
+#[test]
+fn network_video_group_switches_distinguish_pulses_from_explicit_false() {
+    for action in ["VideoGroupSolo", "VideoGroupBypass", "VideoGroupEnabled"] {
+        let mapping = video_group_mapping(action);
+        let pulse = mapped(&mapping, vec![]).unwrap();
+        assert!(pulse.toggle && pulse.active);
+        let off = mapped(&mapping, vec![OscType::Bool(false)]).unwrap();
+        assert!(!off.toggle && !off.active);
+        let on = mapped(&mapping, vec![OscType::Bool(true)]).unwrap();
+        assert!(!on.toggle && on.active);
+    }
+    for action in ["VideoGroupOpacity", "VideoGroupBlendMode"] {
+        assert!(mapped(&video_group_mapping(action), vec![]).is_none());
+    }
+}
+
+#[test]
+fn network_video_group_rejects_missing_unsafe_ids_and_non_finite_samples() {
+    for action in VIDEO_GROUP_ACTIONS {
+        for id in [
+            None,
+            Some(protocol::VideoLayerGroupId(0)),
+            Some(protocol::VideoLayerGroupId(9_007_199_254_740_992)),
+        ] {
+            let mut mapping = video_group_mapping(action);
+            mapping.video_group_id = id;
+            assert!(
+                mapped(&mapping, vec![OscType::Float(1.0)]).is_none(),
+                "{action}/{id:?}"
+            );
+        }
+        for value in [
+            OscType::Float(f32::NAN),
+            OscType::Float(f32::INFINITY),
+            OscType::Double(f64::MAX),
+            OscType::String("1".to_string()),
+        ] {
+            assert!(mapped(&video_group_mapping(action), vec![value]).is_none());
+        }
+    }
+}
+
+#[test]
+fn network_video_group_dmx_forwards_levels_and_zero_without_repeat_or_toggle() {
+    for action in VIDEO_GROUP_ACTIONS {
+        let mapping = video_group_dmx_mapping(action);
+        let mut previous = None;
+        for value in [0u8, 128, 255, 0] {
+            let mut values = [0u8; 512];
+            values[24] = value;
+            let events = control_events_from_changed_frame(
+                2,
+                &values,
+                previous.as_ref(),
+                std::slice::from_ref(&mapping),
+            );
+            let [OscInputEvent::RendererRouted(input)] = events.as_slice() else {
+                panic!("expected exactly one renderer-routed group input: {action}/{value}: {events:?}");
+            };
+            assert_eq!(input.video_group_id, Some(protocol::VideoLayerGroupId(41)));
+            assert_eq!(input.position, f32::from(value) / 255.0);
+            assert_eq!(input.value, 0.25 + 0.5 * input.position);
+            assert_eq!(input.active, value > 0);
+            assert!(!input.toggle);
+            assert!(control_events_from_changed_frame(
+                2,
+                &values,
+                Some(&values),
+                std::slice::from_ref(&mapping)
+            )
+            .is_empty());
+            assert!(control_events_from_changed_frame(
+                1,
+                &values,
+                None,
+                std::slice::from_ref(&mapping)
+            )
+            .is_empty());
+            previous = Some(values);
+        }
+    }
 }

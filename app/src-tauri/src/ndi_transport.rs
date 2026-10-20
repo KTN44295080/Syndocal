@@ -69,6 +69,12 @@ fn ndi_output_effect_render_context(
     }
 }
 
+#[cfg(feature = "ndi")]
+struct NdiDecodedFrame {
+    received: Arc<io::ndi::NdiRgbaFrame>,
+    decoded: Arc<video::VideoFrame>,
+}
+
 pub struct NdiAwareVideoFrameDecoder {
     files: video::PreferredVideoFrameDecoder,
     /// Frames supplied by the recording renderer broker. External inputs are
@@ -78,7 +84,7 @@ pub struct NdiAwareVideoFrameDecoder {
     #[cfg(feature = "ndi")]
     ndi_inputs: NdiInputRegistry,
     #[cfg(feature = "ndi")]
-    ndi_frames: HashMap<u64, video::VideoFrame>,
+    ndi_frames: HashMap<u64, NdiDecodedFrame>,
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     spout_inputs: crate::spout_transport::SpoutInputRegistry,
     capture_inputs: crate::capture_transport::CaptureInputRegistry,
@@ -102,6 +108,7 @@ impl NdiAwareVideoFrameDecoder {
     #[cfg(feature = "ndi")]
     pub fn with_ndi_inputs(mut self, ndi_inputs: NdiInputRegistry) -> Self {
         self.ndi_inputs = ndi_inputs;
+        self.ndi_frames.clear();
         self
     }
 
@@ -145,6 +152,12 @@ impl NdiAwareVideoFrameDecoder {
         &mut self,
         request: &video::VideoFrameRequest,
     ) -> Result<Option<Arc<video::VideoFrame>>, video::VideoDecodeError> {
+        #[cfg(feature = "ndi")]
+        if request.source.kind == VideoSourceKind::Ndi
+            && !self.injected_frames.contains_key(&request.layer_id)
+        {
+            return self.decode_ndi_frame_shared(request);
+        }
         if self.is_plain_file(request) {
             return video::VideoFrameDecoder::decode_input_frame_shared(
                 &mut self.files,
@@ -152,6 +165,73 @@ impl NdiAwareVideoFrameDecoder {
             );
         }
         video::VideoFrameDecoder::decode_frame(self, request).map(|frame| frame.map(Arc::new))
+    }
+
+    #[cfg(feature = "ndi")]
+    fn decode_ndi_frame_shared(
+        &mut self,
+        request: &video::VideoFrameRequest,
+    ) -> Result<Option<Arc<video::VideoFrame>>, video::VideoDecodeError> {
+        let latest = self
+            .ndi_inputs
+            .lock()
+            .map_err(|_| video::VideoDecodeError::Decode {
+                layer_id: request.layer_id,
+                label: request.label.clone(),
+                message: "NDI input state lock was poisoned".to_string(),
+            })
+            .and_then(|inputs| {
+                let Some(input) = inputs.get(&request.layer_id) else {
+                    return Ok(None);
+                };
+                // A layer id may outlive its source selection. Never show a
+                // previous route's frame while a new source is being opened.
+                if request.source.name.as_deref() != Some(input.endpoint_name()) {
+                    return Ok(None);
+                }
+                input
+                    .latest_frame_shared()
+                    .map_err(|error| video::VideoDecodeError::Decode {
+                        layer_id: request.layer_id,
+                        label: request.label.clone(),
+                        message: error.to_string(),
+                    })
+            });
+        let received = match latest {
+            Ok(Some(frame)) => frame,
+            Ok(None) => {
+                self.ndi_frames.remove(&request.layer_id);
+                return Ok(None);
+            }
+            Err(error) => {
+                self.ndi_frames.remove(&request.layer_id);
+                return Err(error);
+            }
+        };
+        if let Some(cached) = self.ndi_frames.get(&request.layer_id) {
+            if Arc::ptr_eq(&cached.received, &received) {
+                return Ok(Some(Arc::clone(&cached.decoded)));
+            }
+        }
+        // One conversion per newly captured frame in this renderer. Repeated
+        // shared reads retain the pixels without copying them every tick.
+        let decoded = Arc::new(video::VideoFrame {
+            layer_id: request.layer_id,
+            width: received.width,
+            height: received.height,
+            pts_ms: request.position_ms,
+            duration_ms: 0,
+            format: video::VideoPixelFormat::Rgba8,
+            data: received.rgba.clone(),
+        });
+        self.ndi_frames.insert(
+            request.layer_id,
+            NdiDecodedFrame {
+                received,
+                decoded: Arc::clone(&decoded),
+            },
+        );
+        Ok(Some(decoded))
     }
 
     pub fn replace_injected_frames(&mut self, frames: HashMap<u64, video::VideoFrame>) {
@@ -203,40 +283,8 @@ impl video::VideoFrameDecoder for NdiAwareVideoFrameDecoder {
         }
         #[cfg(feature = "ndi")]
         if request.source.kind == VideoSourceKind::Ndi {
-            let inputs = self
-                .ndi_inputs
-                .lock()
-                .map_err(|_| video::VideoDecodeError::Decode {
-                    layer_id: request.layer_id,
-                    label: request.label.clone(),
-                    message: "NDI input state lock was poisoned".to_string(),
-                })?;
-            let Some(input) = inputs.get(&request.layer_id) else {
-                return Ok(self.ndi_frames.get(&request.layer_id).cloned());
-            };
-            if let Some(frame) =
-                input
-                    .take_latest()
-                    .map_err(|error| video::VideoDecodeError::Decode {
-                        layer_id: request.layer_id,
-                        label: request.label.clone(),
-                        message: error.to_string(),
-                    })?
-            {
-                self.ndi_frames.insert(
-                    request.layer_id,
-                    video::VideoFrame {
-                        layer_id: request.layer_id,
-                        width: frame.width,
-                        height: frame.height,
-                        pts_ms: request.position_ms,
-                        duration_ms: 0,
-                        format: video::VideoPixelFormat::Rgba8,
-                        data: frame.rgba,
-                    },
-                );
-            }
-            return Ok(self.ndi_frames.get(&request.layer_id).cloned());
+            return self.decode_ndi_frame_shared(request)
+                .map(|frame| frame.map(|frame| (*frame).clone()));
         }
         #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
         if request.source.kind == VideoSourceKind::Spout {
@@ -445,12 +493,29 @@ impl NdiTransportState {
         self.harvest_failed_workers(engine)?;
         match route.direction {
             video::ExternalVideoTransportDirection::Input => {
+                let occupied = self
+                    .inputs
+                    .lock()
+                    .map_err(|_| video::ExternalVideoTransportDriverError {
+                        message: "NDI input state lock was poisoned".to_string(),
+                    })?
+                    .contains_key(&route.route_id);
+                if occupied {
+                    return Err(video::ExternalVideoTransportDriverError {
+                        message: format!(
+                            "NDI input route {} still owns a receiver; stop it before restarting",
+                            route.route_id,
+                        ),
+                    });
+                }
                 let input =
                     io::ndi::NdiInput::new(route.endpoint_name.clone()).map_err(|error| {
                         video::ExternalVideoTransportDriverError {
                             message: error.to_string(),
                         }
                     })?;
+                // Registry writers are serialized by this transport state.
+                // SDK construction stays outside the frame-consumer lock.
                 self.inputs
                     .lock()
                     .map_err(|_| video::ExternalVideoTransportDriverError {
@@ -551,12 +616,28 @@ impl NdiTransportState {
         self.harvest_failed_workers(engine)?;
         match route.direction {
             video::ExternalVideoTransportDirection::Input => {
-                self.inputs
+                let input = self
+                    .inputs
                     .lock()
                     .map_err(|_| video::ExternalVideoTransportDriverError {
                         message: "NDI input state lock was poisoned".to_string(),
                     })?
                     .remove(&route.route_id);
+                if let Some(mut input) = input {
+                    // Keep the worker owned locally without blocking frame
+                    // consumers during the acknowledgement wait.
+                    if let Err(error) = input.stop() {
+                        self.inputs
+                            .lock()
+                            .map_err(|_| video::ExternalVideoTransportDriverError {
+                                message: "NDI input state lock was poisoned".to_string(),
+                            })?
+                            .insert(route.route_id, input);
+                        return Err(video::ExternalVideoTransportDriverError {
+                            message: error.to_string(),
+                        });
+                    }
+                }
             }
             video::ExternalVideoTransportDirection::Output => {
                 let status = engine.output_ownership_status();
@@ -3891,5 +3972,58 @@ mod ndi_output_worker_tests {
             .begin_output_ownership_transition(protocol::MachineOutputRole::Both)
             .unwrap();
         retry.complete().unwrap();
+    }
+}
+
+#[cfg(all(test, feature = "ndi"))]
+mod ndi_input_decoder_tests {
+    use super::*;
+
+    fn input_request() -> video::VideoFrameRequest {
+        video::VideoFrameRequest {
+            layer_id: 91,
+            label: "NDI input".to_string(),
+            source: protocol::VideoSourceSummary {
+                kind: VideoSourceKind::Ndi,
+                path: None,
+                name: Some("STAGE-PC (Program)".to_string()),
+                codec: None,
+                metadata: None,
+            },
+            position_ms: 250,
+            width: 1,
+            height: 1,
+        }
+    }
+
+    #[test]
+    fn ndi_decoder_discards_cached_pixels_when_receiver_is_absent() {
+        let mut decoder = NdiAwareVideoFrameDecoder::from_env();
+        decoder.ndi_frames.insert(
+            91,
+            NdiDecodedFrame {
+                received: Arc::new(io::ndi::NdiRgbaFrame {
+                    width: 1,
+                    height: 1,
+                    frame_rate_n: 60,
+                    frame_rate_d: 1,
+                    rgba: vec![7; 4],
+                }),
+                decoded: Arc::new(video::VideoFrame {
+                    layer_id: 91,
+                    width: 1,
+                    height: 1,
+                    pts_ms: 0,
+                    duration_ms: 0,
+                    format: video::VideoPixelFormat::Rgba8,
+                    data: vec![7; 4],
+                }),
+            },
+        );
+        assert!(decoder
+            .decode_frame_shared(&input_request())
+            .unwrap()
+            .is_none());
+        assert!(decoder.ndi_frames.is_empty());
     }
 }

@@ -8,6 +8,8 @@ mod agent_bridge;
 mod agent_bridge_execution;
 mod cli_console;
 mod native_adapter_error;
+mod vj_preview_slot;
+use vj_preview_slot::VjPreviewSlotAudition;
 mod process_identity_cli;
 use protocol::hidden_console_command::hidden_command;
 use std::{
@@ -329,6 +331,7 @@ mod dvc_import;
 mod dvc_stage_layout;
 mod e3_native_acceptance;
 mod live_audio_ipc_v1;
+mod ndi_catalog;
 mod ndi_transport;
 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
 mod normal_audio_output;
@@ -356,6 +359,11 @@ mod network_dmx_routes;
 mod show_spout_transport;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 mod spout_transport;
+#[cfg(all(feature = "syphon", target_os = "macos"))]
+mod syphon_native;
+mod syphon_output_policy;
+#[cfg(any(all(feature = "syphon", target_os = "macos"), test))]
+mod syphon_transport;
 pub mod timeline_cue_audio;
 
 use scene_creation::{
@@ -544,6 +552,7 @@ mod flat_invoke_args_tests {
 }
 
 use capture_catalog::{list_video_camera_profiles, probe_video_camera_profile};
+use ndi_catalog::list_ndi_sources_v1;
 use control_plane_query::{
     get_control_plane_query_capabilities, get_control_plane_query_schema_catalog,
     poll_control_plane_observation_events, query_control_plane_output_ownership,
@@ -3169,6 +3178,8 @@ struct AppState {
     ndi_inputs: ndi_transport::NdiInputRegistry,
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     spout_transport: Arc<Mutex<spout_transport::SpoutTransportState>>,
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    syphon_transport: Arc<Mutex<syphon_transport::SyphonTransportState>>,
     /// Strict show-owned fixed sender pair. Generic Spout routes remain in
     /// `spout_transport`; this state is deliberately separate so the show
     /// pair cannot be restarted through generic route synchronization.
@@ -4320,6 +4331,8 @@ struct VideoClipSlotLaunchRequest {
     layer_id: VideoLayerId,
     #[serde(default)]
     slot_id: Option<VideoClipSlotId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preview_generation: Option<u64>,
     #[serde(default)]
     transition_kind: VideoClipTakeKind,
     #[serde(default)]
@@ -12370,6 +12383,18 @@ fn commit_authoritative_video_effect_catalog(
     } else {
         None
     };
+    let group_control_change = if before_video.effect_chains == normalized_request.effect_chains
+        && before_video.effect_presets == normalized_request.effect_presets
+        && before_video.transition_buses == normalized_request.transition_buses
+        && normalized_request.composition_layer_orders.is_empty()
+    {
+        project_undo_grouping::single_group_control_change(
+            &before_video.layer_groups,
+            &normalized_request.layer_groups,
+        )
+    } else {
+        None
+    };
     let history_coalesce_key = if let Some((scope, stage, control)) = control_change {
         let (window_label, incarnation) = project_undo_owner_binding(state, owner_id)?;
         project_undo_grouping::isf_control_undo_key(
@@ -12379,6 +12404,15 @@ fn commit_authoritative_video_effect_catalog(
             &scope,
             stage,
             &control,
+        )
+    } else if let Some((group, control)) = group_control_change {
+        let (window_label, incarnation) = project_undo_owner_binding(state, owner_id)?;
+        project_undo_grouping::video_group_control_undo_key(
+            owner_id,
+            &window_label,
+            incarnation,
+            group,
+            control,
         )
     } else {
         String::new()
@@ -13855,6 +13889,7 @@ const VJ_PREVIEW_MAX_SPEED: f32 = 4.0;
 #[derive(Debug, Clone, Serialize, PartialEq)]
 struct VjPreviewTransportSummary {
     layer_id: Option<VideoLayerId>,
+    slot_id: Option<VideoClipSlotId>,
     playing: bool,
     position_ms: u64,
     duration_ms: Option<u64>,
@@ -13874,6 +13909,7 @@ impl VjPreviewTransportSummary {
     fn empty(generation: u64, updated_at_ms: u64) -> Self {
         Self {
             layer_id: None,
+            slot_id: None,
             playing: false,
             position_ms: 0,
             duration_ms: None,
@@ -13925,6 +13961,9 @@ impl VjPreviewSourceIdentity {
 struct VjPreviewTransportSession {
     layer_id: VideoLayerId,
     source: VjPreviewSourceIdentity,
+    slot_audition: Option<Arc<VjPreviewSlotAudition>>,
+    range_start_ms: u64,
+    range_end_ms: Option<u64>,
     source_name: Option<String>,
     position_ms: f64,
     duration_ms: Option<u64>,
@@ -13966,36 +14005,81 @@ impl VjPreviewTransportRuntime {
         now: Instant,
         updated_at_ms: u64,
     ) -> Result<VjPreviewTransportSummary, String> {
-        validate_vj_preview_layer(layer)?;
-        let state = video::sanitize_layer_state(layer.state.clone());
-        let duration_ms = if layer.source.kind == VideoSourceKind::StillImage {
+        self.stage_source_at(layer, None, now, updated_at_ms)
+    }
+
+    fn stage_slot_at(
+        &mut self,
+        video: &protocol::VideoSnapshot,
+        layer: &protocol::VideoLayerSummary,
+        slot_id: VideoClipSlotId,
+        now: Instant,
+        updated_at_ms: u64,
+    ) -> Result<VjPreviewTransportSummary, String> {
+        let audition = VjPreviewSlotAudition::resolve(video, layer, slot_id)?;
+        self.stage_source_at(layer, Some(audition), now, updated_at_ms)
+    }
+
+    fn stage_source_at(
+        &mut self,
+        layer: &protocol::VideoLayerSummary,
+        slot_audition: Option<VjPreviewSlotAudition>,
+        now: Instant,
+        updated_at_ms: u64,
+    ) -> Result<VjPreviewTransportSummary, String> {
+        let resolved = slot_audition
+            .as_ref()
+            .map(|audition| audition.preview_layer(layer.clone()))
+            .transpose()?;
+        let preview_layer = resolved.as_ref().unwrap_or(layer);
+        validate_vj_preview_layer(preview_layer)?;
+        let state = video::sanitize_layer_state(preview_layer.state.clone());
+        let duration_ms = if preview_layer.source.kind == VideoSourceKind::StillImage {
             Some(0)
         } else {
-            layer
+            preview_layer
                 .source
                 .metadata
                 .and_then(|metadata| metadata.duration_ms)
         };
         let (loop_enabled, loop_start_ms, loop_end_ms) =
             vj_preview_loop_bounds(&state, duration_ms);
+        let (range_start_ms, range_end_ms) = if let Some(audition) = slot_audition.as_ref() {
+            audition.bounds()?
+        } else if loop_enabled {
+            (loop_start_ms, Some(loop_end_ms))
+        } else {
+            (0, duration_ms)
+        };
+        // The live source remains a fence; slot media is a separate identity.
         let source = VjPreviewSourceIdentity::from_layer(layer);
-        // Restaging the same layer and source keeps its audition; any other
-        // staging ends it.
         let effect_audition = self
             .session
             .as_ref()
             .filter(|previous| previous.layer_id == layer.id && previous.source == source)
             .and_then(|previous| previous.effect_audition.clone());
+        let playing = slot_audition.is_some() && state.speed != 0.0 && duration_ms != Some(0);
+        let position_ms = if slot_audition
+            .as_ref()
+            .is_some_and(|audition| audition.slot.speed < 0.0)
+        {
+            range_end_ms
+                .map(|end| end.saturating_sub(1).max(range_start_ms))
+                .unwrap_or(range_start_ms)
+        } else {
+            range_start_ms
+        };
         let generation = self.next_generation();
         let mut session = VjPreviewTransportSession {
             layer_id: layer.id,
             source,
-            source_name: vj_preview_source_name(layer),
-            // Staging a pad is a cue operation, not a mirror of the live Program playhead.
-            // Always begin at the clip in-point so an ended Program clip remains auditionable.
-            position_ms: (if loop_enabled { loop_start_ms } else { 0 }) as f64,
+            slot_audition: slot_audition.map(Arc::new),
+            range_start_ms,
+            range_end_ms,
+            source_name: vj_preview_source_name(preview_layer),
+            position_ms: position_ms as f64,
             duration_ms,
-            playing: false,
+            playing,
             speed: sanitize_vj_preview_speed(state.speed),
             loop_enabled,
             loop_start_ms,
@@ -14024,8 +14108,11 @@ impl VjPreviewTransportRuntime {
             .iter()
             .find(|layer| layer.id == session.layer_id)
             .is_some_and(|layer| {
-                validate_vj_preview_layer(layer).is_ok()
-                    && VjPreviewSourceIdentity::from_layer(layer) == session.source
+                VjPreviewSourceIdentity::from_layer(layer) == session.source
+                    && match session.slot_audition.as_ref() {
+                        Some(audition) => audition.is_current(video, layer),
+                        None => validate_vj_preview_layer(layer).is_ok(),
+                    }
             });
         if !valid {
             self.clear_at(updated_at_ms);
@@ -14054,11 +14141,7 @@ impl VjPreviewTransportRuntime {
         let generation = self.next_generation();
         let session = self.session.as_mut().expect("preview session was checked");
         if playing && !session.playing {
-            let lower = if session.loop_enabled {
-                session.loop_start_ms
-            } else {
-                0
-            } as f64;
+            let lower = session.range_start_ms as f64;
             let upper = vj_preview_upper_bound(session);
             if session.speed > 0.0 && session.position_ms >= upper {
                 session.position_ms = lower;
@@ -14066,7 +14149,7 @@ impl VjPreviewTransportRuntime {
                 session.position_ms = upper;
             }
         }
-        session.playing = playing && session.duration_ms != Some(0);
+        session.playing = playing && session.speed != 0.0 && session.duration_ms != Some(0);
         session.anchored_at = now;
         session.updated_at_ms = updated_at_ms;
         session.generation = generation;
@@ -14152,7 +14235,7 @@ impl VjPreviewTransportRuntime {
         self.advance_at(now, updated_at_ms);
         self.session
             .as_ref()
-            .filter(|session| session.layer_id == layer_id)
+            .filter(|session| session.layer_id == layer_id && session.slot_audition.is_none())
             .map(|session| VjPreviewTakeState {
                 position_ms: vj_preview_position_ms(session),
                 speed: session.speed,
@@ -14185,21 +14268,33 @@ impl VjPreviewTransportRuntime {
             let start = session.loop_start_ms as f64;
             let end = session.loop_end_ms as f64;
             let span = end - start;
-            session.position_ms = if span > 0.0 {
-                start + (next - start).rem_euclid(span)
+            let ping_pong = session.slot_audition.as_ref().is_some_and(|audition| {
+                audition.slot.loop_mode == protocol::VideoClipLoopMode::PingPong
+            });
+            if span <= 0.0 {
+                session.position_ms = start;
+            } else if ping_pong {
+                let phase = (next - start).rem_euclid(span * 2.0);
+                if phase <= span {
+                    session.position_ms = start + phase;
+                } else {
+                    session.position_ms = start + span * 2.0 - phase;
+                    session.speed = -session.speed;
+                }
             } else {
-                start
-            };
+                session.position_ms = start + (next - start).rem_euclid(span);
+            }
         } else {
+            let lower = session.range_start_ms as f64;
             let upper = vj_preview_upper_bound(session);
-            if next <= 0.0 {
-                session.position_ms = 0.0;
+            if next <= lower {
+                session.position_ms = lower;
                 if session.speed < 0.0 {
                     session.playing = false;
                 }
             } else if next >= upper {
                 session.position_ms = upper;
-                if session.speed > 0.0 && session.duration_ms.is_some() {
+                if session.speed > 0.0 && session.range_end_ms.is_some() {
                     session.playing = false;
                 }
             } else {
@@ -14288,19 +14383,11 @@ fn vj_preview_loop_bounds(state: &VideoLayerState, duration_ms: Option<u64>) -> 
 }
 
 fn vj_preview_upper_bound(session: &VjPreviewTransportSession) -> f64 {
-    if session.loop_enabled {
-        session.loop_end_ms as f64
-    } else {
-        session.duration_ms.unwrap_or(u64::MAX) as f64
-    }
+    session.range_end_ms.unwrap_or(u64::MAX) as f64
 }
 
 fn clamp_vj_preview_position(session: &VjPreviewTransportSession, position_ms: f64) -> f64 {
-    let lower = if session.loop_enabled {
-        session.loop_start_ms
-    } else {
-        0
-    } as f64;
+    let lower = session.range_start_ms as f64;
     let upper = vj_preview_upper_bound(session).max(lower);
     if position_ms.is_finite() {
         position_ms.clamp(lower, upper)
@@ -14316,6 +14403,7 @@ fn vj_preview_position_ms(session: &VjPreviewTransportSession) -> u64 {
 fn vj_preview_transport_summary(session: &VjPreviewTransportSession) -> VjPreviewTransportSummary {
     VjPreviewTransportSummary {
         layer_id: Some(session.layer_id),
+        slot_id: session.slot_audition.as_ref().map(|audition| audition.slot.id),
         playing: session.playing,
         position_ms: vj_preview_position_ms(session),
         duration_ms: session.duration_ms,
@@ -31398,6 +31486,36 @@ fn validate_mapping_required_fields_for_midi(
     owner: &str,
     mapping: &mut MidiControlMapping,
 ) -> Result<(), String> {
+    if mapping.action.is_video_group() {
+        let group = mapping
+            .video_group_id
+            .ok_or_else(|| format!("{owner} requires a video group target"))?;
+        if !(1..=9_007_199_254_740_991).contains(&group.0) {
+            return Err(format!(
+                "{owner} video group ID must be a positive safe integer"
+            ));
+        }
+        if mapping.layer_id.is_some()
+            || mapping.clip_slot_id.is_some()
+            || mapping.isf_stage_id.is_some()
+            || mapping.attribute.is_some()
+            || mapping.fixture_id.is_some()
+            || mapping.group_id.is_some()
+            || mapping.cue_id.is_some()
+            || mapping.output_id.is_some()
+            || mapping.video_param.is_some()
+            || mapping.cue_point_index.is_some()
+            || mapping.duration_ms.is_some()
+        {
+            return Err(format!(
+                "{owner} video group target cannot include another target identity"
+            ));
+        }
+    } else if mapping.video_group_id.is_some() {
+        return Err(format!(
+            "{owner} video group ID requires a video group action"
+        ));
+    }
     match &mapping.action {
         MidiControlAction::FixtureAttribute => {
             require_mapping_id(mapping.fixture_id, owner, "fixture")?;
@@ -31476,6 +31594,11 @@ fn validate_mapping_required_fields_for_midi(
         MidiControlAction::VideoLayerStop | MidiControlAction::VideoLayerBlendMode => {
             require_mapping_id(mapping.layer_id, owner, "video layer")?;
         }
+        MidiControlAction::VideoGroupOpacity
+        | MidiControlAction::VideoGroupSolo
+        | MidiControlAction::VideoGroupBypass
+        | MidiControlAction::VideoGroupBlendMode
+        | MidiControlAction::VideoGroupEnabled => {}
         MidiControlAction::VideoIsfStageEnabled => {
             require_mapping_id(mapping.layer_id, owner, "video layer")?;
             require_mapping_id(mapping.isf_stage_id, owner, "effect stage")?;
@@ -31560,6 +31683,7 @@ fn validate_dmx_control_mapping(
         layer_id: mapping.layer_id,
         clip_slot_id: mapping.clip_slot_id,
         isf_stage_id: mapping.isf_stage_id,
+        video_group_id: mapping.video_group_id,
         output_id: mapping.output_id,
         video_param: mapping.video_param.clone(),
         cue_point_index: mapping.cue_point_index,
@@ -31577,6 +31701,36 @@ fn validate_mapping_required_fields_for_osc(
     owner: &str,
     mapping: &mut OscControlMapping,
 ) -> Result<(), String> {
+    if mapping.action.is_video_group() {
+        let group = mapping
+            .video_group_id
+            .ok_or_else(|| format!("{owner} requires a video group target"))?;
+        if !(1..=9_007_199_254_740_991).contains(&group.0) {
+            return Err(format!(
+                "{owner} video group ID must be a positive safe integer"
+            ));
+        }
+        if mapping.layer_id.is_some()
+            || mapping.clip_slot_id.is_some()
+            || mapping.isf_stage_id.is_some()
+            || mapping.attribute.is_some()
+            || mapping.fixture_id.is_some()
+            || mapping.group_id.is_some()
+            || mapping.cue_id.is_some()
+            || mapping.output_id.is_some()
+            || mapping.video_param.is_some()
+            || mapping.cue_point_index.is_some()
+            || mapping.duration_ms.is_some()
+        {
+            return Err(format!(
+                "{owner} video group target cannot include another target identity"
+            ));
+        }
+    } else if mapping.video_group_id.is_some() {
+        return Err(format!(
+            "{owner} video group ID requires a video group action"
+        ));
+    }
     match &mapping.action {
         OscControlAction::FixtureAttribute => {
             require_mapping_id(mapping.fixture_id, owner, "fixture")?;
@@ -31648,6 +31802,11 @@ fn validate_mapping_required_fields_for_osc(
         OscControlAction::VideoLayerStop | OscControlAction::VideoLayerBlendMode => {
             require_mapping_id(mapping.layer_id, owner, "video layer")?;
         }
+        OscControlAction::VideoGroupOpacity
+        | OscControlAction::VideoGroupSolo
+        | OscControlAction::VideoGroupBypass
+        | OscControlAction::VideoGroupBlendMode
+        | OscControlAction::VideoGroupEnabled => {}
         OscControlAction::VideoIsfStageEnabled => {
             require_mapping_id(mapping.layer_id, owner, "video layer")?;
             require_mapping_id(mapping.isf_stage_id, owner, "effect stage")?;
@@ -40824,16 +40983,7 @@ fn launch_video_clip_slot_authoritative_command_impl(
                 authority.epoch,
                 owner_id,
                 authority,
-                || {
-                    state
-                        .engine
-                        .launch_video_clip_slot_with_transition_timing_published(
-                            request.layer_id,
-                            request.slot_id,
-                            request.transition_kind,
-                            request.effective_transition_duration(),
-                        )
-                },
+                || launch_video_clip_slot_request_published(state, &request),
             )?;
             Ok(VideoClipSlotAuthoritativeTerminalResult::Runtime(
                 VideoClipSlotAuthoritativeRuntimeOutcome {
@@ -40849,6 +40999,64 @@ fn launch_video_clip_slot_authoritative_command_impl(
         response_binding,
         terminal,
     )
+}
+
+/// Reuses the ticketed launch commit while freezing Preview through engine publication.
+/// The actor checks the authored identity again before changing Program.
+fn launch_video_clip_slot_request_published(
+    state: &AppState,
+    request: &VideoClipSlotLaunchRequest,
+) -> Result<(), String> {
+    let Some(generation) = request.preview_generation else {
+        return state
+            .engine
+            .launch_video_clip_slot_with_transition_timing_published(
+                request.layer_id,
+                request.slot_id,
+                request.transition_kind,
+                request.effective_transition_duration(),
+            );
+    };
+    let slot_id = request
+        .slot_id
+        .ok_or_else(|| "Preview Take requires an explicit clip slot".to_string())?;
+    let mut transport = state
+        .vj_preview_transport
+        .lock()
+        .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let snapshot = state.engine.video_snapshot();
+    let now = Instant::now();
+    let timestamp = vj_preview_timestamp_ms();
+    let guard = match transport.slot_take_guard_at(
+        &snapshot,
+        request.layer_id,
+        slot_id,
+        generation,
+        now,
+        timestamp,
+    ) {
+        Ok(guard) => guard,
+        Err(error) => {
+            if transport.session.is_none() {
+                state
+                    .vj_preview_renderer_reset_pending
+                    .store(true, Ordering::Release);
+            }
+            return Err(error);
+        }
+    };
+    state.engine.launch_video_clip_slot_from_preview_published(
+        request.layer_id,
+        slot_id,
+        request.transition_kind,
+        request.effective_transition_duration(),
+        guard,
+    )?;
+    transport.clear_at(vj_preview_timestamp_ms());
+    state
+        .vj_preview_renderer_reset_pending
+        .store(true, Ordering::Release);
+    Ok(())
 }
 
 #[tauri::command]
@@ -73941,7 +74149,7 @@ fn append_ndi_input_faults(
                 backend_id: route.backend_id.clone(),
                 label: route.label.clone(),
                 message: format!(
-                    "{message}. NDI source identity is '{}'; restart the route after the source returns.",
+                    "{message}. NDI source identity is '{}'; the receiver reconnects only to this exact source.",
                     video::LiveVideoSourceIdentity::new(&route.backend_id, &route.endpoint_name)
                         .map_err(|error| error.to_string())?
                         .stable_key()
@@ -74003,6 +74211,16 @@ fn harvest_spout_output_failures(
         .lock()
         .map_err(|_| "Spout transport state lock was poisoned".to_string())?
         .harvest_failed_workers(engine)
+        .map_err(|error| error.message)
+}
+
+#[cfg(all(feature = "syphon", target_os = "macos"))]
+fn harvest_syphon_output_failures(state: &AppState) -> Result<(), String> {
+    state
+        .syphon_transport
+        .lock()
+        .map_err(|_| "Syphon transport state lock was poisoned".to_string())?
+        .harvest_failed_workers(&state.engine)
         .map_err(|error| error.message)
 }
 
@@ -74199,14 +74417,18 @@ struct AppExternalVideoTransportDriver<'a> {
     ndi: &'a mut ndi_transport::NdiTransportState,
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     spout: &'a mut spout_transport::SpoutTransportState,
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    syphon: &'a mut syphon_transport::SyphonTransportState,
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     engine: EngineHandle,
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     activation: Option<OutputOwnershipActivation>,
 }
@@ -74214,14 +74436,15 @@ struct AppExternalVideoTransportDriver<'a> {
 impl AppExternalVideoTransportDriver<'_> {
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     fn validate_external_video_activation(
         &self,
         route: &video::ExternalVideoTransportRoute,
     ) -> Result<OutputOwnershipActivation, video::ExternalVideoTransportDriverError> {
         if route.direction == video::ExternalVideoTransportDirection::Output
-            && matches!(route.backend_id.as_str(), "ndi" | "spout")
+            && matches!(route.backend_id.as_str(), "ndi" | "spout" | "syphon")
         {
             let activation = self.activation.as_ref().ok_or_else(|| {
                 video::ExternalVideoTransportDriverError {
@@ -74235,7 +74458,7 @@ impl AppExternalVideoTransportDriver<'_> {
         }
         Err(video::ExternalVideoTransportDriverError {
             message:
-                "External video resource activation is only available for NDI/Spout output routes"
+                "External video resource activation is only available for NDI/Spout/Syphon output routes"
                     .to_string(),
         })
     }
@@ -74297,6 +74520,29 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
             );
             return Ok(());
         }
+        if route.backend_id == "syphon" {
+            if route.direction != video::ExternalVideoTransportDirection::Output {
+                return Err(video::ExternalVideoTransportDriverError {
+                    message: "Syphon input is not implemented".to_string(),
+                });
+            }
+            #[cfg(all(feature = "syphon", target_os = "macos"))]
+            {
+                let activation = self.validate_external_video_activation(route)?;
+                self.syphon
+                    .start_route(route, &self.engine, Some(activation))?;
+                self.recording.push_event(
+                    ExternalVideoTransportDriverAction::Start,
+                    route,
+                    format!("Started Syphon output route '{}'", route.endpoint_name),
+                );
+                return Ok(());
+            }
+            #[cfg(not(all(feature = "syphon", target_os = "macos")))]
+            return Err(video::ExternalVideoTransportDriverError {
+                message: "Syphon output requires a macOS build with the syphon feature".to_string(),
+            });
+        }
         self.recording.start_route(route)
     }
 
@@ -74344,6 +74590,22 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
             );
             return Ok(());
         }
+        if route.backend_id == "syphon" {
+            #[cfg(all(feature = "syphon", target_os = "macos"))]
+            {
+                self.syphon.stop_route(route, &self.engine)?;
+                self.recording.push_event(
+                    ExternalVideoTransportDriverAction::Stop,
+                    route,
+                    format!("Stopped Syphon output route '{}'", route.endpoint_name),
+                );
+                return Ok(());
+            }
+            #[cfg(not(all(feature = "syphon", target_os = "macos")))]
+            return Err(video::ExternalVideoTransportDriverError {
+                message: "Syphon output requires a macOS build with the syphon feature".to_string(),
+            });
+        }
         self.recording.stop_route(route)
     }
 }
@@ -74365,19 +74627,24 @@ struct ExternalVideoTransportSyncContext<'a> {
     ndi_transport: &'a Mutex<ndi_transport::NdiTransportState>,
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     spout_transport: &'a Mutex<spout_transport::SpoutTransportState>,
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    syphon_transport: &'a Mutex<syphon_transport::SyphonTransportState>,
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     engine: &'a EngineHandle,
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     activation: Option<OutputOwnershipActivation>,
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     maintenance_transition: Option<&'a mut engine::OutputOwnershipTransition>,
 }
@@ -74395,19 +74662,24 @@ fn sync_external_video_transports_from_snapshot(
         ndi_transport,
         #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
         spout_transport,
+        #[cfg(all(feature = "syphon", target_os = "macos"))]
+        syphon_transport,
         #[cfg(any(
             feature = "ndi",
-            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+            all(feature = "syphon", target_os = "macos")
         ))]
         engine,
         #[cfg(any(
             feature = "ndi",
-            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+            all(feature = "syphon", target_os = "macos")
         ))]
         activation,
         #[cfg(any(
             feature = "ndi",
-            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+            all(feature = "syphon", target_os = "macos")
         ))]
         maintenance_transition,
     } = context;
@@ -74440,6 +74712,14 @@ fn sync_external_video_transports_from_snapshot(
     spout
         .harvest_failed_workers(engine)
         .map_err(|error| error.message)?;
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    let mut syphon = syphon_transport
+        .lock()
+        .map_err(|_| "Syphon transport state lock was poisoned".to_string())?;
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    syphon
+        .harvest_failed_workers(engine)
+        .map_err(|error| error.message)?;
     let mut driver = AppExternalVideoTransportDriver {
         recording: RecordingExternalVideoTransportDriver {
             events: &mut events,
@@ -74450,20 +74730,25 @@ fn sync_external_video_transports_from_snapshot(
         ndi: &mut ndi,
         #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
         spout: &mut spout,
+        #[cfg(all(feature = "syphon", target_os = "macos"))]
+        syphon: &mut syphon,
         #[cfg(any(
             feature = "ndi",
-            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+            all(feature = "syphon", target_os = "macos")
         ))]
         engine: engine.clone(),
         #[cfg(any(
             feature = "ndi",
-            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+            all(feature = "syphon", target_os = "macos")
         ))]
         activation,
     };
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     let report = {
         let mut maintenance_transition = maintenance_transition;
@@ -74490,7 +74775,8 @@ fn sync_external_video_transports_from_snapshot(
     };
     #[cfg(not(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     )))]
     let report =
         transport.sync_routes_with_driver_and_role(&plans, &mut driver, output_ownership_role);
@@ -75334,7 +75620,8 @@ fn sync_output_ownership_routes_for_role(
     role: MachineOutputRole,
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     activation: Option<OutputOwnershipActivation>,
 ) -> Result<ExternalVideoTransportSyncResponse, String> {
@@ -75354,19 +75641,24 @@ fn sync_output_ownership_routes_for_role(
             ndi_transport: state.ndi_transport.as_ref(),
             #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
             spout_transport: state.spout_transport.as_ref(),
+            #[cfg(all(feature = "syphon", target_os = "macos"))]
+            syphon_transport: state.syphon_transport.as_ref(),
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             engine: &state.engine,
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             activation,
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             maintenance_transition: None,
         },
@@ -75387,7 +75679,8 @@ fn retire_project_swap_output_resources(
         MachineOutputRole::Standby,
         #[cfg(any(
             feature = "ndi",
-            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+            all(feature = "syphon", target_os = "macos")
         ))]
         None,
     ) {
@@ -79420,7 +79713,8 @@ fn apply_output_ownership_transition_after_reservation(
             MachineOutputRole::Standby,
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             None,
         )?;
@@ -79438,7 +79732,8 @@ fn apply_output_ownership_transition_after_reservation(
             state.engine.prepare_output_ownership_role(role)?;
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             if role.video_allowed() {
                 transition
@@ -79450,7 +79745,8 @@ fn apply_output_ownership_transition_after_reservation(
             }
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             let activation = if role.video_allowed() {
                 Some(
@@ -79469,7 +79765,8 @@ fn apply_output_ownership_transition_after_reservation(
                 role,
                 #[cfg(any(
                     feature = "ndi",
-                    all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                    all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                    all(feature = "syphon", target_os = "macos")
                 ))]
                 activation,
             )?;
@@ -79533,6 +79830,8 @@ fn reserve_standby_output_ownership_transition(
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     harvest_spout_output_failures(state.spout_transport.as_ref(), &state.engine)
         .map_err(|error| (Some(path.clone()), error))?;
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    harvest_syphon_output_failures(state).map_err(|error| (Some(path.clone()), error))?;
     state
         .engine
         .begin_output_ownership_transition(MachineOutputRole::Standby)
@@ -79567,6 +79866,8 @@ fn apply_output_ownership_role_with_transition_guard(
     harvest_show_spout_output_failures(state.show_spout_transport.as_ref(), &state.engine)?;
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     harvest_spout_output_failures(state.spout_transport.as_ref(), &state.engine)?;
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    harvest_syphon_output_failures(state)?;
 
     let path = match output_ownership_state_path(app) {
         Ok(path) => path,
@@ -79788,6 +80089,8 @@ fn sync_external_video_transports(
     harvest_show_spout_output_failures(state.show_spout_transport.as_ref(), &state.engine)?;
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     harvest_spout_output_failures(state.spout_transport.as_ref(), &state.engine)?;
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    harvest_syphon_output_failures(state)?;
     let role = state.engine.output_ownership_status().role;
     let transition = state
         .engine
@@ -79795,7 +80098,8 @@ fn sync_external_video_transports(
         .map_err(|error| format!("External video sync admission failed: {error}"))?;
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     let mut transition = transition;
     if let Err(error) = state.engine.fence_output_ownership() {
@@ -79814,19 +80118,24 @@ fn sync_external_video_transports(
             ndi_transport: state.ndi_transport.as_ref(),
             #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
             spout_transport: state.spout_transport.as_ref(),
+            #[cfg(all(feature = "syphon", target_os = "macos"))]
+            syphon_transport: state.syphon_transport.as_ref(),
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             engine: &state.engine,
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             activation: None,
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             maintenance_transition: Some(&mut transition),
         },
@@ -80695,8 +81004,15 @@ fn get_debug_video_preview(
     state: State<'_, AppState>,
     width: u32,
     height: u32,
+    composition_id: Option<CompositionId>,
 ) -> Result<video::VideoFrame, String> {
-    let (snapshot, bpm) = state.engine.video_layer_thumbnail_snapshot();
+    let (mut snapshot, bpm) = state.engine.video_layer_thumbnail_snapshot();
+    if let Some(composition_id) = composition_id {
+        snapshot.compositions.retain(|composition| composition.id == composition_id);
+        if snapshot.compositions.is_empty() {
+            return Err("Group preview composition no longer exists".to_string());
+        }
+    }
     let mut renderer = state
         .video_preview
         .lock()
@@ -80752,13 +81068,13 @@ fn get_debug_video_output_preview(
 fn get_vj_preview_transport(
     state: State<'_, AppState>,
 ) -> Result<VjPreviewTransportSummary, String> {
-    let snapshot = state.engine.video_snapshot();
-    let now = Instant::now();
-    let updated_at_ms = vj_preview_timestamp_ms();
     let mut transport = state
         .vj_preview_transport
         .lock()
         .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let snapshot = state.engine.video_snapshot();
+    let now = Instant::now();
+    let updated_at_ms = vj_preview_timestamp_ms();
     let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
     let summary = transport.summary_at(now, updated_at_ms);
     drop(transport);
@@ -80772,6 +81088,7 @@ fn get_vj_preview_transport(
 fn stage_vj_preview_layer(
     state: State<'_, AppState>,
     layer_id: VideoLayerId,
+    slot_id: Option<VideoClipSlotId>,
     expected_epoch: Option<u64>,
     expected_revision: Option<u64>,
     expected_checkpoint_hash: Option<String>,
@@ -80781,12 +81098,13 @@ fn stage_vj_preview_layer(
         expected_revision,
         expected_checkpoint_hash,
     )?;
-    stage_vj_preview_layer_for_authority(&state, layer_id, expected_authority)
+    stage_vj_preview_layer_for_authority(&state, layer_id, slot_id, expected_authority)
 }
 
 fn stage_vj_preview_layer_for_authority(
     state: &AppState,
     layer_id: VideoLayerId,
+    slot_id: Option<VideoClipSlotId>,
     expected_authority: Option<VjPreviewProjectAuthorityExpectation>,
 ) -> Result<VjPreviewTransportSummary, String> {
     if let Some(expected_authority) = expected_authority {
@@ -80798,13 +81116,11 @@ fn stage_vj_preview_layer_for_authority(
         ensure_no_pending_project_transaction(&coordinator)?;
         reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
         return with_exact_vj_preview_project_authority(&coordinator, &expected_authority, || {
-            let snapshot = state.engine.video_snapshot();
-            stage_vj_preview_layer_from_snapshot(state, &snapshot, layer_id)
+            stage_vj_preview_layer_current(state, layer_id, slot_id)
         });
     }
 
-    let snapshot = state.engine.video_snapshot();
-    stage_vj_preview_layer_from_snapshot(state, &snapshot, layer_id)
+    stage_vj_preview_layer_current(state, layer_id, slot_id)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80856,26 +81172,52 @@ fn with_exact_vj_preview_project_authority<T>(
     stage()
 }
 
-fn stage_vj_preview_layer_from_snapshot(
+fn stage_vj_preview_layer_current(
     state: &AppState,
-    snapshot: &protocol::VideoSnapshot,
     layer_id: VideoLayerId,
+    slot_id: Option<VideoClipSlotId>,
 ) -> Result<VjPreviewTransportSummary, String> {
+    let mut transport = state
+        .vj_preview_transport
+        .lock()
+        .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    // Never reconcile a newly staged session against a snapshot captured while
+    // waiting for the Preview mutex.
+    let snapshot = state.engine.video_snapshot();
     let layer = snapshot
         .layers
         .iter()
         .find(|layer| layer.id == layer_id)
         .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
     let source = VjPreviewSourceIdentity::from_layer(layer);
-    let mut transport = state
-        .vj_preview_transport
-        .lock()
-        .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
-    let reset_renderer = transport
-        .session
-        .as_ref()
-        .is_some_and(|session| session.layer_id != layer_id || session.source != source);
-    let summary = transport.stage_at(layer, Instant::now(), vj_preview_timestamp_ms())?;
+    let now = Instant::now();
+    let timestamp = vj_preview_timestamp_ms();
+    let valid = transport.reconcile_at(&snapshot, now, timestamp);
+    let reset_renderer = !valid
+        || transport.session.as_ref().is_some_and(|session| {
+            session.layer_id != layer_id
+                || session.source != source
+                || session
+                    .slot_audition
+                    .as_ref()
+                    .map(|audition| audition.slot.id)
+                    != slot_id
+                || session
+                    .slot_audition
+                    .as_ref()
+                    .is_some_and(|audition| !audition.is_current(&snapshot, layer))
+        });
+    if reset_renderer {
+        // Invalidation must evict the old decoder even if the new stage fails.
+        state
+            .vj_preview_renderer_reset_pending
+            .store(true, Ordering::Release);
+    }
+    let summary = if let Some(slot_id) = slot_id {
+        transport.stage_slot_at(&snapshot, layer, slot_id, now, timestamp)?
+    } else {
+        transport.stage_at(layer, now, timestamp)?
+    };
     drop(transport);
     if reset_renderer {
         reset_vj_preview_renderer(state)?;
@@ -80888,13 +81230,13 @@ fn set_vj_preview_playing(
     state: State<'_, AppState>,
     playing: bool,
 ) -> Result<VjPreviewTransportSummary, String> {
-    let snapshot = state.engine.video_snapshot();
-    let now = Instant::now();
-    let updated_at_ms = vj_preview_timestamp_ms();
     let mut transport = state
         .vj_preview_transport
         .lock()
         .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let snapshot = state.engine.video_snapshot();
+    let now = Instant::now();
+    let updated_at_ms = vj_preview_timestamp_ms();
     let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
     let result = transport.set_playing_at(playing, now, updated_at_ms);
     drop(transport);
@@ -80909,13 +81251,13 @@ fn seek_vj_preview(
     state: State<'_, AppState>,
     position_ms: u64,
 ) -> Result<VjPreviewTransportSummary, String> {
-    let snapshot = state.engine.video_snapshot();
-    let now = Instant::now();
-    let updated_at_ms = vj_preview_timestamp_ms();
     let mut transport = state
         .vj_preview_transport
         .lock()
         .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let snapshot = state.engine.video_snapshot();
+    let now = Instant::now();
+    let updated_at_ms = vj_preview_timestamp_ms();
     let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
     let result = transport.seek_at(position_ms, now, updated_at_ms);
     drop(transport);
@@ -80930,13 +81272,13 @@ fn set_vj_preview_speed(
     state: State<'_, AppState>,
     speed: f32,
 ) -> Result<VjPreviewTransportSummary, String> {
-    let snapshot = state.engine.video_snapshot();
-    let now = Instant::now();
-    let updated_at_ms = vj_preview_timestamp_ms();
     let mut transport = state
         .vj_preview_transport
         .lock()
         .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let snapshot = state.engine.video_snapshot();
+    let now = Instant::now();
+    let updated_at_ms = vj_preview_timestamp_ms();
     let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
     let result = transport.set_speed_at(speed, now, updated_at_ms);
     drop(transport);
@@ -80972,13 +81314,13 @@ fn set_vj_preview_effect(
     } else {
         None
     };
-    let snapshot = state.engine.video_snapshot();
-    let now = Instant::now();
-    let updated_at_ms = vj_preview_timestamp_ms();
     let mut transport = state
         .vj_preview_transport
         .lock()
         .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let snapshot = state.engine.video_snapshot();
+    let now = Instant::now();
+    let updated_at_ms = vj_preview_timestamp_ms();
     let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
     let result = transport.set_effect_audition_at(layer_id, audition, now, updated_at_ms);
     drop(transport);
@@ -80998,11 +81340,22 @@ fn get_builtin_video_isf_effect(preset_id: String) -> Result<VideoIsfEffectSumma
         .ok_or_else(|| format!("Unknown built-in VJ effect '{preset_id}'"))
 }
 
+#[cfg(test)]
 fn vj_preview_render_snapshot(
     snapshot: &protocol::VideoSnapshot,
     layer_id: VideoLayerId,
     position_ms: u64,
     effect_audition: Option<Option<VideoIsfEffectSummary>>,
+) -> Result<protocol::VideoSnapshot, String> {
+    vj_preview_render_snapshot_for_slot(snapshot, layer_id, position_ms, effect_audition, None)
+}
+
+fn vj_preview_render_snapshot_for_slot(
+    snapshot: &protocol::VideoSnapshot,
+    layer_id: VideoLayerId,
+    position_ms: u64,
+    effect_audition: Option<Option<VideoIsfEffectSummary>>,
+    slot_audition: Option<&VjPreviewSlotAudition>,
 ) -> Result<protocol::VideoSnapshot, String> {
     let mut layer = snapshot
         .layers
@@ -81010,7 +81363,24 @@ fn vj_preview_render_snapshot(
         .find(|layer| layer.id == layer_id)
         .cloned()
         .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
+    if let Some(audition) = slot_audition {
+        if !audition.is_current(snapshot, &layer) {
+            return Err("Preview clip changed before rendering".to_string());
+        }
+        layer = audition.preview_layer(layer)?;
+    }
     validate_vj_preview_layer(&layer)?;
+    let position_ms = if let Some(audition) = slot_audition {
+        let (start, end) = audition.bounds()?;
+        // Clip out-points are exclusive, including the paused terminal frame.
+        position_ms.clamp(
+            start,
+            end.map(|end| end.saturating_sub(1).max(start))
+                .unwrap_or(u64::MAX),
+        )
+    } else {
+        position_ms
+    };
     layer.state.position_ms = position_ms;
     layer.state.playing = false;
     // render_layer_preview treats position zero as an invitation to use loop_start_ms.
@@ -81043,6 +81413,7 @@ fn vj_preview_frame_is_current(
     source_is_valid
         && rendered.layer_id.is_some()
         && rendered.layer_id == current.layer_id
+        && rendered.slot_id == current.slot_id
         && rendered.generation == current.generation
 }
 
@@ -81150,23 +81521,34 @@ fn render_live_video_monitor_frame(
                 .map_err(|error| format!("{error:?}"))?
         }
         LiveVideoMonitorKind::Preview => {
-            let (snapshot, bpm) = state.engine.video_layer_thumbnail_snapshot();
-            let live_audio_textures = state.engine.live_audio_texture_snapshot();
-            // layer_id remains in the binary IPC contract for compatibility, but Preview is
-            // rendered exclusively from the explicitly staged ephemeral transport.
+            // Preview comes exclusively from the explicitly staged session.
             let _ = layer_id;
-            let now = Instant::now();
-            let updated_at_ms = vj_preview_timestamp_ms();
-            let (summary, valid, effect_audition) = {
+            let (
+                snapshot,
+                bpm,
+                live_audio_textures,
+                summary,
+                valid,
+                effect_audition,
+                slot_audition,
+            ) = {
                 let mut transport = state
                     .vj_preview_transport
                     .lock()
                     .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+                let (snapshot, bpm) = state.engine.video_layer_thumbnail_snapshot();
+                let live_audio_textures = state.engine.live_audio_texture_snapshot();
+                let now = Instant::now();
+                let updated_at_ms = vj_preview_timestamp_ms();
                 let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
                 (
+                    snapshot,
+                    bpm,
+                    live_audio_textures,
                     transport.summary_at(now, updated_at_ms),
                     valid,
                     transport.effect_audition(),
+                    transport.session.as_ref().and_then(|session| session.slot_audition.clone()),
                 )
             };
             if !valid {
@@ -81175,11 +81557,12 @@ fn render_live_video_monitor_frame(
             let layer_id = summary
                 .layer_id
                 .ok_or_else(|| "Preview monitor has no staged layer".to_string())?;
-            let preview_video = vj_preview_render_snapshot(
+            let preview_video = vj_preview_render_snapshot_for_slot(
                 &snapshot,
                 layer_id,
                 summary.position_ms,
                 effect_audition,
+                slot_audition.as_deref(),
             )?;
             let mut renderer = match state.vj_preview_renderer.try_lock() {
                 Ok(renderer) => renderer,
@@ -81224,14 +81607,14 @@ fn render_live_video_monitor_frame(
 
             // A seek, restage, clear, layer removal, or source replacement may race a slow
             // decode. Do not publish that stale frame into the Preview bus.
-            let latest_snapshot = state.engine.video_snapshot();
-            let check_now = Instant::now();
-            let check_timestamp_ms = vj_preview_timestamp_ms();
             let (current, valid) = {
                 let mut transport = state
                     .vj_preview_transport
                     .lock()
                     .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+                let latest_snapshot = state.engine.video_snapshot();
+                let check_now = Instant::now();
+                let check_timestamp_ms = vj_preview_timestamp_ms();
                 let valid = transport.reconcile_at(&latest_snapshot, check_now, check_timestamp_ms);
                 (transport.summary_at(check_now, check_timestamp_ms), valid)
             };
@@ -81291,14 +81674,14 @@ fn render_live_video_monitor_frame(
     if let Some(rendered) = rendered_preview_summary.as_ref() {
         // Encoding is intentionally outside the transport lock. Recheck after it too, so a
         // seek/clear/project transition during JPEG work can never publish one stale packet.
-        let latest_snapshot = state.engine.video_snapshot();
-        let check_now = Instant::now();
-        let check_timestamp_ms = vj_preview_timestamp_ms();
         let (current, valid) = {
             let mut transport = state
                 .vj_preview_transport
                 .lock()
                 .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+            let latest_snapshot = state.engine.video_snapshot();
+            let check_now = Instant::now();
+            let check_timestamp_ms = vj_preview_timestamp_ms();
             let valid = transport.reconcile_at(&latest_snapshot, check_now, check_timestamp_ms);
             (transport.summary_at(check_now, check_timestamp_ms), valid)
         };
@@ -88544,6 +88927,13 @@ fn normalize_video_output_config(
         let trimmed = name.trim().to_string();
         (!trimmed.is_empty()).then_some(trimmed)
     });
+    if kind == VideoOutputKind::SyphonServer {
+        syphon_output_policy::validate_syphon_config(
+            endpoint_name.as_deref().unwrap_or_default(),
+            width,
+            height,
+        )?;
+    }
 
     Ok(NormalizedVideoOutputConfig {
         label,
@@ -88557,6 +88947,9 @@ fn normalize_video_output_config(
 }
 
 fn ensure_video_input_backend_available(kind: &VideoSourceKind) -> Result<(), String> {
+    if matches!(kind, VideoSourceKind::Syphon) {
+        return Err("Syphon input is not implemented".to_string());
+    }
     let Some((backend_id, feature_label)) = video_input_backend(kind) else {
         return Ok(());
     };
@@ -92973,6 +93366,13 @@ pub(crate) mod tests {
             let show_spout_transport = Arc::new(Mutex::new(
                 show_spout_transport::ShowSpoutTransportState::default(),
             ));
+            #[cfg(all(feature = "syphon", target_os = "macos"))]
+            let syphon_transport =
+                Arc::new(Mutex::new(syphon_transport::SyphonTransportState::new(
+                    #[cfg(feature = "ndi")]
+                    Arc::clone(&ndi_inputs),
+                    Arc::clone(&capture_inputs),
+                )));
             let app_video_decoder = ndi_transport::NdiAwareVideoFrameDecoder::from_env()
                 .with_capture_inputs(Arc::clone(&capture_inputs));
             #[cfg(feature = "ndi")]
@@ -93056,6 +93456,8 @@ pub(crate) mod tests {
                 spout_transport,
                 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
                 show_spout_transport,
+                #[cfg(all(feature = "syphon", target_os = "macos"))]
+                syphon_transport,
                 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
                 spout_inputs: Arc::clone(&spout_inputs),
                 custom_profiles: Mutex::new(HashMap::new()),
@@ -98648,8 +99050,8 @@ pub(crate) mod tests {
                 Some(RuntimeInvokeDispatchPolicy::PreflightOnlyNonProjectOrInnerAuthority)
             );
         }
-        // The extension setter owns its lifecycle authority inside the handler.
-        assert_eq!(runtime_routes.len(), 178);
+        // Extension and Audio setters own their lifecycle authority inside the handler.
+        assert_eq!(runtime_routes.len(), 179);
         // Generator routes own renderer-ticketed publication admission. The
         // runtime-only dispatch policy must not classify those project edits.
         const GENERATOR_PROJECT_ROUTES: [&str; 2] =
@@ -103178,7 +103580,7 @@ pub(crate) mod tests {
         // First-run staging carries the exact returned token through the
         // production reconcile. An idle show must still be at that identity.
         let summary =
-            stage_vj_preview_layer_for_authority(&harness.state, layer_id, Some(terminal.clone()))
+            stage_vj_preview_layer_for_authority(&harness.state, layer_id, None, Some(terminal.clone()))
                 .expect("the Bootstrap terminal authority stages its first layer");
         assert_eq!(summary.layer_id, Some(layer_id));
         assert!(!summary.playing, "staging cues Preview without playing it");
@@ -103193,7 +103595,7 @@ pub(crate) mod tests {
             .send(EngineCommand::SetBpm(bpm + 6.0))
             .expect("send live BPM change");
         let error =
-            stage_vj_preview_layer_for_authority(&harness.state, layer_id, Some(terminal.clone()))
+            stage_vj_preview_layer_for_authority(&harness.state, layer_id, None, Some(terminal.clone()))
                 .expect_err("a reconciled live edit retires the Bootstrap token");
         assert!(
             error.contains(&format!(
@@ -115037,6 +115439,7 @@ pub(crate) mod tests {
             layer_id: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             video_param: None,
             cue_point_index: None,
             output_id: None,
@@ -115077,6 +115480,7 @@ pub(crate) mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let dmx = DmxControlMapping {
             universe: 0,
@@ -115089,6 +115493,7 @@ pub(crate) mod tests {
             layer_id: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,
@@ -115216,6 +115621,7 @@ pub(crate) mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let osc_mapping = OscControlMapping {
             address: "/show/video_master".to_string(),
@@ -115227,6 +115633,7 @@ pub(crate) mod tests {
             layer_id: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             video_param: None,
             cue_point_index: None,
             output_id: None,
@@ -115245,6 +115652,7 @@ pub(crate) mod tests {
             layer_id: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,
@@ -115692,6 +116100,7 @@ pub(crate) mod tests {
                 layer_id: None,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -115745,6 +116154,7 @@ pub(crate) mod tests {
                 layer_id: None,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -118137,19 +118547,14 @@ f 1 2 3
         let frame = renderer
             .render_output_preview(&snapshot.video, 1, 64, 36)
             .expect("sample output should render through the native-output reference boundary");
+        // The sample's only layer is an NDI source with no sender here. A
+        // no-signal NDI input renders transparent, never the debug placeholder.
         assert!(
             frame
                 .data
                 .chunks_exact(4)
-                .any(|pixel| pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0),
-            "sample output should contain non-black video pixels"
-        );
-        assert!(
-            frame
-                .data
-                .chunks_exact(4)
-                .any(|pixel| pixel[0] != 255 || pixel[1] != 255 || pixel[2] != 255),
-            "sample output should not be a solid white frame"
+                .all(|pixel| pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0),
+            "no-signal NDI sample output should stay black instead of a placeholder"
         );
     }
 
@@ -118333,6 +118738,7 @@ f 1 2 3
                     high: 300.0,
                     clip_slot_id: None,
                     isf_stage_id: None,
+                    video_group_id: None,
                 },
                 MidiControlMapping {
                     audio: None,
@@ -118354,6 +118760,7 @@ f 1 2 3
                     high: 1.0,
                     clip_slot_id: None,
                     isf_stage_id: None,
+                    video_group_id: None,
                 },
             ],
         };
@@ -118369,6 +118776,7 @@ f 1 2 3
                 layer_id: None,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
                 output_id: None,
                 video_param: None,
                 cue_point_index: None,
@@ -118439,6 +118847,7 @@ f 1 2 3
                 high: 300.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             }],
             osc_mappings: vec![OscControlMapping {
                 address: "/touchosc/tap".to_string(),
@@ -118450,6 +118859,7 @@ f 1 2 3
                 layer_id: None,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
                 output_id: None,
                 video_param: None,
                 cue_point_index: None,
@@ -118468,6 +118878,7 @@ f 1 2 3
                 layer_id: None,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
                 output_id: None,
                 video_param: None,
                 cue_point_index: None,
@@ -118620,6 +119031,7 @@ f 1 2 3
                 high: 1.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             },
             MidiControlMapping {
                 audio: None,
@@ -118641,6 +119053,7 @@ f 1 2 3
                 high: 1.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             },
             MidiControlMapping {
                 audio: None,
@@ -118662,6 +119075,7 @@ f 1 2 3
                 high: 1.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             },
             MidiControlMapping {
                 audio: None,
@@ -118683,6 +119097,7 @@ f 1 2 3
                 high: 1.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             },
         ])
         .unwrap();
@@ -118720,6 +119135,7 @@ f 1 2 3
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         }])
         .unwrap_err();
         assert!(error.contains("channel"));
@@ -118753,6 +119169,7 @@ f 1 2 3
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         }])
         .unwrap_err();
         assert!(error.contains("feedback Off channel"));
@@ -118777,6 +119194,7 @@ f 1 2 3
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         }])
         .unwrap_err();
         assert!(error.contains("video layer"));
@@ -118801,6 +119219,7 @@ f 1 2 3
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         }])
         .unwrap_err();
         assert!(error.contains("Forward, Reverse, or Bounce"));
@@ -118828,6 +119247,7 @@ f 1 2 3
             duration_ms: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             feedback: None,
             low: 0.0,
             high: 1.0,
@@ -119125,6 +119545,7 @@ f 1 2 3
                 layer_id: None,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
                 output_id: None,
                 video_param: None,
                 cue_point_index: None,
@@ -119142,6 +119563,7 @@ f 1 2 3
                 layer_id: None,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
                 output_id: Some(7),
                 video_param: None,
                 cue_point_index: None,
@@ -119166,6 +119588,7 @@ f 1 2 3
             layer_id: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,
@@ -119186,6 +119609,7 @@ f 1 2 3
             layer_id: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,
@@ -121056,6 +121480,15 @@ f 1 2 3
             Some(("ndi", "NDI output"))
         );
         assert_eq!(video_output_backend(&VideoOutputKind::Display), None);
+        assert_eq!(
+            video_output_backend(&VideoOutputKind::SyphonServer),
+            Some(("syphon", "Syphon output"))
+        );
+        assert!(
+            ensure_video_input_backend_available(&VideoSourceKind::Syphon)
+                .unwrap_err()
+                .contains("Syphon input is not implemented")
+        );
     }
 
     #[test]
@@ -122244,6 +122677,7 @@ f 1 2 3
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let osc_mapping = OscControlMapping {
             address: "/show/go".to_string(),
@@ -122255,6 +122689,7 @@ f 1 2 3
             layer_id: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             video_param: None,
             cue_point_index: None,
             output_id: None,
@@ -122273,6 +122708,7 @@ f 1 2 3
             layer_id: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,
@@ -135373,6 +135809,12 @@ fn main() {
     let show_spout_transport = Arc::new(Mutex::new(
         show_spout_transport::ShowSpoutTransportState::default(),
     ));
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    let syphon_transport = Arc::new(Mutex::new(syphon_transport::SyphonTransportState::new(
+        #[cfg(feature = "ndi")]
+        Arc::clone(&ndi_inputs),
+        Arc::clone(&capture_inputs),
+    )));
     let app_video_decoder = ndi_transport::NdiAwareVideoFrameDecoder::from_env()
         .with_capture_inputs(Arc::clone(&capture_inputs));
     #[cfg(feature = "ndi")]
@@ -135803,6 +136245,8 @@ fn main() {
             spout_transport,
             #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
             show_spout_transport,
+            #[cfg(all(feature = "syphon", target_os = "macos"))]
+            syphon_transport,
             #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
             spout_inputs: Arc::clone(&spout_inputs),
             custom_profiles: Mutex::new(HashMap::new()),
@@ -136116,6 +136560,7 @@ fn main() {
             discover_art_rdm_devices,
             start_art_rdm_full_discovery,
             list_video_camera_profiles,
+            list_ndi_sources_v1,
             probe_video_camera_profile,
             list_video_display_monitors,
             create_scene_authoritative_v1,

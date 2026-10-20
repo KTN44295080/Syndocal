@@ -1,4 +1,5 @@
-import type { MidiControlMapping } from "./types";
+import type { MidiControlMapping, VideoEffectCatalog, VideoLayerSummary } from "./types";
+import { isfStageIndexForId, layerIsfStages } from "./performControlDispatcher";
 import type { ControlMappingTarget } from "./controlMappingLearn";
 import type { PerformRoutedInput } from "./controlMappingPerform";
 
@@ -36,21 +37,57 @@ export const audioTargetIsTrigger = (target: { action: string }) =>
   target.action === "VideoClipSlotTrigger" || target.action === "VideoTake";
 export const audioTargetIsContinuous = (target: { action: string; video_param?: string | null }) =>
   (target.action === "VideoParam" && target.video_param === "Opacity")
-  || target.action === "VideoLayerFade" || target.action === "VideoMaster" || target.action === "VideoIsfParam";
+  || target.action === "VideoLayerFade" || target.action === "VideoGroupOpacity"
+  || target.action === "VideoMaster" || target.action === "VideoIsfParam";
+type AudioTargetIdentity = Omit<ControlMappingTarget, "action" | "label"> & { action: string };
+function validAudioGroupIdentity(target: AudioTargetIdentity): boolean {
+  if (target.group_id != null) return false;
+  if (target.action !== "VideoGroupOpacity") return target.video_group_id == null;
+  return Number.isSafeInteger(target.video_group_id) && Number(target.video_group_id) > 0
+    && [target.layer_id, target.clip_slot_id, target.isf_stage_id, target.attribute, target.fixture_id,
+      target.cue_id, target.output_id, target.video_param, target.cue_point_index, target.duration_ms]
+      .every(value => value == null);
+}
 export const audioTargetIsEligible = (target: ControlMappingTarget) =>
-  !target.audio_disabled && (audioTargetIsTrigger(target) || audioTargetIsContinuous(target));
+  !target.audio_disabled && validAudioGroupIdentity(target)
+  && (audioTargetIsTrigger(target) || audioTargetIsContinuous(target));
 export const isAudioMapping = (mapping: MidiControlMapping): mapping is AudioControlMapping =>
   mapping.message === "Audio" && mapping.audio !== undefined && mapping.audio !== null;
+/** Retain dangling assignments in the project, but do not let one deleted target
+ * reject a live batch for the remaining controls. The runtime rechecks this
+ * getter before queued work executes, using the current catalog's stable ids. */
+export function audioMappingTargetExists(mapping: MidiControlMapping,
+  layers: readonly VideoLayerSummary[], catalog: VideoEffectCatalog | undefined): boolean {
+  if (!isAudioMapping(mapping)) return true;
+  if (!validAudioGroupIdentity(mapping)) return false;
+  if (mapping.action === "VideoMaster" || mapping.action === "VideoTake") return true;
+  if (mapping.action === "VideoGroupOpacity") {
+    return catalog?.layer_groups.some(group => group.id === mapping.video_group_id) ?? false;
+  }
+  const layer = layers.find(candidate => candidate.id === mapping.layer_id);
+  if (!layer) return false;
+  if (mapping.action === "VideoClipSlotTrigger") {
+    return layer.clip_slots?.some(slot => slot.id === mapping.clip_slot_id) ?? false;
+  }
+  if (mapping.action === "VideoIsfParam") {
+    const index = isfStageIndexForId(catalog, layer.id, mapping.isf_stage_id ?? 0);
+    const control = layerIsfStages(layer)[index]?.controls.find(candidate => candidate.name === mapping.attribute);
+    return control !== undefined && ["Float", "Long", "Bool"].includes(control.kind);
+  }
+  return audioTargetIsContinuous(mapping);
+}
 export const audioSourceLabel = (source: AudioMappingSource) =>
   audioSources.find((candidate) => candidate.value === source)?.label ?? "Audio";
 export function audioMappingsFromTargets(targets: readonly ControlMappingTarget[], settings: AudioAssignmentSettings,
   makeId: () => string = () => crypto.randomUUID()): AudioControlMapping[] {
   return targets.filter(audioTargetIsEligible).map((target) => ({
     channel: null, message: "Audio", number: 0, action: target.action, fixture_id: null,
-    attribute: target.attribute ?? null, group_id: target.group_id ?? null, cue_id: null,
+    attribute: target.attribute ?? null, group_id: null, cue_id: null,
     layer_id: target.layer_id ?? null, output_id: null, video_param: target.video_param ?? null,
     cue_point_index: null, duration_ms: null, clip_slot_id: target.clip_slot_id ?? null,
-    isf_stage_id: target.isf_stage_id ?? null, low: settings.low, high: settings.high,
+    isf_stage_id: target.isf_stage_id ?? null,
+    ...(target.video_group_id != null ? { video_group_id: target.video_group_id } : {}),
+    low: settings.low, high: settings.high,
     audio: { id: makeId(), source: settings.source, gain: settings.gain, attack_ms: settings.attack_ms,
       release_ms: settings.release_ms, threshold: settings.threshold,
       mode: audioTargetIsTrigger(target) ? (settings.mode === "Onset" ? "Onset" : "Threshold") : "Continuous" },
@@ -72,7 +109,8 @@ export function audioMappingValue(signal: number, gain: number, low: number, hig
 }
 function validSettings(mapping: AudioControlMapping): boolean {
   const a = mapping.audio;
-  return /^[A-Za-z0-9_-]{1,80}$/.test(a.id) && audioSources.some((source) => source.value === a.source)
+  return validAudioGroupIdentity(mapping)
+    && /^[A-Za-z0-9_-]{1,80}$/.test(a.id) && audioSources.some((source) => source.value === a.source)
     && [a.gain, a.attack_ms, a.release_ms, a.threshold, mapping.low, mapping.high].every(Number.isFinite)
     && a.gain >= 0 && a.gain <= 16 && a.attack_ms >= 0 && a.attack_ms <= 10_000
     && a.release_ms >= 0 && a.release_ms <= 10_000 && a.threshold >= 0 && a.threshold <= 1

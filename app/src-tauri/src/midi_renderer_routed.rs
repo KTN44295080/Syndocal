@@ -41,6 +41,7 @@ mod tests {
                 layer_id: Some(4),
                 clip_slot_id: Some(VideoClipSlotId(21)),
                 isf_stage_id: None,
+                video_group_id: None,
                 control: None,
                 position: 1.0,
                 value: 1.0,

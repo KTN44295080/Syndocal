@@ -711,7 +711,7 @@ const desk = read("components/VideoPerformDesk.tsx");
 const quickFx = read("components/VideoPerformQuickFx.tsx");
 const editor = read("components/VideoFxParameterEditor.tsx");
 const mappingPanel = read("components/MidiControlMappingPanel.tsx");
-assert.match(mappingPanel, /<Show when=\{mapping\.message !== "BeatDivision" && !isPerformRoutedAction\(mapping\.action\)\}>\s*<details class="mappingFeedbackEditor">/, "tempo sources and renderer-owned targets offer no controller feedback");
+assert.match(mappingPanel, /<Show when=\{mapping\.message !== "BeatDivision" && mapping\.message !== "Audio" && !isPerformRoutedAction\(mapping\.action\)\}>\s*<details class="mappingFeedbackEditor">/, "tempo/audio sources and renderer-owned targets offer no controller feedback");
 assert.match(desk, /disabled=\{Boolean\(props\.clipSlotBank\.runtime\?\.transition\) && !props\.performContext\?\.controlLearnActive\}/, "transition controls stay reachable for Learn");
 assert.match(matrix, /data-video-clip-slot-pad-index=\{cell\.index\} \{\.\.\.controlMappingTargetData\(cell\.slot \? \{ action: "VideoClipSlotTrigger"[\s\S]{0,160}clip_slot_id: cell\.slot\.id \} : null\)\}/, "every occupied pad targets its stable slot id");
 assert.match(matrix, /data-video-layer-stop=\{layer\(\)\.id\} \{\.\.\.controlMappingTargetData\(\{ action: "VideoLayerStop"/);
@@ -727,5 +727,7 @@ assert.match(quickFx, /stageId=\{stage\(\)\.stageId\}/);
 assert.match(editor, /action: "VideoIsfParam"[\s\S]{0,300}isf_stage_id: props\.stageId[\s\S]{0,60}attribute: control\.name/);
 assert.equal((editor.match(/controlMappingTargetData\(mapTarget\(control\)\)/g) ?? []).length, 4, "event, bool, enumerated and scalar controls are targets");
 assert.match(editor, /props\.auditioning/, "a Preview-only audition draft is never a MIDI target");
+
+await import("./check-group-control-mapping.mjs");
 
 console.log("PASS: Perform MIDI/OSC/DMX targets use stable ids; renderer routing, selectors, parameters, beat division triggers and the Rust/TypeScript contract hold");

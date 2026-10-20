@@ -9,6 +9,7 @@ default = []
 libav = ["dep:ffmpeg-next", "dep:windows"]
 ndi = []
 spout = []
+syphon = []
 
 [dependencies]
 bcdec_rs.workspace = true

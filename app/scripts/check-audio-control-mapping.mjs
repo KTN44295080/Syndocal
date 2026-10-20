@@ -71,17 +71,37 @@ await test("all twelve feature selectors resolve independently and sanitize nonf
   audio.audioSources.forEach((source, i) => near(audio.audioMappingSignal(source.value, levels), (i + 1) / 20));
   assert.equal(audio.audioMappingSignal("Level", { ...levels, rms: NaN }), 0);
 });
-await test("persistence keeps stable ISF/group ids; Audio-only and Event controls cannot become hardware/Audio bindings", () => {
+await test("canonical group opacity persists and shares MIDI, OSC, DMX and Audio targets", () => {
   const targets = [
     { action: "VideoIsfParam", layer_id: 7, isf_stage_id: 31, attribute: "amount", label: "Amount" },
-    { action: "VideoParam", video_param: "Opacity", group_id: "57", audio_only: true, label: "Group opacity" },
+    { action: "VideoGroupOpacity", video_group_id: 57, label: "Group opacity" },
   ];
   let id = 0;
   const saved = audio.audioMappingsFromTargets(targets, { ...settings, low: 1, high: 0 }, () => "stable-" + ++id);
   assert.deepEqual(JSON.parse(JSON.stringify(saved)), saved);
   assert.equal(saved[0].isf_stage_id, 31); assert.equal(saved[0].attribute, "amount");
-  assert.equal(saved[1].group_id, "57"); assert.equal(saved[1].layer_id, null);
-  assert.deepEqual(learn.midiMappingsFromLearnedControl([targets[1]], { channel: 1, message: "ControlChange", number: 7 }), []);
+  assert.equal(saved[1].action, "VideoGroupOpacity"); assert.equal(saved[1].video_group_id, 57);
+  assert.equal(saved[1].group_id, null); assert.equal(saved[1].layer_id, null); assert.equal(saved[1].video_param, null);
+  for (const mode of ["midi", "osc", "dmx"]) assert.deepEqual(learn.controlMappingTargetsForMode(mode, [targets[1]]), [targets[1]]);
+  for (const learned of [
+    learn.midiMappingsFromLearnedControl([targets[1]], { channel: 1, message: "ControlChange", number: 7 }),
+    learn.oscMappingsFromLearnedControl([targets[1]], { address: "/group/opacity" }),
+    learn.dmxMappingsFromLearnedControl([targets[1]], { universe: 0, channel: 12 }),
+  ]) {
+    assert.equal(learned.length, 1);
+    assert.equal(learned[0].action, "VideoGroupOpacity"); assert.equal(learned[0].video_group_id, 57);
+    assert.ok(learn.midiMappingDrivesTarget(learned[0], targets[1]));
+  }
+  assert.notEqual(learn.controlMappingTargetKey(targets[1]),
+    learn.controlMappingTargetKey({ ...targets[1], video_group_id: 58 }));
+  for (const action of ["VideoGroupSolo", "VideoGroupBypass", "VideoGroupBlendMode", "VideoGroupEnabled"]) {
+    assert.deepEqual(audio.audioMappingsFromTargets([{ ...targets[1], action }], settings), []);
+  }
+  for (const invalid of [{ video_group_id: 0 }, { video_group_id: 1.5 }, { video_group_id: Number.MAX_SAFE_INTEGER + 1 },
+    { layer_id: 7 }, { group_id: "57" }, { video_param: "Opacity" }]) {
+    assert.deepEqual(audio.audioMappingsFromTargets([{ ...targets[1], ...invalid }], settings), []);
+  }
+  assert.deepEqual(audio.audioMappingsFromTargets([{ action: "VideoParam", video_param: "Opacity", group_id: "57", label: "Interim" }], settings), []);
   assert.deepEqual(audio.audioMappingsFromTargets([{ action: "VideoIsfParam", audio_disabled: true, label: "Event" }], settings), []);
   const hardware = { ...mapping(), message: "ControlChange" }; delete hardware.audio;
   empty(sample(audio.createAudioMappingEvaluator(), [hardware], 1, 1, 0));
@@ -197,10 +217,11 @@ await test("runtime cadence and trigger backlog are bounded; suspension/project 
   driver.dispose(); gate.resolve(); await gate.promise;
 });
 
+const authoredWrites = [];
 function dispatcherDeps(overrides = {}) {
-  const forbidden = () => { throw new Error("Audio called an authored parameter setter"); };
+  const forbidden = (...args) => { authoredWrites.push(args); throw new Error("Audio called an authored parameter setter"); };
   return {
-    layers: () => [{ id: 7, clip_slots: [{ id: 91 }] }], effectCatalog: () => undefined,
+    layers: () => [{ id: 7, clip_slots: [{ id: 91 }] }], effectCatalog: () => undefined, patchGroup: forbidden,
     projectEpoch: () => 1, clipRuntime: () => null, takeEnabled: () => false,
     selectLayer: () => {}, selectSlot: () => {}, queueSlot: async () => true, take: async () => {},
     stopLayer: async () => {}, setBlendMode: forbidden, transitionKind: () => "Cut",
@@ -209,6 +230,42 @@ function dispatcherDeps(overrides = {}) {
     setIsfStageEnabled: forbidden, setIsfControl: forbidden, triggerIsfEvent: forbidden, ...overrides,
   };
 }
+await test("deleted groups stay saved and inert while remaining Audio controls keep their runtime lane", async () => {
+  const groups = audio.audioMappingsFromTargets([
+    { action: "VideoGroupOpacity", video_group_id: 57, label: "Group 57" },
+    { action: "VideoGroupOpacity", video_group_id: 58, label: "Group 58" },
+  ], settings, (() => { let id = 0; return () => "group-" + ++id; })());
+  const stored = [...groups, mapping("VideoMaster", "master")];
+  const before = JSON.stringify(stored);
+  let catalog = { layer_groups: [{ id: 57, label: "Renamed" }], effect_chains: [] };
+  let now = 0; const batches = []; const writes = []; const completions = [];
+  const dispatcher = createPerformControlDispatcher(dispatcherDeps({
+    setAudioRuntime: async batch => { writes.push(batch); },
+  }));
+  const source = runtime.createAudioMappingSource(() => now);
+  const driver = runtime.createAudioControlRuntime({
+    mappings: () => stored.filter(m => audio.audioMappingTargetExists(m, [], catalog)),
+    observation: source.current, projectEpoch: () => 1, suspended: () => false, now: () => now,
+    dispatch: input => dispatcher.dispatch(input),
+    dispatchRuntime: (batch, current) => {
+      batches.push({ batch, current });
+      const pending = dispatcher.dispatchAudioRuntime(batch, current);
+      completions.push(pending);
+      return pending;
+    },
+  });
+  source.accept(frame(1, 0.6)); driver.advance(); await completions.at(-1);
+  assert.deepEqual(writes[0].values.map(value => value.mappingId), ["group-1", "master"]);
+  assert.equal(batches[0].current(), true);
+  catalog = { ...catalog, layer_groups: [] };
+  assert.equal(batches[0].current(), false, "deletion revokes already queued target leases");
+  now = 50; source.accept(frame(2, 0.4)); driver.advance(); await completions.at(-1);
+  assert.deepEqual(batches.at(-1).batch.values.map(value => value.mappingId), ["master"]);
+  assert.deepEqual(writes.at(-1).values.map(value => value.mappingId), ["master"]);
+  assert.deepEqual(authoredWrites, [], "Audio group values never call an authored setter");
+  assert.equal(JSON.stringify(stored), before, "dangling assignments remain available for undo/restore");
+  driver.dispose();
+});
 await test("shared dispatcher keeps one in-flight Audio batch and only the latest pending value", async () => {
   const gate = deferred(); const writes = [];
   const dispatcher = createPerformControlDispatcher(dispatcherDeps({
@@ -247,4 +304,5 @@ await test("Audio Queue/Take share the ticketed ordered lane; automatic empty Ta
   await dispatcher.dispatch(take); assert.deepEqual(calls, ["queue", "take"]);
   current = false; await dispatcher.dispatch(clip); assert.deepEqual(calls, ["queue", "take"]);
 });
+assert.deepEqual(authoredWrites, [], "no Audio runtime test called an authored parameter setter");
 console.log("Audio control mapping/runtime: " + checks + " checks passed.");

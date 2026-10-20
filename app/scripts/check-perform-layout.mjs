@@ -24,6 +24,18 @@ const browserPath = [process.env.CHROME_PATH,
 ].filter(Boolean).find(existsSync);
 assert.ok(browserPath, "Set CHROME_PATH to an installed Chromium browser");
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+function requestedPort(name) {
+  const port = Number(process.env[name] ?? 0);
+  assert.ok(Number.isInteger(port) && port >= 0 && port <= 65535, `${name} must be an integer port from 0 to 65535`);
+  return port;
+}
+async function availableLocalPort(preferred) {
+  const reservation = createTcpServer();
+  await new Promise((done, reject) => { reservation.once("error", reject); reservation.listen(preferred, "127.0.0.1", done); });
+  const port = reservation.address().port;
+  await new Promise((done, reject) => reservation.close((error) => error ? reject(error) : done()));
+  return port;
+}
 async function waitFor(check, label, timeout = 30_000) {
   const deadline = Date.now() + timeout;
   let lastError;
@@ -171,7 +183,8 @@ const focusFixtureSource = `
 const matrixFocusPath = "/src/__perform-matrix-focus-fixture.tsx";
 const matrixFocusId = join(appRoot, matrixFocusPath.slice(1)).replaceAll("\\", "/");
 const matrixFocusSource = `
- import { createSignal } from 'solid-js';
+ import { batch, createSignal } from 'solid-js';
+ import { installUiLocalization } from '/src/uiLocalization.ts';
  import { render } from 'solid-js/web';
  import { VideoPerformMatrix } from '/src/components/VideoPerformMatrix.tsx';
  import { VideoEffectBrowser } from '/src/components/VideoEffectBrowser.tsx';
@@ -179,21 +192,26 @@ const matrixFocusSource = `
  import { buildFxCatalog } from '/src/fxCatalogModel.ts';
  import { viewportFixtureData } from '/src/viewportFixtureData.ts';
  import '/src/theme.css';import '/src/styles.css';
- const initial=viewportFixtureData.vjBankLayers.slice(0,3).map((layer,i)=>({...structuredClone(layer),clip_slots:[101,102].map(id=>({id:i*100+id,media_asset_id:id,launch_quantization:'Immediate'}))}));
+ const initial=viewportFixtureData.vjBankLayers.slice(0,3).map((layer,i)=>({...structuredClone(layer),clip_slots:Array.from({length:i===2?10:2},(_,column)=>({id:i*100+101+column,media_asset_id:101+column,launch_quantization:'Immediate'}))}));
+ let locale='en';const localizer=installUiLocalization(document.body,()=>locale);
  const [layers,setLayers]=createSignal(initial);
  const [selectedLayer,setSelectedLayer]=createSignal(1),[selected,setSelected]=createSignal(101);
  const [runtime,setRuntime]=createSignal({layer_id:1,active_slot_id:101,queued_slot_id:null,pending_launch:null,transition:null,playhead_ms:0,playing:true});
- const [previewLayerId,setPreviewLayerId]=createSignal(null);
- const queueCalls=[],takes=[],inspectCalls=[],moreCalls=[],effectAdds=[];
+ const [previewLayerId,setPreviewLayerId]=createSignal(null),[previewSlotId,setPreviewSlotId]=createSignal(null);
+ const [keyboardEnabled,setKeyboardEnabled]=createSignal(true);
+ const queueCalls=[],takes=[],inspectCalls=[],auditionCalls=[],moreCalls=[],effectAdds=[];
  Object.assign(window,{__matrixFocus:{
+ setLocale:value=>{locale=value;localizer.refresh()},
  refresh:()=>setRuntime({...runtime(),playhead_ms:runtime().playhead_ms+250}),
  queue:()=>setRuntime({...runtime(),active_slot_id:null,queued_slot_id:101}),
  replaceLayer:()=>setLayers(layers().map(l=>({...l,label:l.id===1?'Updated matrix layer':l.label,clip_slots:l.clip_slots.map(s=>({...s}))}))),
- setPreviewLayerId,setRuntime,queueCalls,takes,inspectCalls,moreCalls,effectAdds,
+ setPreviewLayerId,setPreviewSlotId,setKeyboardEnabled,setRuntime,queueCalls,takes,inspectCalls,auditionCalls,moreCalls,effectAdds,
+ select:(layerId,slotId)=>batch(()=>{setSelectedLayer(layerId);setSelected(slotId)}),
+ setPreviewTarget:(layerId,slotId)=>batch(()=>{setPreviewLayerId(layerId);setPreviewSlotId(slotId)}),
  }});
- const bank={mode:'control',get layers(){return layers()},get layer(){return layers().find(l=>l.id===selectedLayer())},get runtime(){return runtime()},assets:[101,102].map(id=>({id,label:'Focus asset '+id,source:initial[0].source})),thumbnails:{},get selectedSlotId(){return selected()},onSelectLayer:setSelectedLayer,onSelect:setSelected,onQueue:id=>queueCalls.push([selectedLayer(),id]),onPreview:id=>inspectCalls.push(id),onMore:(id,trigger)=>moreCalls.push({layer:selectedLayer(),slot:id,selected:selected(),anchor:trigger.matches('[data-video-perform-cell-index]')?'cell':trigger.hasAttribute('data-video-perform-clip-options')?'corner':'other'}),onImport:()=>{},onCancelQueue:()=>{},onSetQuantization:()=>{},transitionKind:'Cut',transitionDurationUnit:'Milliseconds',transitionDurationMilliunits:750,onSetTransitionKind:()=>{},onSetTransitionDurationUnit:()=>{},onSetTransitionDurationMilliunits:()=>{}};
+ const bank={mode:'control',get layers(){return layers()},get layer(){return layers().find(l=>l.id===selectedLayer())},get runtime(){return runtime()},assets:Array.from({length:10},(_,column)=>101+column).map(id=>({id,label:'Focus asset '+id,source:initial[0].source})),thumbnails:{},get selectedSlotId(){return selected()},onSelectLayer:setSelectedLayer,onSelect:setSelected,onQueue:id=>queueCalls.push([selectedLayer(),id]),onPreview:id=>{inspectCalls.push(id);auditionCalls.push([selectedLayer(),id])},onMore:(id,trigger)=>moreCalls.push({layer:selectedLayer(),slot:id,selected:selected(),anchor:trigger.matches('[data-video-perform-cell-index]')?'cell':trigger.hasAttribute('data-video-perform-clip-options')?'corner':'other'}),onImport:()=>{},onCancelQueue:()=>{},onSetQuantization:()=>{},transitionKind:'Cut',transitionDurationUnit:'Milliseconds',transitionDurationMilliunits:750,onSetTransitionKind:()=>{},onSetTransitionDurationUnit:()=>{},onSetTransitionDurationMilliunits:()=>{}};
  const list={get layers(){return layers()},onSetLayerState:(id,state)=>setLayers(layers().map(l=>l.id===id?{...l,state}:l)),onSetBlendMode:(id,blend_mode)=>setLayers(layers().map(l=>l.id===id?{...l,blend_mode}:l))};
- render(()=><><InAppDialogHost locale={()=>'en'}/><div style={{height:'680px',width:'1300px'}}><VideoPerformMatrix bank={bank} layerList={list} effectEntries={buildFxCatalog()} onAddEffect={(entry,id)=>effectAdds.push([entry.id,id])} runtimes={[runtime()]} availabilityById={{}} previewLayerId={previewLayerId()} thumbnailsAuthorized={false} onStop={()=>{}} keyboardEnabled={true} onTake={()=>takes.push(true)}/></div><section data-video-perform-pane="inspector" style={{height:'300px',width:'600px'}}><VideoEffectBrowser entries={buildFxCatalog()} layer={layers()[1]} onAdd={(entry,id)=>effectAdds.push([entry.id,id])}/></section></>,document.getElementById('root'));
+ render(()=><><InAppDialogHost locale={()=>'en'}/><div style={{height:'680px',width:'1300px'}}><VideoPerformMatrix bank={bank} layerList={list} effectEntries={buildFxCatalog()} onAddEffect={(entry,id)=>effectAdds.push([entry.id,id])} runtimes={[runtime()]} availabilityById={{}} previewLayerId={previewLayerId()} previewSlotId={previewSlotId()} thumbnailsAuthorized={false} onStop={()=>{}} keyboardEnabled={keyboardEnabled()} onTake={()=>takes.push(true)}/></div><section data-video-perform-pane="inspector" style={{height:'300px',width:'600px'}}><VideoEffectBrowser entries={buildFxCatalog()} layer={layers()[1]} onAdd={(entry,id)=>effectAdds.push([entry.id,id])}/></section></>,document.getElementById('root'));
 `;
 
 const quickFxFocusPath = "/src/__perform-quick-fx-focus-fixture.tsx";
@@ -392,23 +410,61 @@ try {
       }
       // Groups add a compact header while retaining three actual child rows.
       const groupSelector = root + ' [data-video-perform-group="6401"]';
-      for (const part of ['collapse', 'opacity', 'blend', 'solo', 'bypass']) {
+      for (const part of ['collapse', 'opacity', 'blend', 'solo', 'bypass', 'enabled']) {
         const control = groupSelector + ' [data-video-group-' + part + '="6401"]';
         const measurement = await inspect(control);
         assert.equal(measurement.failure, null, label+': visible group '+part+' '+JSON.stringify(measurement));
         assert.ok(measurement.height >= 44 && measurement.width >= 44, label+': group hit target '+part);
       }
       assert.equal(await cdp.evaluate('document.querySelector('+JSON.stringify(rowSelector)+').dataset.videoPerformGroupChild'), '6401', label+': layer is visibly nested under its group');
-      assert.equal(await cdp.evaluate('document.querySelector('+JSON.stringify(groupSelector+' [data-video-group-opacity]')+').dataset.controlMapUnsupported'), 'video-group', label+': group learn is explicitly unsupported rather than mapped to a child layer');
+      const groupActions = { opacity: 'VideoGroupOpacity', blend: 'VideoGroupBlendMode', solo: 'VideoGroupSolo', bypass: 'VideoGroupBypass', enabled: 'VideoGroupEnabled' };
+      const checkGroupTargets = async (surface) => {
+        for (const [property, action] of Object.entries(groupActions)) {
+          const selector = surface + ' [data-video-group-' + property + '="6401"]';
+          const decoded = await cdp.evaluate('(()=>{const e=document.querySelector('+JSON.stringify(selector)+');return {target:JSON.parse(e?.dataset.controlMapTarget??"null")?.[0],unsupported:e?.dataset.controlMapUnsupported}})()');
+          assert.ok(decoded.target, label+': '+surface+' exposes '+property+' as a Learn target');
+          assert.deepEqual([decoded.target.action, decoded.target.video_group_id, decoded.target.layer_id ?? null, decoded.target.midi_only === true, decoded.unsupported ?? null], [action, 6401, null, false, null], label+': group '+property+' maps the stable group ID for every Learn transport');
+        }
+      };
+      await checkGroupTargets(groupSelector);
       await cdp.evaluate('document.querySelector('+JSON.stringify(groupSelector+' [data-video-perform-select-group]')+').click()');
       await waitFor(()=>cdp.evaluate('!!document.querySelector("[data-video-group-inspector=\\"6401\\"]")'), label+': group Inspector selected');
       assert.equal(await cdp.evaluate('!!document.querySelector("[data-video-group-inspector] [data-video-group-transform-enabled]")'), true, label+': group transform available');
+      await checkGroupTargets('[data-video-group-inspector="6401"]');
+      assert.equal(await cdp.evaluate('document.querySelector("[data-video-group-inspector] .videoGroupLearnLimit")'), null, label+': obsolete group Learn limitation is removed');
       await writeFile(join(evidenceDir,label+'-group-inspector.png'),Buffer.from((await cdp.capture({format:'png',captureBeyondViewport:false})).data,'base64'));
+      if (width === 1280) {
+        assert.equal(await cdp.evaluate('!!document.querySelector(".app[data-control-learn-mode]")'), false, label+': Learn initially closed');
+        await cdp.evaluate('(()=>{const drawer=document.querySelector(".topbarTools");if(!drawer.open)drawer.querySelector("summary").click();document.querySelector("[data-control-learn-toggle=midi]").click();if(drawer.open)drawer.querySelector("summary").click()})()');
+        await waitFor(()=>cdp.evaluate('!!document.querySelector(".app[data-control-learn-mode=midi]")'), label+': MIDI Learn entered through Tools');
+        try {
+          for (const [property, japanese, divisions] of [['opacity', '不透明度', 0], ['solo', 'ソロ', 8]]) {
+            const selector = groupSelector + ' [data-video-group-' + property + '="6401"]';
+            const state = () => cdp.evaluate('(()=>{const e=document.querySelector('+JSON.stringify(selector)+');return {value:e.value??null,pressed:e.getAttribute("aria-pressed")}})()');
+            const before = await state();
+            const consumed = await cdp.evaluate('(()=>{const e=document.querySelector('+JSON.stringify(selector)+');const r=e.getBoundingClientRect();const event=new MouseEvent("contextmenu",{bubbles:true,cancelable:true,button:2,clientX:r.left+r.width/2,clientY:r.top+r.height/2});e.dispatchEvent(event);return event.defaultPrevented})()');
+            assert.equal(consumed, true, label+': group '+property+' context menu is captured by Learn');
+            await waitFor(()=>cdp.evaluate('!!document.querySelector("[data-control-assign-menu]")'), label+': group '+property+' assignment menu opens');
+            const expectedLabel = locale === 'ja' ? '映像グループ 6401 の'+japanese : 'Video Group 6401 '+property;
+            const menu = await cdp.evaluate('(()=>{const e=document.querySelector("[data-control-assign-menu]");const h=e.querySelector(".controlAssignMenuHead strong");const r=e.getBoundingClientRect();return {label:h.textContent.trim(),title:h.title,divisions:e.querySelectorAll("[data-control-assign-beat]").length,within:r.left>=0&&r.top>=0&&r.right<=innerWidth+1&&r.bottom<=innerHeight+1}})()');
+            assert.deepEqual([menu.label, menu.title, menu.divisions], [expectedLabel, expectedLabel, divisions], label+': group '+property+' menu uses translated label and correct beat eligibility');
+            assert.equal(menu.within, true, label+': translated group assignment menu fits viewport');
+            assert.deepEqual(await state(), before, label+': opening group assignment does not change the control');
+            await cdp.key('Escape', 'Escape', 27);
+            await waitFor(()=>cdp.evaluate('!document.querySelector("[data-control-assign-menu]")'), label+': Escape closes group assignment menu');
+            assert.equal(await cdp.evaluate('!!document.querySelector(".app[data-control-learn-mode=midi]")'), true, label+': closing menu retains MIDI Learn');
+          }
+        } finally {
+          await cdp.evaluate('(()=>{document.querySelector("[data-control-assign-menu] .controlAssignMenuClose")?.click();const drawer=document.querySelector(".topbarTools");if(document.querySelector(".app[data-control-learn-mode=midi]")){if(!drawer.open)drawer.querySelector("summary").click();document.querySelector("[data-control-learn-toggle=midi]").click()}if(drawer.open)drawer.querySelector("summary").click()})()');
+        }
+        await waitFor(()=>cdp.evaluate('!document.querySelector(".app[data-control-learn-mode], [data-control-assign-menu], .topbarTools[open]")'), label+': group Learn/menu/drawer cleaned up');
+      }
       await cdp.evaluate('document.querySelector('+JSON.stringify(groupSelector+' [data-video-group-collapse]')+').click()');
       assert.equal(await cdp.evaluate('!!document.querySelector('+JSON.stringify(rowSelector)+')'), false, label+': collapsed group hides its child');
       assert.equal(await cdp.evaluate('document.querySelector('+JSON.stringify(groupSelector+' [data-video-group-collapse]')+').getAttribute("aria-expanded")'), 'false', label+': collapsed group accessibility state');
       await cdp.evaluate('document.querySelector('+JSON.stringify(groupSelector+' [data-video-group-collapse]')+').click()');
       await waitFor(()=>cdp.evaluate('!!document.querySelector('+JSON.stringify(rowSelector)+')'), label+': expand restores child');
+      await checkGroupTargets(groupSelector);
       await cdp.evaluate('document.querySelector('+JSON.stringify(rowSelector+' [data-video-perform-select-layer]')+').click()');
       await waitFor(()=>cdp.evaluate('!document.querySelector("[data-video-group-inspector]")'), label+': selecting child restores layer Inspector');
       // ---- Top 1 / bottom 2: Perform shares the Lighting arrangement. ----
@@ -805,35 +861,135 @@ try {
   await cdp.evaluate('window.__matrixOriginal=document.querySelector('+JSON.stringify(matrixFocusedSelector)+');window.__matrixOriginal.focus();true');
   const matrixState=()=>cdp.evaluate('({connected:window.__matrixOriginal.isConnected,sameElement:document.querySelector('+JSON.stringify(matrixFocusedSelector)+')===window.__matrixOriginal,focused:document.activeElement===window.__matrixOriginal,state:window.__matrixOriginal.closest("[data-video-perform-cell-state]").dataset.videoPerformCellState})');
   assert.deepEqual(await matrixState(),{connected:true,sameElement:true,focused:true,state:'LIVE'},currentCase+': initial live');
-  const matrixCellState = (slotId) => cdp.evaluate('(()=>{const cell=document.querySelector("[data-video-clip-slot-id=\\"'+slotId+'\\"]");return {state:cell.dataset.videoPerformCellState,preview:cell.classList.contains("preview"),text:cell.querySelector(".videoPerformClipState").textContent}})()');
-  // Per-cell Inspect/More moved: right-click selects the clip and opens options; the corner buttons act on the selection.
+  const matrixCellState = (slotId) => cdp.evaluate('(()=>{const cell=document.querySelector("[data-video-clip-slot-id=\\\"'+slotId+'\\\"]");return {state:cell.dataset.videoPerformCellState,preview:cell.classList.contains("preview"),text:[...cell.querySelectorAll(".videoPerformClipState,.videoPerformPreviewBadge")].map(el=>el.textContent).join(" ")}})()');
+  // Requests do not claim a Preview state until the native session confirms it.
   assert.deepEqual(await cdp.evaluate('[document.querySelectorAll(".videoPerformClipActions").length,document.querySelectorAll(".videoPerformClipNumber").length,document.querySelectorAll(".videoPerformMatrixCell button").length===document.querySelectorAll(".videoPerformMatrixCell").length]'),[0,0,true],currentCase+': cells hold only the trigger button');
   assert.equal(await cdp.evaluate('document.querySelector(".videoPerformMatrixHead").getBoundingClientRect().height'),44,currentCase+': corner head is 44px');
-  const contextmenu=(slotSelector)=>cdp.evaluate('(()=>{const pad=document.querySelector('+JSON.stringify(slotSelector)+');return !pad.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,cancelable:true}))})()');
-  assert.equal(await contextmenu('[data-video-clip-slot-id="102"] [data-video-perform-cell-index]'),true,currentCase+': contextmenu is consumed by the clip trigger');
-  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.moreCalls'),[{layer:1,slot:102,selected:102,anchor:'cell'}],currentCase+': contextmenu selects layer+slot then opens clip options anchored to the pad');
-  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.queueCalls'),[],currentCase+': contextmenu never queues a clip');
-  assert.equal(await cdp.evaluate('document.querySelector("[data-video-perform-inspect]").disabled'),false,currentCase+': corner Inspect enabled with a selected clip');
+  const contextmenu=(selector)=>cdp.evaluate('(()=>{const pad=document.querySelector('+JSON.stringify(selector)+');return !pad.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,cancelable:true}))})()');
+  const clickMenu=(selector)=>cdp.evaluate('document.querySelector('+JSON.stringify(selector)+').click();true');
+  const menuOpen=()=>cdp.evaluate('!!document.querySelector("[data-video-perform-context-menu]")');
+  assert.equal(await contextmenu('[data-video-clip-slot-id="102"] [data-video-perform-cell-index]'),true,currentCase+': contextmenu consumed');
+  assert.equal(await menuOpen(),true,currentCase+': right-click opens actions');
+  assert.deepEqual(await cdp.evaluate('[window.__matrixFocus.moreCalls,window.__matrixFocus.inspectCalls,window.__matrixFocus.queueCalls]'),[[],[],[]],currentCase+': opening menu has no playback or inspector effect');
+  await clickMenu('[data-video-perform-context-options]');
+  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.moreCalls'),[{layer:1,slot:102,selected:102,anchor:'cell'}],currentCase+': options preserve exact slot and pad anchor');
+  assert.equal(await menuOpen(),false,currentCase+': options close menu');
+  assert.equal(await cdp.evaluate('document.querySelector("[data-video-perform-inspect]").disabled'),false);
   await cdp.evaluate('document.querySelector("[data-video-perform-inspect]").click();true');
-  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.inspectCalls'),[102],currentCase+': corner Inspect uses existing thumbnail route for the selected clip');
-  await cdp.evaluate('document.querySelector("[data-video-perform-clip-options]").click();true');
-  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.moreCalls.at(-1)'),{layer:1,slot:102,selected:102,anchor:'corner'},currentCase+': corner Clip… opens options for the selected clip anchored to itself');
-  assert.equal(await contextmenu('[data-video-clip-slot-index="5"][data-video-clip-slot-layer-id="1"] [data-video-perform-cell-index]'),true,currentCase+': contextmenu on an empty pad is consumed');
-  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.moreCalls.at(-1)'),{layer:1,slot:null,selected:null,anchor:'cell'},currentCase+': contextmenu on an empty pad selects no slot');
-  assert.equal(await cdp.evaluate('document.querySelector("[data-video-perform-inspect]").disabled'),true,currentCase+': corner Inspect disabled without a selected clip');
-  await cdp.evaluate('document.querySelector("[data-video-perform-inspect]").click();true');
-  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.inspectCalls'),[102],currentCase+': disabled Inspect does not route');
+  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.auditionCalls'),[[1,102]],currentCase+': Inspect requests exact selected layer and slot');
+  assert.equal((await matrixCellState(102)).state,'Loaded',currentCase+': pending request does not claim Preview');
+  assert.equal((await matrixCellState(102)).preview,false,currentCase+': unaccepted request has no Preview marker');
   await contextmenu('[data-video-clip-slot-id="102"] [data-video-perform-cell-index]');
-  assert.deepEqual(await matrixCellState(102),{state:'Loaded',preview:false,text:'Loaded'},currentCase+': thumbnail inspection does not invent a previewing/playback state');
-  await cdp.evaluate('window.__matrixFocus.setPreviewLayerId(1);true');
-  const livePreview=await matrixCellState(101);
-  assert.equal(livePreview.state,'LIVE',currentCase+': Program playback remains authoritative');
-  assert.equal(livePreview.preview,true,currentCase+': current active clip exposes real layer Preview');
-  assert.match(livePreview.text,/Preview/,currentCase+': live clip Preview is also indicated by text');
-  assert.equal((await matrixCellState(102)).preview,false,currentCase+': inactive inspected clip is never marked Preview');
+  await clickMenu('[data-video-perform-audition]');
+  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.auditionCalls'),[[1,102],[1,102]],currentCase+': context audition uses exact slot');
+  assert.equal(await menuOpen(),false);
+  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.queueCalls'),[],currentCase+': audition does not queue');
+
+  // Menu navigation and Escape never fall through to a clip Take.
+  await contextmenu('[data-video-clip-slot-id="102"] [data-video-perform-cell-index]');
+  await cdp.key('ArrowDown','ArrowDown',40);
+  assert.equal(await cdp.evaluate('document.activeElement.hasAttribute("data-video-perform-context-options")'),true,currentCase+': menu arrows move action focus');
+  await cdp.key('Escape','Escape',27);
+  assert.equal(await menuOpen(),false,currentCase+': Escape closes actions');
+  assert.equal(await cdp.evaluate('document.activeElement.closest("[data-video-clip-slot-id]").dataset.videoClipSlotId'),'102',currentCase+': Escape restores original pad focus');
+  assert.equal(await cdp.evaluate('window.__matrixFocus.takes.length'),0,currentCase+': menu keys do not Take');
+  await cdp.evaluate('document.querySelector("[data-video-perform-clip-options]").click();true');
+  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.moreCalls.at(-1)'),{layer:1,slot:102,selected:102,anchor:'corner'},currentCase+': corner options use selected clip');
+
+  await contextmenu('[data-video-clip-slot-index="5"][data-video-clip-slot-layer-id="1"] [data-video-perform-cell-index]');
+  assert.equal(await cdp.evaluate('document.querySelector("[data-video-perform-audition]").disabled'),true,currentCase+': empty clip cannot audition');
+  await clickMenu('[data-video-perform-context-options]');
+  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.moreCalls.at(-1)'),{layer:1,slot:null,selected:null,anchor:'cell'},currentCase+': empty options carry no slot');
+  assert.equal(await cdp.evaluate('document.querySelector("[data-video-perform-inspect]").disabled'),true);
+  await cdp.evaluate('document.querySelector("[data-video-perform-inspect]").click();true');
+  assert.equal(await cdp.evaluate('window.__matrixFocus.inspectCalls.length'),2,currentCase+': empty Inspect never routes');
+
+  await cdp.evaluate('window.__matrixFocus.select(1,102);window.__matrixFocus.setPreviewTarget(1,102);true');
+  const acceptedPreview=await matrixCellState(102);
+  assert.equal(acceptedPreview.preview,true,currentCase+': accepted slot gets Preview marker');
+  assert.match(acceptedPreview.text,/Preview/,currentCase+': Preview has a word');
+  assert.match(acceptedPreview.text,/\p{S}/u,currentCase+': Preview has a symbol');
+  assert.equal((await matrixCellState(101)).state,'LIVE',currentCase+': Program remains live');
+  assert.equal((await matrixCellState(101)).preview,false,currentCase+': Program is not the auditioned slot');
+  await cdp.evaluate('window.__matrixFocus.select(2,201);true');
+  assert.equal((await matrixCellState(102)).preview,true,currentCase+': selection does not retarget audition');
+  assert.equal((await matrixCellState(201)).preview,false);
+  await cdp.evaluate('window.__matrixFocus.select(1,102);window.__matrixFocus.setRuntime({layer_id:1,active_slot_id:101,queued_slot_id:102,pending_launch:null,transition:null,playhead_ms:0,playing:true});true');
+  const queuedPreview=await matrixCellState(102);
+  assert.equal(queuedPreview.preview,true);
+  assert.match(queuedPreview.text,/Preview/,currentCase+': queued audition has Preview word');
+  assert.match(queuedPreview.text,/Queued/i,currentCase+': queued audition preserves queued word');
+  assert.equal((await matrixCellState(101)).state,'LIVE');
+  const auditionScreenshot=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+  await writeFile(join(evidenceDir,'matrix-clip-audition.png'),Buffer.from(auditionScreenshot.data,'base64'));
+  await cdp.evaluate('window.__matrixFocus.setLocale("ja");true');
+  await waitFor(()=>cdp.evaluate('document.querySelector(".videoPerformPreviewBadge")?.textContent.includes("プレビュー")'),currentCase+': Japanese Preview marker');
+  const japaneseBadge=await cdp.evaluate('(()=>{const badge=document.querySelector(".videoPerformPreviewBadge");const range=document.createRange();range.selectNodeContents(badge);const text=range.getBoundingClientRect(),box=badge.getBoundingClientRect();return {text:badge.textContent,fontSize:parseFloat(getComputedStyle(badge).fontSize),fits:text.left>=box.left-1&&text.right<=box.right+1&&text.top>=box.top-1&&text.bottom<=box.bottom+1}})()');
+  assert.equal(japaneseBadge.fits,true,currentCase+': Japanese symbol and Preview word fit the unchanged cell');
+  assert.ok(japaneseBadge.fontSize>=14,currentCase+': Preview text retains its size');
+  const japaneseScreenshot=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+  await writeFile(join(evidenceDir,'matrix-clip-audition-ja.png'),Buffer.from(japaneseScreenshot.data,'base64'));
+  await contextmenu('[data-video-clip-slot-id="102"] [data-video-perform-cell-index]');
+  await waitFor(()=>cdp.evaluate('document.querySelector("[data-video-perform-audition]")?.textContent==="Previewで試写"'),currentCase+': Japanese context audition');
+  assert.equal(await cdp.evaluate('document.querySelector("[data-video-perform-context-options]").textContent'),'クリップの設定');
+  const japaneseMenuScreenshot=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+  await writeFile(join(evidenceDir,'matrix-clip-actions-ja.png'),Buffer.from(japaneseMenuScreenshot.data,'base64'));
+  await cdp.key('Escape','Escape',27);
+  await cdp.evaluate('window.__matrixFocus.setLocale("en");true');
+  await cdp.evaluate('window.__matrixFocus.setRuntime({layer_id:1,active_slot_id:102,queued_slot_id:null,pending_launch:null,transition:null,playhead_ms:0,playing:true});true');
+  const livePreview=await matrixCellState(102);
+  assert.equal(livePreview.state,'LIVE',currentCase+': live state stays authoritative');
+  assert.equal(livePreview.preview,true);
+  assert.match(livePreview.text,/Preview/,currentCase+': live Preview has independent word');
+  await cdp.evaluate('window.__matrixFocus.setPreviewTarget(2,201);true');
+  assert.equal((await matrixCellState(102)).preview,false,currentCase+': restage clears old marker');
+  assert.equal((await matrixCellState(201)).preview,true,currentCase+': restage marks exact new slot');
+  await cdp.evaluate('window.__matrixFocus.setPreviewTarget(null,null);true');
+  assert.equal((await matrixCellState(201)).preview,false,currentCase+': Clear removes marker');
+
+  // Legacy P identifies the current source without a staged slot.
+  await cdp.evaluate('window.__matrixFocus.setRuntime({layer_id:1,active_slot_id:101,queued_slot_id:null,pending_launch:null,transition:null,playhead_ms:0,playing:true});window.__matrixFocus.setPreviewTarget(1,null);true');
+  assert.equal((await matrixCellState(101)).preview,true,currentCase+': P still marks active source');
+  assert.equal((await matrixCellState(102)).preview,false);
   await cdp.evaluate('window.__matrixFocus.setRuntime({layer_id:1,active_slot_id:101,queued_slot_id:null,pending_launch:null,transition:null,playhead_ms:0,playing:false});true');
-  assert.equal((await matrixCellState(101)).state,'Preview',currentCase+': active source staged in Preview has a truthful Preview state');
-  await cdp.evaluate('window.__matrixFocus.setPreviewLayerId(null);window.__matrixFocus.setRuntime({layer_id:1,active_slot_id:101,queued_slot_id:null,pending_launch:null,transition:null,playhead_ms:0,playing:true});window.__matrixOriginal.focus();true');
+  assert.equal((await matrixCellState(101)).state,'Preview',currentCase+': paused P source remains Preview');
+  await cdp.evaluate('window.__matrixFocus.setPreviewTarget(null,null);window.__matrixFocus.select(1,101);window.__matrixOriginal.focus();true');
+
+  // Physical number codes work with shifted US/JA characters.
+  const auditionKey=(key,code,extra={},prevented=false)=>cdp.evaluate('(()=>{const event=new KeyboardEvent("keydown",'+JSON.stringify({bubbles:true,cancelable:true,shiftKey:true,key,code,...extra})+');'+(prevented?'event.preventDefault();':'')+'(document.activeElement??document.body).dispatchEvent(event);return event.defaultPrevented})()');
+  const auditionCount=()=>cdp.evaluate('window.__matrixFocus.auditionCalls.length');
+  const beforeKeys=await auditionCount();
+  await auditionKey('@','Digit2');
+  await auditionKey('!','Digit1');
+  await cdp.evaluate('window.__matrixFocus.select(3,301);document.querySelector("[data-video-perform-select-layer=\\"3\\"]").focus();true');
+  await auditionKey(')','Digit0');
+  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.auditionCalls.slice(-3)'),[[1,102],[1,101],[3,310]],currentCase+': Shift 2/1/0 request exact slots');
+  assert.equal(await auditionCount(),beforeKeys+3);
+  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.queueCalls'),[],currentCase+': Shift auditions never queue');
+  await cdp.evaluate('window.__matrixFocus.select(1,101);window.__matrixOriginal.focus();true');
+  await auditionKey('%','Digit5');
+  assert.equal(await auditionCount(),beforeKeys+3,currentCase+': empty target does not audition');
+  for(const blocked of [{ctrlKey:true},{metaKey:true},{altKey:true},{repeat:true},{isComposing:true}]) await auditionKey('@','Digit2',blocked);
+  await auditionKey('@','Digit2',{},true);
+  await auditionKey('Q','KeyQ');
+  await cdp.evaluate('window.__matrixFocus.setKeyboardEnabled(false);true');
+  await auditionKey('@','Digit2');
+  await cdp.evaluate('window.__matrixFocus.setKeyboardEnabled(true);true');
+  assert.equal(await auditionCount(),beforeKeys+3,currentCase+': modifiers, repeat, IME, prevented, unrelated Shift, and disabled keys do not audition');
+  await cdp.evaluate('const input=document.createElement("input");input.id="audition-input";document.body.append(input);input.focus();true');
+  await auditionKey('@','Digit2');
+  await cdp.evaluate('document.getElementById("audition-input").remove();const editor=document.createElement("div");editor.id="audition-editor";editor.contentEditable="true";document.body.append(editor);editor.focus();true');
+  await auditionKey('@','Digit2');
+  await cdp.evaluate('document.getElementById("audition-editor").remove();window.__matrixOriginal.focus();const modal=document.createElement("div");modal.id="audition-modal";modal.setAttribute("role","dialog");modal.setAttribute("aria-modal","true");document.body.append(modal);true');
+  await auditionKey('@','Digit2');
+  await cdp.evaluate('document.getElementById("audition-modal").remove();const learn=document.createElement("div");learn.id="audition-learn";learn.className="app";learn.setAttribute("data-control-learn-mode","midi");document.body.append(learn);true');
+  await auditionKey('@','Digit2');
+  await cdp.evaluate('document.getElementById("audition-learn").remove();true');
+  assert.equal(await auditionCount(),beforeKeys+3,currentCase+': editable controls, dialogs, and Learn mode block audition');
+  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.queueCalls'),[],currentCase+': blocked Shift keys never fall through to queue');
+
+  // Restore original setup for the existing reconciliation and queue tests.
+  await cdp.evaluate('window.__matrixFocus.setPreviewTarget(null,null);window.__matrixFocus.select(1,101);window.__matrixFocus.setRuntime({layer_id:1,active_slot_id:101,queued_slot_id:null,pending_launch:null,transition:null,playhead_ms:0,playing:true});window.__matrixOriginal.focus();true');
   await cdp.evaluate('window.__matrixFocus.refresh();true');
   assert.deepEqual(await matrixState(),{connected:true,sameElement:true,focused:true,state:'LIVE'},currentCase+': polling replacement retains focused element');
   await cdp.evaluate('window.__matrixFocus.queue();true');
