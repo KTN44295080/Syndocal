@@ -35,6 +35,8 @@ mod gpu_display_composition_tests;
 mod gpu_surface;
 mod hap_decoder;
 mod isf_runtime;
+#[cfg(test)]
+mod isf_tempo_sync_tests;
 mod layer_group_composition;
 #[cfg(test)]
 mod layer_group_composition_tests;
@@ -49,10 +51,10 @@ pub use gpu_compositor::{GpuCompositeError, GpuCompositor};
 pub use gpu_surface::{GpuSurfaceBufferStats, GpuSurfaceError, GpuSurfacePresenter};
 pub use hap_decoder::{HapMovFrameDecoder, PreferredVideoFrameDecoder, VideoDecoderDiagnostics};
 pub use isf_runtime::{
-    isf_effect_from_prepared, prepare_isf_shader, resolved_isf_control_values,
-    resolved_isf_control_values_from_controls, IsfControlDefinition, IsfControlKind, IsfGpuRuntime,
-    IsfPrepareError, IsfRuntimeError, PreparedIsfShader, ISF_MAX_CONTROL_INPUTS,
-    ISF_MAX_SOURCE_BYTES,
+    isf_effect_from_prepared, prepare_isf_shader, prepare_isf_shader_with_path,
+    resolved_isf_control_values, resolved_isf_control_values_from_controls, IsfControlDefinition,
+    IsfControlKind, IsfGpuRuntime, IsfPrepareError, IsfRuntimeError, PreparedIsfShader,
+    ISF_MAX_CONTROL_INPUTS, ISF_MAX_SOURCE_BYTES,
 };
 pub use libav_decoder::LibavFrameDecoder;
 pub use live_source::{
@@ -1950,6 +1952,11 @@ pub struct VideoRuntime {
 }
 
 pub trait VideoFrameProvider {
+    /// Engine tempo sampled for the current render request. Providers without
+    /// a clock retain authored ISF values instead of inventing a tempo.
+    fn bpm(&self) -> Option<f32> {
+        None
+    }
     fn retain_layers(&mut self, layer_ids: &[VideoLayerId]);
     fn retain_inputs(&mut self, inputs: &[VideoRenderInput]) {
         let layer_ids = inputs
@@ -2173,7 +2180,8 @@ pub struct VideoPreviewRenderer<P = PreviewFrameProvider> {
     runtime: VideoRuntime,
     frame_provider: P,
     generator_queue_sources: generator::GeneratorQueueSources,
-    isf_shader_cache: HashMap<Arc<str>, CachedIsfShader>,
+    isf_shader_cache: HashMap<(Arc<str>, Option<String>), CachedIsfShader>,
+    isf_render_namespace: (u64, Option<u64>, bool),
     isf_shader_cache_clock: u64,
     isf_runtime: Option<Result<IsfGpuRuntime, IsfRuntimeError>>,
     last_isf_error: Option<String>,
@@ -3755,6 +3763,10 @@ impl<D> DecoderBackedFrameProvider<D> {
 }
 
 impl<D: VideoFrameDecoder> VideoFrameProvider for DecoderBackedFrameProvider<D> {
+    fn bpm(&self) -> Option<f32> {
+        self.bpm
+    }
+
     fn retain_layers(&mut self, layer_ids: &[VideoLayerId]) {
         self.decoded_ahead.clear();
         self.still_images.retain_layers(layer_ids);
@@ -3943,6 +3955,18 @@ fn legacy_layer_input(
     })
 }
 
+fn ndi_no_signal_frame(request: &VideoFrameRequest) -> VideoFrame {
+    // One transparent texel covers any composition size without allocating
+    // output-sized pixels on every no-signal tick.
+    let mut frame = video_output_transparent_black_frame(1, 1);
+    frame.layer_id = request.layer_id;
+    frame.pts_ms = request.position_ms;
+    frame
+}
+
+#[cfg(test)]
+mod ndi_input_frame_tests;
+
 impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
     /// The result `decode_inputs_ahead` already produced for exactly `input`.
     fn take_decoded_ahead(
@@ -4040,6 +4064,9 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
         };
         match decoded {
             Ok(Some(frame)) => Ok(frame),
+            Ok(None) if request.source.kind == VideoSourceKind::Ndi => {
+                Ok(Arc::new(ndi_no_signal_frame(request)))
+            }
             Ok(None) if self.placeholder_when_missing => Ok(Arc::new(debug_solid_frame_for_layer(
                 request.layer_id,
                 request.position_ms,
@@ -4124,6 +4151,13 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
         };
         match decoded {
             Ok(Some(frame)) => Ok(frame),
+            Ok(None) if request.source.kind == VideoSourceKind::Ndi => {
+                if cancellation.is_cancelled() {
+                    Err(VideoFrameProviderError::Cancelled)
+                } else {
+                    Ok(ndi_no_signal_frame(request))
+                }
+            }
             Ok(None) if self.placeholder_when_missing => {
                 if cancellation.is_cancelled() {
                     Err(VideoFrameProviderError::Cancelled)
@@ -4310,6 +4344,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             frame_provider,
             generator_queue_sources: generator::GeneratorQueueSources::default(),
             isf_shader_cache: HashMap::new(),
+            isf_render_namespace: (0, None, false),
             isf_shader_cache_clock: 0,
             isf_runtime: None,
             last_isf_error: None,
@@ -4327,6 +4362,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.isf_render_namespace = (0, None, false);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
         }
@@ -4365,6 +4401,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.isf_render_namespace = (0, None, false);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
         }
@@ -4399,7 +4436,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 clip_slots: Vec::new(),
                 default_clip_slot_id: None,
             };
-            let (frame, errors) = self.apply_isf_effect_to_frame(&layer, frame);
+            let (frame, errors) =
+                self.apply_isf_effect_to_frame_for_input(&layer, frame, Some(input.key));
             keyed_isf_errors.extend(errors.into_iter().map(|error| {
                 VideoRenderInputIsfStageError {
                     key: input.key,
@@ -4443,6 +4481,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.isf_render_namespace = (context.project_render_epoch, None, false);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
         }
@@ -4572,6 +4611,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         snapshot: &VideoSnapshot,
         output_id: VideoOutputId,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.isf_render_namespace = (0, Some(output_id), false);
         let plan = build_video_output_render_plan(snapshot, output_id)
             .map_err(VideoPreviewError::Output)?;
         self.render_output_plan(snapshot, &plan, plan.width, plan.height)
@@ -4584,6 +4624,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.isf_render_namespace = (0, Some(output_id), true);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
         }
@@ -4601,6 +4642,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         context: VideoEffectRenderContext<'_>,
         output_id: VideoOutputId,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.isf_render_namespace = (context.project_render_epoch, Some(output_id), false);
         let plan = build_video_output_render_plan(snapshot, output_id)
             .map_err(VideoPreviewError::Output)?;
         self.render_output_plan_with_effects(
@@ -4622,6 +4664,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         context: VideoEffectRenderContext<'_>,
         output_id: VideoOutputId,
     ) -> Result<VideoOutputRenderResult, VideoPreviewError> {
+        self.isf_render_namespace = (context.project_render_epoch, Some(output_id), false);
         let plan = build_video_output_render_plan(snapshot, output_id)
             .map_err(VideoPreviewError::Output)?;
         self.render_output_plan_with_effects_evidenced(
@@ -4641,6 +4684,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         transition_runtime: &VideoLayerTransitionRuntimeSnapshot,
         output_id: VideoOutputId,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.isf_render_namespace = (context.project_render_epoch, Some(output_id), false);
         let mut plan = build_video_output_render_plan(snapshot, output_id)
             .map_err(VideoPreviewError::Output)?;
         apply_video_layer_transition_weights(snapshot, transition_runtime, &mut plan.composition)?;
@@ -4662,6 +4706,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         transition_runtime: &VideoLayerTransitionRuntimeSnapshot,
         output_id: VideoOutputId,
     ) -> Result<VideoOutputRenderResult, VideoPreviewError> {
+        self.isf_render_namespace = (context.project_render_epoch, Some(output_id), false);
         let mut plan = build_video_output_render_plan(snapshot, output_id)
             .map_err(VideoPreviewError::Output)?;
         apply_video_layer_transition_weights(snapshot, transition_runtime, &mut plan.composition)?;
@@ -4686,6 +4731,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.isf_render_namespace = (context.project_render_epoch, Some(output_id), true);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
         }
@@ -4704,6 +4750,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoOutputRenderResult, VideoPreviewError> {
+        self.isf_render_namespace = (context.project_render_epoch, Some(output_id), true);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
         }
@@ -4723,6 +4770,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.isf_render_namespace = (context.project_render_epoch, Some(output_id), true);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
         }
@@ -4753,6 +4801,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         height: u32,
         cancellation: &dyn VideoRenderCancellation,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.isf_render_namespace = (context.project_render_epoch, Some(output_id), true);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
         }
@@ -4785,6 +4834,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoOutputRenderResult, VideoPreviewError> {
+        self.isf_render_namespace = (context.project_render_epoch, Some(output_id), true);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
         }
@@ -5203,6 +5253,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         context: VideoEffectRenderContext<'_>,
         output_id: VideoOutputId,
     ) -> Result<VideoOutputArtisticRenderResult, VideoPreviewError> {
+        self.isf_render_namespace = (context.project_render_epoch, Some(output_id), false);
         let plan = build_video_output_render_plan(snapshot, output_id)
             .map_err(VideoPreviewError::Output)?;
         self.prepare_output_artistic_render_result_impl(
@@ -5224,6 +5275,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoOutputArtisticRenderResult, VideoPreviewError> {
+        self.isf_render_namespace = (context.project_render_epoch, Some(output_id), true);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
         }
@@ -5246,6 +5298,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoOutputArtisticRenderResult, VideoPreviewError> {
+        self.isf_render_namespace = (context.project_render_epoch, Some(output_id), true);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
         }
@@ -5280,6 +5333,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         height: u32,
         gpu: Option<VideoOutputGpuSupport>,
     ) -> Result<VideoOutputDisplayRender, VideoPreviewError> {
+        self.isf_render_namespace = (context.project_render_epoch, Some(output_id), false);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
         }
@@ -5753,6 +5807,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<PreparedVideoOutput, VideoPreviewError> {
+        self.isf_render_namespace = (0, Some(output_id), false);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
         }
@@ -6263,10 +6318,12 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
     fn cached_isf_shader(
         &mut self,
         source: &Arc<str>,
+        source_path: Option<&str>,
     ) -> Result<Arc<PreparedIsfShader>, IsfPrepareError> {
+        let key = (Arc::clone(source), source_path.map(str::to_owned));
         self.isf_shader_cache_clock = self.isf_shader_cache_clock.wrapping_add(1);
         let last_used = self.isf_shader_cache_clock;
-        if let Some(entry) = self.isf_shader_cache.get_mut(source.as_ref()) {
+        if let Some(entry) = self.isf_shader_cache.get_mut(&key) {
             entry.last_used = last_used;
             return entry.value.clone();
         }
@@ -6275,14 +6332,15 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 .isf_shader_cache
                 .iter()
                 .min_by_key(|(_, entry)| entry.last_used)
-                .map(|(source, _)| Arc::clone(source))
+                .map(|(key, _)| key.clone())
             {
-                self.isf_shader_cache.remove(oldest.as_ref());
+                self.isf_shader_cache.remove(&oldest);
             }
         }
-        let value = prepare_isf_shader(source.as_ref()).map(Arc::new);
+        let value =
+            prepare_isf_shader_with_path(source.as_ref(), source_path.map(Path::new)).map(Arc::new);
         self.isf_shader_cache.insert(
-            Arc::clone(source),
+            key,
             CachedIsfShader {
                 value: value.clone(),
                 last_used,
@@ -6317,6 +6375,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         if !resolved_chain_executes(chain) {
             return Ok((frame, Vec::new()));
         }
+        let bpm = self.frame_provider.bpm();
         let mut prepared_stages = Vec::new();
         let mut faults = Vec::new();
         for (stage_index, stage) in chain.stages.iter().enumerate() {
@@ -6324,10 +6383,14 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             if !stage.enabled {
                 continue;
             }
-            match self.cached_isf_shader(&stage.effect.source) {
+            match self.cached_isf_shader(&stage.effect.source, stage.effect.source_path.as_deref())
+            {
                 Ok(shader) => {
-                    let controls =
-                        resolved_isf_control_values_from_controls(&shader, &stage.effect.controls);
+                    let controls = resolved_isf_control_values_from_controls(
+                        &shader,
+                        &stage.effect.controls,
+                        bpm,
+                    );
                     prepared_stages.push((stage_index, shader, controls));
                 }
                 Err(error) => faults.push(video_effect_fault(
@@ -6344,6 +6407,26 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 )),
             }
         }
+        let stage_keys = prepared_stages
+            .iter()
+            .map(|(stage_index, _, _)| {
+                let stage = &chain.stages[*stage_index];
+                isf_runtime::IsfInstanceKey {
+                    namespace: self.isf_render_namespace,
+                    scope: Some(chain.scope.clone()),
+                    input: render_input_key,
+                    chain_id: chain.chain_id,
+                    stage_id: stage.stage_id,
+                    effect_id: stage.effect_id,
+                    legacy_stage_index: if stage.stage_id.is_some() {
+                        0
+                    } else {
+                        *stage_index
+                    },
+                    layer_id: frame.layer_id,
+                }
+            })
+            .collect::<Vec<_>>();
         if self.isf_runtime.is_none() {
             self.isf_runtime = Some(IsfGpuRuntime::new());
         }
@@ -6377,11 +6460,12 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .iter()
             .map(|(_, shader, controls)| (shader.as_ref(), controls.as_slice()))
             .collect::<Vec<_>>();
-        let (rendered, runtime_failures) = runtime.apply_stack_stage_local(
+        let (rendered, runtime_failures) = runtime.apply_stack_stage_local_with_keys(
             &frame,
             &stage_refs,
             frame.pts_ms as f32 / 1_000.0,
             frame.duration_ms as f32 / 1_000.0,
+            &stage_keys,
         );
         check_runtime_cancellation(cancellation)?;
         for (prepared_index, error) in runtime_failures {
@@ -6403,10 +6487,11 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         Ok((rendered, faults))
     }
 
-    fn apply_isf_effect_to_frame(
+    fn apply_isf_effect_to_frame_for_input(
         &mut self,
         layer: &VideoLayerSummary,
         frame: VideoFrame,
+        input: Option<protocol::VideoRenderInputKey>,
     ) -> (VideoFrame, Vec<VideoIsfStageError>) {
         let Some(effect) = layer.isf_effect.as_ref() else {
             return (frame, Vec::new());
@@ -6427,7 +6512,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 })
                 .collect(),
         };
-        let (frame, faults) = self.apply_resolved_effect_chain_to_frame(&chain, frame, None);
+        let (frame, faults) = self.apply_resolved_effect_chain_to_frame(&chain, frame, input);
         let errors = faults
             .into_iter()
             .map(|fault| VideoIsfStageError {
@@ -15330,19 +15415,23 @@ mod tests {
         let mut renderer = VideoPreviewRenderer::new(VideoRuntimeConfig::default());
         for index in 0..ISF_SHADER_CACHE_CAPACITY {
             let source = Arc::<str>::from(format!("invalid shader {index}"));
-            assert!(renderer.cached_isf_shader(&source).is_err());
+            assert!(renderer.cached_isf_shader(&source, None).is_err());
         }
         let newest = Arc::<str>::from("invalid shader 0");
-        assert!(renderer.cached_isf_shader(&newest).is_err());
+        assert!(renderer.cached_isf_shader(&newest, None).is_err());
         let overflow = Arc::<str>::from("invalid shader overflow");
-        assert!(renderer.cached_isf_shader(&overflow).is_err());
+        assert!(renderer.cached_isf_shader(&overflow, None).is_err());
 
         assert_eq!(renderer.isf_shader_cache.len(), ISF_SHADER_CACHE_CAPACITY);
-        assert!(renderer.isf_shader_cache.contains_key("invalid shader 0"));
-        assert!(!renderer.isf_shader_cache.contains_key("invalid shader 1"));
         assert!(renderer
             .isf_shader_cache
-            .contains_key("invalid shader overflow"));
+            .contains_key(&(Arc::<str>::from("invalid shader 0"), None)));
+        assert!(!renderer
+            .isf_shader_cache
+            .contains_key(&(Arc::<str>::from("invalid shader 1"), None)));
+        assert!(renderer
+            .isf_shader_cache
+            .contains_key(&(Arc::<str>::from("invalid shader overflow"), None)));
     }
 
     #[test]
@@ -15827,6 +15916,115 @@ mod tests {
             assert!(renderer.last_effect_stage_faults().is_empty());
             assert_eq!(renderer.last_isf_error(), None);
         }
+    }
+
+    #[test]
+    fn c1_isf_legacy_output_preview_and_thumbnail_histories_are_separate() {
+        const SOURCE: &str = include_str!("isf_fixtures/persistent.fs");
+        let shader = prepare_isf_shader(SOURCE).unwrap();
+        let effect = isf_effect_from_prepared("Feedback".into(), SOURCE, None, &shader);
+        let mut layer = c1_test_layer(23, VideoBlendMode::Normal);
+        layer.isf_effect = Some(effect);
+        let snapshot = c1_test_snapshot(vec![layer]);
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider::default(),
+        );
+        assert_eq!(
+            renderer.render_output(&snapshot, 80).unwrap().data,
+            [1, 0, 0, 255]
+        );
+        assert_eq!(
+            renderer
+                .render_output_preview(&snapshot, 80, 1, 1)
+                .unwrap()
+                .data,
+            [1, 0, 0, 255]
+        );
+        assert_eq!(
+            renderer
+                .render_layer_preview(&snapshot, 23, 1, 1)
+                .unwrap()
+                .data,
+            [1, 0, 0, 255]
+        );
+        assert_eq!(
+            renderer.render_output(&snapshot, 80).unwrap().data,
+            [2, 0, 0, 255]
+        );
+        let prepared = renderer.prepare_output_frames(&snapshot, 80, 1, 1).unwrap();
+        assert_eq!(prepared.frames[0].data, [3, 0, 0, 255]);
+        assert_eq!(
+            renderer.render_output(&snapshot, 80).unwrap().data,
+            [4, 0, 0, 255]
+        );
+    }
+
+    #[test]
+    fn c1_isf_persistent_history_isolated_between_scopes_preview_output_and_project_epochs() {
+        const SOURCE: &str = include_str!("isf_fixtures/persistent.fs");
+        let shader = prepare_isf_shader(SOURCE).unwrap();
+        let effect = isf_effect_from_prepared("Feedback".into(), SOURCE, None, &shader);
+        let mut snapshot = c1_test_snapshot(Vec::new());
+        snapshot.effect_chains.extend([
+            c1_chain(
+                923,
+                VideoEffectScope::Composition { composition_id: 70 },
+                false,
+                vec![effect.clone()],
+            ),
+            c1_chain(
+                924,
+                VideoEffectScope::Output { output_id: 80 },
+                false,
+                vec![effect],
+            ),
+        ]);
+        let clip_runtime = VideoClipRuntimeSnapshot::default();
+        let mut context = VideoEffectRenderContext {
+            clip_runtime: &clip_runtime,
+            project_render_epoch: 23,
+        };
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            C1SolidFrameProvider::default(),
+        );
+        assert_eq!(
+            renderer
+                .render_output_with_effects(&snapshot, context, 80)
+                .unwrap()
+                .data,
+            [1, 0, 0, 255],
+        );
+        assert_eq!(
+            renderer
+                .render_output_preview_with_effects(&snapshot, context, 80, 1, 1)
+                .unwrap()
+                .data,
+            [1, 0, 0, 255],
+        );
+        assert_eq!(
+            renderer
+                .render_output_with_effects(&snapshot, context, 80)
+                .unwrap()
+                .data,
+            [2, 0, 0, 255],
+        );
+        assert_eq!(
+            renderer
+                .render_output_preview_with_effects(&snapshot, context, 80, 1, 1)
+                .unwrap()
+                .data,
+            [2, 0, 0, 255],
+        );
+        context.project_render_epoch += 1;
+        assert_eq!(
+            renderer
+                .render_output_with_effects(&snapshot, context, 80)
+                .unwrap()
+                .data,
+            [1, 0, 0, 255],
+        );
     }
 
     #[test]

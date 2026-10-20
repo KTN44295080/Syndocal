@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import type { MediaAssetAvailability, MediaAssetId, MediaAssetSummary } from "../types";
+import { ndiInputHealthTitle, type NdiInputHealthRow } from "../ndiInputHealth";
 import {
   MEDIA_HEALTH_ATTENTION_STATES,
   buildMediaHealthRows,
@@ -21,6 +22,7 @@ import "./MediaHealthDialog.css";
 
 export interface MediaHealthDialogProps {
   assets: MediaAssetSummary[];
+  ndiInputs?: readonly NdiInputHealthRow[];
   availabilityById: Record<number, MediaAssetAvailability>;
   /** Epoch milliseconds of each asset's last verification in this session. */
   checkedAtById?: Record<number, number>;
@@ -322,6 +324,35 @@ export function MediaHealthDialog(props: MediaHealthDialogProps) {
           </section>
         )}
       </Show>
+      <Show when={(props.ndiInputs?.length ?? 0) > 0}>
+        <section class="mediaHealthGroup" data-media-health-ndi aria-labelledby="media-health-ndi-title">
+          <h3 id="media-health-ndi-title">NDI inputs</h3>
+          <ul class="mediaHealthRows">
+            <For each={props.ndiInputs?.map((input) => input.layerId) ?? []}>
+              {(layerId) => (
+                <Show when={props.ndiInputs?.find((input) => input.layerId === layerId)}>
+                  {(input) => (
+                    <li class="mediaHealthRow mediaHealthNdiRow" data-media-health-ndi-row={input().layerId} data-ndi-state={input().state}>
+                      <div class="mediaHealthRowMain">
+                        <strong data-no-localize>{input().label}</strong>
+                        <span class="mediaHealthPath" data-no-localize title={input().sourceName}>{input().sourceName}</span>
+                        <span class="mediaHealthNote">{input().detail}</span>
+                        <Show when={input().diagnostic}>
+                          <details>
+                            <summary>NDI diagnostic details</summary>
+                            <p class="mediaHealthNote" data-no-localize>{input().diagnostic}</p>
+                          </details>
+                        </Show>
+                      </div>
+                      <span class="mediaHealthBadge" data-ndi-health-label>{ndiInputHealthTitle[input().state]}</span>
+                    </li>
+                  )}
+                </Show>
+              )}
+            </For>
+          </ul>
+        </section>
+      </Show>
       <Show when={rows().length > 0} fallback={<p class="mediaHealthEmpty" data-media-health-empty>No local media files in this project.</p>}>
         <For each={groups()}>
           {(group) => (
@@ -380,6 +411,7 @@ export function MediaHealthDialog(props: MediaHealthDialogProps) {
 /** The part of a video control panel's media library the health view needs. */
 export interface MediaHealthLibrary {
   assets: MediaAssetSummary[];
+  ndiInputs?: readonly NdiInputHealthRow[];
   availabilityById: Record<number, MediaAssetAvailability>;
   checkedAtById?: Record<number, number>;
   backendAvailable: boolean;
@@ -405,6 +437,7 @@ export function MediaLibraryHealthDialog(props: {
       ref={props.ref}
       onClose={props.onClose}
       assets={props.library.assets}
+      ndiInputs={props.library.ndiInputs}
       availabilityById={props.library.availabilityById}
       checkedAtById={props.library.checkedAtById}
       backendAvailable={props.library.backendAvailable}

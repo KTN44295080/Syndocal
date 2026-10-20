@@ -370,7 +370,9 @@ for (const [code, tab] of [
   );
 }
 for (const workspaceTab of ["control", "touch"]) {
-  const expected = workspaceTab === "control" ? ["edit", "mixer", "live"] : ["edit", "perform", "both"];
+  // Edit (control): Lighting / Video / Timeline authoring. Control (touch): Lighting /
+  // Video (Perform) / Both / Timeline playback; Alt+4 exists only in Control.
+  const expected = workspaceTab === "control" ? ["edit", "mixer", "live"] : ["edit", "perform", "both", "live"];
   for (const [index, mode] of expected.entries()) {
     for (const prefix of ["Digit", "Numpad"]) {
       assert.deepEqual(resolve(prefix + (index + 1), { altKey: true }, { workspaceTab }), { kind: "setControlMode", mode }, `${workspaceTab}: Alt+${prefix}${index + 1} selects the canonical tab`);
@@ -378,6 +380,17 @@ for (const workspaceTab of ["control", "touch"]) {
     }
   }
 }
+for (const prefix of ["Digit", "Numpad"]) {
+  assert.equal(resolve(`${prefix}4`, { altKey: true }, { workspaceTab: "control" }), null, "Edit has three tabs, so Alt+4 is unassigned there");
+}
+assert.deepEqual(resolve("KeyL", {}, { workspaceTab: "touch" }), { kind: "setControlMode", mode: "live" },
+  "Control L selects the Control > Timeline playback domain (the keyboard controller routes live+touch to the domain)");
+assert.deepEqual(resolve("Space", {}, { workspaceTab: "touch", timelineSurfaceActive: false }), { kind: "triggerNextCue", enabled: true },
+  "Space is GO on the Control > Timeline playback surface (timelineSurfaceActive is false there)");
+assert.deepEqual(resolve("Space", { shiftKey: true }, { workspaceTab: "touch", timelineSurfaceActive: false }), { kind: "triggerPreviousCue", enabled: true },
+  "Shift+Space is Back on the Control > Timeline playback surface");
+assert.deepEqual(resolve("KeyT", {}, { workspaceTab: "touch" }), { kind: "toggleTimelinePlayback", operation: "play" },
+  "T toggles the Timeline transport from Control > Timeline");
 assert.deepEqual(resolve("KeyM", {}, { workspaceTab: "touch" }), { kind: "setControlMode", mode: "perform" }, "Control M enters Video's Perform desk");
 assert.deepEqual(resolve("KeyE", {}, { workspaceTab: "touch" }), { kind: "setControlMode", mode: "edit" }, "Control E enters Lighting");
 assert.deepEqual(resolve("KeyL", {}, { timelineSurfaceActive: true }), { kind: "toggleTimelineLoop", enabled: true });

@@ -894,7 +894,8 @@ pub const VIDEO_ISF_TEMPO_SYNC_COUNTS: [f32; 5] = [0.25, 0.5, 1.0, 2.0, 4.0];
 
 /// The operator's choice to express a time control (rate, speed, frequency) as one
 /// cycle per `count` beats or bars of the global tempo instead of a raw number.
-/// This is authored state only: the runtime does not yet track the clock.
+/// The renderer resolves this against the current engine tempo each frame;
+/// the authored choice and raw value do not change when the tempo changes.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct VideoIsfTempoSync {
     pub unit: VideoIsfTempoSyncUnit,
@@ -7888,6 +7889,14 @@ pub enum OscControlAction {
     VideoMaster,
     VideoBlackout,
     ClearFixtureFlags,
+    VideoClipSlotTrigger,
+    VideoTake,
+    VideoLayerStop,
+    VideoLayerBlendMode,
+    VideoTransitionKind,
+    VideoTransitionTime,
+    VideoIsfStageEnabled,
+    VideoIsfParam,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -7901,6 +7910,11 @@ pub struct OscControlMapping {
     pub group_id: Option<String>,
     pub cue_id: Option<CueId>,
     pub layer_id: Option<VideoLayerId>,
+    /// Stable Perform identities; absent fields preserve legacy mappings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip_slot_id: Option<VideoClipSlotId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isf_stage_id: Option<VideoEffectStageId>,
     #[serde(default)]
     pub output_id: Option<VideoOutputId>,
     pub video_param: Option<VideoParam>,
@@ -7930,6 +7944,11 @@ pub struct DmxControlMapping {
     pub group_id: Option<String>,
     pub cue_id: Option<CueId>,
     pub layer_id: Option<VideoLayerId>,
+    /// Stable Perform identities; absent fields preserve legacy mappings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip_slot_id: Option<VideoClipSlotId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isf_stage_id: Option<VideoEffectStageId>,
     #[serde(default)]
     pub output_id: Option<VideoOutputId>,
     pub video_param: Option<VideoParam>,
@@ -8307,7 +8326,7 @@ pub struct RendererRoutedInput {
     pub active: bool,
     /// The input is a button press that flips the target instead of setting it
     /// to `active`. Only stage enable switches driven by a note, program or
-    /// beat trigger use it.
+    /// beat trigger, or a value-less OSC pulse use it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub toggle: bool,
 }

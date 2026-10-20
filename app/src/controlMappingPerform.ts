@@ -93,8 +93,10 @@ export interface PerformRoutedInput {
   active: boolean;
   /** A press that flips the target instead of setting it to `active`. */
   toggle?: boolean;
-  /** Set for a tempo trigger; a controller press omits it. */
-  source?: "beat";
+  /** Identifies the transport; MIDI preserves the existing omitted source. */
+  source?: "beat" | "osc" | "dmx";
+  /** Renderer-only source lease; never decoded from a native payload. */
+  sourceIsCurrent?: () => boolean;
 }
 
 const positiveInteger = (value: unknown): value is number =>

@@ -69378,6 +69378,9 @@ mod tests {
     #[path = "../persistence_video_snapshot_tests.rs"]
     mod persistence_video_snapshot_tests;
 
+    #[path = "../isf_tempo_sync_tests.rs"]
+    mod isf_tempo_sync_tests;
+
     #[path = "../playback_layer_tests.rs"]
     mod playback_layer_tests;
 

@@ -1,0 +1,7 @@
+.videoSourceNdiPanel { display: grid; gap: 8px; min-width: 0; color: var(--theme-text); }
+.videoSourceNdiPanel label { display: grid; gap: 4px; min-width: 0; }
+.videoSourceNdiPanel :is(label, button, select, summary) { font-family: var(--theme-font-ui); font-size: 14px; text-transform: none; letter-spacing: normal; }
+.videoSourceNdiPanel :is(button, select, summary) { min-height: 44px; }
+.videoSourceNdiPanel select { width: 100%; min-width: 0; }
+.videoSourceNdiPanel .fieldHint { margin: 0; font-size: 13px; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; color: var(--theme-muted); }
+.videoSourceNdiPanel details > summary { display: flex; align-items: center; cursor: pointer; }

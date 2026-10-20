@@ -69,6 +69,7 @@ impl RecordingExternalFrameSources {
                 protocol::VideoSourceKind::Ndi => ndi.as_mut().and_then(|inputs| {
                     inputs
                         .get(&layer.id)
+                        .filter(|input| layer.source.name.as_deref() == Some(input.endpoint_name()))
                         .and_then(|input| input.take_latest().ok().flatten())
                         .map(|frame| video::VideoFrame {
                             layer_id: layer.id,

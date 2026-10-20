@@ -3,19 +3,29 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "vite";
+
+const optionalPort = (name) => {
+  const raw = process.env[name];
+  if (raw === undefined) return 0;
+  const value = Number(raw);
+  assert.ok(Number.isInteger(value) && value >= 1 && value <= 65535, name + " must be a port from 1 to 65535");
+  return value;
+};
+const vitePort = optionalPort("SYNDOCAL_VITE_PORT");
+const cdpPort = optionalPort("SYNDOCAL_CDP_PORT");
 
 const require = createRequire(import.meta.url);
 let chromium;
 try { ({chromium} = require("playwright")); }
 catch { ({chromium} = require(resolve(homedir(), ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright"))); }
-let server, browser;
+let server, browser, profile;
 const results = [];
 try {
   let url = process.env.SYNDOCAL_UI_TEST_URL;
   if (!url) {
-    server = await createServer({root: resolve(import.meta.dirname, ".."), server: {host: "127.0.0.1", port: 0}});
+    server = await createServer({root: resolve(import.meta.dirname, ".."), server: {host: "127.0.0.1", port: vitePort, strictPort: vitePort !== 0}});
     await server.listen();
     url = "http://127.0.0.1:" + server.httpServer.address().port;
   }
@@ -24,12 +34,16 @@ try {
     "C:/Program Files/Google/Chrome/Application/chrome.exe",
     "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
   ].find(existsSync);
-  try { browser = await chromium.launch({headless: true}); }
+  const profileRoot = resolve(import.meta.dirname, "../../target/qa/browser-profiles");
+  await mkdir(profileRoot, { recursive: true });
+  profile = await mkdtemp(resolve(profileRoot, "syndocal-fx-scroll-"));
+  const args = cdpPort ? ["--remote-debugging-port=" + cdpPort] : [];
+  try { browser = await chromium.launchPersistentContext(profile, {headless: true, args}); }
   catch (error) {
     if (!executablePath) throw error;
-    browser = await chromium.launch({headless: true, executablePath});
+    browser = await chromium.launchPersistentContext(profile, {headless: true, executablePath, args});
   }
-  const page = await browser.newPage();
+  const page = browser.pages()[0] ?? await browser.newPage();
   for (const viewport of [{width:1920,height:1080},{width:1920,height:1032},{width:2048,height:1152},{width:1366,height:768},{width:1280,height:720}]) {
     await page.setViewportSize(viewport);
     for (const family of ["COLOR FX", "CHASER FX", "VALUE FX", "CURVE FX", "2D MAPPING"]) {
@@ -123,5 +137,6 @@ try {
   console.log("FX form content and wheel/End save reachability: " + results.length + " passed");
 } finally {
   await browser?.close();
+  if (profile) await rm(profile, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
   await server?.close();
 }

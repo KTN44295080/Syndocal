@@ -2,7 +2,8 @@ use std::{
     collections::{hash_map::DefaultHasher, HashMap, HashSet},
     fmt,
     hash::{Hash, Hasher},
-    sync::{mpsc, Arc},
+    path::Path,
+    sync::Arc,
 };
 
 use naga::{
@@ -13,14 +14,63 @@ use naga::{
 };
 use serde::Deserialize;
 use serde_json::Value;
-use wgpu::util::DeviceExt;
 
 use crate::{convert_frame_to_rgba8, CpuCompositeError, VideoFrame, VideoPixelFormat};
-use protocol::{VideoIsfControlKind, VideoIsfControlSummary, VideoIsfEffectSummary};
+use protocol::{
+    VideoIsfControlKind, VideoIsfControlSummary, VideoIsfEffectSummary, VideoIsfTempoSyncUnit,
+    VIDEO_ISF_TEMPO_SYNC_BEATS_PER_BAR,
+};
 
 pub const ISF_MAX_SOURCE_BYTES: usize = 512 * 1024;
 pub const ISF_MAX_CONTROL_INPUTS: usize = 16;
 const ISF_GPU_PIPELINE_CAPACITY: usize = 64;
+const ISF_MAX_PASSES: usize = 16;
+const ISF_MAX_TEXTURES: usize = 16;
+
+#[path = "isf_pass_runtime.rs"]
+mod pass_runtime;
+#[path = "isf_resources.rs"]
+mod resources;
+
+use resources::{IsfDimension, IsfImportedImage};
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct IsfPassDefinition {
+    target: Option<String>,
+    persistent: bool,
+    float: bool,
+    width: Option<IsfDimension>,
+    height: Option<IsfDimension>,
+}
+
+/// Runtime-only ownership: the same source in two stages, inputs or render
+/// surfaces must never share feedback. Authored IDs survive stage reordering.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct IsfInstanceKey {
+    pub namespace: (u64, Option<u64>, bool),
+    pub scope: Option<protocol::VideoEffectScope>,
+    pub input: Option<protocol::VideoRenderInputKey>,
+    pub chain_id: Option<protocol::VideoEffectChainId>,
+    pub stage_id: Option<protocol::VideoEffectStageId>,
+    pub effect_id: Option<protocol::VideoEffectId>,
+    pub legacy_stage_index: usize,
+    pub layer_id: u64,
+}
+
+impl IsfInstanceKey {
+    fn legacy(layer_id: u64, index: usize) -> Self {
+        Self {
+            namespace: (0, None, false),
+            scope: None,
+            input: None,
+            chain_id: None,
+            stage_id: None,
+            effect_id: None,
+            legacy_stage_index: index,
+            layer_id,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IsfControlKind {
@@ -50,6 +100,9 @@ pub struct PreparedIsfShader {
     pub image_input_name: String,
     pub controls: Vec<IsfControlDefinition>,
     pub wgsl: String,
+    pub(crate) passes: Vec<IsfPassDefinition>,
+    pub(crate) imported_images: Vec<IsfImportedImage>,
+    pub(crate) fingerprint: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,7 +135,8 @@ pub struct IsfGpuRuntime {
     device: wgpu::Device,
     queue: wgpu::Queue,
     vertex_shader: wgpu::ShaderModule,
-    pipelines: HashMap<u64, IsfGpuPipeline>,
+    pipelines: HashMap<(u64, bool, usize), IsfGpuPipeline>,
+    resources: pass_runtime::IsfResourcePool,
     frame_index: u32,
     last_stack_stage_count: usize,
     last_stack_render_us: u64,
@@ -102,8 +156,10 @@ impl IsfGpuRuntime {
             compatible_surface: None,
         }))
         .map_err(|error| runtime_error(format!("ISF GPU adapter unavailable: {error}")))?;
+        let float_features = adapter.features() & wgpu::Features::FLOAT32_FILTERABLE;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Syndocal ISF runtime"),
+            required_features: float_features,
             ..Default::default()
         }))
         .map_err(|error| runtime_error(format!("ISF GPU device unavailable: {error}")))?;
@@ -116,6 +172,7 @@ impl IsfGpuRuntime {
             queue,
             vertex_shader,
             pipelines: HashMap::new(),
+            resources: pass_runtime::IsfResourcePool::default(),
             frame_index: 0,
             last_stack_stage_count: 0,
             last_stack_render_us: 0,
@@ -138,7 +195,7 @@ impl IsfGpuRuntime {
         )
     }
 
-    /// Applies an ordered set of independent single-pass ISF filters with one
+    /// Applies an ordered set of ISF filters with one
     /// host upload, GPU-local ping-pong textures, and one final readback.
     pub fn apply_stack(
         &mut self,
@@ -148,12 +205,16 @@ impl IsfGpuRuntime {
         time_delta_seconds: f32,
     ) -> Result<VideoFrame, IsfRuntimeError> {
         let frame_index = self.frame_index;
+        let keys = (0..stages.len())
+            .map(|index| IsfInstanceKey::legacy(frame.layer_id, index))
+            .collect::<Vec<_>>();
         let rendered = self.apply_stack_at_frame_index(
             frame,
             stages,
             time_seconds,
             time_delta_seconds,
             frame_index,
+            &keys,
         );
         // Preserve the legacy API contract: only a successful, non-empty
         // stack advances the host frame counter.
@@ -170,268 +231,16 @@ impl IsfGpuRuntime {
         time_seconds: f32,
         time_delta_seconds: f32,
         frame_index: u32,
+        keys: &[IsfInstanceKey],
     ) -> Result<VideoFrame, IsfRuntimeError> {
-        self.last_stack_stage_count = stages.len();
-        self.last_stack_render_us = 0;
-        if stages.is_empty() {
-            return Ok(frame.clone());
-        }
-        if frame.width == 0 || frame.height == 0 {
-            return Err(runtime_error("ISF input frame has an invalid size"));
-        }
-        // The upload only borrows input bytes. Avoid a full RGBA frame copy
-        // for every executing scope; conversion still owns its temporary.
-        let converted;
-        let rgba = if frame.format == VideoPixelFormat::Rgba8 {
-            frame
-        } else {
-            converted = convert_frame_to_rgba8(frame).map_err(runtime_from_composite_error)?;
-            &converted
-        };
-        let expected_len = frame.width as usize * frame.height as usize * 4;
-        if rgba.data.len() != expected_len {
-            return Err(runtime_error(
-                "ISF input frame byte length does not match its dimensions",
-            ));
-        }
-
-        let missing_pipeline_count = stages
-            .iter()
-            .filter(|(shader, _)| !self.pipelines.contains_key(&source_hash(&shader.wgsl)))
-            .count();
-        if self.pipelines.len() + missing_pipeline_count > ISF_GPU_PIPELINE_CAPACITY {
-            self.pipelines.clear();
-        }
-        for (shader, _) in stages {
-            let shader_key = source_hash(&shader.wgsl);
-            if !self.pipelines.contains_key(&shader_key) {
-                let pipeline = self.create_pipeline(&shader.wgsl)?;
-                self.pipelines.insert(shader_key, pipeline);
-            }
-        }
-        let input_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Syndocal ISF input"),
-            size: wgpu::Extent3d {
-                width: frame.width,
-                height: frame.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &input_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &rgba.data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(frame.width * 4),
-                rows_per_image: Some(frame.height),
-            },
-            wgpu::Extent3d {
-                width: frame.width,
-                height: frame.height,
-                depth_or_array_layers: 1,
-            },
-        );
-        let input_view = input_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Syndocal ISF sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        let create_work_texture = |label| {
-            self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width: frame.width,
-                    height: frame.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            })
-        };
-        let ping_texture = create_work_texture("Syndocal ISF stack ping");
-        let pong_texture = create_work_texture("Syndocal ISF stack pong");
-        let ping_view = ping_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let pong_view = pong_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut uniform_buffers = Vec::with_capacity(stages.len());
-        for (_, controls) in stages {
-            let uniform_data = isf_uniform_data(
-                frame.width,
-                frame.height,
-                time_seconds,
-                time_delta_seconds,
-                frame_index,
-                controls,
-            );
-            uniform_buffers.push(self.device.create_buffer_init(
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("Syndocal ISF stack uniforms"),
-                    contents: &uniform_data,
-                    usage: wgpu::BufferUsages::UNIFORM,
-                },
-            ));
-        }
-        let mut bind_groups = Vec::with_capacity(stages.len());
-        for (index, ((shader, _), uniform_buffer)) in
-            stages.iter().zip(uniform_buffers.iter()).enumerate()
-        {
-            let shader_key = source_hash(&shader.wgsl);
-            let pipeline = self
-                .pipelines
-                .get(&shader_key)
-                .expect("ISF stack pipeline inserted before rendering");
-            let stage_input_view = if index == 0 {
-                &input_view
-            } else if index % 2 == 1 {
-                &ping_view
-            } else {
-                &pong_view
-            };
-            bind_groups.push(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Syndocal ISF stack bind group"),
-                layout: &pipeline.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(stage_input_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: uniform_buffer.as_entire_binding(),
-                    },
-                ],
-            }));
-        }
-
-        let padded_bytes_per_row = (frame.width * 4).div_ceil(256) * 256;
-        let readback_size = u64::from(padded_bytes_per_row) * u64::from(frame.height);
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Syndocal ISF readback"),
-            size: readback_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Syndocal ISF stack encoder"),
-            });
-        for (index, ((shader, _), bind_group)) in stages.iter().zip(bind_groups.iter()).enumerate()
-        {
-            let shader_key = source_hash(&shader.wgsl);
-            let pipeline = self
-                .pipelines
-                .get(&shader_key)
-                .expect("ISF stack pipeline inserted before encoding");
-            let stage_output_view = if index % 2 == 0 {
-                &ping_view
-            } else {
-                &pong_view
-            };
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Syndocal ISF stack pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: stage_output_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            pass.set_pipeline(&pipeline.pipeline);
-            pass.set_bind_group(0, bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-        let final_texture = if stages.len() % 2 == 1 {
-            &ping_texture
-        } else {
-            &pong_texture
-        };
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: final_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_bytes_per_row),
-                    rows_per_image: Some(frame.height),
-                },
-            },
-            wgpu::Extent3d {
-                width: frame.width,
-                height: frame.height,
-                depth_or_array_layers: 1,
-            },
-        );
-        let render_started = std::time::Instant::now();
-        self.queue.submit(Some(encoder.finish()));
-        let (sender, receiver) = mpsc::sync_channel(1);
-        readback
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = sender.send(result.map_err(|error| error.to_string()));
-            });
-        self.device
-            .poll(wgpu::PollType::wait())
-            .map_err(|error| runtime_error(format!("ISF GPU wait failed: {error}")))?;
-        receiver
-            .recv()
-            .map_err(|error| runtime_error(format!("ISF readback channel failed: {error}")))?
-            .map_err(|error| runtime_error(format!("ISF readback failed: {error}")))?;
-        self.last_stack_render_us = render_started
-            .elapsed()
-            .as_micros()
-            .min(u128::from(u64::MAX)) as u64;
-        let mapped = readback.slice(..).get_mapped_range();
-        let mut data = Vec::with_capacity(expected_len);
-        for row in mapped.chunks_exact(padded_bytes_per_row as usize) {
-            data.extend_from_slice(&row[..(frame.width * 4) as usize]);
-        }
-        drop(mapped);
-        readback.unmap();
-        Ok(VideoFrame {
-            layer_id: frame.layer_id,
-            width: frame.width,
-            height: frame.height,
-            pts_ms: frame.pts_ms,
-            duration_ms: frame.duration_ms,
-            format: VideoPixelFormat::Rgba8,
-            data,
-        })
+        self.render_pass_stack(
+            frame,
+            stages,
+            time_seconds,
+            time_delta_seconds,
+            frame_index,
+            keys,
+        )
     }
 
     /// Applies every stage independently so a runtime failure bypasses only
@@ -443,17 +252,42 @@ impl IsfGpuRuntime {
         time_seconds: f32,
         time_delta_seconds: f32,
     ) -> (VideoFrame, Vec<(usize, IsfRuntimeError)>) {
+        let keys = (0..stages.len())
+            .map(|index| IsfInstanceKey::legacy(frame.layer_id, index))
+            .collect::<Vec<_>>();
+        self.apply_stack_stage_local_with_keys(
+            frame,
+            stages,
+            time_seconds,
+            time_delta_seconds,
+            &keys,
+        )
+    }
+
+    pub(crate) fn apply_stack_stage_local_with_keys(
+        &mut self,
+        frame: &VideoFrame,
+        stages: &[(&PreparedIsfShader, &[[f32; 4]])],
+        time_seconds: f32,
+        time_delta_seconds: f32,
+        keys: &[IsfInstanceKey],
+    ) -> (VideoFrame, Vec<(usize, IsfRuntimeError)>) {
         let started = std::time::Instant::now();
         let frame_index = self.frame_index;
         let mut current = frame.clone();
         let mut failures = Vec::new();
         for (index, stage) in stages.iter().enumerate() {
+            let Some(key) = keys.get(index) else {
+                failures.push((index, runtime_error("ISF stage ownership key is missing")));
+                continue;
+            };
             match self.apply_stack_at_frame_index(
                 &current,
                 std::slice::from_ref(stage),
                 time_seconds,
                 time_delta_seconds,
                 frame_index,
+                std::slice::from_ref(key),
             ) {
                 Ok(frame) => current = frame,
                 Err(error) => failures.push((index, error)),
@@ -497,104 +331,25 @@ impl IsfGpuRuntime {
         self.last_stack_render_us = 0;
     }
 
-    fn create_pipeline(&self, wgsl: &str) -> Result<IsfGpuPipeline, IsfRuntimeError> {
-        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let bind_group_layout =
-            self.device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("Syndocal ISF bind group layout"),
-                    entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Texture {
-                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                                view_dimension: wgpu::TextureViewDimension::D2,
-                                multisampled: false,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 2,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                    ],
-                });
-        let layout = self
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Syndocal ISF pipeline layout"),
-                bind_group_layouts: &[&bind_group_layout],
-                push_constant_ranges: &[],
-            });
-        let fragment_shader = self
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Syndocal translated ISF fragment shader"),
-                source: wgpu::ShaderSource::Wgsl(wgsl.into()),
-            });
-        let pipeline = self
-            .device
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Syndocal ISF pipeline"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &self.vertex_shader,
-                    entry_point: Some("main"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &fragment_shader,
-                    entry_point: Some("main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview: None,
-                cache: None,
-            });
-        if let Some(error) = pollster::block_on(self.device.pop_error_scope()) {
-            return Err(runtime_error(format!(
-                "ISF GPU pipeline validation failed: {error}"
-            )));
-        }
-        Ok(IsfGpuPipeline {
-            bind_group_layout,
-            pipeline,
-        })
-    }
 }
 
 pub fn resolved_isf_control_values(
     shader: &PreparedIsfShader,
     effect: &VideoIsfEffectSummary,
+    bpm: Option<f32>,
 ) -> Vec<[f32; 4]> {
-    resolved_isf_control_values_from_controls(shader, &effect.controls)
+    resolved_isf_control_values_from_controls(shader, &effect.controls, bpm)
 }
 
+/// Resolves authored controls for this frame without changing project state.
+/// A clock with no usable tempo keeps the authored value. A stopped external
+/// clock retains its last BPM; transport and shader TIME remain unchanged.
 pub fn resolved_isf_control_values_from_controls(
     shader: &PreparedIsfShader,
     controls: &[VideoIsfControlSummary],
+    bpm: Option<f32>,
 ) -> Vec<[f32; 4]> {
+    let bpm = bpm.filter(|bpm| bpm.is_finite() && *bpm > 0.0);
     shader
         .controls
         .iter()
@@ -602,7 +357,23 @@ pub fn resolved_isf_control_values_from_controls(
             let candidate = controls
                 .iter()
                 .find(|control| control.name == definition.name)
-                .map(|control| control.value)
+                .map(|control| {
+                    let mut value = control.value;
+                    if definition.kind == IsfControlKind::Float
+                        && control.kind == VideoIsfControlKind::Float
+                    {
+                        if let (Some(bpm), Some(sync)) =
+                            (bpm, control.tempo_sync.filter(|sync| sync.is_valid()))
+                        {
+                            let beats_per_unit = match sync.unit {
+                                VideoIsfTempoSyncUnit::Beats => 1.0,
+                                VideoIsfTempoSyncUnit::Bars => VIDEO_ISF_TEMPO_SYNC_BEATS_PER_BAR,
+                            };
+                            value[0] = bpm / 60.0 / (sync.count * beats_per_unit);
+                        }
+                    }
+                    value
+                })
                 .unwrap_or(definition.default);
             sanitize_control_value(
                 definition.kind,
@@ -745,19 +516,43 @@ struct IsfPass {
     target: Option<String>,
     #[serde(default, rename = "PERSISTENT")]
     persistent: Value,
+    #[serde(default, rename = "FLOAT")]
+    float: Value,
+    #[serde(default, rename = "WIDTH")]
+    width: Option<Value>,
+    #[serde(default, rename = "HEIGHT")]
+    height: Option<Value>,
 }
 
 pub fn prepare_isf_shader(source: &str) -> Result<PreparedIsfShader, IsfPrepareError> {
+    prepare_isf_shader_with_path(source, None)
+}
+
+pub fn prepare_isf_shader_with_path(
+    source: &str,
+    source_path: Option<&Path>,
+) -> Result<PreparedIsfShader, IsfPrepareError> {
     if source.len() > ISF_MAX_SOURCE_BYTES {
         return Err(error(format!(
             "ISF source exceeds the {} byte safety limit",
             ISF_MAX_SOURCE_BYTES
         )));
     }
+    if let Some(path) = source_path {
+        for extension in ["vs", "vert"] {
+            let companion = path.with_extension(extension);
+            if companion.is_file() {
+                return Err(error(format!(
+                    "ISF vertex shaders are not supported; companion '{}' requires a custom vertex stage",
+                    companion.display()
+                )));
+            }
+        }
+    }
     let (metadata_json, body) = split_isf_source(source)?;
     let metadata: IsfMetadata = serde_json::from_str(metadata_json)
         .map_err(|parse_error| error(format!("ISF metadata JSON is invalid: {parse_error}")))?;
-    validate_single_pass_boundary(&metadata)?;
+    let passes = prepare_passes(&metadata.passes)?;
     validate_shader_body(body)?;
 
     let mut image_inputs = Vec::new();
@@ -793,8 +588,43 @@ pub fn prepare_isf_shader(source: &str) -> Result<PreparedIsfShader, IsfPrepareE
         )));
     }
     let image_input_name = image_inputs.remove(0);
-    let glsl = build_glsl_wrapper(body, &image_input_name, &controls);
+    let mut image_names = vec![image_input_name.clone()];
+    for pass in &passes {
+        if let Some(target) = &pass.target {
+            validate_identifier(target)?;
+            if !names.insert(target.clone()) {
+                return Err(error(format!(
+                    "ISF target '{target}' is duplicated or conflicts with an input"
+                )));
+            }
+            image_names.push(target.clone());
+        }
+    }
+    for name in metadata.imported.keys() {
+        validate_identifier(name)?;
+        if !names.insert(name.clone()) {
+            return Err(error(format!(
+                "ISF imported image '{name}' conflicts with an input or target"
+            )));
+        }
+    }
+    if image_names.len() + metadata.imported.len() > ISF_MAX_TEXTURES {
+        return Err(error(format!(
+            "ISF declares too many textures; the safety limit is {ISF_MAX_TEXTURES}"
+        )));
+    }
+    let imported_images = resources::load_imported_images(&metadata.imported, source_path)?;
+    image_names.extend(imported_images.iter().map(|image| image.name.clone()));
+    let glsl = build_glsl_wrapper(body, &image_names, &controls);
     let wgsl = glsl_to_wgsl(&glsl)?;
+    let mut fingerprint = DefaultHasher::new();
+    source.hash(&mut fingerprint);
+    for image in &imported_images {
+        image.name.hash(&mut fingerprint);
+        image.width.hash(&mut fingerprint);
+        image.height.hash(&mut fingerprint);
+        image.rgba.hash(&mut fingerprint);
+    }
     Ok(PreparedIsfShader {
         description: metadata
             .description
@@ -810,6 +640,9 @@ pub fn prepare_isf_shader(source: &str) -> Result<PreparedIsfShader, IsfPrepareE
         image_input_name,
         controls,
         wgsl,
+        passes,
+        imported_images,
+        fingerprint: fingerprint.finish(),
     })
 }
 
@@ -833,28 +666,57 @@ fn split_isf_source(source: &str) -> Result<(&str, &str), IsfPrepareError> {
     ))
 }
 
-fn validate_single_pass_boundary(metadata: &IsfMetadata) -> Result<(), IsfPrepareError> {
-    if !metadata.imported.is_empty() {
-        return Err(error("ISF imported image resources are not supported"));
+fn prepare_passes(passes: &[IsfPass]) -> Result<Vec<IsfPassDefinition>, IsfPrepareError> {
+    if passes.len() > ISF_MAX_PASSES {
+        return Err(error(format!(
+            "ISF declares too many passes; the safety limit is {ISF_MAX_PASSES}"
+        )));
     }
-    if metadata.passes.len() > 1 {
-        return Err(error("Multi-pass ISF shaders are not supported"));
+    if passes.is_empty() {
+        return Ok(vec![IsfPassDefinition {
+            target: None,
+            persistent: false,
+            float: false,
+            width: None,
+            height: None,
+        }]);
     }
-    if let Some(pass) = metadata.passes.first() {
-        let persistent = matches!(&pass.persistent, Value::Bool(true))
-            || pass.persistent.as_i64().is_some_and(|value| value != 0);
-        if persistent
-            || pass
-                .target
-                .as_deref()
-                .is_some_and(|target| !target.trim().is_empty())
-        {
-            return Err(error(
-                "Persistent or target-buffer ISF passes are not supported",
-            ));
-        }
+    passes
+        .iter()
+        .map(|pass| {
+            let persistent = pass_flag(&pass.persistent, "PERSISTENT")?;
+            let float = pass_flag(&pass.float, "FLOAT")?;
+            if persistent && pass.target.is_none() {
+                return Err(error("ISF PERSISTENT pass requires a named TARGET"));
+            }
+            Ok(IsfPassDefinition {
+                target: pass.target.clone(),
+                persistent,
+                float,
+                width: IsfDimension::parse(pass.width.as_ref())?,
+                height: IsfDimension::parse(pass.height.as_ref())?,
+            })
+        })
+        .collect()
+}
+
+fn pass_flag(value: &Value, name: &str) -> Result<bool, IsfPrepareError> {
+    match value {
+        Value::Null | Value::Bool(false) => Ok(false),
+        Value::Bool(true) => Ok(true),
+        Value::Number(value) => value
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .map(|value| value > 0.0)
+            .ok_or_else(|| {
+                error(format!(
+                    "ISF pass {name} must be a finite boolean or number"
+                ))
+            }),
+        _ => Err(error(format!(
+            "ISF pass {name} must be a boolean or number"
+        ))),
     }
-    Ok(())
 }
 
 fn validate_shader_body(body: &str) -> Result<(), IsfPrepareError> {
@@ -894,9 +756,22 @@ fn validate_identifier(name: &str) -> Result<(), IsfPrepareError> {
         .is_some_and(|character| character == '_' || character.is_ascii_alphabetic());
     if !valid_first
         || !chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
+        || name.starts_with("gl_")
+        || name.starts_with("syndocal")
         || matches!(
             name,
-            "RENDERSIZE" | "TIME" | "TIMEDELTA" | "FRAMEINDEX" | "PASSINDEX" | "isf_FragNormCoord"
+            "RENDERSIZE"
+                | "TIME"
+                | "TIMEDELTA"
+                | "FRAMEINDEX"
+                | "PASSINDEX"
+                | "DATE"
+                | "isf_FragNormCoord"
+                | "IMG_PIXEL"
+                | "IMG_NORM_PIXEL"
+                | "IMG_THIS_PIXEL"
+                | "IMG_THIS_NORM_PIXEL"
+                | "IMG_SIZE"
         )
     {
         return Err(error(format!(
@@ -981,14 +856,14 @@ fn value_vector(value: Option<&Value>, fallback: [f32; 4]) -> Result<[f32; 4], I
 
 fn build_glsl_wrapper(
     body: &str,
-    image_input_name: &str,
+    image_names: &[String],
     controls: &[IsfControlDefinition],
 ) -> String {
     let mut header = format!(
         r#"#version 450 core
 layout(location=0) in vec2 isf_FragNormCoord;
 layout(location=0) out vec4 syndocal_FragColor;
-layout(set=0,binding=0) uniform texture2D syndocal_input_texture;
+
 layout(set=0,binding=1) uniform sampler syndocal_input_sampler;
 layout(set=0,binding=2,std140) uniform SyndocalUniforms {{
     vec4 render_time;
@@ -1001,15 +876,20 @@ layout(set=0,binding=2,std140) uniform SyndocalUniforms {{
 #define TIMEDELTA syndocal.render_time.w
 #define FRAMEINDEX syndocal.frame_pass.x
 #define PASSINDEX syndocal.frame_pass.y
-#define {image_input_name} sampler2D(syndocal_input_texture, syndocal_input_sampler)
-#define IMG_THIS_PIXEL(image) texture(image, isf_FragNormCoord)
+#define IMG_THIS_PIXEL(image) texture(image, gl_FragCoord.xy / vec2(textureSize(image, 0)))
 #define IMG_THIS_NORM_PIXEL(image) texture(image, isf_FragNormCoord)
 #define IMG_NORM_PIXEL(image, coord) texture(image, coord)
-#define IMG_PIXEL(image, coord) texture(image, (coord) / RENDERSIZE)
-#define IMG_SIZE(image) RENDERSIZE
-#define texture2D texture
+#define IMG_PIXEL(image, coord) texture(image, (coord) / vec2(textureSize(image, 0)))
+#define IMG_SIZE(image) vec2(textureSize(image, 0))
 "#
     );
+    for (index, name) in image_names.iter().enumerate() {
+        let binding = if index == 0 { 0 } else { index + 2 };
+        header.push_str(&format!(
+            "layout(set=0,binding={binding}) uniform texture2D syndocal_texture_{index};\n#define {name} sampler2D(syndocal_texture_{index}, syndocal_input_sampler)\n"
+        ));
+    }
+    header.push_str("#define texture2D texture\n");
     for (index, control) in controls.iter().enumerate() {
         let expression = match control.kind {
             IsfControlKind::Event | IsfControlKind::Bool => {
@@ -1069,6 +949,7 @@ fn isf_uniform_data(
     time_seconds: f32,
     time_delta_seconds: f32,
     frame_index: u32,
+    pass_index: usize,
     controls: &[[f32; 4]],
 ) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(32 + ISF_MAX_CONTROL_INPUTS * 16);
@@ -1088,7 +969,7 @@ fn isf_uniform_data(
     ] {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
-    for value in [frame_index as i32, 0_i32, 0_i32, 0_i32] {
+    for value in [frame_index as i32, pass_index as i32, 0_i32, 0_i32] {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
     for index in 0..ISF_MAX_CONTROL_INPUTS {
@@ -1133,15 +1014,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_multipass_imports_audio_loops_and_unsafe_identifiers() {
+    fn accepts_target_passes_and_rejects_audio_loops_and_unsafe_identifiers() {
         let multipass = FLOAT_FILTER.replace(
             "\"INPUTS\"",
             "\"PASSES\":[{\"TARGET\":\"buffer\"}],\"INPUTS\"",
         );
-        assert!(prepare_isf_shader(&multipass)
-            .unwrap_err()
-            .message
-            .contains("target-buffer"));
+        let prepared = prepare_isf_shader(&multipass).unwrap();
+        assert_eq!(prepared.passes[0].target.as_deref(), Some("buffer"));
         let audio = FLOAT_FILTER.replace(
             "{\"NAME\":\"level\",\"TYPE\":\"float\",\"DEFAULT\":0.5,\"MIN\":0.0,\"MAX\":1.0}",
             "{\"NAME\":\"audio\",\"TYPE\":\"audioFFT\"}",
@@ -1276,3 +1155,7 @@ mod tests {
         assert_eq!(legacy_after_failure.data, vec![5, 19, 29, 255]);
     }
 }
+
+#[cfg(test)]
+#[path = "isf_completeness_tests.rs"]
+mod completeness_tests;

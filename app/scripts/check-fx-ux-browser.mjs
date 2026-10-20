@@ -6,10 +6,19 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
+
+const optionalPort = (name) => {
+  const raw = process.env[name];
+  if (raw === undefined) return 0;
+  const value = Number(raw);
+  assert.ok(Number.isInteger(value) && value >= 1 && value <= 65535, name + " must be a port from 1 to 65535");
+  return value;
+};
+const vitePort = optionalPort("SYNDOCAL_VITE_PORT");
+const cdpPort = optionalPort("SYNDOCAL_CDP_PORT");
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const evidenceDir = resolve(process.env.SYNDOCAL_FX_UX_SCREENSHOT_DIR ?? join(appRoot, "../target/qa/fx-ux-12"));
@@ -160,12 +169,14 @@ const setView = async (viewport, locale, theme, view, width, height, layer = 2) 
 const geometry = (selector) => evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].filter(e=>e.getBoundingClientRect().width).map(e=>{const r=e.getBoundingClientRect();return {w:Math.round(r.width),h:Math.round(r.height),text:(e.innerText||e.getAttribute('aria-label')||'').slice(0,40),font:parseFloat(getComputedStyle(e).fontSize)}})`);
 
 try {
-  server = await createServer({ root: appRoot, server: { host: "127.0.0.1", port: 0, strictPort: false }, plugins: [plugin], clearScreen: false, logLevel: "error" });
+  server = await createServer({ root: appRoot, server: { host: "127.0.0.1", port: vitePort, strictPort: vitePort !== 0 }, plugins: [plugin], clearScreen: false, logLevel: "error" });
   await server.listen();
-  profile = await mkdtemp(join(tmpdir(), "syndocal-fx-ux-"));
-  browser = spawn(browserPath, ["--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--no-first-run", "--no-default-browser-check", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
-  const port = await until(async () => Number((await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]), "DevTools port");
-  const page = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((entry) => entry.type === "page");
+  const profileRoot = resolve(appRoot, "../target/qa/browser-profiles");
+  await mkdir(profileRoot, { recursive: true });
+  profile = await mkdtemp(join(profileRoot, "syndocal-fx-ux-"));
+  browser = spawn(browserPath, ["--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--no-first-run", "--no-default-browser-check", "--remote-debugging-port=" + cdpPort, `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
+  const port = cdpPort || await until(async () => Number((await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]), "DevTools port");
+  const page = await until(async () => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((entry) => entry.type === "page"), "DevTools page");
   socket = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((done, reject) => { socket.addEventListener("open", done, { once: true }); socket.addEventListener("error", reject, { once: true }); });
   socket.addEventListener("message", ({ data }) => {
@@ -318,6 +329,12 @@ try {
   const rateControl = async () => JSON.parse(await ux("return JSON.stringify(u.layers()[1].isf_effect.stack[1].controls.find(c=>c.name==='rate'))"));
   const pickCount = (value) => evaluate(`(()=>{const s=document.querySelector(${JSON.stringify(syncBox + " [data-fx-tempo-count]")});s.value=${JSON.stringify(String(value))};s.dispatchEvent(new Event('change',{bubbles:true}))})()`).then(settle);
   const readout = () => text(`${syncBox} [data-fx-tempo-readout]`);
+  const visibleRate = () => evaluate(`({
+    header: document.querySelector('[data-perform-fx-control=rate] .videoFxParameterHead output').textContent,
+    range: document.querySelector('[data-perform-fx-control=rate] input[type=range]').value,
+    number: document.querySelector('[data-perform-fx-control=rate] input[type=number]').value,
+    accessible: document.querySelector('[data-perform-fx-control=rate] input[type=range]').getAttribute('aria-valuetext')
+  })`);
   assert.equal(await evaluate("document.querySelectorAll('[data-fx-tempo-sync]').length"), 1, "only the Strobe rate offers beat and bar units, not the duty ratio");
   assert.equal(await evaluate(`document.querySelector(${JSON.stringify(syncBox)}).dataset.fxTempoSync`), "hz", "controls start as a raw Hz value");
   assert.deepEqual(await evaluate(`[...document.querySelectorAll(${JSON.stringify(syncBox + " [data-fx-tempo-unit]")})].map(e=>e.textContent+':'+e.getAttribute('aria-pressed'))`), ["Hz:true", "Beats:false", "Bars:false"]);
@@ -343,16 +360,31 @@ try {
   assert.equal(await evaluate(`document.querySelector(${JSON.stringify(syncBox + " [data-fx-tempo-count]")}).getAttribute('aria-label')`), "Bars per cycle");
   assert.equal(await evaluate("document.querySelectorAll('[data-fx-tempo-resync]').length"), 0, "no re-sync is offered while the value follows the clock");
   await shot("tempo-sync-en-tally-1920x1080");
-  // The tempo changes: the stored value is stale until the operator re-syncs it (the runtime does not follow the clock yet).
-  await ux("u.setBpm(90)"); await settle();
-  assert.equal((await rateControl()).value[0], 2, "a tempo change alone never writes the project");
-  assert.equal(await evaluate("document.querySelectorAll('[data-fx-tempo-resync]').length"), 1, "a stale synced value offers Re-sync to tempo");
+  // Live clock changes update every visible rate without publishing authored state.
   writes = await ux("return u.log.liveWrites");
-  await click("[data-fx-tempo-resync]"); await settle();
-  assert.equal(await ux("return u.log.liveWrites"), writes + 1, "re-sync is one write");
-  assert.equal((await rateControl()).value[0], 1.5);
+  const authoredRate = await rateControl();
+  await ux("u.setBpm(90)"); await settle();
+  assert.deepEqual(await rateControl(), authoredRate, "a tempo change preserves authored values and metadata");
+  assert.equal(await ux("return u.log.liveWrites"), writes, "a tempo change never publishes a project write");
   assert.equal(await readout(), "One cycle per 1/4 bar = 1.5 Hz at 90 BPM");
-  assert.equal(await evaluate("document.querySelectorAll('[data-fx-tempo-resync]').length"), 0);
+  assert.deepEqual(await visibleRate(), { header: "1.5 Hz", range: "1.5", number: "1.5", accessible: "1.5 Hz" });
+  assert.equal(await evaluate("document.querySelectorAll('[data-fx-tempo-resync]').length"), 0, "runtime following has no re-sync action");
+  await ux("u.setBpm(180)"); await settle();
+  assert.deepEqual(await visibleRate(), { header: "3 Hz", range: "3", number: "3", accessible: "3 Hz" });
+  assert.deepEqual(await rateControl(), authoredRate);
+  assert.equal(await ux("return u.log.liveWrites"), writes);
+  // Retained engine BPM keeps the nominal rate; native tests cover loss of clock pulses.
+  await ux("u.setBpm(180)"); await settle();
+  assert.deepEqual(await visibleRate(), { header: "3 Hz", range: "3", number: "3", accessible: "3 Hz" });
+  assert.equal(await ux("return u.log.liveWrites"), writes);
+  // Invalid clock data uses the saved raw value and returns to live following on recovery.
+  await ux("u.setBpm(0)"); await settle();
+  assert.deepEqual(await visibleRate(), { header: "2 Hz", range: "2", number: "2", accessible: "2 Hz" });
+  assert.match(await readout(), /2 Hz.*Tempo unavailable; using the saved rate\./);
+  assert.deepEqual(await rateControl(), authoredRate);
+  assert.equal(await ux("return u.log.liveWrites"), writes);
+  await ux("u.setBpm(90)"); await settle();
+  assert.equal(await readout(), "One cycle per 1/4 bar = 1.5 Hz at 90 BPM");
   // A request outside the control's range is limited and says so.
   await pickCount(4);
   rateNow = await rateControl();
@@ -365,11 +397,18 @@ try {
   await click("[data-fx-randomize]"); await settle();
   rateNow = await rateControl();
   assert.deepEqual([rateNow.tempo_sync.unit, rateNow.value[0]], ["beats", beforeRandom], "Randomize keeps a synced control on the clock");
-  // Hz keeps the number; Reset default replaces the sync with the raw default.
+  // Hz captures the currently displayed rate after a tempo change.
+  writes = await ux("return u.log.liveWrites");
+  await ux("u.setBpm(240)"); await settle();
+  assert.equal((await rateControl()).value[0], beforeRandom);
+  assert.equal(await ux("return u.log.liveWrites"), writes);
+  assert.deepEqual(await visibleRate(), { header: "1 Hz", range: "1", number: "1", accessible: "1 Hz" });
   await click(`${syncBox} [data-fx-tempo-unit=hz]`); await settle();
   rateNow = await rateControl();
   assert.equal(rateNow.tempo_sync ?? null, null, "Hz removes the sync");
-  assert.equal(rateNow.value[0], beforeRandom, "and keeps the last value as a plain number");
+  assert.equal(rateNow.value[0], 1, "Hz captures the effective rate instead of restoring a stale authored rate");
+  assert.equal(await ux("return u.log.liveWrites"), writes + 1, "switching to Hz is one explicit write");
+  // Reset default replaces the sync with the raw default.
   await click(`${syncBox} [data-fx-tempo-unit=bars]`); await settle();
   await click("[data-perform-fx-control=rate] .videoFxParameterFoot button"); await settle();
   rateNow = await rateControl();
@@ -386,8 +425,16 @@ try {
   assert.deepEqual(await evaluate(`[...document.querySelectorAll(${JSON.stringify(syncBox + " [data-fx-tempo-unit]")})].map(e=>e.textContent)`), ["Hz", "拍", "小節"]);
   assert.equal(await evaluate(`document.querySelector(${JSON.stringify(syncBox + " [data-fx-tempo-count]")}).getAttribute('aria-label')`), "1周期あたりの拍数");
   assert.equal(await evaluate(`document.querySelector(${JSON.stringify(syncBox + " [role=group]")}).getAttribute('aria-label')`), "時間の単位");
+  writes = await ux("return u.log.liveWrites");
   await ux("u.setBpm(100)"); await settle();
-  assert.match(await text("[data-fx-tempo-resync]"), /テンポに再同期/);
+  assert.equal(await readout(), "1拍ごとに1回 ＝ 1.667 Hz（100 BPM）");
+  const japaneseRate = await visibleRate();
+  assert.equal(japaneseRate.header, "1.667 Hz");
+  assert.equal(japaneseRate.number, "1.667");
+  assert.equal(japaneseRate.accessible, "1.667 Hz");
+  assert.ok(Math.abs(Number(japaneseRate.range) - 100 / 60) < 0.00001);
+  assert.equal(await evaluate("document.querySelectorAll('[data-fx-tempo-resync]').length"), 0);
+  assert.equal(await ux("return u.log.liveWrites"), writes);
   await shot("tempo-sync-ja-tally-1920x1080");
   await ux("u.setBpm(120);u.setLocale('en')"); await settle();
   // During an audition the choice goes to the Preview draft, never to Program.
@@ -396,6 +443,13 @@ try {
   await click(`${syncBox} [data-fx-tempo-unit=bars]`); await settle();
   assert.equal(await ux("return u.log.liveWrites"), writes, "an audition edits only its draft");
   assert.deepEqual(await ux("return u.audition.state().draft.stack[1].controls.find(c=>c.name==='rate').tempo_sync"), { unit: "bars", count: 1 });
+  const authoredDraft = await ux("return JSON.stringify(u.audition.state().draft)");
+  const previews = await ux("return u.log.previews.length");
+  await ux("u.setBpm(240)"); await settle();
+  assert.equal(await readout(), "One cycle per 1 bar = 1 Hz at 240 BPM");
+  assert.equal(await ux("return JSON.stringify(u.audition.state().draft)"), authoredDraft, "clock changes do not rewrite the Preview draft");
+  assert.equal(await ux("return u.log.previews.length"), previews, "clock changes do not republish Preview");
+  assert.equal(await ux("return u.log.liveWrites"), writes, "clock changes during audition never reach Program");
   await click("[data-fx-audition-discard]"); await settle();
   // An imported shader with a rate-like Float qualifies; a plain amount does not (model check covers names).
 
@@ -543,7 +597,7 @@ try {
   await setView([1920, 1080], "ja", "tally", "browser", 900, 640);
   assert.deepEqual(await smallText("[data-effect-browser]"), [], "browser text is at least 14px");
   assert.deepEqual(errors, [], JSON.stringify(errors));
-  console.log(`FX UX browser: parameters (labels, units, ranges, colour picker, reset), presets, Randomize, Preview-only audition with A/B and confirmed Take, rejection cards and problems dialog in EN/JA and two themes; tempo-synced beat/bar units (store, re-sync, range limit, audition draft), drag-and-drop stage reorder in the Perform FX tab and the Full FX editor, and always-visible category chips; evidence ${evidenceDir}`);
+  console.log(`FX UX browser: parameters (labels, units, ranges, colour picker, reset), presets, Randomize, Preview-only audition with A/B and confirmed Take, rejection cards and problems dialog in EN/JA and two themes; tempo-synced beat/bar units (live BPM, zero clock-driven writes, range limit, Hz capture, audition draft), drag-and-drop stage reorder in the Perform FX tab and the Full FX editor, and always-visible category chips; evidence ${evidenceDir}`);
 } finally {
   socket?.close();
   for (const call of pending.values()) clearTimeout(call.timer);

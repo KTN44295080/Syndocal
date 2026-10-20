@@ -1079,3 +1079,38 @@ assert.match(mediaAuthority, /shape_fingerprint !== expectedShapeFingerprint/, "
 assert.doesNotMatch(mediaAuthority, /projectTransactionId|begin_project_transaction|commit_project_transaction/, "media helper owns no renderer project ticket");
 
 console.log("media asset authoritative frontend checks passed (phase order, reply loss/query, cancellation CAS, authority continuity, operator classification, direct paired application, snapshot empty-catalog normalization)");
+
+
+{
+ const shape = fields => {
+  const parts=[Buffer.from("syndocal-media-authoritative-shape-v1")];
+  for(const value of ["relink",...fields]){const bytes=Buffer.from(value);const length=Buffer.alloc(8);length.writeBigUInt64LE(BigInt(bytes.length));parts.push(length,bytes);}
+  return createHash("sha256").update(Buffer.concat(parts)).digest("hex");
+ };
+ const before={project_epoch:12,project_revision:21,checkpoint_hash:"before-group"};
+ const after={project_epoch:12,project_revision:22,checkpoint_hash:"after-group"};
+ async function recover(undoGroupId,receiptGroupId=undoGroupId){
+  const calls=[]; const identity={request_id:1337,operation_generation:7,...before};
+  const result={report:{...identity,outcome:{kind:"relinked",asset_id:3}},mutation:{authority:after,history_status:{can_undo:true,can_redo:false}}};
+  const invoke=async(command,args)=>{
+   if(command==="start_media_asset_operation")return identity;
+   if(command==="prepare_reserved_media_asset_relink" || command==="finalize_prepared_media_asset_relink")return {...identity,prepared_relink_token:91};
+   if(command==="commit_prepared_media_asset_relink_authoritative"){calls.push(args);throw new Error("reply lost");}
+   if(command==="get_media_asset_operation_terminal_result")return {command_kind:"relink",shape_fingerprint:shape(receiptGroupId===undefined?[]:["undo_group_v1",receiptGroupId]),terminal:{kind:"relink",result}};
+   if(command==="cancel_media_asset_operation")return false;
+   throw new Error("unexpected command "+command);
+  };
+  const response=await authority.prepareFinalizeAndCommitMediaAssetRelink({invoke,requestId:1337,assetId:3,replacementPath:"/new/clip.mp4",policy:"RequireContentMatch",expectedEpoch:12,expectedAuthority:before,ownerId:"group-owner",undoGroupId});
+  return {response,calls};
+ }
+ const grouped=await recover("batch-uuid");
+ assert.equal(grouped.response.committed,true);
+ assert.deepEqual(grouped.response.terminalAuthority,after);
+ assert.equal(grouped.calls.length,2);
+ assert.deepEqual(grouped.calls[0],grouped.calls[1],"retry retains request, operation, authority and undo group");
+ assert.equal(grouped.calls[0].undoGroupId,"batch-uuid");
+ await assert.rejects(recover("batch-uuid","different-batch"),/different operation shape/);
+ const ungrouped=await recover(undefined);
+ assert.equal(Object.hasOwn(ungrouped.calls[0],"undoGroupId"),false);
+}
+console.log("PASS: grouped relink exact retry, receipt shape isolation, and legacy ungrouped shape");

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer as createTcpServer } from "node:net";
+import { reserveBrowserCheckPort } from "./browser-check-ports.mjs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,11 @@ import { createServer } from "vite";
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const evidenceDir = resolve(process.env.SYNDOCAL_PERFORM_SCREENSHOT_DIR ?? join(appRoot, "../target/qa/vj-perform-ui/browser"));
+const requestedVitePort = Number(process.env.SYNDOCAL_CHECK_PORT ?? 0);
+const requestedCdpPort = Number(process.env.SYNDOCAL_CDP_PORT ?? 0);
+for (const port of [requestedVitePort, requestedCdpPort]) {
+  assert.ok(Number.isSafeInteger(port) && (port === 0 || (port >= 1024 && port <= 65535)), "Invalid Perform check port");
+}
 const browserPath = [process.env.CHROME_PATH,
   "C:/Program Files/Google/Chrome/Application/chrome.exe",
   "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
@@ -19,6 +24,18 @@ const browserPath = [process.env.CHROME_PATH,
 ].filter(Boolean).find(existsSync);
 assert.ok(browserPath, "Set CHROME_PATH to an installed Chromium browser");
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+function requestedPort(name) {
+  const port = Number(process.env[name] ?? 0);
+  assert.ok(Number.isInteger(port) && port >= 0 && port <= 65535, `${name} must be an integer port from 0 to 65535`);
+  return port;
+}
+async function availableLocalPort(preferred) {
+  const reservation = createTcpServer();
+  await new Promise((done, reject) => { reservation.once("error", reject); reservation.listen(preferred, "127.0.0.1", done); });
+  const port = reservation.address().port;
+  await new Promise((done, reject) => reservation.close((error) => error ? reject(error) : done()));
+  return port;
+}
 async function waitFor(check, label, timeout = 30_000) {
   const deadline = Date.now() + timeout;
   let lastError;
@@ -121,7 +138,10 @@ function inspectInPage(selector) {
   const style = getComputedStyle(element);
   let failure = rect.width <= 0 || rect.height <= 0 || style.visibility !== "visible" || style.display === "none" ? "hidden" : null;
   let clip = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
-  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+  // Modal dialogs paint in the top layer, outside their DOM ancestors' clips.
+  // Keep viewport/hit checks and all clipping ancestors inside the modal.
+  const modal = element.closest("dialog:modal");
+  for (let parent = element === modal ? null : element.parentElement; parent; parent = parent === modal ? null : parent.parentElement) {
     const bounds = parent.getBoundingClientRect();
     const parentStyle = getComputedStyle(parent);
     if (/(auto|scroll|hidden|clip)/.test(parentStyle.overflowX)) { clip.left = Math.max(clip.left, bounds.left); clip.right = Math.min(clip.right, bounds.right); }
@@ -232,21 +252,22 @@ const results = [];
 let currentCase = "startup";
 try {
   await mkdir(evidenceDir, { recursive: true });
-  const reservation = createTcpServer();
-  await new Promise((done, reject) => { reservation.once("error", reject); reservation.listen(0, "127.0.0.1", done); });
-  const vitePort = Number(process.env.SYNDOCAL_PERFORM_PORT ?? reservation.address().port);
-  await new Promise((done, reject) => reservation.close((error) => error ? reject(error) : done()));
+  const vitePort = await reserveBrowserCheckPort("SYNDOCAL_VIEWPORT_VITE_PORT");
   server = await createServer({ root: appRoot, cacheDir: resolve(evidenceDir, "vite-cache"), server: { host: "127.0.0.1", port: vitePort, strictPort: true }, clearScreen: false, plugins: [focusFixturePlugin] });
   await server.listen();
   await server.environments.client.depsOptimizer?.scanProcessing;
   await server.transformRequest("/src/App.tsx");
   const origin = server.resolvedUrls.local[0];
+  const port = await reserveBrowserCheckPort("SYNDOCAL_CDP_PORT");
   profile = await mkdtemp(join(tmpdir(), "syndocal-perform-check-"));
-  browser = spawn(browserPath, ["--headless=new", "--disable-gpu", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--no-first-run", "--no-default-browser-check", `--remote-debugging-port=${process.env.SYNDOCAL_CDP_PORT ?? 0}`, `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
+  browser = spawn(browserPath, ["--headless=new", "--disable-gpu", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--no-first-run", "--no-default-browser-check", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
   browser.on("error", (error) => { console.error(error); process.exitCode = 1; });
-  const port = process.env.SYNDOCAL_CDP_PORT ? Number(process.env.SYNDOCAL_CDP_PORT) : await waitFor(async () => Number((await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]), "owned browser debugger");
-  await waitFor(async () => (await fetch(`http://127.0.0.1:${port}/json/version`)).ok, "owned browser ready");
-  const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+  const targets = await waitFor(async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1000) });
+    if (!response.ok) return null;
+    const candidates = await response.json();
+    return candidates.some((target) => target.type === "page") ? candidates : null;
+  }, "owned browser debugger");
   let pageTarget = targets.find((target) => target.type === "page");
   cdp = new Cdp();
   await cdp.connect(pageTarget.webSocketDebuggerUrl);
@@ -331,15 +352,18 @@ try {
       assert.ok(tempo.sourceFits && tempo.statusFits, label+': sync text is not truncated '+JSON.stringify(tempo));
       assert.ok(tempo.cluster.right <= tempo.state.left + 1 && tempo.state.right <= tempo.windowControls.left + 1 && tempo.windowControls.right <= tempo.viewportWidth + 1 && tempo.topbarOverflow <= 0, label+': top bar tempo cluster fits without overlap or overflow '+JSON.stringify(tempo));
       const rowSelector=root+' [data-video-perform-row="1"]';
-      // Every Perform control is MIDI-learnable with stable ids: clip, Take, Stop, blend, transition type and time.
+      // Every Perform control is MIDI/OSC/DMX-learnable with stable ids: clip, Take, Stop, blend, transition type and time.
       const learnTargets = await cdp.evaluate('(()=>{const read=(q)=>{try{const t=JSON.parse(document.querySelector(q)?.dataset.controlMapTarget??"null");return t&&t[0]}catch{return null}};return {pad:read('+JSON.stringify(selectors.launch)+'),stop:read('+JSON.stringify(root+' [data-video-perform-row="1"] [data-video-layer-stop]')+'),blend:read('+JSON.stringify(root+' [data-video-perform-row="1"] [data-video-layer-blend]')+'),take:read('+JSON.stringify(selectors.take)+'),kind:read('+JSON.stringify(selectors.transitionKind)+'),time:read('+JSON.stringify(selectors.transitionDuration)+'),padSlotId:Number(document.querySelector('+JSON.stringify(selectors.launch)+')?.closest("[data-video-clip-slot-id]")?.dataset.videoClipSlotId)}})()');
-      assert.deepEqual([learnTargets.pad?.action, learnTargets.pad?.layer_id, learnTargets.pad?.midi_only], ['VideoClipSlotTrigger', 1, true], label+': the pad is a MIDI target '+JSON.stringify(learnTargets));
+      assert.deepEqual([learnTargets.pad?.action, learnTargets.pad?.layer_id], ['VideoClipSlotTrigger', 1], label+': the pad is a shared Learn target '+JSON.stringify(learnTargets));
+      for (const name of ['pad', 'stop', 'blend', 'take', 'kind', 'time']) {
+        assert.ok(learnTargets[name] && learnTargets[name].midi_only !== true, label+': '+name+' is available to MIDI, OSC and DMX Learn');
+      }
       assert.ok(Number.isSafeInteger(learnTargets.pad?.clip_slot_id) && learnTargets.pad.clip_slot_id > 0 && learnTargets.pad.clip_slot_id === learnTargets.padSlotId, label+': the pad targets its stable clip slot id, not its column '+JSON.stringify(learnTargets));
-      assert.deepEqual([learnTargets.stop?.action, learnTargets.stop?.layer_id], ['VideoLayerStop', 1], label+': Stop is a MIDI target');
-      assert.deepEqual([learnTargets.blend?.action, learnTargets.blend?.layer_id], ['VideoLayerBlendMode', 1], label+': Blend is a MIDI target');
-      assert.equal(learnTargets.take?.action, 'VideoTake', label+': Take is a MIDI target');
-      assert.equal(learnTargets.kind?.action, 'VideoTransitionKind', label+': transition type is a MIDI target');
-      assert.deepEqual([learnTargets.time?.action, learnTargets.time?.low, learnTargets.time?.high], ['VideoTransitionTime', 0.1, 10], label+': transition time is a MIDI target');
+      assert.deepEqual([learnTargets.stop?.action, learnTargets.stop?.layer_id], ['VideoLayerStop', 1], label+': Stop is a shared Learn target');
+      assert.deepEqual([learnTargets.blend?.action, learnTargets.blend?.layer_id], ['VideoLayerBlendMode', 1], label+': Blend is a shared Learn target');
+      assert.equal(learnTargets.take?.action, 'VideoTake', label+': Take is a shared Learn target');
+      assert.equal(learnTargets.kind?.action, 'VideoTransitionKind', label+': transition type is a shared Learn target');
+      assert.deepEqual([learnTargets.time?.action, learnTargets.time?.low, learnTargets.time?.high], ['VideoTransitionTime', 0.1, 10], label+': transition time is a shared Learn target');
       const legendText = await cdp.evaluate('document.querySelector('+JSON.stringify(root+' [data-video-perform-legend]')+').textContent');
       assert.doesNotMatch(legendText, /not supported by the current control model|現在の制御モデルは/, label+': the legend no longer reports unsupported MIDI targets');
       // Density: complete layer rows inside the matrix viewport (excluding the sticky head and horizontal scrollbar).
@@ -930,11 +954,22 @@ try {
     await cdp.send("Browser.close").catch(() => {});
     cdp.socket.close();
   }
-  if (browser && browser.exitCode === null) {
-    try { await waitFor(() => browser.exitCode !== null || browser.signalCode !== null, "owned browser exit", 5_000); }
-    catch { browser.kill(); }
+  let browserExitError;
+  if (browser && browser.exitCode === null && browser.signalCode === null) {
+    const exited = () => browser.exitCode !== null || browser.signalCode !== null;
+    try {
+      await waitFor(exited, "owned browser exit", 5_000);
+    } catch {
+      try {
+        browser.kill();
+        await waitFor(exited, "owned browser exit after forced termination", 5_000);
+      } catch (error) {
+        browserExitError = error;
+      }
+    }
   }
-  if (server) await server.close();
+  await server?.close();
+  if (browserExitError) throw browserExitError;
   if (profile) {
     // Verify the final absolute target before recursively removing our profile.
     const profileTarget = resolve(profile);

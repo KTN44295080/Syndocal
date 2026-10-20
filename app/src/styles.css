@@ -29046,13 +29046,22 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 }
 
 .patchProfileBrowserPanel {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   flex: 1 1 auto;
-  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 5px;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  /* Keep the list usable below the full-size header/search. When space is
+     short, this browser scrolls locally; the Patch form stays pinned. */
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+}
+
+.patchProfileBrowserPanel > .patchProfileBrowserHeader,
+.patchProfileBrowserPanel > .patchProfileRepairRow,
+.patchProfileBrowserPanel > .patchProfileSearch {
+  flex: 0 0 auto;
 }
 
 .patchProfileBrowserHeader {
@@ -29160,12 +29169,17 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
   font-size: var(--fs-control);
 }
 
+.patchProfileBrowserScroll > .profileImportDisclosure > summary {
+  min-height: 44px;
+}
+
 .patchProfileBrowserScroll {
   display: grid;
+  flex: 1 0 56px;
   align-content: start;
   gap: 6px;
   min-width: 0;
-  min-height: 0;
+  min-height: 56px;
   overflow: hidden auto;
   overscroll-behavior: contain;
   padding-right: 2px;
@@ -39824,6 +39838,28 @@ button.timelineExternalSourceCard:active,
   container-name: video-clip-bank;
 }
 
+/* The full Edit Video mixer includes drawers above the authoritative bank.
+   Let that local column scroll at compact heights; its bank keeps a usable
+   viewport and spans the full column instead of an obsolete three-cell row. */
+.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelMixer > .videoMixerClipPane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelMixer > .videoMixerClipPane > * {
+  flex: 0 0 auto;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelMixer > .videoMixerClipPane > .videoClipSlotBankPanel {
+  flex: 1 0 160px;
+  min-height: 160px;
+}
+
 .videoClipSlotEmptyState {
   display: grid;
   place-items: center;
@@ -39876,8 +39912,11 @@ button.timelineExternalSourceCard:active,
 
 .videoClipSlotPad {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(44px, 1fr) auto;
   min-width: 0;
+  /* Two 44px action rows plus the action padding and borders. The thumbnail
+     ratio yields to this floor instead of letting the buttons overlap. */
+  min-height: 99px;
   aspect-ratio: 16 / 9;
   border: 1px solid var(--theme-line);
   background: var(--theme-raised);

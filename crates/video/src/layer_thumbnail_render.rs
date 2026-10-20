@@ -26,6 +26,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         height: u32,
         cancellation: Option<&dyn VideoRenderCancellation>,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.isf_render_namespace = (0, None, true);
         check_render_cancellation(cancellation)?;
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);

@@ -42,3 +42,11 @@
   .mediaHealthRow { grid-template-columns: minmax(0, 1fr); }
   .mediaHealthRowMeta { justify-items: start; grid-auto-flow: column; justify-content: start; gap: 12px; }
 }
+
+.mediaHealthNdiRow { grid-template-columns: minmax(0, 1fr) auto; }
+.mediaHealthNdiRow[data-ndi-state="connected"] { border-left-color: var(--theme-ok); }
+.mediaHealthNdiRow[data-ndi-state="no_signal"] { border-left-color: var(--theme-warn); }
+.mediaHealthNdiRow[data-ndi-state="lost"],
+.mediaHealthNdiRow[data-ndi-state="unavailable"] { border-left-color: var(--theme-error); }
+.mediaHealthNdiRow details > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+@media (max-width: 720px) { .mediaHealthNdiRow { grid-template-columns: minmax(0, 1fr); } }

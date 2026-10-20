@@ -11,6 +11,8 @@ use protocol::RendererRoutedInput;
 use serde::Serialize;
 
 pub(crate) const EVENT: &str = "syndocal://midi-perform-control-v1";
+pub(crate) const OSC_EVENT: &str = "syndocal://osc-perform-control-v1";
+pub(crate) const DMX_EVENT: &str = "syndocal://dmx-perform-control-v1";
 
 #[derive(Clone, Serialize)]
 pub(crate) struct Input {

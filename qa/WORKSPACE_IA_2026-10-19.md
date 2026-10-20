@@ -64,4 +64,4 @@ Independent source review caught and resolved touch-pane mode synchronization, t
 
 ## Follow-up
 
-Split Timeline authoring from playback in a separately approved task. Timeline remains under Edit for now; its transport and global safety controls remain available. Browser/native UI evidence in this task does not establish physical DMX/video, device, network, or venue acceptance.
+Timeline authoring and playback were split in Task 21 (`qa/TIMELINE_AUTHOR_PLAYBACK_2026-10-20.md`): Control gained a fourth tab, Timeline (playback), and Edit > Timeline is authoring only. The text below records the state at Task 15. Timeline remained under Edit then; its transport and global safety controls remain available. Browser/native UI evidence in this task does not establish physical DMX/video, device, network, or venue acceptance.

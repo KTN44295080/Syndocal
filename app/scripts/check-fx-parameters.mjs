@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
@@ -63,10 +62,15 @@ try {
   assert.equal(saved.effect_presets[0].id, 0, "native allocator owns new IDs");
   assert.equal(model.saveFxStagePreset(catalog, stage, "  "), catalog);
   assert.deepEqual(saved.layer_groups, catalog.layer_groups);
-  const project = JSON.parse(await readFile(resolve(appRoot, "../target/qa/vj-perform-ui/vj-perform-native.sdc"), "utf8"));
+  // Keep this model/disk round trip runnable in a clean worktree before the native gate.
+  const projectPath = process.env.SYNDOCAL_FX_PARAMETER_PROJECT ?? resolve(appRoot, "../samples/phase1-mini-show.sdc");
+  const project = JSON.parse(await readFile(projectPath, "utf8"));
+  assert.ok(project.snapshot?.video, "the project fixture contains a video snapshot");
   project.snapshot.video.effect_presets = saved.effect_presets;
   if (project.snapshot.authored_video) project.snapshot.authored_video.effect_presets = saved.effect_presets;
-  temporary = await mkdtemp(join(tmpdir(), "syndocal-fx-parameters-"));
+  const temporaryRoot = resolve(appRoot, "../target/qa/fx-parameters");
+  await mkdir(temporaryRoot, { recursive: true });
+  temporary = await mkdtemp(join(temporaryRoot, "preset-"));
   const path = join(temporary, "preset-project.sdc");
   await writeFile(path, JSON.stringify(project), "utf8");
   const reopened = JSON.parse(await readFile(path, "utf8"));
@@ -114,8 +118,26 @@ try {
   assert.equal(synced.value[0], 4, "choosing a sync moves the value to the clock-derived target");
   assert.equal(rate.tempo_sync, undefined, "the original control is never mutated");
   assert.deepEqual(rate.value, [8,0,0,0]);
-  assert.equal(model.fxTempoSyncState(synced, 120).inSync, true);
-  assert.equal(model.fxTempoSyncState(synced, 140).inSync, false, "a tempo change leaves the synced value stale until re-sync");
+  const authoredSynced = structuredClone(synced);
+  for (const [bpm, expected] of [[60, 2], [90, 3], [120, 4], [150, 5], [240, 8]]) {
+    assert.equal(model.fxTempoSyncState(synced, bpm).target, expected);
+    assert.equal(model.effectiveFxValue(synced, bpm)[0], expected, `live rate at ${bpm} BPM`);
+  }
+  assert.deepEqual(synced, authoredSynced, "clock reads never mutate authored values or sync metadata");
+  assert.equal(model.effectiveFxValue(synced, 150)[0], 5, "the next clock sample changes the effective rate");
+  assert.equal(model.effectiveFxValue(synced, 150)[0], 5, "retained engine BPM keeps the nominal rate");
+  for (const bad of [0, -5, NaN, Infinity, undefined]) {
+    assert.deepEqual(model.effectiveFxValue(synced, bad), synced.value, "unusable tempo retains the authored fallback");
+  }
+  assert.deepEqual(model.effectiveFxValue(rate, 150), rate.value, "ordinary controls do not follow tempo");
+  assert.deepEqual(model.effectiveFxValue({ ...stage.controls[1], tempo_sync: synced.tempo_sync }, 150), stage.controls[1].value, "non-Float controls do not follow tempo");
+  for (const sync of [{ unit: "beats", count: 0 }, { unit: "beats", count: 3 }, { unit: "beats", count: NaN }, { unit: "seconds", count: 1 }]) {
+    assert.ok(Number.isNaN(model.fxTempoSyncHz(120, sync)), "unsupported metadata cannot derive a live rate");
+  }
+  const reversedBounds = { ...synced, minimum: [10,0,0,0], maximum: [1,0,0,0] };
+  assert.deepEqual(model.fxTempoSyncState(reversedBounds, 120), { target: 4, clamped: false }, "native-accepted reversed bounds use their ordered interval");
+  assert.deepEqual(model.fxTempoSyncState(reversedBounds, 15), { target: 1, clamped: true });
+  assert.deepEqual(model.fxTempoSyncState(reversedBounds, 600), { target: 10, clamped: true });
   assert.equal(model.fxTempoSyncState(rate, 120), null, "unsynced controls have no sync state");
   assert.equal(model.fxTempoSyncState(synced, undefined), null, "no usable tempo, no state");
   assert.equal(model.fxTempoSyncState(model.withFxTempoSync(rate, { unit: "bars", count: 4 }, 120), 120).clamped, true, "0.125 Hz is below the 0.5 Hz minimum");
@@ -123,13 +145,20 @@ try {
   assert.equal(model.withFxTempoSync(rate, { unit: "beats", count: 0.25 }, 600).value[0], 30, "and the upper limit when it asks for more");
   const unsynced = model.withFxTempoSync(synced, null, 120);
   assert.equal("tempo_sync" in unsynced, false, "Hz removes the sync");
-  assert.equal(unsynced.value[0], 4, "and keeps the last value as a plain number");
+  assert.equal(unsynced.value[0], 4, "and keeps the effective value as a plain number");
+  const changedTempoHz = model.withFxTempoSync(synced, null, 150);
+  assert.equal(changedTempoHz.value[0], 5, "switching to Hz captures the current effective rate after a tempo change");
+  assert.equal("tempo_sync" in changedTempoHz, false);
+  assert.deepEqual(synced, authoredSynced, "switching units preserves the source image");
+  assert.equal(model.withFxTempoSync(synced, null, undefined).value[0], 4, "without tempo, Hz captures the authored fallback");
+  const clampedSync = model.withFxTempoSync(rate, { unit: "beats", count: 0.25 }, 120);
+  assert.equal(model.withFxTempoSync(clampedSync, null, 600).value[0], 30, "Hz captures the current clamped rate");
   assert.equal(model.withFxTempoSync(rate, { unit: "beats", count: 1 }, undefined).value[0], 8, "without a tempo the value is left alone");
   const syncedStage = { ...strobe, controls: [synced, duty] };
   const resynced = model.resyncFxStage(syncedStage, 150);
-  assert.equal(resynced.controls[0].value[0], 5, "re-sync follows the new tempo (150 BPM, 1/2 beat)");
+  assert.equal(resynced.controls[0].value[0], 5, "explicit preset recall captures the current tempo (150 BPM, 1/2 beat)");
   assert.deepEqual(resynced.controls[1], duty, "ordinary controls are untouched");
-  assert.equal(syncedStage.controls[0].value[0], 4, "re-sync never mutates the stage it reads");
+  assert.equal(syncedStage.controls[0].value[0], 4, "preset recall never mutates the stage it reads");
   // Randomize and the clone/replace round trip keep the choice.
   for (const random of [() => 0, () => 0.5, () => 1]) {
     const randomized = model.randomizeFxStage(syncedStage, random);
@@ -162,5 +191,5 @@ try {
   assert.equal(audition.moveFxStageTo(four, -1, 2), four);
   assert.deepEqual(audition.fxChainStages(audition.moveFxStageTo(chain, 0, 2))[2].controls[0].tempo_sync, { unit: "beats", count: 0.5 }, "reorder carries the control state with the stage");
   assert.deepEqual(audition.moveFxStageTo(chain, 0, 2).stack.length, 2, "the root/stack split is rebuilt");
-  console.log("PASS FX parameters: ISF labels/type presentation; validated ranges/defaults; colour/point arity; declared choice/random bounds; exact undo; stale identity rejection; tempo-synced beat/bar units (clock maths, range clamp, re-sync, project round trip); insert-style stage reorder; presets saved/reopened from project-shaped UTF-8 disk file (native save/load verified separately).");
+  console.log("PASS FX parameters: ISF labels/type presentation; validated ranges/defaults; colour/point arity; declared choice/random bounds; exact undo; stale identity rejection; tempo-synced beat/bar units (live BPM following, authored-value preservation, range clamp, Hz capture, project round trip); insert-style stage reorder; presets saved/reopened from a project specimen as UTF-8 JSON (native save/load remains a separate gate).");
 } finally { await server.close(); if (temporary) await rm(temporary, { recursive: true, force: true }); }

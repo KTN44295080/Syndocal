@@ -9,8 +9,9 @@ use std::{
 };
 
 use protocol::{
-    ClockSource, CueId, EffectId, FixtureId, LearnedOscControl, NodeGraphId, OscControlAction,
-    OscControlMapping, OscInputConfig, TimelineLoopScale, VideoLayerId, VideoOutputId, VideoParam,
+    ClockSource, CueId, EffectId, FixtureId, LearnedOscControl, MidiControlAction, NodeGraphId,
+    OscControlAction, OscControlMapping, OscInputConfig, RendererRoutedInput, TimelineLoopScale,
+    VideoLayerId, VideoOutputId, VideoParam,
 };
 use rosc::{decoder, OscMessage, OscPacket, OscType};
 use thiserror::Error;
@@ -21,6 +22,7 @@ const OSC_BUFFER_SIZE: usize = 1536;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum OscInputEvent {
+    RendererRouted(RendererRoutedInput),
     SetAttribute {
         fixture_id: FixtureId,
         attribute: String,
@@ -250,6 +252,14 @@ control_plane_variant_inventory!(
     VideoMaster => OscControlAction::VideoMaster,
     VideoBlackout => OscControlAction::VideoBlackout,
     ClearFixtureFlags => OscControlAction::ClearFixtureFlags,
+    VideoClipSlotTrigger => OscControlAction::VideoClipSlotTrigger,
+    VideoTake => OscControlAction::VideoTake,
+    VideoLayerStop => OscControlAction::VideoLayerStop,
+    VideoLayerBlendMode => OscControlAction::VideoLayerBlendMode,
+    VideoTransitionKind => OscControlAction::VideoTransitionKind,
+    VideoTransitionTime => OscControlAction::VideoTransitionTime,
+    VideoIsfStageEnabled => OscControlAction::VideoIsfStageEnabled,
+    VideoIsfParam => OscControlAction::VideoIsfParam,
 );
 
 control_plane_variant_inventory!(
@@ -257,6 +267,7 @@ control_plane_variant_inventory!(
     osc_input_event_variant_name,
     OscInputEventInventoryUniqueness,
     OscInputEvent;
+    RendererRouted => OscInputEvent::RendererRouted(_),
     SetAttribute => OscInputEvent::SetAttribute { .. },
     SetSelectedFeatureFader => OscInputEvent::SetSelectedFeatureFader { .. },
     SetFixtureHighlight => OscInputEvent::SetFixtureHighlight { .. },
@@ -443,8 +454,16 @@ fn collect_events(
 ) {
     match packet {
         OscPacket::Message(message) => {
-            if let Some(event) = event_from_message(message) {
-                events.push(event);
+            // A learned Perform address belongs to the renderer route, even
+            // for invalid payloads; it cannot also execute a built-in action.
+            let perform_mapped = mappings.iter().any(|mapping| {
+                renderer_routed_action(&mapping.action).is_some()
+                    && osc_address_pattern_matches(&mapping.address, &message.addr)
+            });
+            if !perform_mapped {
+                if let Some(event) = event_from_message(message) {
+                    events.push(event);
+                }
             }
             events.extend(events_from_mapped_message(message, mappings));
         }
@@ -950,6 +969,9 @@ pub(crate) fn event_from_control_value(
 }
 
 fn event_from_mapping(message: &OscMessage, mapping: &OscControlMapping) -> Option<OscInputEvent> {
+    if let Some(action) = renderer_routed_action(&mapping.action) {
+        return renderer_routed_event_from_mapping(message, mapping, action);
+    }
     let first_arg = message.args.first();
     let float_value = first_arg.and_then(osc_value_to_f32).unwrap_or(1.0);
     let ranged_value = if mapping.low.is_finite() && mapping.high.is_finite() {
@@ -1145,7 +1167,110 @@ fn event_from_mapping(message: &OscMessage, mapping: &OscControlMapping) -> Opti
                     .to_string(),
             })
         }
+        OscControlAction::VideoClipSlotTrigger
+        | OscControlAction::VideoTake
+        | OscControlAction::VideoLayerStop
+        | OscControlAction::VideoLayerBlendMode
+        | OscControlAction::VideoTransitionKind
+        | OscControlAction::VideoTransitionTime
+        | OscControlAction::VideoIsfStageEnabled
+        | OscControlAction::VideoIsfParam => None,
     }
+}
+
+fn renderer_routed_action(action: &OscControlAction) -> Option<MidiControlAction> {
+    Some(match action {
+        OscControlAction::VideoClipSlotTrigger => MidiControlAction::VideoClipSlotTrigger,
+        OscControlAction::VideoTake => MidiControlAction::VideoTake,
+        OscControlAction::VideoLayerStop => MidiControlAction::VideoLayerStop,
+        OscControlAction::VideoLayerBlendMode => MidiControlAction::VideoLayerBlendMode,
+        OscControlAction::VideoTransitionKind => MidiControlAction::VideoTransitionKind,
+        OscControlAction::VideoTransitionTime => MidiControlAction::VideoTransitionTime,
+        OscControlAction::VideoIsfStageEnabled => MidiControlAction::VideoIsfStageEnabled,
+        OscControlAction::VideoIsfParam => MidiControlAction::VideoIsfParam,
+        _ => return None,
+    })
+}
+pub(crate) fn is_perform_trigger(action: &OscControlAction) -> bool {
+    matches!(
+        action,
+        OscControlAction::VideoClipSlotTrigger
+            | OscControlAction::VideoTake
+            | OscControlAction::VideoLayerStop
+    )
+}
+fn renderer_routed_event_from_mapping(
+    message: &OscMessage,
+    mapping: &OscControlMapping,
+    action: MidiControlAction,
+) -> Option<OscInputEvent> {
+    // A pulse has no value; continuous controls require an explicit finite sample.
+    let pulse = message.args.is_empty();
+    let raw = match message.args.first() {
+        Some(OscType::Bool(value)) => {
+            if *value {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        Some(value) => finite_osc_f32(value)?,
+        None if is_perform_trigger(&mapping.action)
+            || mapping.action == OscControlAction::VideoIsfStageEnabled =>
+        {
+            1.0
+        }
+        None => return None,
+    };
+    if !mapping.low.is_finite() || !mapping.high.is_finite() {
+        return None;
+    }
+    let position = raw.clamp(0.0, 1.0);
+    let value = mapping.low + (mapping.high - mapping.low) * position;
+    if !value.is_finite() {
+        return None;
+    }
+    let active = position > 0.0;
+    if is_perform_trigger(&mapping.action) && !active {
+        return None;
+    }
+    match mapping.action {
+        OscControlAction::VideoClipSlotTrigger => {
+            mapping.layer_id?;
+            mapping.clip_slot_id?;
+        }
+        OscControlAction::VideoLayerStop | OscControlAction::VideoLayerBlendMode => {
+            mapping.layer_id?;
+        }
+        OscControlAction::VideoIsfStageEnabled | OscControlAction::VideoIsfParam => {
+            mapping.layer_id?;
+            mapping.isf_stage_id?;
+            if mapping.action == OscControlAction::VideoIsfParam
+                && mapping
+                    .attribute
+                    .as_deref()
+                    .is_none_or(|name| name.trim().is_empty())
+            {
+                return None;
+            }
+        }
+        _ => {}
+    }
+    Some(OscInputEvent::RendererRouted(RendererRoutedInput {
+        action,
+        layer_id: mapping.layer_id,
+        clip_slot_id: mapping.clip_slot_id,
+        isf_stage_id: mapping.isf_stage_id,
+        control: if mapping.action == OscControlAction::VideoIsfParam {
+            mapping.attribute.clone()
+        } else {
+            None
+        },
+        position,
+        value,
+        active,
+        toggle: pulse && mapping.action == OscControlAction::VideoIsfStageEnabled,
+    }))
 }
 
 fn normalize_osc_address(address: &str) -> String {
@@ -1887,6 +2012,8 @@ mod tests {
             group_id: None,
             cue_id: None,
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             video_param: None,
             cue_point_index: None,
             output_id: None,
@@ -1915,6 +2042,8 @@ mod tests {
             group_id: None,
             cue_id: None,
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             video_param: None,
             cue_point_index: Some(2),
             output_id: None,
@@ -2063,6 +2192,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2078,6 +2209,8 @@ mod tests {
                 group_id: None,
                 cue_id: Some(9),
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2093,6 +2226,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2108,6 +2243,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2123,6 +2260,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: Some(4),
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: Some(VideoParam::Opacity),
                 cue_point_index: None,
                 output_id: None,
@@ -2138,6 +2277,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: Some(4),
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: Some(2),
                 output_id: None,
@@ -2153,6 +2294,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: Some(4),
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2168,6 +2311,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: Some(4),
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2183,6 +2328,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: Some(4),
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2198,6 +2345,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: Some(4),
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2213,6 +2362,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: Some(4),
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2228,6 +2379,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: Some(4),
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2243,6 +2396,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: Some(8),
@@ -2258,6 +2413,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: Some(8),
@@ -2273,6 +2430,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: Some(8),
@@ -2288,6 +2447,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: Some(8),
@@ -2303,6 +2464,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: Some(8),
@@ -2318,6 +2481,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: Some(8),
@@ -2333,6 +2498,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2348,6 +2515,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2363,6 +2532,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2378,6 +2549,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2393,6 +2566,8 @@ mod tests {
                 group_id: Some("front".to_string()),
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2408,6 +2583,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2423,6 +2600,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2438,6 +2617,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2453,6 +2634,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2468,6 +2651,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2618,6 +2803,8 @@ mod tests {
             group_id: group_id.map(str::to_string),
             cue_id: None,
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             video_param: None,
             cue_point_index: None,
             output_id: None,
@@ -2709,6 +2896,8 @@ mod tests {
             group_id: None,
             cue_id: Some(9),
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             video_param: None,
             cue_point_index: None,
             output_id: None,
@@ -2740,6 +2929,8 @@ mod tests {
             group_id: None,
             cue_id: Some(12),
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             video_param: None,
             cue_point_index: None,
             output_id: None,
@@ -2784,6 +2975,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: Some(4),
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2799,6 +2992,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: Some(4),
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2850,6 +3045,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2865,6 +3062,8 @@ mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -2893,6 +3092,8 @@ mod tests {
             group_id: None,
             cue_id: None,
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             video_param: None,
             cue_point_index: None,
             output_id: None,
@@ -2940,6 +3141,8 @@ mod tests {
             group_id: None,
             cue_id: None,
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             video_param: None,
             cue_point_index: None,
             output_id: None,
@@ -2958,3 +3161,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "perform_network_tests.rs"]
+mod perform_network_tests;

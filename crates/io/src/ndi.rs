@@ -7,14 +7,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crossbeam_queue::ArrayQueue;
+use crate::ndi_input_state::{
+    exact_source_index, parse_discovered_sources, validate_source_name, NdiInputState,
+};
+pub use crate::ndi_input_state::NdiSourceDescriptor;
 use grafton_ndi::{
     Finder, FinderOptions, LineStrideOrSize, PixelFormat, Receiver, ReceiverColorFormat,
     ReceiverOptions, Sender, SenderOptions, VideoFrame, NDI,
 };
 use thiserror::Error;
 
-const INPUT_FRAME_QUEUE_CAPACITY: usize = 2;
+const INPUT_SIGNAL_TIMEOUT: Duration = Duration::from_secs(2);
+const INPUT_RETRY_INTERVAL: Duration = Duration::from_millis(500);
 const DISCOVERY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CAPTURE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const OUTPUT_TEARDOWN_TIMEOUT: Duration = Duration::from_secs(3);
@@ -23,6 +27,8 @@ const OUTPUT_TEARDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 pub enum NdiError {
     #[error("NDI endpoint name is required")]
     EmptyEndpoint,
+    #[error("NDI runtime not installed: {0}")]
+    RuntimeMissing(String),
     #[error("NDI runtime initialization failed: {0}")]
     Runtime(String),
     #[error("NDI worker failed: {0}")]
@@ -46,10 +52,8 @@ pub struct NdiRgbaFrame {
 
 pub struct NdiInput {
     endpoint_name: String,
-    frames: Arc<ArrayQueue<NdiRgbaFrame>>,
+    frames: Arc<Mutex<NdiInputState<NdiRgbaFrame>>>,
     running: Arc<AtomicBool>,
-    failed: Arc<AtomicBool>,
-    error: Arc<Mutex<Option<String>>>,
     finished: mpsc::Receiver<()>,
     worker: Option<JoinHandle<()>>,
 }
@@ -122,19 +126,37 @@ impl NdiOutputTeardown {
     }
 }
 
+/// Snapshot discoverable LAN sources using the same guarded SDK as output.
+/// Names are exact selectors; ambiguous duplicate names fail closed.
+pub fn discover_sources(timeout: Duration) -> Result<Vec<NdiSourceDescriptor>, NdiError> {
+    let ndi = crate::ndi_runtime::initialize_ndi()?;
+    let finder = Finder::new(
+        &ndi,
+        &FinderOptions::builder().show_local_sources(true).build(),
+    )
+    .map_err(|error| NdiError::Runtime(error.to_string()))?;
+    finder
+        .wait_for_sources(timeout.min(Duration::from_secs(3)))
+        .map_err(|error| NdiError::Worker(error.to_string()))?;
+    let sources = finder
+        .sources(Duration::ZERO)
+        .map_err(|error| NdiError::Worker(error.to_string()))?;
+    parse_discovered_sources(sources.into_iter().map(|source| source.name))
+        .map_err(NdiError::Worker)
+}
+
 impl NdiInput {
     pub fn new(endpoint_name: impl Into<String>) -> Result<Self, NdiError> {
-        let endpoint_name = normalize_endpoint(endpoint_name.into())?;
-        let ndi = NDI::new().map_err(|error| NdiError::Runtime(error.to_string()))?;
+        let endpoint_name = endpoint_name.into();
+        validate_source_name(&endpoint_name).map_err(NdiError::Worker)?;
+        let ndi = crate::ndi_runtime::initialize_ndi()?;
         let finder = Finder::new(
             &ndi,
             &FinderOptions::builder().show_local_sources(true).build(),
         )
         .map_err(|error| NdiError::Runtime(error.to_string()))?;
-        let frames = Arc::new(ArrayQueue::new(INPUT_FRAME_QUEUE_CAPACITY));
+        let frames = Arc::new(Mutex::new(NdiInputState::new()));
         let running = Arc::new(AtomicBool::new(true));
-        let failed = Arc::new(AtomicBool::new(false));
-        let error = Arc::new(Mutex::new(None));
         let (finished_tx, finished) = mpsc::sync_channel(1);
         let worker = thread::Builder::new()
             .name(format!(
@@ -145,29 +167,28 @@ impl NdiInput {
                 let endpoint_name = endpoint_name.clone();
                 let frames = Arc::clone(&frames);
                 let running = Arc::clone(&running);
-                let failed = Arc::clone(&failed);
-                let error = Arc::clone(&error);
                 move || {
-                    if let Err(worker_error) =
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         run_input_worker(ndi, finder, &endpoint_name, &frames, &running)
-                    {
-                        if let Ok(mut slot) = error.lock() {
-                            *slot = Some(worker_error);
-                        }
-                        failed.store(true, Ordering::Release);
-                        running.store(false, Ordering::Release);
-                    }
+                    }));
+                    let detail = match result {
+                        Ok(Ok(())) => "receiver stopped".to_string(),
+                        Ok(Err(error)) => error,
+                        Err(_) => "NDI receiver worker panicked".to_string(),
+                    };
+                    frames
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .invalidate(detail);
+                    running.store(false, Ordering::Release);
                     let _ = finished_tx.send(());
                 }
             })
             .map_err(|error| NdiError::Worker(error.to_string()))?;
-
         Ok(Self {
             endpoint_name,
             frames,
             running,
-            failed,
-            error,
             finished,
             worker: Some(worker),
         })
@@ -177,50 +198,72 @@ impl NdiInput {
         &self.endpoint_name
     }
 
-    /// Returns the retained worker fault without draining the frame queue.
-    /// Runtime status polling can therefore expose a broken source while the
-    /// decoder remains the sole owner of frame consumption.
+    /// Reports startup/no-signal and loss until a valid video frame arrives.
     pub fn current_error(&self) -> Option<String> {
-        self.error
-            .lock()
-            .ok()
-            .and_then(|error| error.clone())
-    }
-
-    pub fn take_latest(&self) -> Result<Option<NdiRgbaFrame>, NdiError> {
-        self.check_worker()?;
-        let mut latest = None;
-        while let Some(frame) = self.frames.pop() {
-            latest = Some(frame);
+        match self.frames.lock() {
+            Ok(mut state) => {
+                state.expire(Instant::now(), INPUT_SIGNAL_TIMEOUT);
+                state.current_error(&self.endpoint_name)
+            }
+            Err(_) => Some("NDI input state lock was poisoned".to_string()),
         }
-        Ok(latest)
     }
 
-    fn check_worker(&self) -> Result<(), NdiError> {
-        if !self.failed.load(Ordering::Acquire) {
+    /// Retained broadcast snapshot; Preview and outputs cannot consume each
+    /// other's frames. The freshness check also covers a stalled SDK worker.
+    pub fn latest_frame_shared(&self) -> Result<Option<Arc<NdiRgbaFrame>>, NdiError> {
+        let mut state = self
+            .frames
+            .lock()
+            .map_err(|_| NdiError::Worker("NDI input state lock was poisoned".to_string()))?;
+        state.expire(Instant::now(), INPUT_SIGNAL_TIMEOUT);
+        if !self.running.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        Ok(state.latest())
+    }
+
+    /// Owned snapshot for existing direct I/O callers; it no longer drains
+    /// the sole mailbox and therefore does not starve renderer consumers.
+    pub fn take_latest(&self) -> Result<Option<NdiRgbaFrame>, NdiError> {
+        self.latest_frame_shared()
+            .map(|frame| frame.map(|frame| (*frame).clone()))
+    }
+
+    /// On timeout this object still owns the worker. Route state must retain
+    /// it and retry, rather than replacing an unreaped receiver.
+    pub fn stop(&mut self) -> Result<(), NdiError> {
+        self.running.store(false, Ordering::Release);
+        if let Ok(mut state) = self.frames.lock() {
+            state.invalidate("receiver stopped");
+        }
+        if self.worker.is_none() {
             return Ok(());
         }
-        let message = self
-            .error
-            .lock()
-            .map_err(|_| NdiError::Worker("worker error lock was poisoned".to_string()))?
-            .clone()
-            .unwrap_or_else(|| "worker stopped without an error message".to_string());
-        Err(NdiError::Worker(message))
+        match self.finished.recv_timeout(Duration::from_millis(250)) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                if let Some(worker) = self.worker.take() {
+                    worker.join().map_err(|_| {
+                        NdiError::Worker("NDI input worker panicked during teardown".to_string())
+                    })?;
+                }
+                Ok(())
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(NdiError::Worker(
+                "NDI input teardown acknowledgement timed out; receiver remains owned until retry"
+                    .to_string(),
+            )),
+        }
     }
 }
 
 impl Drop for NdiInput {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Release);
+        // Ordinary route teardown calls stop first. This final fallback must
+        // retain ownership through SDK destruction, even if it blocks.
         if let Some(worker) = self.worker.take() {
-            if self
-                .finished
-                .recv_timeout(Duration::from_millis(250))
-                .is_ok()
-            {
-                let _ = worker.join();
-            }
+            let _ = worker.join();
         }
     }
 }
@@ -228,7 +271,7 @@ impl Drop for NdiInput {
 impl NdiOutput {
     pub fn new(endpoint_name: impl Into<String>) -> Result<Self, NdiError> {
         let endpoint_name = normalize_endpoint(endpoint_name.into())?;
-        let ndi = NDI::new().map_err(|error| NdiError::Runtime(error.to_string()))?;
+        let ndi = crate::ndi_runtime::initialize_ndi()?;
         let sender = Sender::new(&ndi, &SenderOptions::builder(endpoint_name.clone()).build())
             .map_err(|error| NdiError::Runtime(error.to_string()))?;
         Ok(Self {
@@ -366,40 +409,130 @@ fn run_input_worker(
     ndi: NDI,
     finder: Finder,
     endpoint_name: &str,
-    frames: &ArrayQueue<NdiRgbaFrame>,
+    frames: &Mutex<NdiInputState<NdiRgbaFrame>>,
     running: &AtomicBool,
 ) -> Result<(), String> {
     while running.load(Ordering::Acquire) {
-        finder
+        let discovery_started = Instant::now();
+        let discovery = finder
             .wait_for_sources(DISCOVERY_POLL_INTERVAL)
-            .map_err(|error| error.to_string())?;
-        let sources = finder
-            .sources(Duration::ZERO)
-            .map_err(|error| error.to_string())?;
-        let Some(source) = sources
-            .into_iter()
-            .find(|source| source_name_matches(&source.name, endpoint_name))
-        else {
-            continue;
+            .and_then(|_| finder.sources(Duration::ZERO));
+        let mut sources = match discovery {
+            Ok(sources) => sources,
+            Err(error) => {
+                invalidate_input(
+                    frames,
+                    format!("source discovery failed: {error}; retrying"),
+                )?;
+                wait_input_retry(running, INPUT_RETRY_INTERVAL);
+                continue;
+            }
         };
-        let receiver = Receiver::new(
+        let source_index = exact_source_index(
+            endpoint_name,
+            sources.iter().map(|source| source.name.as_str()),
+        );
+        let source_index = match source_index {
+            Ok(Some(index)) => index,
+            Ok(None) => {
+                invalidate_input(frames, "selected source is not present; refresh NDI sources and verify its full name; retrying discovery".to_string())?;
+                wait_input_retry(
+                    running,
+                    DISCOVERY_POLL_INTERVAL.saturating_sub(discovery_started.elapsed()),
+                );
+                continue;
+            }
+            Err(error) => {
+                invalidate_input(frames, error)?;
+                wait_input_retry(running, INPUT_RETRY_INTERVAL);
+                continue;
+            }
+        };
+        if !running.load(Ordering::Acquire) {
+            break;
+        }
+        let receiver = match Receiver::new(
             &ndi,
-            &ReceiverOptions::builder(source)
+            &ReceiverOptions::builder(sources.swap_remove(source_index))
                 .color(ReceiverColorFormat::RGBX_RGBA)
                 .build(),
-        )
-        .map_err(|error| error.to_string())?;
-        while running.load(Ordering::Acquire) {
-            let Some(frame) = receiver
-                .capture_video_timeout(CAPTURE_POLL_INTERVAL)
-                .map_err(|error| error.to_string())?
-            else {
+        ) {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                invalidate_input(
+                    frames,
+                    format!("receiver connection failed: {error}; reconnecting"),
+                )?;
+                wait_input_retry(running, INPUT_RETRY_INTERVAL);
                 continue;
-            };
-            enqueue_latest(frames, convert_received_frame(frame)?);
+            }
+        };
+        let mut last_frame_at = Instant::now();
+        while running.load(Ordering::Acquire) {
+            let capture_started = Instant::now();
+            match receiver.capture_video_timeout(CAPTURE_POLL_INTERVAL) {
+                Ok(Some(frame)) => match convert_received_frame(frame) {
+                    Ok(frame) => {
+                        last_frame_at = Instant::now();
+                        frames
+                            .lock()
+                            .map_err(|_| "NDI input state lock was poisoned".to_string())?
+                            .publish(frame, last_frame_at);
+                    }
+                    Err(error) => {
+                        invalidate_input(frames, format!("{error}; reconnecting"))?;
+                        break;
+                    }
+                },
+                Ok(None) => {
+                    if last_frame_at.elapsed() >= INPUT_SIGNAL_TIMEOUT {
+                        invalidate_input(
+                            frames,
+                            "no video frames received; reconnecting to the selected source"
+                                .to_string(),
+                        )?;
+                        break;
+                    }
+                    // Some SDK no-video events return immediately. Bound CPU
+                    // usage while waiting instead of busy spinning.
+                    wait_input_retry(
+                        running,
+                        Duration::from_millis(10).saturating_sub(capture_started.elapsed()),
+                    );
+                }
+                Err(error) => {
+                    invalidate_input(frames, format!("capture failed: {error}; reconnecting"))?;
+                    break;
+                }
+            }
         }
+        // Drop the old receiver before discovery can construct a replacement.
+        drop(receiver);
+        wait_input_retry(running, INPUT_RETRY_INTERVAL);
     }
     Ok(())
+}
+
+fn invalidate_input(
+    frames: &Mutex<NdiInputState<NdiRgbaFrame>>,
+    detail: String,
+) -> Result<(), String> {
+    frames
+        .lock()
+        .map_err(|_| "NDI input state lock was poisoned".to_string())?
+        .invalidate(detail);
+    Ok(())
+}
+
+fn wait_input_retry(running: &AtomicBool, duration: Duration) {
+    let deadline = Instant::now() + duration;
+    while running.load(Ordering::Acquire) {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        thread::sleep(remaining.min(Duration::from_millis(10)));
+    }
 }
 
 fn convert_received_frame(frame: VideoFrame) -> Result<NdiRgbaFrame, String> {
@@ -415,10 +548,20 @@ fn convert_received_frame(frame: VideoFrame) -> Result<NdiRgbaFrame, String> {
     let row_bytes = width
         .checked_mul(4)
         .ok_or_else(|| "received NDI frame dimensions overflow".to_string())?;
-    if stride < row_bytes || frame.data.len() < stride.saturating_mul(height) {
+    let required_length = stride
+        .checked_mul(height)
+        .ok_or_else(|| "received NDI frame stride overflows".to_string())?;
+    let packed_length = row_bytes
+        .checked_mul(height)
+        .ok_or_else(|| "received NDI frame dimensions overflow".to_string())?;
+    if stride < row_bytes || frame.data.len() < required_length {
         return Err("received NDI frame buffer is shorter than its declared stride".to_string());
     }
-    let mut rgba = vec![0; row_bytes.saturating_mul(height)];
+    let mut rgba = Vec::new();
+    rgba
+        .try_reserve_exact(packed_length)
+        .map_err(|error| format!("cannot allocate the received NDI frame: {error}"))?;
+    rgba.resize(packed_length, 0);
     for (source, target) in frame
         .data
         .chunks_exact(stride)
@@ -472,13 +615,6 @@ fn validate_rgba_frame(frame: &NdiRgbaFrame) -> Result<(), NdiError> {
     Ok(())
 }
 
-fn enqueue_latest(queue: &ArrayQueue<NdiRgbaFrame>, frame: NdiRgbaFrame) {
-    if let Err(frame) = queue.push(frame) {
-        let _ = queue.pop();
-        let _ = queue.push(frame);
-    }
-}
-
 fn normalize_endpoint(endpoint_name: String) -> Result<String, NdiError> {
     let endpoint_name = endpoint_name.trim().to_string();
     if endpoint_name.is_empty() {
@@ -486,17 +622,6 @@ fn normalize_endpoint(endpoint_name: String) -> Result<String, NdiError> {
     } else {
         Ok(endpoint_name)
     }
-}
-
-fn source_name_matches(advertised_name: &str, endpoint_name: &str) -> bool {
-    if advertised_name.eq_ignore_ascii_case(endpoint_name) {
-        return true;
-    }
-    let advertised_name = advertised_name.trim();
-    advertised_name
-        .strip_suffix(')')
-        .and_then(|name| name.rsplit_once('(').map(|(_, endpoint)| endpoint.trim()))
-        .is_some_and(|endpoint| endpoint.eq_ignore_ascii_case(endpoint_name))
 }
 
 fn worker_name(endpoint_name: &str) -> String {
@@ -533,32 +658,6 @@ mod tests {
                 actual: 15
             })
         ));
-    }
-
-    #[test]
-    fn latest_frame_queue_drops_stale_frame() {
-        let queue = ArrayQueue::new(2);
-        for marker in 1..=3 {
-            enqueue_latest(
-                &queue,
-                NdiRgbaFrame {
-                    width: 1,
-                    height: 1,
-                    frame_rate_n: 60,
-                    frame_rate_d: 1,
-                    rgba: vec![marker; 4],
-                },
-            );
-        }
-        assert_eq!(queue.pop().unwrap().rgba[0], 2);
-        assert_eq!(queue.pop().unwrap().rgba[0], 3);
-    }
-
-    #[test]
-    fn matches_plain_and_machine_qualified_source_names() {
-        assert!(source_name_matches("Program", "program"));
-        assert!(source_name_matches("STAGE-PC (Program)", "Program"));
-        assert!(!source_name_matches("STAGE-PC (Preview)", "Program"));
     }
 
     #[test]
@@ -601,14 +700,26 @@ mod tests {
         let endpoint = format!("Syndocal Loopback {}", std::process::id());
         eprintln!("ndi-loopback: create output");
         let output = NdiOutput::new(endpoint.clone()).unwrap();
-        eprintln!("ndi-loopback: create input");
-        let input = NdiInput::new(endpoint).unwrap();
         let expected = NdiRgbaFrame {
             width: 4,
             height: 2,
             frame_rate_n: 60,
             frame_rate_d: 1,
             rgba: [17, 83, 201, 255].repeat(8),
+        };
+        output.send_rgba(&expected).unwrap();
+        let discovery_deadline = Instant::now() + Duration::from_secs(8);
+        let input = loop {
+            let mut sources: Vec<_> = discover_sources(Duration::from_millis(250)).unwrap()
+                .into_iter()
+                .filter(|source| source.name == endpoint || source.name.ends_with(&format!(" ({endpoint})")))
+                .collect();
+            assert!(sources.len() <= 1, "loopback sender advertisement is ambiguous");
+            if let Some(source) = sources.pop() {
+                break NdiInput::new(source.endpoint_name).unwrap();
+            }
+            assert!(Instant::now() < discovery_deadline, "loopback sender was not discovered");
+            output.send_rgba(&expected).unwrap();
         };
         let deadline = std::time::Instant::now() + Duration::from_secs(8);
         eprintln!("ndi-loopback: send and discover");
@@ -638,7 +749,7 @@ mod tests {
     #[ignore = "requires an external NDI sender and the NDI runtime"]
     fn receives_rgba_from_an_external_ndi_application() {
         let source_match = std::env::var("SYNDOCAL_TEST_NDI_SOURCE").unwrap_or_default();
-        let ndi = NDI::new().unwrap();
+        let ndi = crate::ndi_runtime::initialize_ndi().unwrap();
         let finder = Finder::new(
             &ndi,
             &FinderOptions::builder().show_local_sources(true).build(),

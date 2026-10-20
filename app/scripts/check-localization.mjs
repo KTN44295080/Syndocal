@@ -958,7 +958,9 @@ assert.match(
 );
 assert.equal(
   [...appSource.matchAll(/<strong>\{pad\.cue \? <span data-no-localize>\{pad\.cue\.label\}<\/span> : "Empty"\}<\/strong>/g)].length,
-  2,
+  // Task 21: the hidden Edit > Timeline pad copy was removed; Lighting's pad surface is the only one left
+  // (Control > Timeline lists cues in ControlTimelinePlaybackPanel, whose names are data-no-localize).
+  1,
   "Cue Pad labels must protect authored scene names while Empty remains localizable UI copy",
 );
 assert.match(

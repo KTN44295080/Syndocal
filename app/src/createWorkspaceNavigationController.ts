@@ -9,7 +9,7 @@ export interface WorkspaceNavigationRoute {
   editDeskSurface?: EditDeskSurface;
   timelineDeskSurface?: TimelineDeskSurface;
   timelineChildCueId?: number | null;
-  touchControlDomain?: "lighting" | "video" | "both";
+  touchControlDomain?: "lighting" | "video" | "both" | "timeline";
 }
 interface HistoryPort {
   readonly state: unknown;
