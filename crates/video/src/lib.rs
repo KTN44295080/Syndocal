@@ -35,6 +35,8 @@ mod gpu_display_composition_tests;
 mod gpu_surface;
 mod hap_decoder;
 mod isf_runtime;
+#[cfg(test)]
+mod isf_tempo_sync_tests;
 mod libav_decoder;
 mod layer_thumbnail_render;
 mod live_source;
@@ -1944,6 +1946,11 @@ pub struct VideoRuntime {
 }
 
 pub trait VideoFrameProvider {
+    /// Engine tempo sampled for the current render request. Providers without
+    /// a clock retain authored ISF values instead of inventing a tempo.
+    fn bpm(&self) -> Option<f32> {
+        None
+    }
     fn retain_layers(&mut self, layer_ids: &[VideoLayerId]);
     fn retain_inputs(&mut self, inputs: &[VideoRenderInput]) {
         let layer_ids = inputs
@@ -3749,6 +3756,10 @@ impl<D> DecoderBackedFrameProvider<D> {
 }
 
 impl<D: VideoFrameDecoder> VideoFrameProvider for DecoderBackedFrameProvider<D> {
+    fn bpm(&self) -> Option<f32> {
+        self.bpm
+    }
+
     fn retain_layers(&mut self, layer_ids: &[VideoLayerId]) {
         self.decoded_ahead.clear();
         self.still_images.retain_layers(layer_ids);
@@ -6343,6 +6354,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         if !resolved_chain_executes(chain) {
             return Ok((frame, Vec::new()));
         }
+        let bpm = self.frame_provider.bpm();
         let mut prepared_stages = Vec::new();
         let mut faults = Vec::new();
         for (stage_index, stage) in chain.stages.iter().enumerate() {
@@ -6352,8 +6364,11 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             }
             match self.cached_isf_shader(&stage.effect.source) {
                 Ok(shader) => {
-                    let controls =
-                        resolved_isf_control_values_from_controls(&shader, &stage.effect.controls);
+                    let controls = resolved_isf_control_values_from_controls(
+                        &shader,
+                        &stage.effect.controls,
+                        bpm,
+                    );
                     prepared_stages.push((stage_index, shader, controls));
                 }
                 Err(error) => faults.push(video_effect_fault(

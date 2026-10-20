@@ -894,7 +894,8 @@ pub const VIDEO_ISF_TEMPO_SYNC_COUNTS: [f32; 5] = [0.25, 0.5, 1.0, 2.0, 4.0];
 
 /// The operator's choice to express a time control (rate, speed, frequency) as one
 /// cycle per `count` beats or bars of the global tempo instead of a raw number.
-/// This is authored state only: the runtime does not yet track the clock.
+/// The renderer resolves this against the current engine tempo each frame;
+/// the authored choice and raw value do not change when the tempo changes.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct VideoIsfTempoSync {
     pub unit: VideoIsfTempoSyncUnit,

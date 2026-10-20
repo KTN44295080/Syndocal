@@ -89,7 +89,7 @@ const japaneseText: Record<string, string> = {
   "Beats per cycle": "1周期あたりの拍数",
   "Bars per cycle": "1周期あたりの小節数",
   "Limited by this control's range.": "このコントロールの範囲の上限・下限に制限されています。",
-  "Re-sync to tempo": "テンポに再同期",
+  "Tempo unavailable; using the saved rate.": "テンポを取得できないため、保存済みの値を使用しています。",
   "Drag to reorder, or use Up and Down.": "ドラッグして並べ替えられます。キーボードでは「上」「下」ボタンを使います。",
   "Confirm remove": "削除を確定",
   "Confirm FX removal": "FXの削除を確認",
