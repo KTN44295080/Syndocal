@@ -42,12 +42,21 @@ assert.equal(catalog.buildFxCatalog({ imported: [imported], layers: [layer], run
 
 const nagaSyntax = 'ISF GLSL compile failed: ParseErrors { errors: [Error { kind: InvalidToken(Semicolon, [Rparen]), meta: Span { start: 412, end: 413 } }] }';
 const cases = [
+  { name: "persistent requires target", source: "", raw: "ISF PERSISTENT pass requires a named TARGET", title: /render pass configuration/, ja: /描画パス/ },
+  { name: "target name collision", source: "", raw: "ISF target 'inputImage' is duplicated or conflicts with an input", title: /render pass configuration/, ja: /描画パス/ },
+  { name: "invalid pass expression", source: "", raw: "ISF pass size expression is invalid at byte 4: expected ')'", title: /invalid size/, ja: /サイズ/ },
+  { name: "oversized pass", source: "", raw: "ISF pass size 1000000x1 is invalid; dimensions must be 1..=8192", title: /invalid size/, ja: /サイズ/ },
+  { name: "GPU memory budget", source: "", raw: "ISF pass size exceeds the GPU buffer memory budget", title: /invalid size/, ja: /サイズ/ },
+  { name: "missing imported image", source: "", raw: "ISF imported image 'tex' cannot resolve PATH 'missing.png': missing", title: /could not be loaded/, ja: /読み取れません/ },
+  { name: "import path traversal", source: "", raw: "ISF imported image 'tex' PATH must stay inside the shader directory", title: /could not be loaded/, ja: /読み取れません/ },
+  { name: "import decode", source: "", raw: "ISF imported image 'tex' cannot be decoded within its safety limits: invalid PNG", title: /could not be loaded/, ja: /読み取れません/ },
+  { name: "import name collision", source: "", raw: "ISF imported image 'tex' conflicts with an input or target", title: /name is already used/, ja: /重複/ },
+  { name: "vertex companion", source: "", raw: "ISF vertex shaders are not supported; companion 'filter.vs' requires a custom vertex stage", title: /Custom vertex shaders/, ja: /頂点シェーダー/ },
+  { name: "FLOAT capability", source: "", raw: "ISF FLOAT buffers require 32-bit float texture filtering, which this GPU does not support", title: /cannot use FLOAT/, ja: /FLOATバッファー/ },
   { name: "GLSL syntax error", source: '/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"}]}*/\nvoid main(){\n gl_FragColor = ;\n}', raw: nagaSyntax, title: /code has an error/, ja: /コードにエラー/ },
   { name: "explicit line", source: "", raw: "GLSL parse error: syntax error at line 7", title: /code has an error/, ja: /コードにエラー/, line: 7 },
   { name: "unsupported INPUT type", source: '/*{\n"INPUTS":[\n{"NAME":"inputImage","TYPE":"image"},\n{"NAME":"warp","TYPE":"color3"}]}*/ void main(){}', raw: "Unsupported ISF input type 'color3'", title: /input type is not supported/, ja: /入力タイプ/, line: 4, input: "color3" },
   { name: "audio input", source: '/*{"INPUTS":[{"NAME":"music","TYPE":"audioFFT"}]}*/ void main(){}', raw: "ISF audio/audioFFT textures are not supported by this runtime; use Syndocal Audio FFT nodes", title: /Audio inputs/, ja: /音声/, line: 1 },
-  { name: "PASS TARGET buffer", source: '/*{"PASSES":[{"TARGET":"bufferA"}]}*/ void main(){}', raw: "Persistent or target-buffer ISF passes are not supported", title: /render passes/, ja: /パス/ },
-  { name: "multi-pass", source: '/*{"PASSES":[{},{}]}*/ void main(){}', raw: "Multi-pass ISF shaders are not supported", title: /render passes/, ja: /パス/ },
   { name: "missing PASS target reference", source: '/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"}]}*/\nvoid main(){\n gl_FragColor = IMG_THIS_PIXEL(bufferA);\n}', raw: 'ISF GLSL compile failed: ParseErrors { errors: [Error { kind: UnknownVariable("bufferA"), meta: Span { start: 1, end: 2 } }] }', title: /pass target is missing/, ja: /ターゲット/, line: 3, input: "bufferA" },
   { name: "forbidden loop", source: '/*{"INPUTS":[]}*/\nvoid main(){\n for (int i=0;i<9;i++){}\n}', raw: "ISF source uses forbidden or unsupported construct 'for ('", title: /not allowed/, ja: /使用できない記述/, line: 3 },
   { name: "invalid header JSON", source: '\n\n/*{\n"INPUTS":[,]}*/ void main(){}', raw: "ISF metadata JSON is invalid: expected value at line 2 column 11", title: /not valid JSON/, ja: /JSON/, line: 4 },
@@ -65,6 +74,7 @@ for (const item of cases) {
   assert.equal(explained.line, item.line, `${item.name}: line`);
   if (item.input) assert.equal(explained.input, item.input, `${item.name}: input`);
   assert.equal(explained.raw, item.raw, `${item.name}: raw text is preserved`);
+  assert.doesNotMatch(explained.title + explained.detail + explained.action, /single-pass filters only|External images are not supported/, `${item.name}: current support boundaries`);
   assert.ok(explained.detail.length > 20 && explained.action.length > 20, `${item.name}: detail and action`);
   const japanese = rejection.explainFxRejection(item.raw, "ja", item.source);
   assert.match(japanese.title, item.ja, `${item.name}: Japanese title`);

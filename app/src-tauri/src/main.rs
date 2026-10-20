@@ -27626,7 +27626,8 @@ fn select_video_isf_file(window: WebviewWindow) -> Result<Option<VideoIsfEffectS
 fn load_video_isf_effect_from_path(path: &Path) -> Result<VideoIsfEffectSummary, String> {
     let source = fs::read_to_string(path)
         .map_err(|error| format!("Failed to read ISF shader '{}': {error}", path.display()))?;
-    let prepared = video::prepare_isf_shader(&source).map_err(|error| error.to_string())?;
+    let prepared = video::prepare_isf_shader_with_path(&source, Some(path))
+        .map_err(|error| error.to_string())?;
     let label = path
         .file_stem()
         .and_then(OsStr::to_str)
@@ -43913,8 +43914,11 @@ fn sanitize_video_isf_stage(
     if label.is_empty() || label.chars().count() > 128 {
         return Err("ISF effect label must contain 1-128 characters".to_string());
     }
-    let prepared =
-        video::prepare_isf_shader(effect.source.as_ref()).map_err(|error| error.to_string())?;
+    let prepared = video::prepare_isf_shader_with_path(
+        effect.source.as_ref(),
+        effect.source_path.as_deref().map(Path::new),
+    )
+    .map_err(|error| error.to_string())?;
     // Validate authored values without baking the current runtime tempo into the project.
     let resolved =
         video::resolved_isf_control_values_from_controls(&prepared, &effect.controls, None);
@@ -123239,14 +123243,14 @@ f 1 2 3
             .source
             .replace(
                 "\"INPUTS\"",
-                "\"PASSES\":[{\"TARGET\":\"buffer\"}],\"INPUTS\"",
+                "\"PASSES\":[{\"TARGET\":\"buffer\"},{\"TARGET\":\"buffer\"}],\"INPUTS\"",
             )
             .into();
         project.snapshot.video.layers[0].isf_effect = Some(effect);
 
         let error = validate_project_file(&project).unwrap_err();
         assert!(error.contains("ISF effect is invalid"));
-        assert!(error.contains("target-buffer"));
+        assert!(error.contains("'buffer' is duplicated"));
     }
 
     #[test]
@@ -123258,14 +123262,14 @@ f 1 2 3
             .source
             .replace(
                 "\"INPUTS\"",
-                "\"PASSES\":[{\"TARGET\":\"buffer\"}],\"INPUTS\"",
+                "\"PASSES\":[{\"TARGET\":\"buffer\"},{\"TARGET\":\"buffer\"}],\"INPUTS\"",
             )
             .into();
         effect.stack.push(unsafe_tail);
         project.snapshot.video.layers[0].isf_effect = Some(effect.clone());
         let error = validate_project_file(&project).unwrap_err();
         assert!(error.contains("ISF stage 2 is invalid"));
-        assert!(error.contains("target-buffer"));
+        assert!(error.contains("'buffer' is duplicated"));
 
         effect.stack.clear();
         let stage = video_isf_stage_from_root(test_isf_effect());

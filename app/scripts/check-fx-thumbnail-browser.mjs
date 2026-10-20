@@ -2,15 +2,22 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 
+const optionalPort = (name) => {
+  const raw = process.env[name];
+  if (raw === undefined) return 0;
+  const value = Number(raw);
+  assert.ok(Number.isInteger(value) && value >= 1 && value <= 65535, name + " must be a port from 1 to 65535");
+  return value;
+};
+const vitePort = optionalPort("SYNDOCAL_VITE_PORT");
+const cdpPort = optionalPort("SYNDOCAL_CDP_PORT");
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const vitePort = Number(process.env.SYNDOCAL_VITE_PORT ?? 0);
-const cdpPort = Number(process.env.SYNDOCAL_CDP_PORT ?? 0);
 const browserPath = [process.env.CHROME_PATH, "C:/Program Files/Google/Chrome/Application/chrome.exe", "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"].filter(Boolean).find(existsSync);
 assert.ok(browserPath, "Chromium browser is required");
 const modulePath = "/src/__fx-thumbnail-fixture.ts";
@@ -41,11 +48,12 @@ async function send(method, params = {}) {
 }
 async function evaluate(expression) { const value = await send("Runtime.evaluate", { expression, returnByValue: true }); assert.ok(!value.exceptionDetails, JSON.stringify(value.exceptionDetails)); return value.result.value; }
 try {
-  // This virtual fixture has no app entry; scanning app/index.html can outlive it.
-  server = await createServer({ root, optimizeDeps: { noDiscovery: true, include: [] }, server: { host: "127.0.0.1", port: vitePort, strictPort: vitePort !== 0 }, plugins: [plugin], clearScreen: false });
+  server = await createServer({ root, server: { host: "127.0.0.1", port: vitePort, strictPort: vitePort !== 0 }, plugins: [plugin], optimizeDeps: { entries: [] }, clearScreen: false });
   await server.listen();
-  profile = await mkdtemp(join(tmpdir(), "syndocal-fx-thumbnail-"));
-  browser = spawn(browserPath, ["--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--no-first-run", "--no-default-browser-check", `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
+  const profileRoot = resolve(root, "../target/qa/browser-profiles");
+  await mkdir(profileRoot, { recursive: true });
+  profile = await mkdtemp(join(profileRoot, "syndocal-fx-thumbnail-"));
+  browser = spawn(browserPath, ["--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--no-first-run", "--no-default-browser-check", "--remote-debugging-port=" + cdpPort, `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
   const port = cdpPort || await until(async () => Number((await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]));
   const page = await until(async () => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((entry) => entry.type === "page"));
   socket = new WebSocket(page.webSocketDebuggerUrl);

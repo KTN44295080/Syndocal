@@ -61,16 +61,46 @@ const rules: Rule[] = [
     action: word("Use only image, float, bool, long, point2D, color and event inputs, remove the unsupported INPUT, then import again.", "使えるのは image・float・bool・long・point2D・color・event です。対応していないINPUTを取り除いて、もう一度読み込んでください。"),
   },
   {
-    test: (raw) => /target-buffer|persistent|multi-pass|\bpass(es)?\b.*not supported/i.test(raw),
-    title: word("The shader needs render passes Syndocal cannot run", "複数パスやバッファーを使うシェーダーは実行できません"),
-    detail: (found) => word(`PASSES uses a TARGET buffer, a persistent buffer or more than one pass${at(found).en}. Syndocal runs single-pass filters only.`, `PASSESがTARGETのバッファー・永続バッファー・複数パスのいずれかを使っています${at(found).ja}。Syndocalは1パスのフィルターだけを実行できます。`),
-    action: word("Merge the work into one pass without TARGET or PERSISTENT, or import a single-pass version of the shader.", "TARGETやPERSISTENTを使わず1パスにまとめるか、1パス版のシェーダーを読み込んでください。"),
+    test: (raw) => /ISF pass size/i.test(raw),
+    title: word("A render pass has an invalid size", "描画パスのサイズが正しくありません"),
+    detail: () => word("A WIDTH or HEIGHT expression is invalid, or the requested buffers exceed the dimension or memory limits.", "WIDTH・HEIGHTの式が正しくないか、バッファーのサイズやメモリー使用量が上限を超えています。"),
+    action: word("Check the WIDTH and HEIGHT expressions, use positive dimensions and reduce the buffer sizes. Open the technical details for the exact limit.", "WIDTH・HEIGHTの式を確認し、正のサイズを指定してバッファーを小さくしてください。具体的な上限は技術的な詳細で確認できます。"),
+  },
+  {
+    test: (raw) => /ISF FLOAT buffers require/i.test(raw),
+    title: word("The graphics card cannot use FLOAT buffers", "このグラフィックスカードではFLOATバッファーを使えません"),
+    detail: () => word("The shader requires filtering of 32-bit floating-point textures, which this graphics adapter does not support.", "シェーダーには32ビット浮動小数点テクスチャーのフィルタリングが必要ですが、このグラフィックスカードは対応していません。"),
+    action: word("Use a graphics adapter with 32-bit float texture filtering, or use a shader designed for ordinary image buffers.", "32ビット浮動小数点テクスチャーのフィルタリングに対応したGPUか、通常の画像バッファー用のシェーダーを使ってください。"),
+  },
+  {
+    test: (raw) => /ISF vertex shaders are not supported/i.test(raw),
+    title: word("Custom vertex shaders are not supported", "独自の頂点シェーダーには対応していません"),
+    detail: () => word("This ISF file has a companion vertex shader. Syndocal renders ISF filters with its own full-screen vertex stage.", "このISFファイルには頂点シェーダーが付属しています。Syndocalは独自の全画面用頂点ステージでISFフィルターを描画します。"),
+    action: word("Use a fragment-only version of the effect whose output does not depend on the companion vertex shader.", "付属の頂点シェーダーに依存しない、フラグメントシェーダーだけの版を使ってください。"),
+  },
+  {
+    test: (raw) => /ISF (?:PERSISTENT pass|pass (?:PERSISTENT|FLOAT)|target\b)|target-buffer|multi-pass|\bpass(es)?\b.*not supported/i.test(raw),
+    title: word("The render pass configuration cannot be used", "描画パスの設定を使用できません"),
+    detail: () => word("A pass flag or TARGET declaration is invalid or unsupported. Multiple passes and persistent named buffers are supported within the runtime limits.", "パスのフラグやTARGETの宣言が正しくないか、対応していない設定です。複数パスと名前付きの永続バッファーは、実行時の上限内で使えます。"),
+    action: word("Check the technical details. Give persistent passes a TARGET, use unique target names and correct the pass flags before importing again.", "技術的な詳細を確認してください。永続パスにTARGETを指定し、重複しないターゲット名と正しいフラグに修正して、もう一度読み込んでください。"),
+  },
+  {
+    test: (raw) => /ISF imported image.*conflicts with/i.test(raw),
+    title: word("An imported image name is already used", "読み込み画像の名前が重複しています"),
+    detail: () => word("An IMPORTED name conflicts with an input or pass target.", "IMPORTEDの名前が入力またはパスのターゲットと重複しています。"),
+    action: word("Give the imported image a unique name and update its IMG_* references.", "読み込み画像に重複しない名前を付け、IMG_*の参照も変更してください。"),
+  },
+  {
+    test: (raw) => /ISF imported image|imported image resources/i.test(raw),
+    title: word("An imported image could not be loaded", "読み込み画像を読み取れませんでした"),
+    detail: () => word("An IMPORTED resource is missing, has an unsafe path or cannot be decoded.", "IMPORTEDの画像が見つからない、パスが安全な範囲外にある、または画像を解析できない状態です。"),
+    action: word("Import the shader from its original folder with its image files. Check each relative PATH and use PNG or JPEG.", "画像ファイルが揃った元のフォルダーからシェーダーを読み込んでください。各PATHの相対パスを確認し、PNGかJPEGを使ってください。"),
   },
   {
     test: (raw, source) => /unknown ?variable|undeclared identifier/i.test(raw) && isReadAsImage(source, unknownName(raw)),
     title: word("A referenced image or pass target is missing", "参照している画像やパスのターゲットが見つかりません"),
-    detail: (found) => word(`The shader reads an image${named(found).en} that is not an INPUT of type image and is not a PASS TARGET${at(found).en}.`, `シェーダーが画像${named(found).ja}を読み取っていますが、TYPEがimageのINPUTにも、PASSESのTARGETにもありません${at(found).ja}。`),
-    action: word("Declare it as an image INPUT, or rewrite the shader so it reads only its single image input.", "TYPEがimageのINPUTとして宣言するか、画像入力1つだけを読むように書き直してください。"),
+    detail: () => word("The referenced image is not declared in INPUTS, PASSES or IMPORTED.", "参照している画像がINPUTS・PASSES・IMPORTEDのどこにも宣言されていません。"),
+    action: word("Declare the image in INPUTS or IMPORTED, or add the intended named PASS TARGET. Check the spelling of its IMG_* references.", "画像をINPUTSかIMPORTEDで宣言するか、対応する名前付きのPASS TARGETを追加してください。IMG_*の参照名も確認してください。"),
   },
   {
     test: (raw) => /unknown ?variable|undeclared identifier/i.test(raw),
@@ -107,12 +137,6 @@ const rules: Rule[] = [
     title: word("An input has an invalid default or range", "入力の初期値や範囲の指定が正しくありません"),
     detail: (found) => word(`A DEFAULT, MIN or MAX value${named(found).en}${at(found).en} is not a finite number or a number list Syndocal understands.`, `DEFAULT・MIN・MAXの値${named(found).ja}${at(found).ja}が、有限の数値または対応する数値リストではありません。`),
     action: word("Use plain numbers in INPUTS (an [r, g, b, a] list for colours, [x, y] for points), then import again.", "INPUTSでは通常の数値を使ってください（色は[r, g, b, a]、点は[x, y]の配列）。修正して、もう一度読み込んでください。"),
-  },
-  {
-    test: (raw) => /imported image resources/i.test(raw),
-    title: word("External images are not supported", "外部の画像ファイルには対応していません"),
-    detail: (found) => word(`IMPORTED loads image files${at(found).en}. Syndocal cannot read them.`, `IMPORTEDで画像ファイルを読み込んでいます${at(found).ja}。Syndocalでは読み取れません。`),
-    action: word("Remove IMPORTED, or bake the image into the shader's code.", "IMPORTEDを取り除くか、画像の内容をシェーダーのコードに組み込んでください。"),
   },
   {
     test: (raw) => /safety limit|controls; the safety limit/i.test(raw),
@@ -166,6 +190,8 @@ export function explainFxRejection(raw: string, locale = "en", source = ""): FxR
     ?? unknownName(raw)
     ?? raw.match(/input type\s+'([^']+)'/i)?.[1]
     ?? raw.match(/TARGET\s+'([^']+)'/)?.[1]
+    ?? raw.match(/ISF imported image\s+'([^']+)'/i)?.[1]
+    ?? raw.match(/ISF target\s+'([^']+)'/i)?.[1]
     ?? (/audioFFT/.test(raw) ? "audioFFT" : undefined);
   const token = raw.match(/construct\s+'([^']+)'/i)?.[1];
   const count = raw.match(/found\s+(\d+)/i)?.[1];

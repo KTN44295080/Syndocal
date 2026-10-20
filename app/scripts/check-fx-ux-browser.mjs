@@ -6,17 +6,21 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 
+const optionalPort = (name) => {
+  const raw = process.env[name];
+  if (raw === undefined) return 0;
+  const value = Number(raw);
+  assert.ok(Number.isInteger(value) && value >= 1 && value <= 65535, name + " must be a port from 1 to 65535");
+  return value;
+};
+const vitePort = optionalPort("SYNDOCAL_VITE_PORT");
+const cdpPort = optionalPort("SYNDOCAL_CDP_PORT");
+
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const vitePort = Number(process.env.SYNDOCAL_VITE_PORT ?? 0);
-const cdpPort = Number(process.env.SYNDOCAL_CDP_PORT ?? 0);
-for (const [name, port] of [["SYNDOCAL_VITE_PORT", vitePort], ["SYNDOCAL_CDP_PORT", cdpPort]]) {
-  assert.ok(Number.isInteger(port) && port >= 0 && port <= 65535, `${name} must be a valid port`);
-}
 const evidenceDir = resolve(process.env.SYNDOCAL_FX_UX_SCREENSHOT_DIR ?? join(appRoot, "../target/qa/fx-ux-12"));
 const browserPath = [process.env.CHROME_PATH, "C:/Program Files/Google/Chrome/Application/chrome.exe", "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Microsoft/Edge/Application/msedge.exe"].filter(Boolean).find(existsSync);
 assert.ok(browserPath, "Chromium browser is required");
@@ -167,11 +171,12 @@ const geometry = (selector) => evaluate(`[...document.querySelectorAll(${JSON.st
 try {
   server = await createServer({ root: appRoot, server: { host: "127.0.0.1", port: vitePort, strictPort: vitePort !== 0 }, plugins: [plugin], clearScreen: false, logLevel: "error" });
   await server.listen();
-  profile = await mkdtemp(join(tmpdir(), "syndocal-fx-ux-"));
-  browser = spawn(browserPath, ["--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--no-first-run", "--no-default-browser-check", `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
+  const profileRoot = resolve(appRoot, "../target/qa/browser-profiles");
+  await mkdir(profileRoot, { recursive: true });
+  profile = await mkdtemp(join(profileRoot, "syndocal-fx-ux-"));
+  browser = spawn(browserPath, ["--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--no-first-run", "--no-default-browser-check", "--remote-debugging-port=" + cdpPort, `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
   const port = cdpPort || await until(async () => Number((await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]), "DevTools port");
-  const page = await until(async () =>
-    (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((entry) => entry.type === "page"), "DevTools page");
+  const page = await until(async () => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((entry) => entry.type === "page"), "DevTools page");
   socket = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((done, reject) => { socket.addEventListener("open", done, { once: true }); socket.addEventListener("error", reject, { once: true }); });
   socket.addEventListener("message", ({ data }) => {

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
@@ -69,7 +68,9 @@ try {
   assert.ok(project.snapshot?.video, "the project fixture contains a video snapshot");
   project.snapshot.video.effect_presets = saved.effect_presets;
   if (project.snapshot.authored_video) project.snapshot.authored_video.effect_presets = saved.effect_presets;
-  temporary = await mkdtemp(join(tmpdir(), "syndocal-fx-parameters-"));
+  const temporaryRoot = resolve(appRoot, "../target/qa/fx-parameters");
+  await mkdir(temporaryRoot, { recursive: true });
+  temporary = await mkdtemp(join(temporaryRoot, "preset-"));
   const path = join(temporary, "preset-project.sdc");
   await writeFile(path, JSON.stringify(project), "utf8");
   const reopened = JSON.parse(await readFile(path, "utf8"));
