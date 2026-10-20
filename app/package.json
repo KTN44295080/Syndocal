@@ -86,6 +86,7 @@
     "check:fx-parameters": "node scripts/check-fx-parameters.mjs",
     "check:fx-live-session": "node scripts/check-fx-live-session.mjs",
     "check:fx-audition": "node scripts/check-fx-audition.mjs",
+    "check:clip-audition": "node scripts/check-clip-audition.mjs",
     "check:fx-thumbnail": "node scripts/check-fx-thumbnail-browser.mjs",
     "check:fx-ux-browser": "node scripts/check-fx-ux-browser.mjs",
     "check:fx-ux": "pnpm run check:fx-catalog && pnpm run check:fx-parameters && pnpm run check:fx-live-session && pnpm run check:fx-audition && pnpm run check:fx-thumbnail && pnpm run check:fx-ux-browser",

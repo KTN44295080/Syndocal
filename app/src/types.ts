@@ -2923,6 +2923,8 @@ export interface AutoVjSnapshot {
  */
 export interface VjPreviewTransportSummary {
   layer_id: number | null;
+  /** Explicitly auditioned clip; null for the layer's current source. Runtime-only. */
+  slot_id?: VideoClipSlotId | null;
   playing: boolean;
   position_ms: number;
   duration_ms: number | null;

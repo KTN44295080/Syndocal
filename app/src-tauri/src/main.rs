@@ -8,6 +8,8 @@ mod agent_bridge;
 mod agent_bridge_execution;
 mod cli_console;
 mod native_adapter_error;
+mod vj_preview_slot;
+use vj_preview_slot::VjPreviewSlotAudition;
 mod process_identity_cli;
 use protocol::hidden_console_command::hidden_command;
 use std::{
@@ -4318,6 +4320,8 @@ struct VideoClipSlotLaunchRequest {
     layer_id: VideoLayerId,
     #[serde(default)]
     slot_id: Option<VideoClipSlotId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preview_generation: Option<u64>,
     #[serde(default)]
     transition_kind: VideoClipTakeKind,
     #[serde(default)]
@@ -13853,6 +13857,7 @@ const VJ_PREVIEW_MAX_SPEED: f32 = 4.0;
 #[derive(Debug, Clone, Serialize, PartialEq)]
 struct VjPreviewTransportSummary {
     layer_id: Option<VideoLayerId>,
+    slot_id: Option<VideoClipSlotId>,
     playing: bool,
     position_ms: u64,
     duration_ms: Option<u64>,
@@ -13872,6 +13877,7 @@ impl VjPreviewTransportSummary {
     fn empty(generation: u64, updated_at_ms: u64) -> Self {
         Self {
             layer_id: None,
+            slot_id: None,
             playing: false,
             position_ms: 0,
             duration_ms: None,
@@ -13923,6 +13929,9 @@ impl VjPreviewSourceIdentity {
 struct VjPreviewTransportSession {
     layer_id: VideoLayerId,
     source: VjPreviewSourceIdentity,
+    slot_audition: Option<Arc<VjPreviewSlotAudition>>,
+    range_start_ms: u64,
+    range_end_ms: Option<u64>,
     source_name: Option<String>,
     position_ms: f64,
     duration_ms: Option<u64>,
@@ -13964,36 +13973,81 @@ impl VjPreviewTransportRuntime {
         now: Instant,
         updated_at_ms: u64,
     ) -> Result<VjPreviewTransportSummary, String> {
-        validate_vj_preview_layer(layer)?;
-        let state = video::sanitize_layer_state(layer.state.clone());
-        let duration_ms = if layer.source.kind == VideoSourceKind::StillImage {
+        self.stage_source_at(layer, None, now, updated_at_ms)
+    }
+
+    fn stage_slot_at(
+        &mut self,
+        video: &protocol::VideoSnapshot,
+        layer: &protocol::VideoLayerSummary,
+        slot_id: VideoClipSlotId,
+        now: Instant,
+        updated_at_ms: u64,
+    ) -> Result<VjPreviewTransportSummary, String> {
+        let audition = VjPreviewSlotAudition::resolve(video, layer, slot_id)?;
+        self.stage_source_at(layer, Some(audition), now, updated_at_ms)
+    }
+
+    fn stage_source_at(
+        &mut self,
+        layer: &protocol::VideoLayerSummary,
+        slot_audition: Option<VjPreviewSlotAudition>,
+        now: Instant,
+        updated_at_ms: u64,
+    ) -> Result<VjPreviewTransportSummary, String> {
+        let resolved = slot_audition
+            .as_ref()
+            .map(|audition| audition.preview_layer(layer.clone()))
+            .transpose()?;
+        let preview_layer = resolved.as_ref().unwrap_or(layer);
+        validate_vj_preview_layer(preview_layer)?;
+        let state = video::sanitize_layer_state(preview_layer.state.clone());
+        let duration_ms = if preview_layer.source.kind == VideoSourceKind::StillImage {
             Some(0)
         } else {
-            layer
+            preview_layer
                 .source
                 .metadata
                 .and_then(|metadata| metadata.duration_ms)
         };
         let (loop_enabled, loop_start_ms, loop_end_ms) =
             vj_preview_loop_bounds(&state, duration_ms);
+        let (range_start_ms, range_end_ms) = if let Some(audition) = slot_audition.as_ref() {
+            audition.bounds()?
+        } else if loop_enabled {
+            (loop_start_ms, Some(loop_end_ms))
+        } else {
+            (0, duration_ms)
+        };
+        // The live source remains a fence; slot media is a separate identity.
         let source = VjPreviewSourceIdentity::from_layer(layer);
-        // Restaging the same layer and source keeps its audition; any other
-        // staging ends it.
         let effect_audition = self
             .session
             .as_ref()
             .filter(|previous| previous.layer_id == layer.id && previous.source == source)
             .and_then(|previous| previous.effect_audition.clone());
+        let playing = slot_audition.is_some() && state.speed != 0.0 && duration_ms != Some(0);
+        let position_ms = if slot_audition
+            .as_ref()
+            .is_some_and(|audition| audition.slot.speed < 0.0)
+        {
+            range_end_ms
+                .map(|end| end.saturating_sub(1).max(range_start_ms))
+                .unwrap_or(range_start_ms)
+        } else {
+            range_start_ms
+        };
         let generation = self.next_generation();
         let mut session = VjPreviewTransportSession {
             layer_id: layer.id,
             source,
-            source_name: vj_preview_source_name(layer),
-            // Staging a pad is a cue operation, not a mirror of the live Program playhead.
-            // Always begin at the clip in-point so an ended Program clip remains auditionable.
-            position_ms: (if loop_enabled { loop_start_ms } else { 0 }) as f64,
+            slot_audition: slot_audition.map(Arc::new),
+            range_start_ms,
+            range_end_ms,
+            source_name: vj_preview_source_name(preview_layer),
+            position_ms: position_ms as f64,
             duration_ms,
-            playing: false,
+            playing,
             speed: sanitize_vj_preview_speed(state.speed),
             loop_enabled,
             loop_start_ms,
@@ -14022,8 +14076,11 @@ impl VjPreviewTransportRuntime {
             .iter()
             .find(|layer| layer.id == session.layer_id)
             .is_some_and(|layer| {
-                validate_vj_preview_layer(layer).is_ok()
-                    && VjPreviewSourceIdentity::from_layer(layer) == session.source
+                VjPreviewSourceIdentity::from_layer(layer) == session.source
+                    && match session.slot_audition.as_ref() {
+                        Some(audition) => audition.is_current(video, layer),
+                        None => validate_vj_preview_layer(layer).is_ok(),
+                    }
             });
         if !valid {
             self.clear_at(updated_at_ms);
@@ -14052,11 +14109,7 @@ impl VjPreviewTransportRuntime {
         let generation = self.next_generation();
         let session = self.session.as_mut().expect("preview session was checked");
         if playing && !session.playing {
-            let lower = if session.loop_enabled {
-                session.loop_start_ms
-            } else {
-                0
-            } as f64;
+            let lower = session.range_start_ms as f64;
             let upper = vj_preview_upper_bound(session);
             if session.speed > 0.0 && session.position_ms >= upper {
                 session.position_ms = lower;
@@ -14064,7 +14117,7 @@ impl VjPreviewTransportRuntime {
                 session.position_ms = upper;
             }
         }
-        session.playing = playing && session.duration_ms != Some(0);
+        session.playing = playing && session.speed != 0.0 && session.duration_ms != Some(0);
         session.anchored_at = now;
         session.updated_at_ms = updated_at_ms;
         session.generation = generation;
@@ -14150,7 +14203,7 @@ impl VjPreviewTransportRuntime {
         self.advance_at(now, updated_at_ms);
         self.session
             .as_ref()
-            .filter(|session| session.layer_id == layer_id)
+            .filter(|session| session.layer_id == layer_id && session.slot_audition.is_none())
             .map(|session| VjPreviewTakeState {
                 position_ms: vj_preview_position_ms(session),
                 speed: session.speed,
@@ -14183,21 +14236,33 @@ impl VjPreviewTransportRuntime {
             let start = session.loop_start_ms as f64;
             let end = session.loop_end_ms as f64;
             let span = end - start;
-            session.position_ms = if span > 0.0 {
-                start + (next - start).rem_euclid(span)
+            let ping_pong = session.slot_audition.as_ref().is_some_and(|audition| {
+                audition.slot.loop_mode == protocol::VideoClipLoopMode::PingPong
+            });
+            if span <= 0.0 {
+                session.position_ms = start;
+            } else if ping_pong {
+                let phase = (next - start).rem_euclid(span * 2.0);
+                if phase <= span {
+                    session.position_ms = start + phase;
+                } else {
+                    session.position_ms = start + span * 2.0 - phase;
+                    session.speed = -session.speed;
+                }
             } else {
-                start
-            };
+                session.position_ms = start + (next - start).rem_euclid(span);
+            }
         } else {
+            let lower = session.range_start_ms as f64;
             let upper = vj_preview_upper_bound(session);
-            if next <= 0.0 {
-                session.position_ms = 0.0;
+            if next <= lower {
+                session.position_ms = lower;
                 if session.speed < 0.0 {
                     session.playing = false;
                 }
             } else if next >= upper {
                 session.position_ms = upper;
-                if session.speed > 0.0 && session.duration_ms.is_some() {
+                if session.speed > 0.0 && session.range_end_ms.is_some() {
                     session.playing = false;
                 }
             } else {
@@ -14286,19 +14351,11 @@ fn vj_preview_loop_bounds(state: &VideoLayerState, duration_ms: Option<u64>) -> 
 }
 
 fn vj_preview_upper_bound(session: &VjPreviewTransportSession) -> f64 {
-    if session.loop_enabled {
-        session.loop_end_ms as f64
-    } else {
-        session.duration_ms.unwrap_or(u64::MAX) as f64
-    }
+    session.range_end_ms.unwrap_or(u64::MAX) as f64
 }
 
 fn clamp_vj_preview_position(session: &VjPreviewTransportSession, position_ms: f64) -> f64 {
-    let lower = if session.loop_enabled {
-        session.loop_start_ms
-    } else {
-        0
-    } as f64;
+    let lower = session.range_start_ms as f64;
     let upper = vj_preview_upper_bound(session).max(lower);
     if position_ms.is_finite() {
         position_ms.clamp(lower, upper)
@@ -14314,6 +14371,7 @@ fn vj_preview_position_ms(session: &VjPreviewTransportSession) -> u64 {
 fn vj_preview_transport_summary(session: &VjPreviewTransportSession) -> VjPreviewTransportSummary {
     VjPreviewTransportSummary {
         layer_id: Some(session.layer_id),
+        slot_id: session.slot_audition.as_ref().map(|audition| audition.slot.id),
         playing: session.playing,
         position_ms: vj_preview_position_ms(session),
         duration_ms: session.duration_ms,
@@ -40804,16 +40862,7 @@ fn launch_video_clip_slot_authoritative_command_impl(
                 authority.epoch,
                 owner_id,
                 authority,
-                || {
-                    state
-                        .engine
-                        .launch_video_clip_slot_with_transition_timing_published(
-                            request.layer_id,
-                            request.slot_id,
-                            request.transition_kind,
-                            request.effective_transition_duration(),
-                        )
-                },
+                || launch_video_clip_slot_request_published(state, &request),
             )?;
             Ok(VideoClipSlotAuthoritativeTerminalResult::Runtime(
                 VideoClipSlotAuthoritativeRuntimeOutcome {
@@ -40829,6 +40878,64 @@ fn launch_video_clip_slot_authoritative_command_impl(
         response_binding,
         terminal,
     )
+}
+
+/// Reuses the ticketed launch commit while freezing Preview through engine publication.
+/// The actor checks the authored identity again before changing Program.
+fn launch_video_clip_slot_request_published(
+    state: &AppState,
+    request: &VideoClipSlotLaunchRequest,
+) -> Result<(), String> {
+    let Some(generation) = request.preview_generation else {
+        return state
+            .engine
+            .launch_video_clip_slot_with_transition_timing_published(
+                request.layer_id,
+                request.slot_id,
+                request.transition_kind,
+                request.effective_transition_duration(),
+            );
+    };
+    let slot_id = request
+        .slot_id
+        .ok_or_else(|| "Preview Take requires an explicit clip slot".to_string())?;
+    let mut transport = state
+        .vj_preview_transport
+        .lock()
+        .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let snapshot = state.engine.video_snapshot();
+    let now = Instant::now();
+    let timestamp = vj_preview_timestamp_ms();
+    let guard = match transport.slot_take_guard_at(
+        &snapshot,
+        request.layer_id,
+        slot_id,
+        generation,
+        now,
+        timestamp,
+    ) {
+        Ok(guard) => guard,
+        Err(error) => {
+            if transport.session.is_none() {
+                state
+                    .vj_preview_renderer_reset_pending
+                    .store(true, Ordering::Release);
+            }
+            return Err(error);
+        }
+    };
+    state.engine.launch_video_clip_slot_from_preview_published(
+        request.layer_id,
+        slot_id,
+        request.transition_kind,
+        request.effective_transition_duration(),
+        guard,
+    )?;
+    transport.clear_at(vj_preview_timestamp_ms());
+    state
+        .vj_preview_renderer_reset_pending
+        .store(true, Ordering::Release);
+    Ok(())
 }
 
 #[tauri::command]
@@ -80684,13 +80791,13 @@ fn get_debug_video_output_preview(
 fn get_vj_preview_transport(
     state: State<'_, AppState>,
 ) -> Result<VjPreviewTransportSummary, String> {
-    let snapshot = state.engine.video_snapshot();
-    let now = Instant::now();
-    let updated_at_ms = vj_preview_timestamp_ms();
     let mut transport = state
         .vj_preview_transport
         .lock()
         .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let snapshot = state.engine.video_snapshot();
+    let now = Instant::now();
+    let updated_at_ms = vj_preview_timestamp_ms();
     let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
     let summary = transport.summary_at(now, updated_at_ms);
     drop(transport);
@@ -80704,6 +80811,7 @@ fn get_vj_preview_transport(
 fn stage_vj_preview_layer(
     state: State<'_, AppState>,
     layer_id: VideoLayerId,
+    slot_id: Option<VideoClipSlotId>,
     expected_epoch: Option<u64>,
     expected_revision: Option<u64>,
     expected_checkpoint_hash: Option<String>,
@@ -80713,12 +80821,13 @@ fn stage_vj_preview_layer(
         expected_revision,
         expected_checkpoint_hash,
     )?;
-    stage_vj_preview_layer_for_authority(&state, layer_id, expected_authority)
+    stage_vj_preview_layer_for_authority(&state, layer_id, slot_id, expected_authority)
 }
 
 fn stage_vj_preview_layer_for_authority(
     state: &AppState,
     layer_id: VideoLayerId,
+    slot_id: Option<VideoClipSlotId>,
     expected_authority: Option<VjPreviewProjectAuthorityExpectation>,
 ) -> Result<VjPreviewTransportSummary, String> {
     if let Some(expected_authority) = expected_authority {
@@ -80730,13 +80839,11 @@ fn stage_vj_preview_layer_for_authority(
         ensure_no_pending_project_transaction(&coordinator)?;
         reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
         return with_exact_vj_preview_project_authority(&coordinator, &expected_authority, || {
-            let snapshot = state.engine.video_snapshot();
-            stage_vj_preview_layer_from_snapshot(state, &snapshot, layer_id)
+            stage_vj_preview_layer_current(state, layer_id, slot_id)
         });
     }
 
-    let snapshot = state.engine.video_snapshot();
-    stage_vj_preview_layer_from_snapshot(state, &snapshot, layer_id)
+    stage_vj_preview_layer_current(state, layer_id, slot_id)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80788,26 +80895,52 @@ fn with_exact_vj_preview_project_authority<T>(
     stage()
 }
 
-fn stage_vj_preview_layer_from_snapshot(
+fn stage_vj_preview_layer_current(
     state: &AppState,
-    snapshot: &protocol::VideoSnapshot,
     layer_id: VideoLayerId,
+    slot_id: Option<VideoClipSlotId>,
 ) -> Result<VjPreviewTransportSummary, String> {
+    let mut transport = state
+        .vj_preview_transport
+        .lock()
+        .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    // Never reconcile a newly staged session against a snapshot captured while
+    // waiting for the Preview mutex.
+    let snapshot = state.engine.video_snapshot();
     let layer = snapshot
         .layers
         .iter()
         .find(|layer| layer.id == layer_id)
         .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
     let source = VjPreviewSourceIdentity::from_layer(layer);
-    let mut transport = state
-        .vj_preview_transport
-        .lock()
-        .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
-    let reset_renderer = transport
-        .session
-        .as_ref()
-        .is_some_and(|session| session.layer_id != layer_id || session.source != source);
-    let summary = transport.stage_at(layer, Instant::now(), vj_preview_timestamp_ms())?;
+    let now = Instant::now();
+    let timestamp = vj_preview_timestamp_ms();
+    let valid = transport.reconcile_at(&snapshot, now, timestamp);
+    let reset_renderer = !valid
+        || transport.session.as_ref().is_some_and(|session| {
+            session.layer_id != layer_id
+                || session.source != source
+                || session
+                    .slot_audition
+                    .as_ref()
+                    .map(|audition| audition.slot.id)
+                    != slot_id
+                || session
+                    .slot_audition
+                    .as_ref()
+                    .is_some_and(|audition| !audition.is_current(&snapshot, layer))
+        });
+    if reset_renderer {
+        // Invalidation must evict the old decoder even if the new stage fails.
+        state
+            .vj_preview_renderer_reset_pending
+            .store(true, Ordering::Release);
+    }
+    let summary = if let Some(slot_id) = slot_id {
+        transport.stage_slot_at(&snapshot, layer, slot_id, now, timestamp)?
+    } else {
+        transport.stage_at(layer, now, timestamp)?
+    };
     drop(transport);
     if reset_renderer {
         reset_vj_preview_renderer(state)?;
@@ -80820,13 +80953,13 @@ fn set_vj_preview_playing(
     state: State<'_, AppState>,
     playing: bool,
 ) -> Result<VjPreviewTransportSummary, String> {
-    let snapshot = state.engine.video_snapshot();
-    let now = Instant::now();
-    let updated_at_ms = vj_preview_timestamp_ms();
     let mut transport = state
         .vj_preview_transport
         .lock()
         .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let snapshot = state.engine.video_snapshot();
+    let now = Instant::now();
+    let updated_at_ms = vj_preview_timestamp_ms();
     let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
     let result = transport.set_playing_at(playing, now, updated_at_ms);
     drop(transport);
@@ -80841,13 +80974,13 @@ fn seek_vj_preview(
     state: State<'_, AppState>,
     position_ms: u64,
 ) -> Result<VjPreviewTransportSummary, String> {
-    let snapshot = state.engine.video_snapshot();
-    let now = Instant::now();
-    let updated_at_ms = vj_preview_timestamp_ms();
     let mut transport = state
         .vj_preview_transport
         .lock()
         .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let snapshot = state.engine.video_snapshot();
+    let now = Instant::now();
+    let updated_at_ms = vj_preview_timestamp_ms();
     let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
     let result = transport.seek_at(position_ms, now, updated_at_ms);
     drop(transport);
@@ -80862,13 +80995,13 @@ fn set_vj_preview_speed(
     state: State<'_, AppState>,
     speed: f32,
 ) -> Result<VjPreviewTransportSummary, String> {
-    let snapshot = state.engine.video_snapshot();
-    let now = Instant::now();
-    let updated_at_ms = vj_preview_timestamp_ms();
     let mut transport = state
         .vj_preview_transport
         .lock()
         .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let snapshot = state.engine.video_snapshot();
+    let now = Instant::now();
+    let updated_at_ms = vj_preview_timestamp_ms();
     let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
     let result = transport.set_speed_at(speed, now, updated_at_ms);
     drop(transport);
@@ -80904,13 +81037,13 @@ fn set_vj_preview_effect(
     } else {
         None
     };
-    let snapshot = state.engine.video_snapshot();
-    let now = Instant::now();
-    let updated_at_ms = vj_preview_timestamp_ms();
     let mut transport = state
         .vj_preview_transport
         .lock()
         .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    let snapshot = state.engine.video_snapshot();
+    let now = Instant::now();
+    let updated_at_ms = vj_preview_timestamp_ms();
     let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
     let result = transport.set_effect_audition_at(layer_id, audition, now, updated_at_ms);
     drop(transport);
@@ -80930,11 +81063,22 @@ fn get_builtin_video_isf_effect(preset_id: String) -> Result<VideoIsfEffectSumma
         .ok_or_else(|| format!("Unknown built-in VJ effect '{preset_id}'"))
 }
 
+#[cfg(test)]
 fn vj_preview_render_snapshot(
     snapshot: &protocol::VideoSnapshot,
     layer_id: VideoLayerId,
     position_ms: u64,
     effect_audition: Option<Option<VideoIsfEffectSummary>>,
+) -> Result<protocol::VideoSnapshot, String> {
+    vj_preview_render_snapshot_for_slot(snapshot, layer_id, position_ms, effect_audition, None)
+}
+
+fn vj_preview_render_snapshot_for_slot(
+    snapshot: &protocol::VideoSnapshot,
+    layer_id: VideoLayerId,
+    position_ms: u64,
+    effect_audition: Option<Option<VideoIsfEffectSummary>>,
+    slot_audition: Option<&VjPreviewSlotAudition>,
 ) -> Result<protocol::VideoSnapshot, String> {
     let mut layer = snapshot
         .layers
@@ -80942,7 +81086,24 @@ fn vj_preview_render_snapshot(
         .find(|layer| layer.id == layer_id)
         .cloned()
         .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
+    if let Some(audition) = slot_audition {
+        if !audition.is_current(snapshot, &layer) {
+            return Err("Preview clip changed before rendering".to_string());
+        }
+        layer = audition.preview_layer(layer)?;
+    }
     validate_vj_preview_layer(&layer)?;
+    let position_ms = if let Some(audition) = slot_audition {
+        let (start, end) = audition.bounds()?;
+        // Clip out-points are exclusive, including the paused terminal frame.
+        position_ms.clamp(
+            start,
+            end.map(|end| end.saturating_sub(1).max(start))
+                .unwrap_or(u64::MAX),
+        )
+    } else {
+        position_ms
+    };
     layer.state.position_ms = position_ms;
     layer.state.playing = false;
     // render_layer_preview treats position zero as an invitation to use loop_start_ms.
@@ -80975,6 +81136,7 @@ fn vj_preview_frame_is_current(
     source_is_valid
         && rendered.layer_id.is_some()
         && rendered.layer_id == current.layer_id
+        && rendered.slot_id == current.slot_id
         && rendered.generation == current.generation
 }
 
@@ -81081,22 +81243,24 @@ fn render_live_video_monitor_frame(
                 .map_err(|error| format!("{error:?}"))?
         }
         LiveVideoMonitorKind::Preview => {
-            let (snapshot, bpm) = state.engine.video_layer_thumbnail_snapshot();
-            // layer_id remains in the binary IPC contract for compatibility, but Preview is
-            // rendered exclusively from the explicitly staged ephemeral transport.
+            // Preview comes exclusively from the explicitly staged session.
             let _ = layer_id;
-            let now = Instant::now();
-            let updated_at_ms = vj_preview_timestamp_ms();
-            let (summary, valid, effect_audition) = {
+            let (snapshot, bpm, summary, valid, effect_audition, slot_audition) = {
                 let mut transport = state
                     .vj_preview_transport
                     .lock()
                     .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+                let (snapshot, bpm) = state.engine.video_layer_thumbnail_snapshot();
+                let now = Instant::now();
+                let updated_at_ms = vj_preview_timestamp_ms();
                 let valid = transport.reconcile_at(&snapshot, now, updated_at_ms);
                 (
+                    snapshot,
+                    bpm,
                     transport.summary_at(now, updated_at_ms),
                     valid,
                     transport.effect_audition(),
+                    transport.session.as_ref().and_then(|session| session.slot_audition.clone()),
                 )
             };
             if !valid {
@@ -81105,11 +81269,12 @@ fn render_live_video_monitor_frame(
             let layer_id = summary
                 .layer_id
                 .ok_or_else(|| "Preview monitor has no staged layer".to_string())?;
-            let preview_video = vj_preview_render_snapshot(
+            let preview_video = vj_preview_render_snapshot_for_slot(
                 &snapshot,
                 layer_id,
                 summary.position_ms,
                 effect_audition,
+                slot_audition.as_deref(),
             )?;
             let mut renderer = match state.vj_preview_renderer.try_lock() {
                 Ok(renderer) => renderer,
@@ -81148,14 +81313,14 @@ fn render_live_video_monitor_frame(
 
             // A seek, restage, clear, layer removal, or source replacement may race a slow
             // decode. Do not publish that stale frame into the Preview bus.
-            let latest_snapshot = state.engine.video_snapshot();
-            let check_now = Instant::now();
-            let check_timestamp_ms = vj_preview_timestamp_ms();
             let (current, valid) = {
                 let mut transport = state
                     .vj_preview_transport
                     .lock()
                     .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+                let latest_snapshot = state.engine.video_snapshot();
+                let check_now = Instant::now();
+                let check_timestamp_ms = vj_preview_timestamp_ms();
                 let valid = transport.reconcile_at(&latest_snapshot, check_now, check_timestamp_ms);
                 (transport.summary_at(check_now, check_timestamp_ms), valid)
             };
@@ -81215,14 +81380,14 @@ fn render_live_video_monitor_frame(
     if let Some(rendered) = rendered_preview_summary.as_ref() {
         // Encoding is intentionally outside the transport lock. Recheck after it too, so a
         // seek/clear/project transition during JPEG work can never publish one stale packet.
-        let latest_snapshot = state.engine.video_snapshot();
-        let check_now = Instant::now();
-        let check_timestamp_ms = vj_preview_timestamp_ms();
         let (current, valid) = {
             let mut transport = state
                 .vj_preview_transport
                 .lock()
                 .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+            let latest_snapshot = state.engine.video_snapshot();
+            let check_now = Instant::now();
+            let check_timestamp_ms = vj_preview_timestamp_ms();
             let valid = transport.reconcile_at(&latest_snapshot, check_now, check_timestamp_ms);
             (transport.summary_at(check_now, check_timestamp_ms), valid)
         };
@@ -103097,7 +103262,7 @@ pub(crate) mod tests {
         // First-run staging carries the exact returned token through the
         // production reconcile. An idle show must still be at that identity.
         let summary =
-            stage_vj_preview_layer_for_authority(&harness.state, layer_id, Some(terminal.clone()))
+            stage_vj_preview_layer_for_authority(&harness.state, layer_id, None, Some(terminal.clone()))
                 .expect("the Bootstrap terminal authority stages its first layer");
         assert_eq!(summary.layer_id, Some(layer_id));
         assert!(!summary.playing, "staging cues Preview without playing it");
@@ -103112,7 +103277,7 @@ pub(crate) mod tests {
             .send(EngineCommand::SetBpm(bpm + 6.0))
             .expect("send live BPM change");
         let error =
-            stage_vj_preview_layer_for_authority(&harness.state, layer_id, Some(terminal.clone()))
+            stage_vj_preview_layer_for_authority(&harness.state, layer_id, None, Some(terminal.clone()))
                 .expect_err("a reconciled live edit retires the Bootstrap token");
         assert!(
             error.contains(&format!(
