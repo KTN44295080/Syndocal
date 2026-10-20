@@ -2680,11 +2680,11 @@ mod tests {
         // BeatDivision, the eight Perform actions and the renderer-routed
         // event each add one inventoried MIDI source.
         const MIDI_CONTROL_MESSAGE_COUNT: usize = 7;
-        const MIDI_CONTROL_ACTION_COUNT: usize = 60;
+        const MIDI_CONTROL_ACTION_COUNT: usize = 65;
         const MIDI_CLOCK_EVENT_COUNT: usize = 6;
         const MIDI_CONTROL_EVENT_COUNT: usize = 49;
         // The eight shared Perform actions and renderer event add nine OSC sources.
-        const OSC_CONTROL_ACTION_COUNT: usize = 55;
+        const OSC_CONTROL_ACTION_COUNT: usize = 60;
         const OSC_INPUT_EVENT_COUNT: usize = 48;
         const DMX_INPUT_PROTOCOL_COUNT: usize = 2;
         const DMX_INPUT_EVENT_COUNT: usize = 2;
@@ -2702,7 +2702,7 @@ mod tests {
         // Tauri source and one frontend invocation source; the read-only Media
         // Health folder listing (`select_media_relink_folder`) adds one more of each.
         const FRONTEND_INVOKE_COUNT: usize = 506;
-        assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 229);
+        assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 239);
         assert_eq!(
             registry.operations.len(),
             FROZEN_TAURI_ROUTE_ADMISSION_COUNT
@@ -2711,7 +2711,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1722);
+        assert_eq!(registry.operations.len(), 1732);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -3108,7 +3108,7 @@ mod tests {
         // `ResetShowSpoutOutputsExactPublished` source.
         const ENGINE_COUNT: usize = 285;
         const REMOTE_COUNT: usize = 116;
-        const MIDI_OSC_DMX_COUNT: usize = 229;
+        const MIDI_OSC_DMX_COUNT: usize = 239;
         const FRONTEND_COUNT: usize = 506;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
@@ -3116,8 +3116,8 @@ mod tests {
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1722);
-        assert_eq!(SOURCE_TOTAL, 1755);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1732);
+        assert_eq!(SOURCE_TOTAL, 1765);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 76);
 
@@ -3549,8 +3549,9 @@ mod tests {
         // more local, read-only native route; its frontend source is an alias.
         // The Perform MIDI/OSC actions, the beat-division message and their
         // renderer-routed events are inventoried sources, not classified
-        // external operations.
-        assert_eq!(unclassified.len(), 1168);
+        // external operations. Five group MIDI and five shared OSC/DMX actions
+        // add ten more local, unclassified sources.
+        assert_eq!(unclassified.len(), 1178);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -4314,11 +4315,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both native and frontend sources for generator create/update.
-        assert_eq!(legacy.operations.len(), 1722);
+        assert_eq!(legacy.operations.len(), 1732);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1722);
+        assert_eq!(operations.len(), 1732);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

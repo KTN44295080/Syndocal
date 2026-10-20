@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, type ComponentProps } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { controlMappingTargetData } from "../controlMappingLearn";
+import { controlMappingTargetData, type ControlMappingTarget } from "../controlMappingLearn";
 import type { MediaAssetAvailability, VideoBlendMode, VideoClipLayerRuntimeSummary, VideoLayerSummary, VideoLayerGroupSummary, CompositionSummary } from "../types";
 import { videoClipSlotBankCells } from "../videoClipSlotBankModel";
 import { VideoClipSlotBankPanel } from "./VideoClipSlotBankPanel";
@@ -207,17 +207,19 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
   const GroupHeader = (header: { id: number }) => {
     const group = () => ({ ...defaultVideoGroupMix, ...props.groups!.find(item => item.id === header.id)! });
     const patch = (value: Partial<VideoLayerGroupSummary>) => props.onPatchGroup?.(header.id, value);
-    // The current learn model cannot represent a video group. Do not claim a
-    // child-layer mapping is group control; preserve explicit target metadata.
-    const mapping = (property: string) => ({ ...controlMappingTargetData(null), "data-control-map-group-id": header.id, "data-control-map-group-property": property, "data-control-map-unsupported": "video-group" });
+    const mapping = (action: ControlMappingTarget["action"], property: string) => ({
+      ...controlMappingTargetData({ action, label: `Video Group ${header.id} ${property}`, video_group_id: header.id }),
+      "data-control-map-group-id": header.id, "data-control-map-group-property": property,
+    });
     return <div class="videoPerformGroupRow" data-video-perform-group={header.id} role="row">
       <div class="videoPerformGroupStrip" role="rowheader">
         <button type="button" data-video-group-collapse={header.id} aria-label={collapsed().includes(header.id) ? "Expand group" : "Collapse group"} aria-expanded={!collapsed().includes(header.id)} onClick={() => setCollapsed(ids => ids.includes(header.id) ? ids.filter(id => id !== header.id) : [...ids, header.id])}>{collapsed().includes(header.id) ? "\u25b8" : "\u25be"}</button>
         <button type="button" class="videoPerformGroupName" aria-pressed={props.selectedGroupId === header.id} data-video-perform-select-group={header.id} title={group().label} onClick={() => props.onSelectGroup?.(header.id)} data-no-localize>{group().label}</button>
-        <label title="Group opacity"><input type="range" min="0" max="1" step="0.01" value={group().opacity} aria-label="Group opacity" data-video-group-opacity={header.id} disabled={props.groupBusy} {...mapping("opacity")} onChange={event => patch({ opacity: Number(event.currentTarget.value) })} /><span data-no-localize>{Math.round(group().opacity * 100)}%</span></label>
-        <select value={group().blend_mode} aria-label="Group blend" data-video-group-blend={header.id} disabled={props.groupBusy} onChange={event => patch({ blend_mode: event.currentTarget.value as VideoBlendMode })}><For each={videoGroupBlends}>{blend => <option value={blend}>{blend === "SoftLight" ? "Soft Light" : blend}</option>}</For></select>
-        <button type="button" aria-pressed={group().solo} data-video-group-solo={header.id} disabled={props.groupBusy} {...mapping("solo")} onClick={() => patch({ solo: !group().solo })}>Solo</button>
-        <button type="button" aria-pressed={group().bypassed} data-video-group-bypass={header.id} disabled={props.groupBusy} {...mapping("bypassed")} onClick={() => patch({ bypassed: !group().bypassed })}>Bypass</button>
+        <label title="Group opacity"><input type="range" min="0" max="1" step="0.01" value={group().opacity} aria-label="Group opacity" data-video-group-opacity={header.id} disabled={props.groupBusy} {...mapping("VideoGroupOpacity", "opacity")} onChange={event => patch({ opacity: Number(event.currentTarget.value) })} /><span data-no-localize>{Math.round(group().opacity * 100)}%</span></label>
+        <select value={group().blend_mode} aria-label="Group blend" data-video-group-blend={header.id} {...mapping("VideoGroupBlendMode", "blend")} disabled={props.groupBusy} onChange={event => patch({ blend_mode: event.currentTarget.value as VideoBlendMode })}><For each={videoGroupBlends}>{blend => <option value={blend}>{blend === "SoftLight" ? "Soft Light" : blend}</option>}</For></select>
+        <button type="button" aria-pressed={group().solo} data-video-group-solo={header.id} disabled={props.groupBusy} {...mapping("VideoGroupSolo", "solo")} onClick={() => patch({ solo: !group().solo })}>Solo</button>
+        <button type="button" aria-pressed={group().bypassed} data-video-group-bypass={header.id} disabled={props.groupBusy} {...mapping("VideoGroupBypass", "bypass")} onClick={() => patch({ bypassed: !group().bypassed })}>Bypass</button>
+        <button type="button" aria-pressed={group().enabled} aria-label="Group enabled" title="Group enabled" data-video-group-enabled={header.id} disabled={props.groupBusy} {...mapping("VideoGroupEnabled", "enabled")} onClick={() => patch({ enabled: !group().enabled })}>Enabled</button>
       </div>
     </div>;
   };

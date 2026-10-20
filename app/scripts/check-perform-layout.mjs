@@ -392,23 +392,61 @@ try {
       }
       // Groups add a compact header while retaining three actual child rows.
       const groupSelector = root + ' [data-video-perform-group="6401"]';
-      for (const part of ['collapse', 'opacity', 'blend', 'solo', 'bypass']) {
+      for (const part of ['collapse', 'opacity', 'blend', 'solo', 'bypass', 'enabled']) {
         const control = groupSelector + ' [data-video-group-' + part + '="6401"]';
         const measurement = await inspect(control);
         assert.equal(measurement.failure, null, label+': visible group '+part+' '+JSON.stringify(measurement));
         assert.ok(measurement.height >= 44 && measurement.width >= 44, label+': group hit target '+part);
       }
       assert.equal(await cdp.evaluate('document.querySelector('+JSON.stringify(rowSelector)+').dataset.videoPerformGroupChild'), '6401', label+': layer is visibly nested under its group');
-      assert.equal(await cdp.evaluate('document.querySelector('+JSON.stringify(groupSelector+' [data-video-group-opacity]')+').dataset.controlMapUnsupported'), 'video-group', label+': group learn is explicitly unsupported rather than mapped to a child layer');
+      const groupActions = { opacity: 'VideoGroupOpacity', blend: 'VideoGroupBlendMode', solo: 'VideoGroupSolo', bypass: 'VideoGroupBypass', enabled: 'VideoGroupEnabled' };
+      const checkGroupTargets = async (surface) => {
+        for (const [property, action] of Object.entries(groupActions)) {
+          const selector = surface + ' [data-video-group-' + property + '="6401"]';
+          const decoded = await cdp.evaluate('(()=>{const e=document.querySelector('+JSON.stringify(selector)+');return {target:JSON.parse(e?.dataset.controlMapTarget??"null")?.[0],unsupported:e?.dataset.controlMapUnsupported}})()');
+          assert.ok(decoded.target, label+': '+surface+' exposes '+property+' as a Learn target');
+          assert.deepEqual([decoded.target.action, decoded.target.video_group_id, decoded.target.layer_id ?? null, decoded.target.midi_only === true, decoded.unsupported ?? null], [action, 6401, null, false, null], label+': group '+property+' maps the stable group ID for every Learn transport');
+        }
+      };
+      await checkGroupTargets(groupSelector);
       await cdp.evaluate('document.querySelector('+JSON.stringify(groupSelector+' [data-video-perform-select-group]')+').click()');
       await waitFor(()=>cdp.evaluate('!!document.querySelector("[data-video-group-inspector=\\"6401\\"]")'), label+': group Inspector selected');
       assert.equal(await cdp.evaluate('!!document.querySelector("[data-video-group-inspector] [data-video-group-transform-enabled]")'), true, label+': group transform available');
+      await checkGroupTargets('[data-video-group-inspector="6401"]');
+      assert.equal(await cdp.evaluate('document.querySelector("[data-video-group-inspector] .videoGroupLearnLimit")'), null, label+': obsolete group Learn limitation is removed');
       await writeFile(join(evidenceDir,label+'-group-inspector.png'),Buffer.from((await cdp.capture({format:'png',captureBeyondViewport:false})).data,'base64'));
+      if (width === 1280) {
+        assert.equal(await cdp.evaluate('!!document.querySelector(".app[data-control-learn-mode]")'), false, label+': Learn initially closed');
+        await cdp.evaluate('(()=>{const drawer=document.querySelector(".topbarTools");if(!drawer.open)drawer.querySelector("summary").click();document.querySelector("[data-control-learn-toggle=midi]").click();if(drawer.open)drawer.querySelector("summary").click()})()');
+        await waitFor(()=>cdp.evaluate('!!document.querySelector(".app[data-control-learn-mode=midi]")'), label+': MIDI Learn entered through Tools');
+        try {
+          for (const [property, japanese, divisions] of [['opacity', '不透明度', 0], ['solo', 'ソロ', 8]]) {
+            const selector = groupSelector + ' [data-video-group-' + property + '="6401"]';
+            const state = () => cdp.evaluate('(()=>{const e=document.querySelector('+JSON.stringify(selector)+');return {value:e.value??null,pressed:e.getAttribute("aria-pressed")}})()');
+            const before = await state();
+            const consumed = await cdp.evaluate('(()=>{const e=document.querySelector('+JSON.stringify(selector)+');const r=e.getBoundingClientRect();const event=new MouseEvent("contextmenu",{bubbles:true,cancelable:true,button:2,clientX:r.left+r.width/2,clientY:r.top+r.height/2});e.dispatchEvent(event);return event.defaultPrevented})()');
+            assert.equal(consumed, true, label+': group '+property+' context menu is captured by Learn');
+            await waitFor(()=>cdp.evaluate('!!document.querySelector("[data-control-assign-menu]")'), label+': group '+property+' assignment menu opens');
+            const expectedLabel = locale === 'ja' ? '映像グループ 6401 の'+japanese : 'Video Group 6401 '+property;
+            const menu = await cdp.evaluate('(()=>{const e=document.querySelector("[data-control-assign-menu]");const h=e.querySelector(".controlAssignMenuHead strong");const r=e.getBoundingClientRect();return {label:h.textContent.trim(),title:h.title,divisions:e.querySelectorAll("[data-control-assign-beat]").length,within:r.left>=0&&r.top>=0&&r.right<=innerWidth+1&&r.bottom<=innerHeight+1}})()');
+            assert.deepEqual([menu.label, menu.title, menu.divisions], [expectedLabel, expectedLabel, divisions], label+': group '+property+' menu uses translated label and correct beat eligibility');
+            assert.equal(menu.within, true, label+': translated group assignment menu fits viewport');
+            assert.deepEqual(await state(), before, label+': opening group assignment does not change the control');
+            await cdp.key('Escape', 'Escape', 27);
+            await waitFor(()=>cdp.evaluate('!document.querySelector("[data-control-assign-menu]")'), label+': Escape closes group assignment menu');
+            assert.equal(await cdp.evaluate('!!document.querySelector(".app[data-control-learn-mode=midi]")'), true, label+': closing menu retains MIDI Learn');
+          }
+        } finally {
+          await cdp.evaluate('(()=>{document.querySelector("[data-control-assign-menu] .controlAssignMenuClose")?.click();const drawer=document.querySelector(".topbarTools");if(document.querySelector(".app[data-control-learn-mode=midi]")){if(!drawer.open)drawer.querySelector("summary").click();document.querySelector("[data-control-learn-toggle=midi]").click()}if(drawer.open)drawer.querySelector("summary").click()})()');
+        }
+        await waitFor(()=>cdp.evaluate('!document.querySelector(".app[data-control-learn-mode], [data-control-assign-menu], .topbarTools[open]")'), label+': group Learn/menu/drawer cleaned up');
+      }
       await cdp.evaluate('document.querySelector('+JSON.stringify(groupSelector+' [data-video-group-collapse]')+').click()');
       assert.equal(await cdp.evaluate('!!document.querySelector('+JSON.stringify(rowSelector)+')'), false, label+': collapsed group hides its child');
       assert.equal(await cdp.evaluate('document.querySelector('+JSON.stringify(groupSelector+' [data-video-group-collapse]')+').getAttribute("aria-expanded")'), 'false', label+': collapsed group accessibility state');
       await cdp.evaluate('document.querySelector('+JSON.stringify(groupSelector+' [data-video-group-collapse]')+').click()');
       await waitFor(()=>cdp.evaluate('!!document.querySelector('+JSON.stringify(rowSelector)+')'), label+': expand restores child');
+      await checkGroupTargets(groupSelector);
       await cdp.evaluate('document.querySelector('+JSON.stringify(rowSelector+' [data-video-perform-select-layer]')+').click()');
       await waitFor(()=>cdp.evaluate('!document.querySelector("[data-video-group-inspector]")'), label+': selecting child restores layer Inspector');
       // ---- Top 1 / bottom 2: Perform shares the Lighting arrangement. ----

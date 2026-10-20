@@ -1257,6 +1257,7 @@ fn dvc_midi_mapping(
         duration_ms: None,
         clip_slot_id: None,
         isf_stage_id: None,
+        video_group_id: None,
         feedback: None,
         low: 0.0,
         high: 1.0,
@@ -1504,6 +1505,7 @@ fn parse_dmx_shortcuts(
                 layer_id: None,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
                 output_id: None,
                 video_param: None,
                 cue_point_index: None,
@@ -10414,6 +10416,7 @@ mod tests {
                 high: 1.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             }
         );
         assert!(matches!(
@@ -10539,6 +10542,7 @@ mod tests {
                 layer_id: None,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
                 output_id: None,
                 video_param: None,
                 cue_point_index: None,

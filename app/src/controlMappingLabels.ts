@@ -66,5 +66,10 @@ export const controlMappingTargetLabel = (mapping: DmxControlMapping | MidiContr
     case "VideoTransitionTime": return "Video transition time";
     case "VideoIsfStageEnabled": return `Video Layer ${mapping.layer_id} FX stage ${"isf_stage_id" in mapping ? mapping.isf_stage_id : "?"} enabled`;
     case "VideoIsfParam": return `Video Layer ${mapping.layer_id} FX stage ${"isf_stage_id" in mapping ? mapping.isf_stage_id : "?"} ${mapping.attribute ?? "control"}`;
+    case "VideoGroupOpacity": return `Video Group ${mapping.video_group_id} opacity`;
+    case "VideoGroupSolo": return `Video Group ${mapping.video_group_id} solo`;
+    case "VideoGroupBypass": return `Video Group ${mapping.video_group_id} bypass`;
+    case "VideoGroupBlendMode": return `Video Group ${mapping.video_group_id} blend`;
+    case "VideoGroupEnabled": return `Video Group ${mapping.video_group_id} enabled`;
   }
 };

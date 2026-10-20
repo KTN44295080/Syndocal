@@ -141,6 +141,7 @@ mod tests {
             layer_id: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             control: None,
             position: 1.0,
             value: 1.0,

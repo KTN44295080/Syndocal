@@ -1,4 +1,4 @@
-import { controlMappingTargetData } from "../controlMappingLearn";
+import { controlMappingTargetData, type ControlMappingTarget } from "../controlMappingLearn";
 import { For, Show } from "solid-js";
 import type { VideoLayerGroupSummary, Transform2D } from "../types";
 import type { VideoControlPanelProps } from "./VideoControlPanel";
@@ -9,17 +9,24 @@ import "./VideoLayerGroups.css";
 
 export function VideoGroupInspector(props: { group: VideoLayerGroupSummary; effects: VideoControlPanelProps["effectScopes"] }) {
   const patch = (value: Partial<VideoLayerGroupSummary>) => props.effects.onApplyCatalog(patchVideoGroup(props.effects.catalog, props.group.id, value));
-  const groupMapping = { ...controlMappingTargetData(null), "data-control-map-group-id": props.group.id, "data-control-map-group-property": "opacity", "data-control-map-unsupported": "video-group" };
+  const groupMapping = (action: ControlMappingTarget["action"], property: string) => ({
+    ...controlMappingTargetData({ action, label: `Video Group ${props.group.id} ${property}`, video_group_id: props.group.id }),
+    "data-control-map-group-id": props.group.id, "data-control-map-group-property": property,
+  });
   const transform = () => props.group.transform ?? { ...defaultTransform };
   const patchTransform = (key: keyof Transform2D, value: number) => {
     if (Number.isFinite(value)) void patch({ transform: { ...transform(), [key]: value } });
   };
   return <div class="videoGroupInspector" data-video-group-inspector={props.group.id}>
     <strong data-no-localize>{props.group.label}</strong>
-    <label class="checkbox"><input type="checkbox" checked={props.group.enabled} disabled={props.effects.busy} onChange={event => void patch({ enabled: event.currentTarget.checked })} />Group enabled</label>
+    <label class="checkbox"><input type="checkbox" checked={props.group.enabled} aria-label="Group enabled" data-video-group-enabled={props.group.id} {...groupMapping("VideoGroupEnabled", "enabled")} disabled={props.effects.busy} onChange={event => void patch({ enabled: event.currentTarget.checked })} />Group enabled</label>
     <div class="videoGroupInspectorMix">
-      <label>Group opacity<input type="range" min="0" max="1" step="0.01" value={props.group.opacity} {...groupMapping} disabled={props.effects.busy} onChange={event => void patch({ opacity: Number(event.currentTarget.value) })} /></label>
-      <label>Group blend<select value={props.group.blend_mode} disabled={props.effects.busy} onChange={event => void patch({ blend_mode: event.currentTarget.value as VideoLayerGroupSummary["blend_mode"] })}><For each={videoGroupBlends}>{blend => <option value={blend}>{blend === "SoftLight" ? "Soft Light" : blend}</option>}</For></select></label>
+      <button type="button" aria-pressed={props.group.solo} data-video-group-solo={props.group.id} {...groupMapping("VideoGroupSolo", "solo")} disabled={props.effects.busy} onClick={() => void patch({ solo: !props.group.solo })}>Group solo</button>
+      <button type="button" aria-pressed={props.group.bypassed} data-video-group-bypass={props.group.id} {...groupMapping("VideoGroupBypass", "bypass")} disabled={props.effects.busy} onClick={() => void patch({ bypassed: !props.group.bypassed })}>Group bypass</button>
+    </div>
+    <div class="videoGroupInspectorMix">
+      <label>Group opacity<input type="range" min="0" max="1" step="0.01" value={props.group.opacity} aria-label="Group opacity" data-video-group-opacity={props.group.id} {...groupMapping("VideoGroupOpacity", "opacity")} disabled={props.effects.busy} onChange={event => void patch({ opacity: Number(event.currentTarget.value) })} /></label>
+      <label>Group blend<select value={props.group.blend_mode} aria-label="Group blend" data-video-group-blend={props.group.id} {...groupMapping("VideoGroupBlendMode", "blend")} disabled={props.effects.busy} onChange={event => void patch({ blend_mode: event.currentTarget.value as VideoLayerGroupSummary["blend_mode"] })}><For each={videoGroupBlends}>{blend => <option value={blend}>{blend === "SoftLight" ? "Soft Light" : blend}</option>}</For></select></label>
     </div>
     <fieldset disabled={props.effects.busy}>
       <legend>Group transform</legend>
@@ -35,6 +42,5 @@ export function VideoGroupInspector(props: { group: VideoLayerGroupSummary; effe
     </fieldset>
     <VideoEffectScopePanel scopeLabel="Group FX" title={props.group.label} scope={{ scope: "group", group_id: props.group.id }} catalog={props.effects.catalog} busy={props.effects.busy}
       onApplyCatalog={props.effects.onApplyCatalog} onImportIsf={props.effects.onImportIsf} onApplyPreset={props.effects.onApplyPreset} onRemoveChain={props.effects.onRemoveChain} />
-    <p class="videoGroupLearnLimit">Group MIDI Learn is not available yet.</p>
   </div>;
 }

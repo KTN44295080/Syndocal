@@ -728,4 +728,6 @@ assert.match(editor, /action: "VideoIsfParam"[\s\S]{0,300}isf_stage_id: props\.s
 assert.equal((editor.match(/controlMappingTargetData\(mapTarget\(control\)\)/g) ?? []).length, 4, "event, bool, enumerated and scalar controls are targets");
 assert.match(editor, /props\.auditioning/, "a Preview-only audition draft is never a MIDI target");
 
+await import("./check-group-control-mapping.mjs");
+
 console.log("PASS: Perform MIDI/OSC/DMX targets use stable ids; renderer routing, selectors, parameters, beat division triggers and the Rust/TypeScript contract hold");

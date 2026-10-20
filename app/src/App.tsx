@@ -1000,6 +1000,7 @@ import {
   beatDivisionLabel,
   createBeatTriggerScheduler,
   isPerformTriggerAction,
+  isPerformGroupAction,
   midiSourceDescription,
   type PerformRoutedInput,
 } from "./controlMappingPerform";
@@ -18676,7 +18677,10 @@ export default function App() {
     mode: controlLearnMode,
     busy: controlLearnBusy,
     setBusy: setControlLearnBusy,
-    targets: controlMappingTargetsFromElement,
+    targets: element => controlMappingTargetsFromElement(element).map(target =>
+      isPerformGroupAction(target.action)
+        ? { ...target, label: translateUiText(target.label, uiLocale()) }
+        : target),
     select: selectControlLearnElement,
     message: setMessage,
     assign: (request) => {
@@ -21112,6 +21116,7 @@ export default function App() {
     setVideoLayerIsfControl,
     triggerVideoLayerIsfEvent,
     applyVideoEffectCatalog,
+    patchVideoLayerGroup,
     importVideoEffectScopeIsf,
     applyVideoEffectPreset,
     removeVideoEffectChain,
@@ -22028,9 +22033,13 @@ export default function App() {
   };
   // Perform MIDI/OSC/DMX targets and beat-division triggers run the same functions the
   // on-screen pad, Take button, selects and FX controls call.
+  const performInputSuspended = () => Boolean(paneWindow) || controlLearnMode() !== null || controlLearnBusy()
+    || isInAppDialogOpen() || Boolean(document.querySelector("dialog[open]"));
   const performDispatcher = createPerformControlDispatcher({
     layers: () => snapshot().video.layers,
     effectCatalog: videoEffectCatalog,
+    patchGroup: patchVideoLayerGroup,
+    inputSuspended: performInputSuspended,
     projectEpoch: () => captureProjectAuthorityIdentity().project_epoch,
     clipRuntime: (layerId) => videoClipRuntime().layers.find((runtime) => runtime.layer_id === layerId) ?? null,
     takeEnabled: () => {
@@ -22071,7 +22080,7 @@ export default function App() {
   const beatTriggers = createBeatTriggerScheduler({
     mappings: midiMappings,
     dispatch: (input) => { void performDispatcher.dispatch(input); },
-    suspended: () => controlLearnMode() !== null || controlLearnBusy(),
+    suspended: performInputSuspended,
   });
   createEffect(() => {
     const clock = snapshot().clock;
