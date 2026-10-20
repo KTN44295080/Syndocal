@@ -1,3 +1,7 @@
+import type { VideoOutputConfigDraft } from "../editorDrafts";
+import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
+import type { VideoDisplayMonitorDescriptor } from "./VideoOutputCreatePanel";
+import { VideoOutputConfigPanel } from "./VideoOutputConfigPanel";
 import { For, Show, createEffect, createMemo, createSignal, type JSX } from "solid-js";
 import type {
   CompositionSummary,
@@ -24,6 +28,14 @@ export interface VideoOutputSetupWindowState {
 type VideoOutputListPanelProps = {
   setupTools: JSX.Element;
   outputs: VideoOutputSummary[];
+  syphonAvailable: boolean;
+  spoutAvailable: boolean;
+  ndiAvailable: boolean;
+  invokeCommand: FrontendTauriInvoke;
+  outputConfigDraft: (output: VideoOutputSummary) => VideoOutputConfigDraft;
+  onOutputConfigDraft: (output: VideoOutputSummary, patch: Partial<VideoOutputConfigDraft>) => void;
+  onApplyOutputConfig: (output: VideoOutputSummary, monitor?: VideoDisplayMonitorDescriptor) => MaybePromise;
+  onRemoveOutput: (outputId: number) => MaybePromise;
   compositions: CompositionSummary[];
   mappingPresets: VideoOutputMappingPresetSummary[];
   mappingPresetLabel: string;
@@ -76,7 +88,7 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
             <Show when={props.outputs.length > 0} fallback={
               <div class="videoOutputEmptyState" data-empty-state="video-output">
                 <strong>No configured video outputs.</strong>
-                <span>Add a Display output to control its live window.</span>
+                <span>Add an available video output to send a composition.</span>
               </div>
             }>
               <For each={props.outputs}>
@@ -111,7 +123,7 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
       <Show when={selectedOutput()} fallback={
         <main class="videoSetupMapPane videoOutputNoSelection" aria-live="polite">
           <h3>Video output status</h3>
-          <p>No configured video outputs. Add a Display output to control its live window.</p>
+          <p>No configured video outputs. Add an available video output to send a composition.</p>
         </main>
       }>
         {(output) => {
@@ -208,6 +220,23 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
                 error={windowState().error}
                 onToggleWindow={props.onToggleWindow}
               />
+
+              <details class="ioDisclosure" data-video-output-config-disclosure>
+                <summary>Output configuration</summary>
+                <div class="ioDisclosureBody">
+                  <VideoOutputConfigPanel
+                    output={output()}
+                    draft={props.outputConfigDraft(output())}
+                    syphonAvailable={props.syphonAvailable}
+                    spoutAvailable={props.spoutAvailable}
+                    ndiAvailable={props.ndiAvailable}
+                    invokeCommand={props.invokeCommand}
+                    onDraft={props.onOutputConfigDraft}
+                    onApply={props.onApplyOutputConfig}
+                    onRemove={props.onRemoveOutput}
+                  />
+                </div>
+              </details>
 
               <details class="advancedProjectionCorrection">
                 <summary>Advanced projection correction</summary>

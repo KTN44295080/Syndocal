@@ -88,6 +88,7 @@ use stage_map_contract::{
     validate_project_stage_objects, validate_stage_map_config,
 };
 mod video_output_mapping_contract;
+mod video_output_authoring;
 use video_output_mapping_contract::{
     normalize_video_output_mapping_field, normalize_video_output_mapping_preset_label,
     validate_video_output_mapping,
@@ -13633,6 +13634,9 @@ struct NativeVideoOutputWorker {
     /// (and therefore dropped its GPU presenter) and the native window has
     /// acknowledged retirement.
     teardown_lease: Arc<Mutex<Option<engine::OutputOwnershipTeardownLease>>>,
+    /// Failed authoring construction remains counted until this exact
+    /// worker/shell receives both its join and native retirement ACK.
+    retained_creation_leases: Vec<engine::OutputOwnershipCreationLease>,
 }
 
 impl NativeVideoOutputWorker {
@@ -13662,6 +13666,17 @@ impl NativeVideoOutputWorker {
             join: Some(join),
             start_gate,
             teardown_lease,
+            retained_creation_leases: Vec::new(),
+        }
+    }
+
+    fn for_retirement(lease: Option<engine::OutputOwnershipTeardownLease>) -> Self {
+        Self {
+            stop: Arc::new(AtomicBool::new(true)),
+            join: None,
+            start_gate: None,
+            teardown_lease: Arc::new(Mutex::new(lease)),
+            retained_creation_leases: Vec::new(),
         }
     }
 
@@ -13717,6 +13732,7 @@ impl NativeVideoOutputWorker {
             Err(poisoned) => poisoned.into_inner().take(),
         };
         drop(lease);
+        self.retained_creation_leases.clear();
     }
 }
 
@@ -25499,6 +25515,7 @@ const OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES: &[&str] = &[
 const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "acquire_output_lease_v2",
     "add_display_output_v2",
+    "add_external_output_v2",
     "add_local_media_layers",
     "add_still_image_layer",
     "add_video_file_layer",
@@ -25517,6 +25534,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "close_video_output_window",
     "commit_timeline_loop_runtime_v1",
     "configure_takeover_recording_v1",
+    "configure_video_output_v2",
     "connect_midi_clock",
     "connect_midi_control",
     "connect_midi_feedback",
@@ -25566,6 +25584,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "release_video_layer_transition_bus_authoritative",
     "relink_media_asset",
     "relinquish_output_lease_v2",
+    "remove_video_output_v2",
     "renew_output_lease_v2",
     "request_dj_link_operator_return_to_dj_control",
     "reselect_asio_output_profile",
@@ -26171,6 +26190,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::SetVideoBlackout(..)
         | EngineCommand::AddVideoOutput(..)
         | EngineCommand::AddVideoOutputPublished { .. }
+        | EngineCommand::AuthorVideoOutputPublished { .. }
         | EngineCommand::RemoveVideoOutput(..)
         | EngineCommand::RemoveVideoOutputPublished { .. }
         | EngineCommand::SetVideoOutputConfig { .. }
@@ -51415,6 +51435,51 @@ async fn add_display_output_v2(
         .await
 }
 
+#[tauri::command]
+async fn add_external_output_v2(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(
+        app,
+        window,
+        protocol::control_plane_command::OUTPUT_EXTERNAL_ADD_OPERATION_ID,
+        request,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn configure_video_output_v2(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(
+        app,
+        window,
+        protocol::control_plane_command::OUTPUT_VIDEO_CONFIGURE_OPERATION_ID,
+        request,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn remove_video_output_v2(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(
+        app,
+        window,
+        protocol::control_plane_command::OUTPUT_VIDEO_REMOVE_OPERATION_ID,
+        request,
+    )
+    .await
+}
+
 /// Canonical physical live-window mutation.  Legacy open/sync/close routes
 /// remain rejected; this ingress is the only reviewed route for a Display
 /// shell and never accepts a test-pattern selector.
@@ -58778,7 +58843,27 @@ pub(crate) fn build_output_lease_authorization_request(
     project_epoch: u64,
 ) -> Result<(OutputLeaseRequest, u64), String> {
     use protocol::control_plane_command::OutputControlActionV2;
-    let resources = output_lease_resources_for_control_action(action)?;
+    let resources = match action {
+        OutputControlActionV2::AddExternalOutput { lease, .. }
+        | OutputControlActionV2::ConfigureVideoOutput { lease, .. }
+        | OutputControlActionV2::RemoveVideoOutput { lease, .. } => {
+            let lease_id = output_lease::OutputLeaseId::decode(&lease.lease_id)
+                .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?;
+            let registry = state.output_lease_registry.lock()
+                .map_err(|_| "Output lease registry lock was poisoned".to_string())?;
+            let view = registry.lease_view(lease_id)
+                .map_err(|error| format!("Output lease authority is unavailable: {error:?}"))?;
+            let resources = view.snapshot.resources
+                .ok_or_else(|| "Video output authoring requires an active Video-capable lease".to_string())?;
+            if !resources.as_slice().contains(&OutputLeaseResource::Video)
+                || view.project_identity != output_lease_project_identity(project_epoch)
+            {
+                return Err("Video output authoring requires a Video-capable lease for this project".to_string());
+            }
+            resources
+        }
+        _ => output_lease_resources_for_control_action(action)?,
+    };
     // Do not retain the registry guard while asking the managed keepalive
     // whether this is its exact-Both lease: runtime operations take the
     // serial lane before the registry, so the opposite order would deadlock.
@@ -58867,6 +58952,9 @@ pub(crate) fn build_output_lease_authorization_request(
             }
         }
         OutputControlActionV2::Arm { lease, .. }
+        | OutputControlActionV2::AddExternalOutput { lease, .. }
+        | OutputControlActionV2::ConfigureVideoOutput { lease, .. }
+        | OutputControlActionV2::RemoveVideoOutput { lease, .. }
         | OutputControlActionV2::SetLightingMaster { lease, .. }
         | OutputControlActionV2::SetGroupSubmaster { lease, .. }
         | OutputControlActionV2::SetVideoMaster { lease, .. }
@@ -74343,7 +74431,24 @@ impl video::ExternalVideoTransportDriver for RecordingExternalVideoTransportDriv
     }
 }
 
+struct VideoOutputAuthoringAdmission<'a> {
+    output_id: VideoOutputId,
+    validate: &'a dyn Fn() -> Result<(), String>,
+}
+
+impl VideoOutputAuthoringAdmission<'_> {
+    fn validate_route(&self, route: &video::ExternalVideoTransportRoute) -> Result<(), String> {
+        if route.direction != video::ExternalVideoTransportDirection::Output
+            || route.route_id != self.output_id
+        {
+            return Err("Video output authoring admission does not cover this route".to_string());
+        }
+        (self.validate)()
+    }
+}
+
 struct AppExternalVideoTransportDriver<'a> {
+    authoring_admission: Option<VideoOutputAuthoringAdmission<'a>>,
     recording: RecordingExternalVideoTransportDriver<'a>,
     output_ownership_role: MachineOutputRole,
     capture: &'a mut capture_transport::CaptureTransportState,
@@ -74403,6 +74508,11 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
         &mut self,
         route: &video::ExternalVideoTransportRoute,
     ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        if let Some(admission) = self.authoring_admission.as_ref() {
+            admission.validate_route(route).map_err(|message| {
+                video::ExternalVideoTransportDriverError { message }
+            })?;
+        }
         if route.direction == video::ExternalVideoTransportDirection::Output
             && !self.output_ownership_role.video_allowed()
         {
@@ -74426,7 +74536,13 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
         if route.backend_id == "ndi" {
             let activation = self.validate_external_video_activation(route)?;
             let engine = &self.engine;
-            self.ndi.start_route(route, engine, Some(activation))?;
+            if let Some(admission) = self.authoring_admission.as_ref() {
+                self.ndi.start_route_for_authoring(
+                    route, engine, Some(activation), &|| admission.validate_route(route),
+                )?;
+            } else {
+                self.ndi.start_route(route, engine, Some(activation))?;
+            }
             self.recording.push_event(
                 ExternalVideoTransportDriverAction::Start,
                 route,
@@ -74442,7 +74558,13 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
         if route.backend_id == "spout" {
             let activation = self.validate_external_video_activation(route)?;
             let engine = &self.engine;
-            self.spout.start_route(route, engine, Some(activation))?;
+            if let Some(admission) = self.authoring_admission.as_ref() {
+                self.spout.start_route_for_authoring(
+                    route, engine, Some(activation), &|| admission.validate_route(route),
+                )?;
+            } else {
+                self.spout.start_route(route, engine, Some(activation))?;
+            }
             self.recording.push_event(
                 ExternalVideoTransportDriverAction::Start,
                 route,
@@ -74463,8 +74585,13 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
             #[cfg(all(feature = "syphon", target_os = "macos"))]
             {
                 let activation = self.validate_external_video_activation(route)?;
-                self.syphon
-                    .start_route(route, &self.engine, Some(activation))?;
+                if let Some(admission) = self.authoring_admission.as_ref() {
+                    self.syphon.start_route_for_authoring(
+                        route, &self.engine, Some(activation), &|| admission.validate_route(route),
+                    )?;
+                } else {
+                    self.syphon.start_route(route, &self.engine, Some(activation))?;
+                }
                 self.recording.push_event(
                     ExternalVideoTransportDriverAction::Start,
                     route,
@@ -74484,6 +74611,11 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
         &mut self,
         route: &video::ExternalVideoTransportRoute,
     ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        if let Some(admission) = self.authoring_admission.as_ref() {
+            admission.validate_route(route).map_err(|message| {
+                video::ExternalVideoTransportDriverError { message }
+            })?;
+        }
         if route.backend_id == "camera" || route.backend_id == "screen_capture" {
             self.capture.stop_route(route)?;
             self.recording.push_event(
@@ -74498,7 +74630,13 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
         }
         #[cfg(feature = "ndi")]
         if route.backend_id == "ndi" {
-            self.ndi.stop_route(route, &self.engine)?;
+            if let Some(admission) = self.authoring_admission.as_ref() {
+                self.ndi.stop_route_for_authoring(
+                    route, &self.engine, &|| admission.validate_route(route),
+                )?;
+            } else {
+                self.ndi.stop_route(route, &self.engine)?;
+            }
             self.recording.push_event(
                 ExternalVideoTransportDriverAction::Stop,
                 route,
@@ -74512,7 +74650,13 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
         }
         #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
         if route.backend_id == "spout" {
-            self.spout.stop_route(route, &self.engine)?;
+            if let Some(admission) = self.authoring_admission.as_ref() {
+                self.spout.stop_route_for_authoring(
+                    route, &self.engine, &|| admission.validate_route(route),
+                )?;
+            } else {
+                self.spout.stop_route(route, &self.engine)?;
+            }
             self.recording.push_event(
                 ExternalVideoTransportDriverAction::Stop,
                 route,
@@ -74527,7 +74671,13 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
         if route.backend_id == "syphon" {
             #[cfg(all(feature = "syphon", target_os = "macos"))]
             {
-                self.syphon.stop_route(route, &self.engine)?;
+                if let Some(admission) = self.authoring_admission.as_ref() {
+                    self.syphon.stop_route_for_authoring(
+                        route, &self.engine, &|| admission.validate_route(route),
+                    )?;
+                } else {
+                    self.syphon.stop_route(route, &self.engine)?;
+                }
                 self.recording.push_event(
                     ExternalVideoTransportDriverAction::Stop,
                     route,
@@ -74655,6 +74805,7 @@ fn sync_external_video_transports_from_snapshot(
         .harvest_failed_workers(engine)
         .map_err(|error| error.message)?;
     let mut driver = AppExternalVideoTransportDriver {
+        authoring_admission: None,
         recording: RecordingExternalVideoTransportDriver {
             events: &mut events,
         },
@@ -76130,6 +76281,7 @@ fn prepare_native_video_output_candidate_worker(
             unpublished_snapshot: Some(unpublished_snapshot),
             gate_render_loop_until_publication: true,
             first_frame_fence: Some(expected_fence.clone()),
+            first_frame_admission: None,
             phase_cancelled: Some(phase_cancelled),
             show_before_first_frame: true,
             label: label.clone(),
@@ -82988,6 +83140,7 @@ fn set_display_output_window_open_with_output_control_fence(
                     unpublished_snapshot: None,
                     gate_render_loop_until_publication: false,
                     first_frame_fence: None,
+                    first_frame_admission: None,
                     phase_cancelled: None,
                     show_before_first_frame: false,
                     label: label.clone(),
@@ -84943,6 +85096,7 @@ struct NativeVideoLiveOutputRequest {
     unpublished_snapshot: Option<EngineSnapshot>,
     gate_render_loop_until_publication: bool,
     first_frame_fence: Option<OutputControlFenceV1>,
+    first_frame_admission: Option<Box<dyn Fn() -> Result<(), String> + Send>>,
     phase_cancelled: Option<Arc<AtomicBool>>,
     show_before_first_frame: bool,
     label: String,
@@ -84967,6 +85121,7 @@ fn start_native_video_live_output(
         unpublished_snapshot,
         gate_render_loop_until_publication,
         first_frame_fence,
+        first_frame_admission,
         phase_cancelled,
         show_before_first_frame,
         label,
@@ -85054,6 +85209,9 @@ fn start_native_video_live_output(
                 );
             }
         }
+        if let Some(admit) = first_frame_admission.as_ref() {
+            admit()?;
+        }
         let _video_permit = engine.acquire_video_output()?;
         if show_before_first_frame {
             window
@@ -85091,6 +85249,27 @@ fn start_native_video_live_output(
                     &first_frame.authority,
                     first_frame.follow_identity,
                     || {
+                        if phase_cancelled.as_ref().is_some_and(|cancelled| {
+                            cancelled.load(Ordering::Acquire)
+                        }) {
+                            return Err("Display output native phase expired before first physical present".to_string());
+                        }
+                        if let Some(admit) = first_frame_admission.as_ref() {
+                            admit()?;
+                        }
+                        // Lease validation can acquire short authority locks.
+                        // Recheck the native token afterward so no presentation
+                        // mutation slips between the last token read and present.
+                        if phase_cancelled.as_ref().is_some_and(|cancelled| {
+                            cancelled.load(Ordering::Acquire)
+                        }) {
+                            return Err("Display output native phase expired before first physical present".to_string());
+                        }
+                        if engine.video_presentation_config_token()
+                            != first_frame.authority.presentation_config_token
+                        {
+                            return Err("Native Display presentation authority changed during first-frame admission".to_string());
+                        }
                         present_native_display_payload(presenter, &first_frame).map_err(|error| {
                             format!("Native Display output first frame failed: {error:?}")
                         })?;
@@ -86913,6 +87092,7 @@ async fn open_video_output_window(
                     unpublished_snapshot: None,
                     gate_render_loop_until_publication: false,
                     first_frame_fence: None,
+                    first_frame_admission: None,
                     phase_cancelled: None,
                     show_before_first_frame: false,
                     label: label.clone(),
@@ -98948,6 +99128,9 @@ pub(crate) mod tests {
         // These output-control adapters have their own native lease/fence
         // authority and must never retain the outer guard into that executor.
         for command in [
+            "add_external_output_v2",
+            "configure_video_output_v2",
+            "remove_video_output_v2",
             "launch_video_clip_output_control_v2",
             "set_network_dmx_routes_v1",
             "set_group_submaster_output_control_v2",
@@ -98961,8 +99144,9 @@ pub(crate) mod tests {
                 Some(RuntimeInvokeDispatchPolicy::PreflightOnlyNonProjectOrInnerAuthority)
             );
         }
-        // The extension setter owns its lifecycle authority inside the handler.
-        assert_eq!(runtime_routes.len(), 178);
+        // The extension setter and three video authoring routes own their
+        // lifecycle authority inside the handler.
+        assert_eq!(runtime_routes.len(), 181);
         // Generator routes own renderer-ticketed publication admission. The
         // runtime-only dispatch policy must not classify those project edits.
         const GENERATOR_PROJECT_ROUTES: [&str; 2] =
@@ -99249,11 +99433,6 @@ pub(crate) mod tests {
                 "renderer:test"
             );
         }
-    }
-
-    #[derive(Default)]
-    struct NativeOutputQaRecorder {
-        confirmations: usize,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100408,8 +100587,6 @@ pub(crate) mod tests {
         let monitors = native_output_qa_monitors();
         let native_ops =
             FakeDisplayOutputNativeOperations::new(Arc::clone(&state), monitors.clone());
-        let mut recorder = NativeOutputQaRecorder::default();
-
         for (offset, monitor) in monitors
             .iter()
             .filter(|monitor| !monitor.is_editor_monitor)
@@ -100437,11 +100614,10 @@ pub(crate) mod tests {
             };
             request.validate().expect("canonical Add request");
             assert!(
-                control_plane_runtime::output_action_requires_native_danger_confirmation(
+                !control_plane_runtime::output_action_requires_native_danger_confirmation(
                     &request.action
                 )
             );
-            recorder.confirmations += 1;
             let (lease_request, lease_now) = build_output_lease_authorization_request(
                 &state,
                 &owner_principal,
@@ -100482,7 +100658,6 @@ pub(crate) mod tests {
         assert_eq!(native_ops.presented.load(Ordering::Acquire), 4);
         assert_eq!(native_ops.published.load(Ordering::Acquire), 4);
         assert_eq!(native_ops.publication_state(), (4, 4, 4, 4));
-        assert_eq!(recorder.confirmations, 4);
         assert!(state
             .output_lease_durable_receipts
             .lock()
@@ -100495,8 +100670,8 @@ pub(crate) mod tests {
 
     /// Headless/native-QA driver seam. It deliberately constructs the same
     /// v2 AddDisplay request that the frontend sends, walks the detected
-    /// editor+four-sub-display topology, and injects a Yes confirmation only
-    /// through this test callback. It is not a Tauri command and therefore
+    /// editor+four-sub-display topology, and verifies direct authoring without
+    /// an additional confirmation. It is not a Tauri command and therefore
     /// cannot be reached by release, remote, MIDI, OSC, or shortcut ingress.
     #[test]
     fn native_output_qa_driver_uses_canonical_v2_add_path_for_four_sub_displays() {
@@ -100596,7 +100771,6 @@ pub(crate) mod tests {
             lease_id: "lease-0000000000000001".to_string(),
             generation: 1,
         };
-        let mut confirmation_count = 0usize;
         let mut phases = Vec::new();
         for (request_id, monitor) in monitors
             .iter()
@@ -100616,9 +100790,8 @@ pub(crate) mod tests {
             };
             assert_eq!(action.operation_id(), OUTPUT_DISPLAY_ADD_OPERATION_ID);
             assert!(
-                control_plane_runtime::output_action_requires_native_danger_confirmation(&action)
+                !control_plane_runtime::output_action_requires_native_danger_confirmation(&action)
             );
-            confirmation_count += 1; // injected Yes in this test-only driver
             let request = OutputControlCommandRequestV2 {
                 operation_id: OUTPUT_DISPLAY_ADD_OPERATION_ID.to_string(),
                 request_id: request_id as u64 + 1,
@@ -100641,11 +100814,6 @@ pub(crate) mod tests {
             phases.len(),
             4,
             "editor monitor must be excluded from QA adds"
-        );
-        assert_eq!(
-            confirmation_count,
-            phases.len(),
-            "each add gets one injected Yes"
         );
         assert_eq!(
             phases
@@ -136698,6 +136866,9 @@ fn main() {
             enable_output_control_v2,
             take_over_output_control_v2,
             add_display_output_v2,
+            add_external_output_v2,
+            configure_video_output_v2,
+            remove_video_output_v2,
             set_display_output_window_open_v2,
             assign_video_output_composition_v2,
             acquire_output_lease_v2,

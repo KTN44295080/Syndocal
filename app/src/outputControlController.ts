@@ -12,6 +12,9 @@ export const OUTPUT_BLACKOUT_SET_OPERATION_ID = "syndocal.output.blackout.set.v2
 export const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID = "syndocal.output.blackout.release.v2";
 export const OUTPUT_STANDBY_TAKEOVER_OPERATION_ID = "syndocal.output.standby.takeover.v2";
 export const OUTPUT_DISPLAY_ADD_OPERATION_ID = "syndocal.output.display.add.v2";
+export const OUTPUT_EXTERNAL_ADD_OPERATION_ID = "syndocal.output.external.add.v2";
+export const OUTPUT_VIDEO_CONFIGURE_OPERATION_ID = "syndocal.output.video.configure.v2";
+export const OUTPUT_VIDEO_REMOVE_OPERATION_ID = "syndocal.output.video.remove.v2";
 export const OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID =
   "syndocal.output.display.window.set_open.v2";
 export const OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID =
@@ -162,6 +165,39 @@ export type OutputVideoCompositionAssignmentAction = {
   lease: OutputLeaseAuthority;
 };
 
+export interface ExternalVideoOutputSpec {
+  kind: "SpoutSender" | "NdiSender" | "SyphonServer";
+  label: string;
+  width: number;
+  height: number;
+  endpoint_name: string;
+  composition_id: number;
+}
+
+export interface VideoOutputConfigurationSpec {
+  kind: "Display" | ExternalVideoOutputSpec["kind"];
+  label: string;
+  width: number;
+  height: number;
+  fullscreen: boolean;
+  monitor_index: number | null;
+  monitor_identity: string | null;
+  endpoint_name: string | null;
+}
+
+export type OutputVideoAuthoringAction =
+  | { kind: "add_external_output"; spec: ExternalVideoOutputSpec; lease: OutputLeaseAuthority }
+  | { kind: "configure_video_output"; output_id: number; spec: VideoOutputConfigurationSpec; lease: OutputLeaseAuthority }
+  | { kind: "remove_video_output"; output_id: number; lease: OutputLeaseAuthority };
+
+export type OutputVideoAuthoringIntent =
+  | Omit<Extract<OutputVideoAuthoringAction, { kind: "add_external_output" }>, "lease">
+  | Omit<Extract<OutputVideoAuthoringAction, { kind: "configure_video_output" }>, "lease">
+  | Omit<Extract<OutputVideoAuthoringAction, { kind: "remove_video_output" }>, "lease">;
+
+const isVideoAuthoringAction = (action: OutputControlOperationAction): action is OutputVideoAuthoringAction =>
+  action.kind === "add_external_output" || action.kind === "configure_video_output" || action.kind === "remove_video_output";
+
 export type OutputEnableAction = { kind: "enable_output" };
 /** The sole staged show route activation. It has no mutable route fields. */
 export type OutputShowArtNetLoopbackRouteEnableAction = {
@@ -266,6 +302,7 @@ export type OutputControlAction =
       lease: OutputLeaseAuthority;
     }
   | OutputDisplayAction
+  | OutputVideoAuthoringAction
   | OutputDisplayWindowAction
   | OutputVideoCompositionAssignmentAction;
 
@@ -510,6 +547,9 @@ const operationIdForAction = (action: OutputControlOperationAction): string => {
     case "release_blackout": return OUTPUT_BLACKOUT_RELEASE_OPERATION_ID;
     case "take_over_standby": return OUTPUT_STANDBY_TAKEOVER_OPERATION_ID;
     case "add_display": return OUTPUT_DISPLAY_ADD_OPERATION_ID;
+    case "add_external_output": return OUTPUT_EXTERNAL_ADD_OPERATION_ID;
+    case "configure_video_output": return OUTPUT_VIDEO_CONFIGURE_OPERATION_ID;
+    case "remove_video_output": return OUTPUT_VIDEO_REMOVE_OPERATION_ID;
     case "set_display_window_open": return OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID;
     case "assign_video_output_composition": return OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID;
     case "set_lighting_master": return OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID;
@@ -542,6 +582,9 @@ type OutputControlInvokeCommand =
   | "release_blackout_output_control_v2"
   | "take_over_output_control_v2"
   | "add_display_output_v2"
+  | "add_external_output_v2"
+  | "configure_video_output_v2"
+  | "remove_video_output_v2"
   | "set_display_output_window_open_v2"
   | "assign_video_output_composition_v2"
   | "set_lighting_master_output_control_v2"
@@ -573,6 +616,9 @@ const commandForAction = (action: OutputControlOperationAction): OutputControlIn
     case "release_blackout": return "release_blackout_output_control_v2";
     case "take_over_standby": return "take_over_output_control_v2";
     case "add_display": return "add_display_output_v2";
+    case "add_external_output": return "add_external_output_v2";
+    case "configure_video_output": return "configure_video_output_v2";
+    case "remove_video_output": return "remove_video_output_v2";
     case "set_display_window_open": return "set_display_output_window_open_v2";
     case "assign_video_output_composition": return "assign_video_output_composition_v2";
     case "set_lighting_master": return "set_lighting_master_output_control_v2";
@@ -867,6 +913,17 @@ export function hasOnlyActiveOutputLease(
   ).length === 1;
 }
 
+const validAuthoringLabel = (value: unknown): value is string =>
+  typeof value === "string" && value.trim() === value && value.length > 0
+  && new TextEncoder().encode(value).length <= 128 && !/[\u0000-\u001f\u007f-\u009f/\\]/.test(value);
+const validAuthoringEndpoint = (value: unknown): value is string =>
+  typeof value === "string" && value.trim() === value && value.length > 0
+  && new TextEncoder().encode(value).length <= 255 && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
+const validAuthoringSize = (value: unknown, max: number): value is number =>
+  isPositiveSafeInteger(value) && value <= max;
+const isExternalOutputKind = (kind: unknown): kind is ExternalVideoOutputSpec["kind"] =>
+  kind === "SpoutSender" || kind === "NdiSender" || kind === "SyphonServer";
+
 const assertAction = (action: OutputControlOperationAction): void => {
   const record = action as unknown as Record<string, unknown>;
   if (action.kind === "enable_output") {
@@ -988,6 +1045,31 @@ const assertAction = (action: OutputControlOperationAction): void => {
       || !isNonnegativeSafeInteger(action.fade_ms)
       || action.fade_ms > MAX_VIDEO_CLIP_LAUNCH_FADE_MS) {
       throw new Error("Video Clip Launch action was invalid; nothing was applied.");
+    }
+  } else if (action.kind === "add_external_output") {
+    const spec = action.spec as unknown as Record<string, unknown>;
+    if (!hasExactKeys(record, ["kind", "spec", "lease"]) || !isObject(spec)
+      || !hasExactKeys(spec, ["kind", "label", "width", "height", "endpoint_name", "composition_id"])
+      || !isExternalOutputKind(spec.kind) || !validAuthoringLabel(spec.label)
+      || !validAuthoringSize(spec.width, 8192) || !validAuthoringSize(spec.height, 8192)
+      || !validAuthoringEndpoint(spec.endpoint_name) || !isPositiveSafeInteger(spec.composition_id)) {
+      throw new Error("Video output settings are invalid; check the name, resolution, endpoint and composition.");
+    }
+  } else if (action.kind === "configure_video_output") {
+    const spec = action.spec as unknown as Record<string, unknown>;
+    if (!hasExactKeys(record, ["kind", "output_id", "spec", "lease"]) || !isPositiveSafeInteger(action.output_id)
+      || !isObject(spec) || !hasExactKeys(spec, ["kind", "label", "width", "height", "fullscreen", "monitor_index", "monitor_identity", "endpoint_name"])
+      || !validAuthoringLabel(spec.label) || typeof spec.fullscreen !== "boolean"
+      || !validAuthoringSize(spec.width, spec.kind === "Display" ? 16384 : 8192)
+      || !validAuthoringSize(spec.height, spec.kind === "Display" ? 16384 : 8192)
+      || (spec.kind === "Display"
+        ? !isNonnegativeSafeInteger(spec.monitor_index) || spec.monitor_index > 255 || !isLowerHexSha256(spec.monitor_identity) || spec.endpoint_name !== null
+        : !isExternalOutputKind(spec.kind) || !validAuthoringEndpoint(spec.endpoint_name) || spec.fullscreen !== false || spec.monitor_index !== null || spec.monitor_identity !== null)) {
+      throw new Error("Video output settings are invalid; check the name, resolution, endpoint and display target.");
+    }
+  } else if (action.kind === "remove_video_output") {
+    if (!hasExactKeys(record, ["kind", "output_id", "lease"]) || !isPositiveSafeInteger(action.output_id)) {
+      throw new Error("Select an existing video output before removing it.");
     }
   } else if (action.kind === "add_display") {
     const spec = action.spec as unknown as Record<string, unknown>;
@@ -1111,6 +1193,12 @@ const assertLeaseResult = (value: unknown, action: OutputControlOperationAction)
     case "add_display":
       if (outcome !== "authorized" || phase !== "held_active" || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
       break;
+    case "add_external_output":
+    case "configure_video_output":
+    case "remove_video_output":
+      if (outcome !== "authorized" || phase !== "held_active"
+        || !sameResources(resources, ["video"]) && !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
+      break;
     case "set_display_window_open":
       if (outcome !== "authorized" || phase !== "held_active" || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
       break;
@@ -1224,7 +1312,7 @@ const assertResponse = (
     || action.kind === "send_dsf2026_artnet_acceptance_probe"
     || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
     || action.kind === "enable_show_spout_outputs";
-  const persistedProjectFenceIsExact = (action.kind !== "enable_show_art_net_loopback_route" && action.kind !== "set_network_dmx_routes" && action.kind !== "set_blackout")
+  const persistedProjectFenceIsExact = (!isVideoAuthoringAction(action) && action.kind !== "enable_show_art_net_loopback_route" && action.kind !== "set_network_dmx_routes" && action.kind !== "set_blackout")
     || result.outcome !== "applied"
     || fenceAfter.process_incarnation === fenceBefore.process_incarnation
       && fenceAfter.session_incarnation === fenceBefore.session_incarnation
@@ -1234,7 +1322,7 @@ const assertResponse = (
       && fenceAfter.project_publication_generation === fenceBefore.project_publication_generation + 1
       && fenceAfter.output_epoch === fenceBefore.output_epoch
       && fenceAfter.output_generation === fenceBefore.output_generation
-      && (action.kind !== "set_blackout" || fenceAfter.safety_blackout_epoch === fenceBefore.safety_blackout_epoch
+      && (action.kind !== "set_blackout" && !isVideoAuthoringAction(action) || fenceAfter.safety_blackout_epoch === fenceBefore.safety_blackout_epoch
         && fenceAfter.safety_blackout_generation === fenceBefore.safety_blackout_generation);
   const resetWithoutLease = action.kind === "reset_show_spout_outputs" && result.lease_result === null;
   if (!fencesEqual(fenceBefore, expectedFence)
@@ -1289,6 +1377,7 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
     || action.kind === "take_video_clip" && selected[0].status !== "held_active"
     || action.kind === "launch_video_clip" && selected[0].status !== "held_active"
     || action.kind === "assign_video_output_composition" && selected[0].status !== "held_active"
+    || isVideoAuthoringAction(action) && selected[0].status !== "held_active"
     || action.kind === "renew_lease" && selected[0].status !== "held_active"
     || action.kind === "recover_lease" && selected[0].status !== "held_orphaned") {
     throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
@@ -1311,6 +1400,10 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
     || action.kind === "assign_video_output_composition") {
     const expectedResources = ["lighting", "video"] as const;
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
+  } else if (isVideoAuthoringAction(action)) {
+    if (!sameResources(selected[0].resources, ["video"]) && !sameResources(selected[0].resources, ["lighting", "video"])) {
+      throw new Error("Video output authoring requires one active Video-capable lease; nothing was applied.");
+    }
   } else if (action.kind === "set_lighting_master" || action.kind === "set_group_submaster") {
     const expectedResources = action.role === "both" ? ["lighting", "video"] as const : ["lighting"] as const;
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
@@ -1611,4 +1704,36 @@ export async function executeOutputLeaseLifecycle(
   action: OutputLeaseLifecycleAction,
 ): Promise<OutputControlReceipt> {
   return executeOutputControlOperation(invoke, action);
+}
+
+/** Authoring follows current output state; acquiring ownership never arms outputs. */
+export async function executeVideoOutputAuthoringControl(
+  invoke: FrontendTauriInvoke,
+  intent: OutputVideoAuthoringIntent,
+  expectedProject?: OutputControlExpectedProject,
+): Promise<OutputControlReceipt> {
+  const frozen = deepFreeze(structuredClone(intent));
+  const query = await queryOutputLeaseAuthority(invoke);
+  const videoStatuses = query.statuses.filter((status): status is OutputLeaseAuthorityQueryHeld =>
+    status.status !== "unavailable" && status.resources.includes("video"));
+  const active = videoStatuses.filter((status) => status.status === "held_active");
+  let lease: OutputLeaseAuthority;
+  if (active.length === 1) {
+    lease = { ...active[0].authority };
+  } else if (active.length > 1 || videoStatuses.length > 1) {
+    throw new Error("Video output authority is ambiguous; refresh output ownership before retrying.");
+  } else {
+    // Ownership setup belongs to the same prepared project as the edit.
+    // Check its fence before acquiring or recovering any lease, not only
+    // before the subsequent authoring command.
+    const receipt = videoStatuses.length === 1
+      ? await executeOutputControlOperation(invoke, { kind: "recover_lease", lease: videoStatuses[0].authority }, { expectedProject })
+      : await executeOutputControlOperation(invoke, { kind: "acquire_lease", role: "both" }, { expectedProject });
+    if (!receipt.lease_result || receipt.lease_result.phase !== "held_active"
+      || !receipt.lease_result.resources.includes("video")) {
+      throw new Error("Video output ownership is unavailable; refresh output ownership before retrying.");
+    }
+    lease = { ...receipt.lease_result.authority };
+  }
+  return executeOutputControlOperation(invoke, { ...frozen, lease }, { expectedProject });
 }

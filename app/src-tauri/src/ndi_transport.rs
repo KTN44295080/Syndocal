@@ -489,6 +489,38 @@ impl NdiTransportState {
         engine: &EngineHandle,
         activation: Option<OutputOwnershipActivation>,
     ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        self.start_route_with_authority(route, engine, activation, None)
+    }
+
+    /// Canonical authoring revalidates its exact lease after sender readiness,
+    /// before the worker receives permission to send any frames.
+    pub fn start_route_for_authoring(
+        &mut self,
+        route: &video::ExternalVideoTransportRoute,
+        engine: &EngineHandle,
+        activation: Option<OutputOwnershipActivation>,
+        authority: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        if route.direction != video::ExternalVideoTransportDirection::Output
+            || route.backend_id != "ndi"
+        {
+            return Err(video::ExternalVideoTransportDriverError {
+                message: "NDI authoring accepts only its output routes".to_string(),
+            });
+        }
+        self.start_route_with_authority(route, engine, activation, Some(authority))
+    }
+
+    fn start_route_with_authority(
+        &mut self,
+        route: &video::ExternalVideoTransportRoute,
+        engine: &EngineHandle,
+        activation: Option<OutputOwnershipActivation>,
+        authority: Option<&dyn Fn() -> Result<(), String>>,
+    ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        if let Some(validate) = authority {
+            validate().map_err(|message| video::ExternalVideoTransportDriverError { message })?;
+        }
         self.harvest_failed_workers(engine)?;
         match route.direction {
             video::ExternalVideoTransportDirection::Input => {
@@ -552,7 +584,15 @@ impl NdiTransportState {
                         });
                     }
                 }
+                if authority.is_some() && self.outputs.contains_key(&route.route_id) {
+                    return Err(video::ExternalVideoTransportDriverError {
+                        message: "NDI output is still awaiting worker teardown acknowledgement".to_string(),
+                    });
+                }
                 self.failed_output_routes.remove(&route.route_id);
+                if let Some(validate) = authority {
+                    validate().map_err(|message| video::ExternalVideoTransportDriverError { message })?;
+                }
                 let output = match NdiOutputWorker::start(
                     route,
                     engine.clone(),
@@ -573,11 +613,12 @@ impl NdiTransportState {
                     }
                 };
                 self.outputs.insert(route.route_id, output);
-                let publish_result = self
-                    .outputs
-                    .get_mut(&route.route_id)
-                    .expect("just-inserted NDI output worker")
-                    .publish();
+                let publish_result = authority.map_or(Ok(()), |validate| validate()).and_then(|()| {
+                    self.outputs
+                        .get_mut(&route.route_id)
+                        .expect("just-inserted NDI output worker")
+                        .publish()
+                });
                 if let Err(_error) = publish_result {
                     let output = self
                         .outputs
@@ -612,6 +653,36 @@ impl NdiTransportState {
         route: &video::ExternalVideoTransportRoute,
         engine: &EngineHandle,
     ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        self.stop_route_with_authority(route, engine, None)
+    }
+
+    /// Retire only the authoring target under a counted resource lease. The
+    /// ordinary stop API continues to require a global ownership transition.
+    pub fn stop_route_for_authoring(
+        &mut self,
+        route: &video::ExternalVideoTransportRoute,
+        engine: &EngineHandle,
+        authority: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        if route.direction != video::ExternalVideoTransportDirection::Output
+            || route.backend_id != "ndi"
+        {
+            return Err(video::ExternalVideoTransportDriverError {
+                message: "NDI authoring accepts only its output routes".to_string(),
+            });
+        }
+        self.stop_route_with_authority(route, engine, Some(authority))
+    }
+
+    fn stop_route_with_authority(
+        &mut self,
+        route: &video::ExternalVideoTransportRoute,
+        engine: &EngineHandle,
+        authority: Option<&dyn Fn() -> Result<(), String>>,
+    ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        if let Some(validate) = authority {
+            validate().map_err(|message| video::ExternalVideoTransportDriverError { message })?;
+        }
         self.harvest_failed_workers(engine)?;
         match route.direction {
             video::ExternalVideoTransportDirection::Input => {
@@ -640,7 +711,7 @@ impl NdiTransportState {
             }
             video::ExternalVideoTransportDirection::Output => {
                 let status = engine.output_ownership_status();
-                if !matches!(
+                if authority.is_none() && !matches!(
                     status.state,
                     protocol::OutputOwnershipState::Transitioning
                         | protocol::OutputOwnershipState::Activating
@@ -650,6 +721,13 @@ impl NdiTransportState {
                         message: "NDI output teardown requires the serialized ownership transition"
                             .to_string(),
                     });
+                }
+                if authority.is_some() {
+                    if let Some(pending) = self.pending_output_startups.get(&route.route_id) {
+                        return Err(video::ExternalVideoTransportDriverError {
+                            message: format!("NDI startup cleanup is still pending: {}", pending.message),
+                        });
+                    }
                 }
                 if let Some(teardown) = self.pending_output_teardowns.get(&route.route_id).cloned()
                 {
@@ -661,6 +739,12 @@ impl NdiTransportState {
                     return result.map_err(|error| video::ExternalVideoTransportDriverError {
                         message: error.to_string(),
                     });
+                }
+                if let Some(validate) = authority {
+                    validate().map_err(|message| video::ExternalVideoTransportDriverError { message })?;
+                    if let Some(output) = self.outputs.get(&route.route_id) {
+                        output.admit_authoring_retirement(engine).map_err(|message| video::ExternalVideoTransportDriverError { message })?;
+                    }
                 }
                 if let Some(output) = self.outputs.remove(&route.route_id) {
                     match output.stop(engine) {
@@ -841,6 +925,7 @@ fn take_ndi_creation_lease(slot: &NdiCreationLeaseSlot) -> Option<OutputOwnershi
 
 #[cfg(feature = "ndi")]
 struct NdiOutputWorker {
+    authoring_teardown: Arc<Mutex<Option<OutputOwnershipTeardownLease>>>,
     stop: Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<Result<(), NdiOutputWorkerStopError>>>,
     failure: Arc<Mutex<Option<NdiOutputWorkerStopError>>>,
@@ -906,6 +991,8 @@ impl NdiOutputWorker {
         capture_inputs: crate::capture_transport::CaptureInputRegistry,
         activation: OutputOwnershipActivation,
     ) -> Result<Self, NdiOutputWorkerStartError> {
+        let authoring_teardown = Arc::new(Mutex::new(None));
+        let worker_authoring_teardown = Arc::clone(&authoring_teardown);
         let output_id = route.route_id;
         let endpoint_name = route.endpoint_name.clone();
         let stop = Arc::new(AtomicBool::new(false));
@@ -1490,12 +1577,17 @@ impl NdiOutputWorker {
                 }
                 output_pacer.wait_after_frame();
             }
+            let authored_teardown = worker_authoring_teardown.lock()
+                .map(|mut slot| slot.take())
+                .unwrap_or_else(|poisoned| poisoned.into_inner().take());
             let teardown_lease = if let Some(lease) = failure_lease.take() {
                 lease
             } else if let Some(worker_error) = worker_error.as_ref() {
                 engine.begin_output_ownership_failure_fence(format!(
                     "NDI output route {output_id} failed before teardown: {worker_error}"
                 ))
+            } else if let Some(lease) = authored_teardown {
+                lease
             } else {
                 match engine.begin_output_ownership_teardown() {
                     Ok(lease) => lease,
@@ -1612,6 +1704,7 @@ impl NdiOutputWorker {
             }
         };
         Ok(Self {
+            authoring_teardown,
             stop,
             worker: Some(worker),
             failure,
@@ -1664,6 +1757,16 @@ impl NdiOutputWorker {
                 NdiOutputStartDecision::Publish => None,
             },
         }
+    }
+
+    fn admit_authoring_retirement(&self, engine: &EngineHandle) -> Result<(), String> {
+        let lease = engine.begin_video_output_resource_teardown()?;
+        let mut slot = self.authoring_teardown.lock()
+            .map_err(|_| "Video authoring retirement lease slot was poisoned".to_string())?;
+        if slot.is_none() {
+            *slot = Some(lease);
+        }
+        Ok(())
     }
 
     fn stop(mut self, _engine: &EngineHandle) -> Result<(), NdiOutputWorkerStopError> {
@@ -3742,6 +3845,60 @@ mod ndi_output_worker_tests {
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     };
+
+    #[test]
+    fn ndi_authoring_stop_hands_counted_retirement_to_target_worker_without_global_transition() {
+        let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
+            enabled: false,
+            ..protocol::DmxOutputConfig::default()
+        });
+        let before = engine.output_ownership_status();
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let slot = Arc::new(Mutex::new(None));
+        let worker_slot = Arc::clone(&slot);
+        let closed = Arc::new(AtomicBool::new(false));
+        let worker_closed = Arc::clone(&closed);
+        let worker = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !worker_stop.load(Ordering::Acquire) {
+                assert!(Instant::now() < deadline, "target stop must be signalled");
+                std::thread::yield_now();
+            }
+            let lease = worker_slot.lock().unwrap().take().expect("authoring stop installs the scoped retirement token before signaling");
+            worker_closed.store(true, Ordering::Release);
+            drop(lease);
+            Ok(())
+        });
+        let output = NdiOutputWorker {
+            authoring_teardown: slot,
+            stop,
+            worker: Some(worker),
+            failure: Arc::new(Mutex::new(None)),
+            start_signal: None,
+            creation_lease: None,
+        };
+        let route = video::ExternalVideoTransportRoute {
+            direction: video::ExternalVideoTransportDirection::Output,
+            route_id: 930_024,
+            label: "NDI authoring teardown".to_string(),
+            backend_id: "ndi".to_string(),
+            endpoint_name: "NDI authoring teardown".to_string(),
+        };
+        let mut transport = NdiTransportState::new(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+        );
+        transport.outputs.insert(route.route_id, output);
+        assert!(transport.stop_route(&route, &engine).is_err());
+        assert!(transport.outputs.contains_key(&route.route_id));
+        transport.stop_route_for_authoring(&route, &engine, &|| Ok(())).unwrap();
+        assert!(closed.load(Ordering::Acquire));
+        assert!(transport.outputs.is_empty());
+        assert_eq!(engine.output_ownership_status(), before);
+        engine.begin_output_ownership_transition(protocol::MachineOutputRole::Standby)
+            .unwrap().complete().unwrap();
+    }
 
     #[test]
     fn injected_worker_spawn_failure_constructs_no_sender() {

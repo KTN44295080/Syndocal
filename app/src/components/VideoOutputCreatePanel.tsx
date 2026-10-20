@@ -1,7 +1,8 @@
 import { For, onMount, Show, createEffect, createMemo, createSignal } from "solid-js";
 import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
 import { displayAddDiagnosticText, displayAddErrorMessage, loadUiLocale } from "../uiLocalization";
-import type { VideoOutputKind } from "../types";
+import type { CompositionSummary, VideoOutputKind } from "../types";
+import { videoOutputAuthoringErrorMessage } from "../videoOutputAuthoring";
 
 type VideoOutputAddStatus = {
   kind: "pending" | "success" | "error";
@@ -92,6 +93,9 @@ type VideoOutputCreatePanelProps = {
   label: string;
   kind: VideoOutputKind;
   syphonAvailable: boolean;
+  spoutAvailable: boolean;
+  ndiAvailable: boolean;
+  compositions: readonly CompositionSummary[];
   width: number;
   height: number;
   fadeMs: number;
@@ -108,6 +112,7 @@ type VideoOutputCreatePanelProps = {
   onEndpoint: (value: string) => void;
   invokeCommand: FrontendTauriInvoke;
   onAddDisplayOutput: (monitor: VideoDisplayMonitorDescriptor) => Promise<void>;
+  onAddExternalOutput: (compositionId: number) => Promise<boolean | void>;
   onEnableShowSpoutOutputs: () => void | Promise<unknown>;
   onResetShowSpoutOutputs: () => void | Promise<unknown>;
 };
@@ -119,6 +124,16 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
   const [addPending, setAddPending] = createSignal(false);
   const [addStatus, setAddStatus] = createSignal<VideoOutputAddStatus | null>(null);
   const [addDiagnostic, setAddDiagnostic] = createSignal<VideoOutputAddDiagnostic | null>(null);
+  const [compositionId, setCompositionId] = createSignal<number | null>(props.compositions?.[0]?.id ?? null);
+  const externalAvailable = () => props.kind === "SpoutSender" ? props.spoutAvailable
+    : props.kind === "NdiSender" ? props.ndiAvailable
+    : props.kind === "SyphonServer" ? props.syphonAvailable : false;
+  createEffect(() => {
+    const compositions = props.compositions ?? [];
+    if (!compositions.some((composition) => composition.id === compositionId())) {
+      setCompositionId(compositions[0]?.id ?? null);
+    }
+  });
   let addEpoch = 0;
   let activeAddFlight: symbol | null = null;
   const selectedMonitor = createMemo(() => {
@@ -199,6 +214,33 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
     }
   };
 
+  const addSelectedExternalOutput = async () => {
+    const selectedComposition = compositionId();
+    if (addPending() || !externalAvailable() || selectedComposition === null) return;
+    const operationEpoch = ++addEpoch;
+    const kind = props.kind;
+    const flight = Symbol("external-output-add");
+    activeAddFlight = flight;
+    setAddPending(true);
+    setAddStatus({ kind: "pending", message: "Adding video output…" });
+    try {
+      const currentProject = await props.onAddExternalOutput(selectedComposition);
+      if (currentProject === false) { setAddStatus(null); return; }
+      if (operationEpoch === addEpoch && props.kind === kind) {
+        setAddStatus({ kind: "success", message: "Video output added." });
+      }
+    } catch (error) {
+      if (operationEpoch === addEpoch && props.kind === kind) {
+        setAddStatus({ kind: "error", message: videoOutputAuthoringErrorMessage(error) });
+      }
+    } finally {
+      if (activeAddFlight === flight) {
+        activeAddFlight = null;
+        setAddPending(false);
+      }
+    }
+  };
+
   onMount(() => {
     // This panel has no project identifier; discovery reload/remount is the
     // observable boundary for discarding display failure evidence.
@@ -250,19 +292,36 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
         <div class="videoOutputQuickCreate" data-video-output-quick-create>
           <Show when={props.kind === "Display"} fallback={
             <>
-              <p class="hint videoOutputQuickHint" role="status">
-                {props.kind === "SyphonServer" && props.syphonAvailable
-                  ? "Syphon output is available for configured project outputs. Creating external outputs is not available yet."
-                  : "Configure the output type and endpoint in Advanced output settings."}
-              </p>
-              <button class="primary" data-video-output-add disabled>
-                Add configured output
+              <label>
+                Composition
+                <select data-video-output-create-composition value={compositionId() ?? ""} disabled={addPending()}
+                  onChange={(event) => setCompositionId(Number(event.currentTarget.value))}>
+                  <Show when={(props.compositions ?? []).length > 0} fallback={<option value="" disabled>Add a composition first</option>}>
+                    <For each={props.compositions ?? []}>{(composition) => (
+                      <option value={composition.id} data-no-localize>{composition.label}</option>
+                    )}</For>
+                  </Show>
+                </select>
+              </label>
+              <p class="hint videoOutputQuickHint">New outputs follow the current output state and may start sending immediately.</p>
+              <button class="primary" data-video-output-add
+                disabled={!externalAvailable() || compositionId() === null || addPending()}
+                onClick={() => void addSelectedExternalOutput()}>
+                {addPending() ? "Adding video output…" : "Add configured output"}
               </button>
-              <p class="inlineWarning" role="status" data-video-output-kind-status>
-                {props.kind === "SyphonServer" && !props.syphonAvailable
-                  ? "Syphon output is available on macOS only."
-                  : "External output creation is unavailable until its canonical transport is configured; nothing was applied."}
-              </p>
+              <Show when={!externalAvailable()}>
+                <p class="inlineWarning" role="status" data-video-output-kind-status>
+                  {props.kind === "SyphonServer" ? "Syphon output is available on macOS only."
+                    : props.kind === "SpoutSender" ? "Spout output is available on Windows only."
+                    : "NDI output is unavailable in this build."}
+                </p>
+              </Show>
+              <Show when={addStatus()}>{(status) => (
+                <p class={status().kind === "error" ? "inlineWarning videoOutputQuickHint" : "hint videoOutputQuickHint"}
+                  role={status().kind === "error" ? "alert" : "status"} data-video-output-add-status={status().kind}>
+                  {status().message}
+                </p>
+              )}</Show>
             </>
           }>
             <label>
@@ -333,9 +392,6 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
                 </div>
               </details>
             )}</Show>
-            <p class="hint videoOutputQuickHint" data-video-output-native-dialog-note>
-              The native display confirmation dialog will appear when this output is added.
-            </p>
             <p class="hint videoOutputQuickHint">
               {(() => {
                 const monitor = selectedMonitor();
@@ -367,8 +423,12 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
                 Kind
                 <select value={props.kind} onInput={(event) => props.onKind(event.currentTarget.value as VideoOutputKind)}>
                   <option value="Display">Display</option>
-                  <option value="NdiSender">NDI Sender</option>
-                  <option value="SpoutSender">Spout Sender</option>
+                  <Show when={props.ndiAvailable} fallback={<Show when={props.kind === "NdiSender"}><option value="NdiSender" disabled>NDI Sender (unavailable)</option></Show>}>
+                    <option value="NdiSender">NDI Sender</option>
+                  </Show>
+                  <Show when={props.spoutAvailable} fallback={<Show when={props.kind === "SpoutSender"}><option value="SpoutSender" disabled>Spout Sender (Windows only)</option></Show>}>
+                    <option value="SpoutSender">Spout Sender</option>
+                  </Show>
                   <Show when={props.syphonAvailable} fallback={
                     <Show when={props.kind === "SyphonServer"}>
                       <option value="SyphonServer" disabled>Syphon Server (macOS only)</option>
@@ -389,31 +449,9 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
                 <input type="number" min="1" value={props.height} onInput={(event) => props.onHeight(Number(event.currentTarget.value))} />
               </label>
             </div>
-            <label>
-              Output Fade ms
-              <input
-                type="number"
-                min="0"
-                step="10"
-                value={props.fadeMs}
-                onInput={(event) => props.onFadeMs(Number(event.currentTarget.value))}
-              />
-            </label>
-            <Show when={props.kind === "Display"}>
-              <div class="split">
-                <label>
-                  Monitor index
-                  <input type="number" min="0" value={props.monitorId} onInput={(event) => props.onMonitorId(Number(event.currentTarget.value))} />
-                </label>
-                <label class="checkbox inlineCheckbox">
-                  <input type="checkbox" checked={props.fullscreen} onChange={(event) => props.onFullscreen(event.currentTarget.checked)} />
-                  Fullscreen
-                </label>
-              </div>
-            </Show>
             <Show when={props.kind === "SyphonServer" && props.syphonAvailable}>
               <p class="hint" data-syphon-output-help>
-                Publishes video to Syphon clients on this Mac. Enable Output to start; Standby stops transmission.
+                Publishes video to Syphon clients on this Mac and follows the current output state.
               </p>
             </Show>
             <Show when={props.kind !== "Display"}>

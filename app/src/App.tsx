@@ -1,3 +1,5 @@
+import { executeVideoOutputAuthoringControl, executeOutputLeaseLifecycle as executeVideoOutputLeaseSetup, type ExternalVideoOutputSpec, type VideoOutputConfigurationSpec, type OutputVideoAuthoringIntent } from "./outputControlController";
+import { validateVideoOutputAuthoringSpec, videoOutputAuthoringErrorMessage } from "./videoOutputAuthoring";
 import { buildNdiInputHealthRows } from "./ndiInputHealth";
 import { sceneEditFaderValues } from "./sceneEditFaderValues";
 import { createSceneEditWriteBarrier } from "./createSceneEditWriteBarrier";
@@ -23539,7 +23541,11 @@ export default function App() {
       || !Number.isInteger(target.height) || target.height <= 0) {
       throw new Error("Selected display target is stale; refresh screen detection before adding output.");
     }
-    const displayAddAuthority = await queryDisplayAddLeaseAuthority(invoke);
+    let displayAddAuthority = await queryDisplayAddLeaseAuthority(invoke);
+    if (displayAddAuthority.status === "unavailable") {
+      await executeVideoOutputLeaseSetup(invoke, { kind: "acquire_lease", role: "both" });
+      displayAddAuthority = await queryDisplayAddLeaseAuthority(invoke);
+    }
     const lease = selectExactBothLeaseForDisplayAdd(displayAddAuthority);
     await executeDisplayAddOutputControl(
       invoke,
@@ -23572,12 +23578,95 @@ export default function App() {
     finishDisplayAddPostCommitRefresh(statusBeforeRefresh, appStatus().text, refreshError);
   };
 
-  const removeVideoOutput = async (outputId: number) => {
-    setMessage(`Removing video output ${outputId} is unavailable until a canonical operation exists; no state changed.`);
+  let videoOutputAuthoringInFlight = false;
+  const applyVideoOutputAuthoring = async (intent: OutputVideoAuthoringIntent, success: string) => {
+    if (videoOutputAuthoringInFlight) throw new Error("busy");
+    if (!projectMappingsAuthorityReady()) throw new Error("project authority changed");
+    const expectedProject = { ...projectMappingsAuthority() };
+    const isCurrentProject = () => projectMappingsAuthority().project_epoch === expectedProject.project_epoch;
+    videoOutputAuthoringInFlight = true;
+    try {
+      await executeVideoOutputAuthoringControl(invoke, intent, expectedProject);
+    } catch (error) {
+      if (!isCurrentProject()) return false;
+      setMessage(videoOutputAuthoringErrorMessage(error));
+      throw error;
+    } finally {
+      videoOutputAuthoringInFlight = false;
+    }
+    // A completed operation from a replaced project cannot update the new
+    // project's drafts, selection or status even when numeric IDs coincide.
+    if (!isCurrentProject()) return false;
+    // A committed mutation must never be reported as a failed creation merely
+    // because a later observation could not be refreshed.
+    try {
+      await refreshSnapshotAndVideoOutputRenderPlans();
+      if (!isCurrentProject()) return false;
+      setMessage(success);
+    } catch {
+      if (!isCurrentProject()) return false;
+      setMessage("Output change committed, but refresh is pending. Refresh the output list.");
+    }
+    return true;
   };
 
-  const setVideoOutputConfig = async (output: VideoOutputSummary) => {
-    setMessage(`Changing configuration for ${output.label} is unavailable until a canonical operation exists; no state changed.`);
+  const addExternalVideoOutput = async (compositionId: number) => {
+    const kind = videoOutputKind();
+    if (kind === "Display") throw new Error("This output type is unavailable on this computer or in this build.");
+    if (!snapshot().video.compositions.some((composition) => composition.id === compositionId)) {
+      throw new Error("Choose an existing composition before adding the output.");
+    }
+    const spec: ExternalVideoOutputSpec = {
+      kind,
+      label: videoOutputLabel().trim(),
+      width: videoOutputWidth(),
+      height: videoOutputHeight(),
+      endpoint_name: videoOutputEndpoint().trim(),
+      composition_id: compositionId,
+    };
+    validateVideoOutputAuthoringSpec(spec, snapshot().video.outputs, videoRuntimeStatus()?.backends);
+    if (!await applyVideoOutputAuthoring({ kind: "add_external_output", spec }, "Video output added.")) return false;
+    setVideoOutputLabel(`Output ${snapshot().video.outputs.length + 1}`);
+    return true;
+  };
+
+  const removeVideoOutput = async (outputId: number) => {
+    if (!snapshot().video.outputs.some((output) => output.id === outputId)) {
+      throw new Error("The selected output no longer exists. Refresh the output list.");
+    }
+    if (!await applyVideoOutputAuthoring({ kind: "remove_video_output", output_id: outputId }, "Video output removed. Undo is available.")) return false;
+    setVideoOutputConfigDrafts((current) => {
+      const next = { ...current }; delete next[outputId]; return next;
+    });
+    if (selectedVideoOutputId() === outputId) setSelectedVideoOutputId(null);
+    return true;
+  };
+
+  const setVideoOutputConfig = async (output: VideoOutputSummary, monitor?: VideoDisplayMonitorDescriptor) => {
+    if (!snapshot().video.outputs.some((candidate) => candidate.id === output.id)) {
+      throw new Error("The selected output no longer exists. Refresh the output list.");
+    }
+    const draft = { ...videoOutputConfigDraft(output) };
+    const display = draft.kind === "Display";
+    if (display && (!monitor || monitor.index !== draft.monitor_id)) {
+      throw new Error("The selected display is unavailable. Refresh the display list and choose a connected screen.");
+    }
+    const spec: VideoOutputConfigurationSpec = {
+      kind: draft.kind,
+      label: draft.label.trim(),
+      width: draft.width,
+      height: draft.height,
+      fullscreen: display ? draft.fullscreen : false,
+      monitor_index: display ? monitor?.index ?? null : null,
+      monitor_identity: display ? monitor?.identity ?? null : null,
+      endpoint_name: display ? null : draft.endpoint_name.trim(),
+    };
+    validateVideoOutputAuthoringSpec(spec, snapshot().video.outputs, videoRuntimeStatus()?.backends, output.id);
+    if (!await applyVideoOutputAuthoring({ kind: "configure_video_output", output_id: output.id, spec }, "Video output updated.")) return false;
+    setVideoOutputConfigDrafts((current) => {
+      const next = { ...current }; delete next[output.id]; return next;
+    });
+    return true;
   };
 
   const setVideoOutputEnabled = async (outputId: number, enabled: boolean) => {
@@ -28506,6 +28595,8 @@ export default function App() {
           outputMonitorId={videoOutputMonitorId()}
           outputFullscreen={videoOutputFullscreen()}
           outputEndpoint={videoOutputEndpoint()}
+          spoutAvailable={videoRuntimeStatus()?.backends.some((backend) => backend.id === "spout" && backend.state === "Available") ?? false}
+          ndiAvailable={videoRuntimeStatus()?.backends.some((backend) => backend.id === "ndi" && backend.state === "Available") ?? false}
           syphonAvailable={videoRuntimeStatus()?.backends.some(
             (backend) => backend.id === "syphon" && backend.state === "Available",
           ) ?? false}
@@ -28532,6 +28623,11 @@ export default function App() {
           onOutputEndpoint={setVideoOutputEndpoint}
           invokeCommand={invoke}
           onAddDisplayOutput={addDisplayVideoOutput}
+          onAddExternalOutput={addExternalVideoOutput}
+          outputConfigDraft={videoOutputConfigDraft}
+          onOutputConfigDraft={updateVideoOutputConfigDraft}
+          onApplyOutputConfig={setVideoOutputConfig}
+          onRemoveOutput={removeVideoOutput}
           onEnableShowSpoutOutputs={enableShowSpoutOutputs}
           onResetShowSpoutOutputs={resetShowSpoutOutputs}
           onSelectOutput={setSelectedVideoOutputId}

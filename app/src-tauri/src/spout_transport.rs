@@ -258,6 +258,38 @@ impl SpoutTransportState {
         engine: &EngineHandle,
         activation: Option<OutputOwnershipActivation>,
     ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        self.start_route_with_authority(route, engine, activation, None)
+    }
+
+    /// Canonical authoring revalidates its exact lease after sender readiness,
+    /// before the worker receives permission to send any frames.
+    pub fn start_route_for_authoring(
+        &mut self,
+        route: &video::ExternalVideoTransportRoute,
+        engine: &EngineHandle,
+        activation: Option<OutputOwnershipActivation>,
+        authority: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        if route.direction != video::ExternalVideoTransportDirection::Output
+            || route.backend_id != "spout"
+        {
+            return Err(video::ExternalVideoTransportDriverError {
+                message: "Spout authoring accepts only its output routes".to_string(),
+            });
+        }
+        self.start_route_with_authority(route, engine, activation, Some(authority))
+    }
+
+    fn start_route_with_authority(
+        &mut self,
+        route: &video::ExternalVideoTransportRoute,
+        engine: &EngineHandle,
+        activation: Option<OutputOwnershipActivation>,
+        authority: Option<&dyn Fn() -> Result<(), String>>,
+    ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        if let Some(validate) = authority {
+            validate().map_err(driver_error)?;
+        }
         self.harvest_failed_workers(engine)?;
         match route.direction {
             video::ExternalVideoTransportDirection::Input => {
@@ -284,6 +316,9 @@ impl SpoutTransportState {
                     )));
                 }
                 self.failed_output_routes.remove(&route.route_id);
+                if let Some(validate) = authority {
+                    validate().map_err(driver_error)?;
+                }
                 let worker = match SpoutRouteWorker::start_output(
                     route.route_id,
                     route.endpoint_name.clone(),
@@ -309,11 +344,12 @@ impl SpoutTransportState {
                         .stop()
                         .map_err(|error| driver_error(error.message))?;
                 }
-                let publish_result = self
-                    .output_workers
-                    .get_mut(&route.route_id)
-                    .expect("just-inserted Spout output worker")
-                    .publish();
+                let publish_result = authority.map_or(Ok(()), |validate| validate()).and_then(|()| {
+                    self.output_workers
+                        .get_mut(&route.route_id)
+                        .expect("just-inserted Spout output worker")
+                        .publish()
+                });
                 if let Err(error) = publish_result {
                     let worker = self
                         .output_workers
@@ -341,6 +377,36 @@ impl SpoutTransportState {
         route: &video::ExternalVideoTransportRoute,
         engine: &EngineHandle,
     ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        self.stop_route_with_authority(route, engine, None)
+    }
+
+    /// Retire only the authoring target under a counted resource lease. The
+    /// ordinary stop API continues to require a global ownership transition.
+    pub fn stop_route_for_authoring(
+        &mut self,
+        route: &video::ExternalVideoTransportRoute,
+        engine: &EngineHandle,
+        authority: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        if route.direction != video::ExternalVideoTransportDirection::Output
+            || route.backend_id != "spout"
+        {
+            return Err(video::ExternalVideoTransportDriverError {
+                message: "Spout authoring accepts only its output routes".to_string(),
+            });
+        }
+        self.stop_route_with_authority(route, engine, Some(authority))
+    }
+
+    fn stop_route_with_authority(
+        &mut self,
+        route: &video::ExternalVideoTransportRoute,
+        engine: &EngineHandle,
+        authority: Option<&dyn Fn() -> Result<(), String>>,
+    ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        if let Some(validate) = authority {
+            validate().map_err(driver_error)?;
+        }
         self.harvest_failed_workers(engine)?;
         match route.direction {
             video::ExternalVideoTransportDirection::Input => {
@@ -354,7 +420,7 @@ impl SpoutTransportState {
             }
             video::ExternalVideoTransportDirection::Output => {
                 let status = engine.output_ownership_status();
-                if !matches!(
+                if authority.is_none() && !matches!(
                     status.state,
                     protocol::OutputOwnershipState::Transitioning
                         | protocol::OutputOwnershipState::Activating
@@ -363,6 +429,19 @@ impl SpoutTransportState {
                     return Err(driver_error(
                         "Spout output teardown requires the serialized ownership transition",
                     ));
+                }
+                if authority.is_some() {
+                    if let Some(pending) = self.pending_output_startups.get(&route.route_id) {
+                        return Err(video::ExternalVideoTransportDriverError {
+                            message: format!("Spout startup cleanup is still pending: {}", pending.message),
+                        });
+                    }
+                }
+                if let Some(validate) = authority {
+                    validate().map_err(driver_error)?;
+                    if let Some(worker) = self.output_workers.get(&route.route_id) {
+                        worker.admit_authoring_retirement(engine).map_err(driver_error)?;
+                    }
                 }
                 if let Some(worker) = self.output_workers.remove(&route.route_id) {
                     match worker.stop() {
@@ -1334,6 +1413,16 @@ impl SpoutRouteWorker {
         }
     }
 
+    fn admit_authoring_retirement(&self, engine: &EngineHandle) -> Result<(), String> {
+        let lease = engine.begin_video_output_resource_teardown()?;
+        let mut slot = self.teardown_lease.lock()
+            .map_err(|_| "Video authoring retirement lease slot was poisoned".to_string())?;
+        if slot.is_none() {
+            *slot = Some(lease);
+        }
+        Ok(())
+    }
+
     pub(crate) fn stop(mut self) -> Result<(), SpoutOutputWorkerStopError> {
         let undelivered_creation_lease = self.signal_retirement();
         self.stop.store(true, Ordering::Release);
@@ -1433,10 +1522,15 @@ fn finish_spout_output_worker<S: SpoutOutputSender>(
     failure_lease: Option<engine::OutputOwnershipTeardownLease>,
     mut worker_error: Option<String>,
 ) -> Result<(), SpoutOutputWorkerStopError> {
+    let authored_teardown = teardown_lease_slot.lock()
+        .map(|mut slot| slot.take())
+        .unwrap_or_else(|poisoned| poisoned.into_inner().take());
     let teardown_lease = if let Some(lease) = failure_lease {
         lease
     } else if let Some(error) = worker_error.as_ref() {
         engine.begin_output_ownership_failure_fence(error.clone())
+    } else if let Some(lease) = authored_teardown {
+        lease
     } else {
         match engine.begin_output_ownership_teardown() {
             Ok(lease) => lease,
@@ -4074,6 +4168,30 @@ mod tests {
             .unwrap();
         retry.complete().unwrap();
         assert!(engine.acquire_video_output().is_ok());
+    }
+
+    #[test]
+    fn spout_authoring_retirement_keeps_live_global_authority_and_holds_token_until_join() {
+        let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
+            enabled: false,
+            ..protocol::DmxOutputConfig::default()
+        });
+        let before = engine.output_ownership_status();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let sender = InjectedSpoutSender {
+            send_error: None,
+            drop_started: Arc::new(AtomicBool::new(false)),
+            allow_drop: Arc::new(AtomicBool::new(true)),
+            dropped: Arc::clone(&dropped),
+        };
+        let slot = Arc::new(Mutex::new(Some(engine.begin_video_output_resource_teardown().unwrap())));
+        finish_spout_output_worker(&engine, sender, &slot, None, None).unwrap();
+        assert!(dropped.load(Ordering::Acquire));
+        assert!(slot.lock().unwrap().is_some(), "native close remains counted until its join owner acknowledges it");
+        assert_eq!(engine.output_ownership_status(), before);
+        drop(slot.lock().unwrap().take());
+        engine.begin_output_ownership_transition(protocol::MachineOutputRole::Standby)
+            .unwrap().complete().unwrap();
     }
 
     #[test]

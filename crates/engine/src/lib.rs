@@ -42,6 +42,7 @@ mod telemetry_percentiles;
 mod timeline_audio_live_fence;
 mod timeline_follow_hold;
 mod video_generator;
+pub mod video_output_authoring;
 mod video_render_sample;
 pub use snapshot_read::{
     ControlPlaneRuntimeSnapshot, EngineTelemetrySnapshot, VideoOutputEffectRuntimeSnapshot,
@@ -1601,6 +1602,37 @@ impl OutputOwnershipGate {
         {
             return Err(
                 "Output teardown lease requires an active all-deny ownership transition"
+                    .to_string(),
+            );
+        }
+        state.in_flight = state.in_flight.saturating_add(1);
+        Ok(OutputOwnershipTeardownLease {
+            inner: Arc::clone(&self.inner),
+        })
+    }
+
+    /// Account for one explicitly authorized video resource retirement without
+    /// changing the current role. The caller owns route and canonical-authority
+    /// validation; a global transition still waits for the resource to be reaped.
+    fn acquire_video_resource_teardown_lease(&self) -> Result<OutputOwnershipTeardownLease, String> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
+        let ready_video = !state.transition_active
+            && state.status.state == OutputOwnershipState::Ready
+            && state.status.video_allowed;
+        let transition_teardown = state.transition_active
+            && matches!(
+                state.status.state,
+                OutputOwnershipState::Transitioning
+                    | OutputOwnershipState::Activating
+                    | OutputOwnershipState::Failed
+            );
+        if !ready_video && !transition_teardown {
+            return Err(
+                "Video resource teardown requires current Video authority or an all-deny transition"
                     .to_string(),
             );
         }
@@ -5526,6 +5558,15 @@ define_engine_command! {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    /// Exact authored A-to-B output mutation with classified snapshot ACK.
+    AuthorVideoOutputPublished {
+        output_id: VideoOutputId,
+        expected: Option<VideoOutputSummary>,
+        replacement: Option<VideoOutputSummary>,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     SetVideoOutputConfig {
         output_id: VideoOutputId,
         label: String,
@@ -5627,6 +5668,7 @@ macro_rules! engine_command_video_presentation_relevance {
             // routing. Catalog-only preset writes do not touch a live route.
             EngineCommand::AddVideoOutput(_)
             | EngineCommand::AddVideoOutputPublished { .. }
+            | EngineCommand::AuthorVideoOutputPublished { .. }
             | EngineCommand::RemoveVideoOutput(_)
             | EngineCommand::RemoveVideoOutputPublished { .. }
             | EngineCommand::SetVideoOutputConfig { .. }
@@ -11671,6 +11713,15 @@ impl EngineHandle {
         self.output_ownership_gate.acquire_teardown_lease()
     }
 
+    /// Retain cleanup ownership for one video resource during a canonical edit.
+    /// This leaves the current role and output fence unchanged.
+    pub fn begin_video_output_resource_teardown(
+        &self,
+    ) -> Result<OutputOwnershipTeardownLease, String> {
+        self.output_ownership_gate
+            .acquire_video_resource_teardown_lease()
+    }
+
     pub fn begin_output_ownership_failure_fence(
         &self,
         error: impl Into<String>,
@@ -12512,9 +12563,11 @@ impl EngineHandle {
                 maxima.observe_u64(AllocatorDomain::VideoOutputs, output.id);
             }
             EngineCommand::AddVideoOutput(output)
-            | EngineCommand::AddVideoOutputPublished { output, .. } => {
+            | EngineCommand::AddVideoOutputPublished { output, .. }
+            | EngineCommand::AuthorVideoOutputPublished { replacement: Some(output), .. } => {
                 maxima.observe_u64(AllocatorDomain::VideoOutputs, output.id);
             }
+            EngineCommand::AuthorVideoOutputPublished { replacement: None, .. } => {}
             EngineCommand::UpsertStageObject(object) => {
                 maxima.observe_u64(AllocatorDomain::StageObjects, object.id);
             }
@@ -20538,6 +20591,7 @@ enum PendingCommandRollback {
         last_error: Option<String>,
     },
     RestoreNetworkDmxRoutes(network_dmx_routes::NetworkDmxRoutesRollback),
+    RestoreVideoOutputAuthoring(video_output_authoring::AuthoringRollback),
     /// The route begins disabled and has no sender by contract. Retaining
     /// this exact A image lets an acknowledged publication failure drop the
     /// newly-opened Art-Net sender and restore the authored disabled route.
@@ -20887,6 +20941,7 @@ impl PendingCommandRollback {
             Self::RemoveAddedEffect { .. }
                 | Self::RestoreShowArtNetLoopbackRouteEnable { .. }
                 | Self::RestoreNetworkDmxRoutes(_)
+                | Self::RestoreVideoOutputAuthoring(_)
                 | Self::RestoreEffect { .. }
                 | Self::RestoreEffectEnabled { .. }
                 | Self::RestoreNodeGraphs { .. }
@@ -23616,6 +23671,7 @@ impl EngineRuntime {
                     | EngineCommand::AbortTimelineFollow { .. }
                     | EngineCommand::AcknowledgeTimelineFollowSettlement { .. }
                     | EngineCommand::AddVideoOutputPublished { .. }
+                    | EngineCommand::AuthorVideoOutputPublished { .. }
                     | EngineCommand::RemoveVideoOutputPublished { .. }
                     | EngineCommand::SetVideoOutputRoutingPublished { .. }
             );
@@ -31005,6 +31061,16 @@ impl EngineRuntime {
                         "Display output cleanup could not publish an acknowledged engine snapshot",
                 });
             }
+            EngineCommand::AuthorVideoOutputPublished {
+                output_id,
+                expected,
+                replacement,
+                expires_at,
+                admission,
+                ack,
+            } => self.apply_video_output_authoring(
+                output_id, expected, replacement, expires_at, admission, ack,
+            ),
             EngineCommand::SetVideoOutputConfig {
                 output_id,
                 label,
@@ -31392,6 +31458,7 @@ impl EngineRuntime {
                         | PendingCommandRollback::RestoreStageMapPresets { .. }
                         | PendingCommandRollback::RestoreStageProject { .. }
                         | PendingCommandRollback::RestoreMediaAssetTransaction { .. }
+                        | PendingCommandRollback::RestoreVideoOutputAuthoring(_)
                         | PendingCommandRollback::CommitMediaAssetAvailability { .. }
                         | PendingCommandRollback::RestoreVideoLayersAndCompositions { .. }
                         | PendingCommandRollback::RestoreVideoClipSlots { .. }
@@ -32025,6 +32092,9 @@ impl EngineRuntime {
                 self.active_video_transition_buses = active_transition_buses;
                 self.pending_video_isf_event_resets = pending_video_isf_event_resets;
                 self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreVideoOutputAuthoring(rollback) => {
+                rollback.restore(self);
             }
             PendingCommandRollback::RestoreMediaAssetTransaction {
                 media_assets,
@@ -72374,6 +72444,62 @@ mod tests {
         let recovery = gate.begin_transition(MachineOutputRole::Both).unwrap();
         recovery.complete().unwrap();
         assert!(gate.acquire(OutputCapability::Lighting).is_ok());
+    }
+
+    #[test]
+    fn video_resource_teardown_preserves_live_role_and_rejects_unowned_video() {
+        for role in [MachineOutputRole::Video, MachineOutputRole::Both] {
+            let gate = OutputOwnershipGate::for_role(role);
+            let before = gate.status();
+            let teardown = gate.acquire_video_resource_teardown_lease().unwrap();
+            let after = gate.status();
+            assert_eq!(after.state, before.state);
+            assert_eq!(after.effective_role, before.effective_role);
+            assert_eq!(after.generation, before.generation);
+            assert_eq!(after.epoch, before.epoch);
+            assert!(after.video_allowed);
+            assert!(gate.acquire(OutputCapability::Video).is_ok());
+            assert!(gate.acquire_teardown_lease().is_err());
+            drop(teardown);
+        }
+        for role in [MachineOutputRole::Lighting, MachineOutputRole::Standby] {
+            let gate = OutputOwnershipGate::for_role(role);
+            assert!(gate.acquire_video_resource_teardown_lease().is_err());
+        }
+    }
+
+    #[test]
+    fn video_resource_teardown_blocks_global_transition_until_resource_is_reaped() {
+        let gate = OutputOwnershipGate::for_role(MachineOutputRole::Video);
+        let teardown = gate.acquire_video_resource_teardown_lease().unwrap();
+        assert!(gate
+            .begin_transition_with_test_timeout(
+                MachineOutputRole::Standby,
+                Duration::from_millis(5),
+            )
+            .is_err());
+        assert_eq!(gate.status().state, OutputOwnershipState::Failed);
+        assert!(gate.begin_transition(MachineOutputRole::Both).is_err());
+        drop(teardown);
+        gate.begin_transition(MachineOutputRole::Both)
+            .unwrap()
+            .complete()
+            .unwrap();
+        assert!(gate.acquire(OutputCapability::Video).is_ok());
+    }
+
+    #[test]
+    fn video_resource_teardown_remains_available_during_all_deny_transition() {
+        let gate = OutputOwnershipGate::for_role(MachineOutputRole::Video);
+        let transition = gate.begin_transition(MachineOutputRole::Standby).unwrap();
+        let teardown = gate.acquire_video_resource_teardown_lease().unwrap();
+        transition.fail("injected pending per-output cleanup");
+        assert!(gate.begin_transition(MachineOutputRole::Video).is_err());
+        drop(teardown);
+        gate.begin_transition(MachineOutputRole::Standby)
+            .unwrap()
+            .complete()
+            .unwrap();
     }
 
     #[test]

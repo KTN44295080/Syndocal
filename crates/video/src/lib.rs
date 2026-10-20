@@ -8253,6 +8253,38 @@ fn external_video_backend_route_state(
 }
 
 impl ExternalVideoTransportRuntime {
+    /// Reconcile one authored output without retrying or retiring unrelated
+    /// outputs or inputs. Failed target retirement stays owned in the main
+    /// runtime; the scoped runtime is always merged back before returning.
+    pub fn sync_output_route_with_driver_and_role_with_start_admission<
+        D: ExternalVideoTransportDriver,
+        F: FnMut(&mut D) -> Result<(), String>,
+    >(
+        &mut self,
+        output_id: VideoOutputId,
+        plans: &ExternalVideoIoRoutePlans,
+        driver: &mut D,
+        role: MachineOutputRole,
+        admit_start: F,
+    ) -> ExternalVideoTransportSyncReport {
+        let is_target = |route: &ExternalVideoTransportRoute| {
+            route.direction == ExternalVideoTransportDirection::Output && route.route_id == output_id
+        };
+        let mut scoped = Self::new();
+        scoped.active_routes = self.active_routes.iter().filter(|route| is_target(route)).cloned().collect();
+        let scoped_plans = ExternalVideoIoRoutePlans {
+            inputs: Vec::new(),
+            outputs: plans.outputs.iter().filter(|output| output.output_id == output_id).cloned().collect(),
+        };
+        let mut report = scoped.sync_routes_with_driver_and_role_with_start_admission(
+            &scoped_plans, driver, role, admit_start,
+        );
+        self.active_routes.retain(|route| !is_target(route));
+        self.active_routes.extend(scoped.active_routes);
+        report.active_count = self.active_routes.len();
+        report
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -18707,3 +18739,7 @@ mod axis_aligned_composite_tests;
 #[cfg(test)]
 #[path = "video_render_cancellation_tests.rs"]
 mod video_render_cancellation_tests;
+
+#[cfg(test)]
+#[path = "output_authoring_transport_tests.rs"]
+mod output_authoring_transport_tests;

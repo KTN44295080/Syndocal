@@ -114,7 +114,7 @@ async function run() {
   assert.equal(frozenCount, tauriCommands.length, "Tauri admission count is not tied to the production source");
   assert.equal(frozenFingerprint, tauriFingerprint, "Tauri admission fingerprint is not tied to the production source");
 
-  assert.equal(invokeManifest.length, 507, "frontend invoke inventory count drifted; classify the delta");
+  assert.equal(invokeManifest.length, 510, "frontend invoke inventory count drifted; classify the delta");
   assert(invokeManifest.includes("set_network_dmx_routes_v1"), "canonical network DMX route must remain inventoried");
   assert(invokeManifest.includes("enable_usb_dmx_universe_route_v1"), "USB-DMX cable routes must remain inventoried");
   assert(invokeManifest.every((command) => tauriCommands.includes(command)), "frontend invoke inventory contains an unregistered Tauri command");
@@ -129,7 +129,7 @@ async function run() {
   }
 
   const engineSource = countMacroVariants(engine, "define_engine_command!", false);
-  assert.equal(engineSource.length, 285, "EngineCommand declaration inventory count drifted");
+  assert.equal(engineSource.length, 286, "EngineCommand declaration inventory count drifted");
   assert.ok(engineSource.includes("RequestPlaybackLayerSnapshot"), "Standby playback-layer read must remain inventoried");
   assert.ok(engineSource.includes("SetNetworkDmxRoutesPublished"), "network route publication must remain inventoried");
   assert.ok(engineSource.includes("RequestSnapshotPublication"), "Internal read publication barrier must remain inventoried");
@@ -199,6 +199,9 @@ async function run() {
   assertNeedles(main, "app/src-tauri/src/main.rs", nativeOutputMarkers, "Native output-window inventory");
   assertNeedles(controlPlane, "app/src-tauri/src/control_plane.rs", [
     "OUTPUT_DISPLAY_ADD_OPERATION_ID",
+    "OUTPUT_EXTERNAL_ADD_OPERATION_ID",
+    "OUTPUT_VIDEO_CONFIGURE_OPERATION_ID",
+    "OUTPUT_VIDEO_REMOVE_OPERATION_ID",
     "OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID",
     "OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID",
   ], "Native output control inventory");

@@ -23,6 +23,8 @@ use protocol::control_plane_command::{
     OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, OUTPUT_BLACKOUT_SET_OPERATION_ID,
     OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID, OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION,
     OUTPUT_DISPLAY_ADD_OPERATION_ID, OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
+    OUTPUT_EXTERNAL_ADD_OPERATION_ID, OUTPUT_VIDEO_CONFIGURE_OPERATION_ID,
+    OUTPUT_VIDEO_REMOVE_OPERATION_ID,
     OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID,
     OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID, OUTPUT_ENABLE_OPERATION_ID,
     OUTPUT_LEASE_ACQUIRE_OPERATION_ID, OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID,
@@ -70,9 +72,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 587;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 590;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "a9966cb3f0fc6a4ce80195c5cfd8ec4e45a8f4219897ed4ca8c5013ff53c6e48";
+    "2256afa0d6a07bad401d8f7bd5947b12a0616030e4e0679cc8406bbd20429e18";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -441,6 +443,9 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
         command,
         "acquire_output_lease_v2"
             | "add_display_output_v2"
+            | "add_external_output_v2"
+            | "configure_video_output_v2"
+            | "remove_video_output_v2"
             | "add_local_media_layers"
             | "add_still_image_layer"
             | "add_video_file_layer"
@@ -1300,6 +1305,9 @@ enum ReviewedCanonicalOperation {
     ArmOutputOwnership,
     TakeOverStandby,
     AddDisplayOutput,
+    AddExternalOutput,
+    ConfigureVideoOutput,
+    RemoveVideoOutput,
     SetDisplayWindowOpen,
     AssignVideoOutputComposition,
     EnableShowArtNetLoopbackRoute,
@@ -1353,6 +1361,9 @@ impl ReviewedCanonicalOperation {
             Self::ArmOutputOwnership => OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
             Self::TakeOverStandby => OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
             Self::AddDisplayOutput => OUTPUT_DISPLAY_ADD_OPERATION_ID,
+            Self::AddExternalOutput => OUTPUT_EXTERNAL_ADD_OPERATION_ID,
+            Self::ConfigureVideoOutput => OUTPUT_VIDEO_CONFIGURE_OPERATION_ID,
+            Self::RemoveVideoOutput => OUTPUT_VIDEO_REMOVE_OPERATION_ID,
             Self::SetDisplayWindowOpen => OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
             Self::AssignVideoOutputComposition => OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
             Self::SetNetworkDmxRoutes => OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID,
@@ -1433,6 +1444,9 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
         "arm_output_control_v2" => Some(ReviewedCanonicalOperation::ArmOutputOwnership),
         "take_over_output_control_v2" => Some(ReviewedCanonicalOperation::TakeOverStandby),
         "add_display_output_v2" => Some(ReviewedCanonicalOperation::AddDisplayOutput),
+        "add_external_output_v2" => Some(ReviewedCanonicalOperation::AddExternalOutput),
+        "configure_video_output_v2" => Some(ReviewedCanonicalOperation::ConfigureVideoOutput),
+        "remove_video_output_v2" => Some(ReviewedCanonicalOperation::RemoveVideoOutput),
         "set_display_output_window_open_v2" => {
             Some(ReviewedCanonicalOperation::SetDisplayWindowOpen)
         }
@@ -1597,7 +1611,6 @@ fn canonical_descriptor_for_source(
         ),
         ReviewedCanonicalOperation::ArmOutputOwnership
         | ReviewedCanonicalOperation::TakeOverStandby
-        | ReviewedCanonicalOperation::AddDisplayOutput
         | ReviewedCanonicalOperation::AssignVideoOutputComposition
         | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
         | ReviewedCanonicalOperation::SetNetworkDmxRoutes
@@ -1637,6 +1650,10 @@ fn canonical_descriptor_for_source(
             ReceiptPolicy::ExactTerminalReceipt,
         ),
         ReviewedCanonicalOperation::EnableOutput
+        | ReviewedCanonicalOperation::AddDisplayOutput
+        | ReviewedCanonicalOperation::AddExternalOutput
+        | ReviewedCanonicalOperation::ConfigureVideoOutput
+        | ReviewedCanonicalOperation::RemoveVideoOutput
         | ReviewedCanonicalOperation::AcquireOutputLease
         | ReviewedCanonicalOperation::RenewOutputLease
         | ReviewedCanonicalOperation::RecoverOutputLease
@@ -1665,6 +1682,9 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
                 | ReviewedCanonicalOperation::AddDisplayOutput
+                | ReviewedCanonicalOperation::AddExternalOutput
+                | ReviewedCanonicalOperation::ConfigureVideoOutput
+                | ReviewedCanonicalOperation::RemoveVideoOutput
                 | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
                 | ReviewedCanonicalOperation::SetBlackout
@@ -1715,6 +1735,9 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
                 | ReviewedCanonicalOperation::AddDisplayOutput
+                | ReviewedCanonicalOperation::AddExternalOutput
+                | ReviewedCanonicalOperation::ConfigureVideoOutput
+                | ReviewedCanonicalOperation::RemoveVideoOutput
                 | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
                 | ReviewedCanonicalOperation::SetBlackout
@@ -1763,6 +1786,9 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
                 | ReviewedCanonicalOperation::AddDisplayOutput
+                | ReviewedCanonicalOperation::AddExternalOutput
+                | ReviewedCanonicalOperation::ConfigureVideoOutput
+                | ReviewedCanonicalOperation::RemoveVideoOutput
                 | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
                 | ReviewedCanonicalOperation::SetBlackout
@@ -1805,6 +1831,10 @@ fn canonical_descriptor_for_source(
         } else if matches!(
             reviewed,
             ReviewedCanonicalOperation::EnableOutput
+                | ReviewedCanonicalOperation::AddDisplayOutput
+                | ReviewedCanonicalOperation::AddExternalOutput
+                | ReviewedCanonicalOperation::ConfigureVideoOutput
+                | ReviewedCanonicalOperation::RemoveVideoOutput
                 | ReviewedCanonicalOperation::ReleaseBlackout
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
                 | ReviewedCanonicalOperation::SetBlackout
@@ -1823,7 +1853,6 @@ fn canonical_descriptor_for_source(
             reviewed,
             ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
-                | ReviewedCanonicalOperation::AddDisplayOutput
                 | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
                 | ReviewedCanonicalOperation::SetNetworkDmxRoutes
@@ -2008,6 +2037,9 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
     if matches!(
         operation_id,
         "add_display_output_v2"
+            | "add_external_output_v2"
+            | "configure_video_output_v2"
+            | "remove_video_output_v2"
             | "new_project_control_plane_v1"
             | "open_project_control_plane_v1"
             | "restore_project_backup_control_plane_v1"
@@ -2228,6 +2260,9 @@ fn command_schema(operation_id: &str, direction: &str) -> SchemaIdentity {
                 | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                 | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                | OUTPUT_EXTERNAL_ADD_OPERATION_ID
+                | OUTPUT_VIDEO_CONFIGURE_OPERATION_ID
+                | OUTPUT_VIDEO_REMOVE_OPERATION_ID
                 | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                 | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                 | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
@@ -2610,7 +2645,7 @@ mod tests {
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 11);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 8);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 178);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 181);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 29);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 28);
@@ -2678,7 +2713,7 @@ mod tests {
         // Spout reset account for the six manifest entries below.
         // RequestPlaybackLayerSnapshot (DEC-PLAYBACK-LAYER-001) adds one
         // read-only Engine source.
-        const ENGINE_COMMAND_COUNT: usize = 285;
+        const ENGINE_COMMAND_COUNT: usize = 286;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
@@ -2708,7 +2743,7 @@ mod tests {
         // add two more of each. Native output cadence health adds one read-only
         // Tauri source and one frontend invocation source; the read-only Media
         // Health folder listing (`select_media_relink_folder`) adds one more of each.
-        const FRONTEND_INVOKE_COUNT: usize = 507;
+        const FRONTEND_INVOKE_COUNT: usize = 510;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 239);
         assert_eq!(
             registry.operations.len(),
@@ -2718,7 +2753,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1734);
+        assert_eq!(registry.operations.len(), 1741);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2869,6 +2904,9 @@ mod tests {
                 OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
             ),
             ("add_display_output_v2", OUTPUT_DISPLAY_ADD_OPERATION_ID),
+            ("add_external_output_v2", OUTPUT_EXTERNAL_ADD_OPERATION_ID),
+            ("configure_video_output_v2", OUTPUT_VIDEO_CONFIGURE_OPERATION_ID),
+            ("remove_video_output_v2", OUTPUT_VIDEO_REMOVE_OPERATION_ID),
             (
                 "assign_video_output_composition_v2",
                 OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
@@ -3113,20 +3151,20 @@ mod tests {
         const TAURI_COUNT: usize = FROZEN_TAURI_ROUTE_ADMISSION_COUNT;
         // 277 prior engine sources plus the distinct atomic
         // `ResetShowSpoutOutputsExactPublished` source.
-        const ENGINE_COUNT: usize = 285;
+        const ENGINE_COUNT: usize = 286;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 239;
-        const FRONTEND_COUNT: usize = 507;
+        const FRONTEND_COUNT: usize = 510;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1734);
-        assert_eq!(SOURCE_TOTAL, 1767);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1741);
+        assert_eq!(SOURCE_TOTAL, 1774);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 77);
+        assert_eq!(canonical.canonical_operations.len(), 80);
 
         let output_control_operations = canonical
             .canonical_operations
@@ -3144,6 +3182,9 @@ mod tests {
                         | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                         | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                         | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                        | OUTPUT_EXTERNAL_ADD_OPERATION_ID
+                        | OUTPUT_VIDEO_CONFIGURE_OPERATION_ID
+                        | OUTPUT_VIDEO_REMOVE_OPERATION_ID
                         | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                         | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                         | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
@@ -3165,7 +3206,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(output_control_operations.len(), 28);
+        assert_eq!(output_control_operations.len(), 31);
         for (source_id, operation_id) in [
             (
                 "release_blackout_output_control_v2",
@@ -3239,6 +3280,9 @@ mod tests {
                 OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
             ),
             ("add_display_output_v2", OUTPUT_DISPLAY_ADD_OPERATION_ID),
+            ("add_external_output_v2", OUTPUT_EXTERNAL_ADD_OPERATION_ID),
+            ("configure_video_output_v2", OUTPUT_VIDEO_CONFIGURE_OPERATION_ID),
+            ("remove_video_output_v2", OUTPUT_VIDEO_REMOVE_OPERATION_ID),
             (
                 "set_display_output_window_open_v2",
                 OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
@@ -3273,6 +3317,10 @@ mod tests {
                 if matches!(
                     operation_id,
                     OUTPUT_ENABLE_OPERATION_ID
+                        | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                        | OUTPUT_EXTERNAL_ADD_OPERATION_ID
+                        | OUTPUT_VIDEO_CONFIGURE_OPERATION_ID
+                        | OUTPUT_VIDEO_REMOVE_OPERATION_ID
                         | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
                         | OUTPUT_BLACKOUT_SET_OPERATION_ID
                         | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
@@ -3308,6 +3356,10 @@ mod tests {
                 if matches!(
                     operation_id,
                     OUTPUT_ENABLE_OPERATION_ID
+                        | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                        | OUTPUT_EXTERNAL_ADD_OPERATION_ID
+                        | OUTPUT_VIDEO_CONFIGURE_OPERATION_ID
+                        | OUTPUT_VIDEO_REMOVE_OPERATION_ID
                         | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
                         | OUTPUT_BLACKOUT_SET_OPERATION_ID
                         | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
@@ -3525,7 +3577,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 77);
+        assert_eq!(direct.len(), 80);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
@@ -3558,7 +3610,7 @@ mod tests {
         // renderer-routed events are inventoried sources, not classified
         // external operations. Five group MIDI and five shared OSC/DMX actions
         // add ten more local, unclassified sources.
-        assert_eq!(unclassified.len(), 1178);
+        assert_eq!(unclassified.len(), 1179);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -3888,6 +3940,9 @@ mod tests {
                     | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                     | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                     | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                    | OUTPUT_EXTERNAL_ADD_OPERATION_ID
+                    | OUTPUT_VIDEO_CONFIGURE_OPERATION_ID
+                    | OUTPUT_VIDEO_REMOVE_OPERATION_ID
                     | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                     | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                     | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
@@ -4063,6 +4118,9 @@ mod tests {
                     | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                     | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                     | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                    | OUTPUT_EXTERNAL_ADD_OPERATION_ID
+                    | OUTPUT_VIDEO_CONFIGURE_OPERATION_ID
+                    | OUTPUT_VIDEO_REMOVE_OPERATION_ID
                     | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                     | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                     | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
@@ -4094,6 +4152,10 @@ mod tests {
                     if matches!(
                         operation.operation_id.as_str(),
                         OUTPUT_ENABLE_OPERATION_ID
+                            | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                            | OUTPUT_EXTERNAL_ADD_OPERATION_ID
+                            | OUTPUT_VIDEO_CONFIGURE_OPERATION_ID
+                            | OUTPUT_VIDEO_REMOVE_OPERATION_ID
                             | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
                             | OUTPUT_BLACKOUT_SET_OPERATION_ID
                             | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
@@ -4125,6 +4187,10 @@ mod tests {
                     if matches!(
                         operation.operation_id.as_str(),
                         OUTPUT_ENABLE_OPERATION_ID
+                            | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                            | OUTPUT_EXTERNAL_ADD_OPERATION_ID
+                            | OUTPUT_VIDEO_CONFIGURE_OPERATION_ID
+                            | OUTPUT_VIDEO_REMOVE_OPERATION_ID
                             | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
                             | OUTPUT_BLACKOUT_SET_OPERATION_ID
                             | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
@@ -4322,11 +4388,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both native and frontend sources for generator create/update.
-        assert_eq!(legacy.operations.len(), 1734);
+        assert_eq!(legacy.operations.len(), 1741);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1734);
+        assert_eq!(operations.len(), 1741);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

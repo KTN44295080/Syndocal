@@ -129,8 +129,8 @@ assert.match(panelSource, /data-video-output-editor-warning/);
 assert.match(panelSource, /This editor screen overlaps the Syndocal control surface\. Choose a different screen when possible\./);
 assert.doesNotMatch(panelSource, /disabled=\{[^}]*isEditorMonitor/);
 
-// Requirement 3: the add callback remains the native-owned action, with an
-// explicit UI note beside it; no frontend confirmation route is introduced.
+// Requirement 3: Add is one direct, native-owned action. Ownership setup is
+// automatic when unclaimed; no confirmation or separate Arm/Enable is required.
 assert.match(panelSource, /const \[addPending, setAddPending\] = createSignal\(false\)/);
 assert.match(panelSource, /const addSelectedDisplayOutput = async \(\) =>/);
 assert.match(panelSource, /if \(addPending\(\) \|\| props\.kind !== "Display"\) return/);
@@ -194,8 +194,10 @@ assert.match(stylesSource, /videoOutputAddDiagnostic(?:Code|Value)[\s\S]*word-br
 assert.match(stylesSource, /videoOutputAddDiagnostic(?:Body|Code|Value)[\s\S]*max-width: 100%/);
 assert.match(stylesSource, /videoOutputAddDiagnostic(?:Body|Code|Value)[\s\S]*min-width: 0/);
 assert.match(localizationSource, /"Clear diagnostics":/);
-assert.match(panelSource, /data-video-output-native-dialog-note/);
-assert.match(panelSource, /The native display confirmation dialog will appear when this output is added\./);
+assert.doesNotMatch(panelSource, /data-video-output-native-dialog-note/);
+assert.doesNotMatch(panelSource, /The native display confirmation dialog will appear when this output is added\./);
+assert.doesNotMatch(panelSource, /window\.confirm\(|inAppDialog|confirmDialog/);
+assert.match(panelSource, /New outputs follow the current output state and may start sending immediately\./);
 
 // The UI-side guard is a local singleflight: two clicks in the same pending
 // window must yield one callback, while the guard is released in finally.
@@ -662,7 +664,7 @@ assert.match(panelSource, /monitor\.index <= 255/);
 assert.match(appSource, /videoDisplayTargetSummary/);
 assert.match(appSource, /monitor\.index > 255/);
 const addFunctionStart = appSource.indexOf("const addDisplayVideoOutput = async");
-const addFunctionEnd = appSource.indexOf("const removeVideoOutput = async", addFunctionStart);
+const addFunctionEnd = appSource.indexOf("let videoOutputAuthoringInFlight = false;", addFunctionStart);
 assert.ok(addFunctionStart >= 0 && addFunctionEnd > addFunctionStart, "display add function boundary must remain discoverable");
 const addFunctionSource = appSource.slice(addFunctionStart, addFunctionEnd);
 assert.match(appSource, /const staleDisplayAddRecoveryMessages = new Set\(\[/);
@@ -670,6 +672,9 @@ assert.match(appSource, /const isStaleDisplayAddRecoveryMessage = \(text: string
 assert.match(appSource, /const displayAddPostCommitRefreshResult = \(/);
 assert.match(appSource, /const finishDisplayAddPostCommitRefresh = \(/);
 assert.match(addFunctionSource, /queryDisplayAddLeaseAuthority\(invoke\)/);
+assert.match(addFunctionSource, /if \(displayAddAuthority\.status === "unavailable"\) \{\s*await executeVideoOutputLeaseSetup\(invoke, \{ kind: "acquire_lease", role: "both" \}\);\s*displayAddAuthority = await queryDisplayAddLeaseAuthority\(invoke\);\s*\}/);
+assert.doesNotMatch(addFunctionSource, /window\.confirm\(|inAppDialog|confirmDialog/);
+assert.doesNotMatch(addFunctionSource, /kind: "(?:arm|enable_output|force_transfer_lease|relinquish_output_lease)"/);
 assert.match(addFunctionSource, /selectExactBothLeaseForDisplayAdd\(displayAddAuthority\)/);
 assert.match(addFunctionSource, /executeDisplayAddOutputControl\(/);
 const executeDisplayAddIndex = addFunctionSource.indexOf("await executeDisplayAddOutputControl(");
@@ -684,6 +689,128 @@ assert.match(addFunctionSource, /catch \(error\) \{[\s\S]*refreshError = error;[
 assert.doesNotMatch(addFunctionSource, /queryOutputLeaseAuthority\(invoke\)/, "display Add must not fall back to the public lease query");
 assert.doesNotMatch(addFunctionSource, /enableOutput|enable_output_control_v2/, "frontend add must not publish a separate enable before atomic backend add");
 assert.doesNotMatch(addFunctionSource, /setMessage\(/, "display add errors must be rendered beside Add, not only in the global status line");
+
+// Execute the actual App callback with its production controller functions.
+// Only the lease-setup seam is stubbed: lifecycle receipts are covered by the
+// controller/authoring suite, while this proves the UI chooses Both once,
+// re-queries authority, and proceeds directly to exactly one canonical Add.
+const appDisplayAddRuntime = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(
+  `export function makeDisplayAdd(deps) {
+    const { isTauriRuntime, tauriBackendUnavailableMessage, videoDisplayTargetSummary,
+      queryDisplayAddLeaseAuthority, executeVideoOutputLeaseSetup,
+      selectExactBothLeaseForDisplayAdd, executeDisplayAddOutputControl, invoke,
+      setVideoOutputLabel, snapshot, appStatus, refreshSnapshotAndVideoOutputRenderPlans,
+      finishDisplayAddPostCommitRefresh } = deps;
+    ${addFunctionSource}
+    return addDisplayVideoOutput;
+  }`,
+  { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 }, fileName: "displayAddCallbackFixture.ts" },
+).outputText).toString("base64")}`);
+const runAppDisplayAdd = async ({ initiallyAvailable, acquireError, remainsUnavailable = false }) => {
+  let available = initiallyAvailable;
+  const events = [];
+  let addInvokes = 0;
+  let refreshCalls = 0;
+  const invoke = async (command, args) => {
+    events.push(command);
+    if (command === "query_display_add_lease_authority_v1") {
+      return {
+        operationId: displayAddOperationId,
+        status: available ? "held_active" : "unavailable",
+        authority: available ? runtimeLease : null,
+        resources: available ? ["lighting", "video"] : [],
+      };
+    }
+    if (command === "query_output_control_authority_v1") return runtimeAuthorityResponse;
+    if (command === "allocate_output_control_request_id_v1") return allocatedRequestId++;
+    if (command === "add_display_output_v2") {
+      addInvokes += 1;
+      return runtimeAddReceipt(args.request.request_id);
+    }
+    throw new Error(`unexpected App Add invoke: ${command}`);
+  };
+  const add = appDisplayAddRuntime.makeDisplayAdd({
+    isTauriRuntime: () => true,
+    tauriBackendUnavailableMessage: "Native backend unavailable",
+    videoDisplayTargetSummary: targetSummary,
+    queryDisplayAddLeaseAuthority: controllerRuntime.queryDisplayAddLeaseAuthority,
+    executeVideoOutputLeaseSetup: async (selectedInvoke, action) => {
+      assert.equal(selectedInvoke, invoke);
+      assert.deepEqual(action, { kind: "acquire_lease", role: "both" });
+      events.push("acquire_both");
+      if (acquireError) throw acquireError;
+      available = !remainsUnavailable;
+    },
+    selectExactBothLeaseForDisplayAdd: controllerRuntime.selectExactBothLeaseForDisplayAdd,
+    executeDisplayAddOutputControl: controllerRuntime.executeDisplayAddOutputControl,
+    invoke,
+    setVideoOutputLabel: () => {},
+    snapshot: () => ({ video: { outputs: [] } }),
+    appStatus: () => ({ text: "Ready" }),
+    refreshSnapshotAndVideoOutputRenderPlans: async () => { refreshCalls += 1; events.push("refresh"); },
+    finishDisplayAddPostCommitRefresh: () => { events.push("finish_refresh"); },
+  });
+  let error;
+  try { await add(fixtures[1]); } catch (caught) { error = caught; }
+  return { events, addInvokes, refreshCalls, error };
+};
+const acquiredAppAdd = await runAppDisplayAdd({ initiallyAvailable: false });
+assert.equal(acquiredAppAdd.error, undefined);
+assert.equal(acquiredAppAdd.addInvokes, 1);
+assert.equal(acquiredAppAdd.refreshCalls, 1);
+assert.deepEqual(acquiredAppAdd.events, [
+  "query_display_add_lease_authority_v1", "acquire_both", "query_display_add_lease_authority_v1",
+  "query_output_control_authority_v1", "allocate_output_control_request_id_v1", "add_display_output_v2",
+  "refresh", "finish_refresh",
+], "unclaimed Display Add must acquire Both once, re-query, then add without Arm/Enable/confirmation");
+const existingAppAdd = await runAppDisplayAdd({ initiallyAvailable: true });
+assert.equal(existingAppAdd.error, undefined);
+assert.equal(existingAppAdd.addInvokes, 1);
+assert(!existingAppAdd.events.includes("acquire_both"), "existing authority must not be reacquired");
+const conflictingAppAdd = await runAppDisplayAdd({ initiallyAvailable: false, acquireError: new Error("ownership conflict") });
+assert.match(String(conflictingAppAdd.error), /ownership conflict/);
+assert.equal(conflictingAppAdd.addInvokes, 0);
+assert.equal(conflictingAppAdd.refreshCalls, 0);
+assert.deepEqual(conflictingAppAdd.events, ["query_display_add_lease_authority_v1", "acquire_both"], "acquire conflict must not trigger transfer, retry, or Add");
+const unavailableAppAdd = await runAppDisplayAdd({ initiallyAvailable: false, remainsUnavailable: true });
+assert.match(String(unavailableAppAdd.error), /Exactly one active or recoverable Both output lease is required/);
+assert.equal(unavailableAppAdd.addInvokes, 0);
+assert.deepEqual(unavailableAppAdd.events, ["query_display_add_lease_authority_v1", "acquire_both", "query_display_add_lease_authority_v1"], "failed authority refresh must not retry acquisition or dispatch Add");
+
+// Standby Add persists an enabled Display without creating a native window or
+// advancing output state. Its project-only successor must be accepted by the
+// same strict terminal parser as the existing live Add receipt above.
+const standbyDisplayCalls = [];
+const standbyDisplayInvoke = async (command, args) => {
+  standbyDisplayCalls.push(command);
+  if (command === "query_display_add_lease_authority_v1") {
+    return { operationId: displayAddOperationId, status: "held_active", authority: runtimeLease, resources: ["lighting", "video"] };
+  }
+  if (command === "query_output_control_authority_v1") return runtimeAuthorityResponse;
+  if (command === "allocate_output_control_request_id_v1") return allocatedRequestId++;
+  if (command === "add_display_output_v2") {
+    const result = runtimeAddReceipt(args.request.request_id);
+    result.receipt.fence_after = {
+      ...runtimeFence,
+      project_revision: runtimeFence.project_revision + 1,
+      project_checkpoint_hash: "d".repeat(64),
+      project_publication_generation: runtimeFence.project_publication_generation + 1,
+    };
+    result.receipt.lease_result.authority = { ...runtimeLease };
+    result.receipt.lease_result.changes[0].after_generation = runtimeLease.generation;
+    return result;
+  }
+  throw new Error(`unexpected standby Display Add invoke: ${command}`);
+};
+const standbyDisplayAuthority = await controllerRuntime.queryDisplayAddLeaseAuthority(standbyDisplayInvoke);
+const standbyDisplayReceipt = await controllerRuntime.executeDisplayAddOutputControl(standbyDisplayInvoke, runtimeAddAction(), standbyDisplayAuthority);
+assert.equal(standbyDisplayReceipt.fence_after.project_revision, runtimeFence.project_revision + 1);
+assert.equal(standbyDisplayReceipt.fence_after.output_epoch, runtimeFence.output_epoch);
+assert.equal(standbyDisplayReceipt.fence_after.output_generation, runtimeFence.output_generation);
+assert.deepEqual(standbyDisplayCalls, [
+  "query_display_add_lease_authority_v1", "query_output_control_authority_v1",
+  "allocate_output_control_request_id_v1", "add_display_output_v2",
+]);
 
 // Execute the exact extracted post-commit classifier rather than mirroring it
 // in this checker. The fixture models the production order: canonical Add
@@ -748,12 +875,12 @@ assert.deepEqual(unrelatedBeforeRefresh.result, { kind: "preserve" }, "unrelated
 let fixtureRefreshCalls = 0;
 await assert.rejects(
   runCommittedDisplayAddFixture({
-    mutation: async () => { throw new Error("native Add failed after confirmation"); },
+    mutation: async () => { throw new Error("native Add failed"); },
     refresh: async () => { fixtureRefreshCalls += 1; },
     before: "Ready",
     after: "Ready",
   }),
-  /native Add failed after confirmation/,
+  /native Add failed/,
   "mutation failure must reject the outer Add callback",
 );
 assert.equal(fixtureRefreshCalls, 0, "mutation failure must not run post-commit refresh classification");
@@ -811,11 +938,11 @@ assert.doesNotMatch(
 );
 assert.match(localizationSource, /"This editor screen overlaps the Syndocal control surface\. Choose a different screen when possible\."/);
 assert.match(localizationSource, /"· Editor screen": "· エディター画面"/);
-assert.match(localizationSource, /"The native display confirmation dialog will appear when this output is added\."/);
+assert.match(localizationSource, /"New outputs follow the current output state and may start sending immediately\.":/);
 assert.match(localizationSource, /"Adding display output…":/);
 assert.match(localizationSource, /"Display output added\.":/);
 assert.match(stylesSource, /\.videoOutputQuickCreate/);
 assert.match(stylesSource, /grid-template-columns: minmax\(0, 1fr\) auto/);
 assert.match(stylesSource, /\.videoOutputQuickCreate > button[\s\S]*min-height: 36px/);
 
-console.log("video display target contract: PASS (exactly one editor, first non-editor default, editor warning, stale DTO fail-closed, four-sub add sequence, local add singleflight, adjacent status, bounded/redacted local Add diagnostics with raw-error retention, bidi removal, safe conversion, clear lifecycle/button, strict Add authority parser, executable query-to-Add-v2 exactly-once flow, post-commit refresh lifecycle, zero-mutation negatives, no pre-enable/fallback, Japanese Add errors, native dialog notice, localized 1280-safe surface)");
+console.log("video display target contract: PASS (exactly one editor, first non-editor default, editor warning, stale DTO fail-closed, four-sub add sequence, local add singleflight, adjacent status, bounded/redacted local Add diagnostics with raw-error retention, bidi removal, safe conversion, clear lifecycle/button, strict Add authority parser, executable query-to-Add-v2 exactly-once flow, post-commit refresh lifecycle, zero-mutation negatives, automatic Both acquisition without transfer, standby project-only receipt, no pre-enable/confirmation, Japanese Add errors, localized 1280-safe surface)");
