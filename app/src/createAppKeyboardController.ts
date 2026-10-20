@@ -120,8 +120,10 @@ export function createAppKeyboardController(options: AppKeyboardControllerOption
       options.setMappingViewportPanDrag(null);
     },
     setControlMode: (mode) => {
+      // In Control, E / L / M / Alt+1-4 select the Control domains (Lighting,
+      // Timeline playback, Video); only Edit routes to the authoring Timeline.
       const liveDomain = mode === "perform" || mode === "both"
-        || (options.workspaceTab() === "touch" && mode === "edit");
+        || (options.workspaceTab() === "touch" && (mode === "edit" || mode === "live"));
       if (liveDomain) {
         if (!options.selectWorkspaceTab("touch")) return;
         const accepted = options.selectControlDomain(controlDomainForMode(mode));

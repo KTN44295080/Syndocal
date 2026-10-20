@@ -52,7 +52,9 @@ const allowedSetupSubTabs: SetupSubTab[] = [
   "io",
 ];
 const allowedControlModes: ControlMode[] = ["edit", "live", "mixer", "both", "perform"];
-const allowedControlDomains: ControlDomain[] = ["lighting", "video", "both"];
+// "timeline" is the additive Control playback domain (Task 21). Older layouts
+// never contain it, and an unknown value still normalizes to Lighting.
+const allowedControlDomains: ControlDomain[] = ["lighting", "video", "both", "timeline"];
 const allowedTimelineDeskSurfaces: TimelineDeskSurface[] = ["show", "automation", "playback"];
 // Block properties are tied to the current selection, so reopening that drawer
 // from a previous process would restore stale editing context. Only stable
@@ -114,7 +116,7 @@ export const workspaceLayoutFromUnknown = (candidate: unknown): WorkspaceLayout 
       defaultWorkspaceLayout.setup_sub_tab,
     ),
     control_mode: migratedLiveDesk ? mode : workspace === "touch"
-      ? domain === "video" ? "perform" : domain === "both" ? "both" : "edit"
+      ? domain === "video" ? "perform" : domain === "both" ? "both" : domain === "timeline" ? "live" : "edit"
       : liveDeskMode ? "edit" : mode,
     touch_control_domain: domain,
     timeline_desk_surface: enumValue(

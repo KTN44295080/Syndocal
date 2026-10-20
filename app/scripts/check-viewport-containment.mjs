@@ -12516,15 +12516,17 @@ function hasExpectedControlModeSurface(result) {
     result.label.startsWith("control-edit-") ||
     result.label.startsWith("control-live-scene-settings-");
   const timelineSurface = result.label.startsWith("control-live-") && !lightingSurface;
-  if (result.controlModeTabCount !== 3) {
+  // Task 21: Control has four tabs (Lighting / Video / Both / Timeline playback); Edit keeps three.
+  const expectedTabCount = bothSurface ? 4 : 3;
+  if (result.controlModeTabCount !== expectedTabCount) {
     return false;
   }
   if (
-    result.controlModeSemanticTabCount !== 3 ||
-    result.controlModeSemanticTabWidths.length !== 3 ||
+    result.controlModeSemanticTabCount !== expectedTabCount ||
+    result.controlModeSemanticTabWidths.length !== expectedTabCount ||
     result.controlModeSemanticTabWidths.some((width) => width <= 0) ||
-    JSON.stringify(result.controlModeSemanticTabIds) !== JSON.stringify(bothSurface ? ['edit', 'perform', 'both'] : ['edit', 'mixer', 'live']) ||
-    JSON.stringify(result.controlModeSemanticTabLabels) !== JSON.stringify(bothSurface ? ['Lighting', 'Video', 'Both'] : ['Lighting', 'Video', 'Timeline']) ||
+    JSON.stringify(result.controlModeSemanticTabIds) !== JSON.stringify(bothSurface ? ['edit', 'perform', 'both', 'live'] : ['edit', 'mixer', 'live']) ||
+    JSON.stringify(result.controlModeSemanticTabLabels) !== JSON.stringify(bothSurface ? ['Lighting', 'Video', 'Both', 'Timeline'] : ['Lighting', 'Video', 'Timeline']) ||
     result.editDomainNavigationCount !== 1 ||
     result.oldLowerControlModeNavigationCount !== 0 ||
     !result.editDomainNavigationDirectlyAfterTopbar ||
