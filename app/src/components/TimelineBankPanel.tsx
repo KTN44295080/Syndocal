@@ -7,8 +7,6 @@ import type {
   VideoClipTakeKind,
   VideoLayerTransitionCurve,
 } from "../types";
-import { confirmDialog } from "../inAppDialog";
-import { removeTimelineDialog } from "../inAppDialogCopy";
 
 interface TimelineBankPanelProps {
   timelines: TimelineSnapshot[];
@@ -93,8 +91,6 @@ export function TimelineBankPanel(props: TimelineBankPanelProps) {
   };
   const removeTimeline = async (timeline: TimelineSnapshot, index: number) => {
     if (props.timelines.length <= 1) return;
-    const label = timelineLabel(timeline, index);
-    if (!await confirmDialog(removeTimelineDialog(label))) return;
     void props.onRemove(timelineId(timeline));
   };
   const runtimeLabel = createMemo(() => {

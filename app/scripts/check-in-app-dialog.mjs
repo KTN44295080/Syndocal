@@ -16,7 +16,6 @@ const server = await createServer({
 try {
   const service = await server.ssrLoadModule("/src/inAppDialog.ts");
   const copy = await server.ssrLoadModule("/src/inAppDialogCopy.ts");
-  const destructive = await server.ssrLoadModule("/src/destructiveActions.ts");
   const localization = await server.ssrLoadModule("/src/uiLocalization.ts");
   const open = () => service.activeInAppDialog();
   const tick = () => new Promise((done) => setTimeout(done, 0));
@@ -77,18 +76,10 @@ try {
   // Wording: every string a dialog can show has Japanese text, and every
   // dangerous question names its consequence and starts on Cancel.
   const samples = [
-    copy.blackoutDialog(true), copy.blackoutDialog(false), copy.newProjectDuringShowDialog(),
     copy.discardTimelineEditsDialog(), copy.discardFxDraftDialog(), copy.installUpdateDialog("1.2.3"),
-    copy.removeFixturesDialog(1, "Front Spot 1"), copy.removeFixturesDialog(3, "x"), copy.abandonPublicationDialog("save as"),
-    copy.abandonPublicationDialog("user template"), copy.deleteBackupDialog("2026/10/19 12:00:00"), copy.disarmDjLinkDialog(),
-    copy.rotateDjLinkTokenDialog(), copy.returnDjControlDialog(), copy.adoptMediaReplacementDialog(7, "C:\\media\\a.mp4"),
-    copy.revokeAllExternalAccessDialog(), copy.removeTimelineDialog("Timeline 2"), copy.deleteTouchPageDialog("Page 2"),
-    copy.removeTouchControlDialog("Fader 1"), copy.removeDjLinkMappingDialog(), copy.removeClipSlotDialog(12),
-    copy.removeFxPresetDialog("Warm"), copy.removeLayerGroupDialog("Front"), copy.removeFxStageDialog("Invert"),
-    copy.removeFxChainDialog("Layer 1"), copy.removeTransitionBusDialog("Bus A"), copy.addEffectToLiveLayerDialog("3 · Logo", "Mirror"),
-    destructive.destructiveActionDialog("fixture", "Front Spot 1"), destructive.destructiveActionDialog("playback executor", "Exec 1"),
-    destructive.cueRemovalDialog("Opening", 0, 0), destructive.cueRemovalDialog("Opening", 1, 1), destructive.cueRemovalDialog("Opening", 5, 3),
-    destructive.timelinePlacementRemovalDialog(5, "1 · Opening", 0), destructive.timelinePlacementRemovalDialog(5, "1 · Opening", 4000),
+    copy.abandonPublicationDialog("save as"), copy.abandonPublicationDialog("user template"),
+    copy.deleteBackupDialog("2026/10/19 12:00:00"), copy.rotateDjLinkTokenDialog(),
+    copy.adoptMediaReplacementDialog(7, "C:\\media\\a.mp4"), copy.revokeAllExternalAccessDialog(),
   ];
   const invariant = new Set(["OK"]);
   for (const dialog of samples) {
@@ -111,11 +102,7 @@ try {
       assert.equal(dialog.tone, "danger", `a destructive question starts on Cancel: ${dialog.title}`);
     }
   }
-  assert.equal(localization.translateUiText(copy.blackoutDialog(true).title, "ja"), "映像をブラックアウトしますか？");
-  assert.equal(localization.translateUiText(copy.blackoutDialog(true).message, "ja"), "本番出力が即座に黒になります。");
-  assert.equal(localization.translateUiText(copy.removeFixturesDialog(1, "Front Spot 1").title, "ja"), "灯体「Front Spot 1」を削除しますか？");
   assert.equal(localization.translateUiText(copy.installUpdateDialog("1.2.3").title, "ja"), "Syndocal 1.2.3 をインストールしますか？");
-  assert.equal(copy.blackoutDialog(true).tone, "danger");
   // Standby explanations are plain in-app text (never a dialog) with Japanese for every reason.
   for (const [english, japanese] of [
     ["Standby: this machine is not driving outputs", "スタンバイ: このマシンは出力を制御していません"],
@@ -124,7 +111,6 @@ try {
     ["No blackout was applied. Standby: this machine is not driving outputs.", "ブラックアウトは適用されませんでした。スタンバイ: このマシンは出力を制御していません。"],
   ]) assert.equal(localization.translateUiText(english, "ja"), japanese, `Standby wording localized: ${english}`);
   for (const word of ["Standby", "Fenced", "Output off"]) assert.notEqual(localization.translateUiText(word, "ja"), word, `short key label localized: ${word}`);
-  assert.equal(copy.blackoutDialog(false).tone, "danger", "Recover is guarded like Blackout");
 
   console.log(`in-app dialog service and wording ok (${samples.length} dialogs localized)`);
 } finally {

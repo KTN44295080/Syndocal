@@ -19232,14 +19232,9 @@ async function runFixtureGroupsViewport(client, viewport) {
     const menu = document.querySelector('[data-group-context-menu]');
     [...(menu?.querySelectorAll('button') || [])].find((button) => button.textContent?.trim() === 'Delete')?.click();
   })()`);
-  await sleep(40);
+  await sleep(110);
   const deleteConfirmation = await readState();
-  await client.evaluate(`(() => {
-    const dialog = document.querySelector('[data-group-delete-dialog]');
-    [...(dialog?.querySelectorAll('button') || [])].find((button) => button.textContent?.trim() === 'Delete')?.click();
-  })()`);
-  await sleep(70);
-  const deleted = await readState();
+  const deleted = deleteConfirmation;
   await client.evaluate(`document.querySelector('.appStatusAction')?.click()`);
   await sleep(70);
   const undone = await readState();
@@ -19287,7 +19282,7 @@ async function runFixtureGroupsViewport(client, viewport) {
       contextMenu.menu?.id === sourceGroup?.id &&
       ['Rename', 'Color', 'Delete'].every((item) => contextMenu.menu.items.includes(item)) &&
       contextMenu.menu.colorInputCount === 1,
-    deleteRequiresConfirmation: deleteConfirmation.deleteDialogOpen === true,
+    deleteActsAtOnce: deleteConfirmation.deleteDialogOpen !== true,
     deleteOffersStatusLineUndo: deleted.statusUndoCount === 1 && deleted.statusUndoText === 'Undo group delete',
     undoRestoresRenamedEntityAndMembership:
       restoredGroup?.text === 'Renamed Front' && restoredGroup?.count === sourceGroup?.count,
@@ -22915,23 +22910,9 @@ async function exerciseSceneMatrixCueListBanksV2(client) {
   await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-cue-list-id=\\"3\\"]")', 'scene in selected bank');
   const sceneCreated = await readState('scene-created');
 
+  // Deleting a Bank acts at once (no confirmation); Undo restores it below.
   await openContext('3');
   await clickMenu('[data-scene-matrix-context-delete]');
-  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-delete-dialog][open]")', 'bank delete dialog');
-  const deleteDialog = await readState('delete-dialog');
-  await clickVisibleSelector(client, '[data-scene-matrix-delete-cancel]');
-  await settle();
-  const deleteCanceled = await readState('delete-canceled');
-  await openContext('1');
-  await clickMenu('[data-scene-matrix-context-delete]');
-  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-delete-dialog][open]")', 'Main bank delete dialog');
-  const mainDeleteDialog = await readState('main-delete-dialog');
-  await clickVisibleSelector(client, '[data-scene-matrix-delete-cancel]');
-  await settle();
-  await openContext('3');
-  await clickMenu('[data-scene-matrix-context-delete]');
-  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-delete-dialog][open]")', 'bank delete confirmation');
-  await clickVisibleSelector(client, '[data-scene-matrix-delete-confirm]');
   await waitForClientCondition(client, '!document.querySelector("[data-scene-matrix-column=\\"3\\"]")', 'bank delete completion');
   const deleteConfirmed = await readState('delete-confirmed');
   await client.evaluate(`(() => {
@@ -23020,9 +23001,6 @@ async function exerciseSceneMatrixCueListBanksV2(client) {
     interactiveClosed,
     keyboardEsc,
     sceneCreated,
-    deleteDialog,
-    deleteCanceled,
-    mainDeleteDialog,
     deleteConfirmed,
     deleteUndone,
     deleteRedone,
@@ -25397,22 +25375,9 @@ async function exerciseSceneMatrixSceneContextMenu(client) {
   };
 
   const pointerOpened = await openContext('302');
-  await clickVisibleSelector(client, '[data-scene-matrix-scene-context-delete]');
-  await waitForClientCondition(
-    client,
-    'document.querySelector("[data-scene-matrix-scene-delete-dialog][open]")',
-    'Scene delete confirmation',
-  );
-  const deleteDialog = await client.evaluate(`(() => ({
-    open: Boolean(document.querySelector('[data-scene-matrix-scene-delete-dialog][open]')),
-    placementCount: document.querySelector('[data-scene-matrix-scene-delete-placement-count]')?.textContent?.trim() ?? '',
-    jumpCount: document.querySelector('[data-scene-matrix-scene-delete-jump-count]')?.textContent?.trim() ?? '',
-  }))()`);
-  await clickVisibleSelector(client, '[data-scene-matrix-scene-delete-cancel]');
+  await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape' });
   await sleep(80);
-  const deleteCanceled = await client.evaluate(
-    `!document.querySelector('[data-scene-matrix-scene-delete-dialog][open]')`,
-  );
 
   const keyboardOpened = await openContext('302', true);
   await clickVisibleSelector(client, '[data-scene-matrix-scene-context-rename]');
@@ -25431,8 +25396,6 @@ async function exerciseSceneMatrixSceneContextMenu(client) {
   })()`);
   return {
     pointerOpened,
-    deleteDialog,
-    deleteCanceled,
     keyboardOpened,
     renameFocused,
   };
@@ -26515,15 +26478,10 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     ["matrixCueListSceneCreateTargetsExplicitBank", () =>
       cueListBanks.sceneCreated.banks.find((bank) => bank.id === "3")?.cards.includes("321")
       && cueListBanks.sceneCreated.banks.find((bank) => bank.id === "3")?.cardListIds.every((id) => id === "3")],
-    ["matrixCueListDeleteUsesCancelConfirmAndDeletesBankScenes", () =>
-      cueListBanks.deleteDialog.deleteDialogVisible
-      && cueListBanks.deleteCanceled.bankIds.includes("3")
+    ["matrixCueListDeleteActsAtOnceAndDeletesBankScenes", () =>
+      !cueListBanks.deleteConfirmed.deleteDialogOpen
       && !cueListBanks.deleteConfirmed.bankIds.includes("3")
-      && cueListBanks.deleteDialog.deleteSceneCount.startsWith("3")
       && cueListBanks.deleteConfirmed.cardIds.every((id) => !["303", "320", "321"].includes(id))],
-    ["matrixCueListMainDeleteIsAllowedWhenAnotherBankRemains", () =>
-      cueListBanks.mainDeleteDialog.deleteDialogVisible
-      && !cueListBanks.mainDeleteDialog.deleteConfirmDisabled],
     ["matrixCueListDeleteUndoRestoresBankScenes", () =>
       cueListBanks.deleteUndone.bankIds.includes("3")
       && cueListBanks.deleteUndone.banks.find((bank) => bank.id === "3")?.cards.join(",") === "303,320,321"
@@ -26556,10 +26514,6 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       && ["Rename", "Duplicate", "Delete"].every((label) =>
         sceneContextMenu.pointerOpened.labels.includes(label))
       && sceneContextMenu.pointerOpened.disabledLabels.length === 0
-      && sceneContextMenu.deleteDialog.open
-      && sceneContextMenu.deleteDialog.placementCount.startsWith("0")
-      && sceneContextMenu.deleteDialog.jumpCount.startsWith("0")
-      && sceneContextMenu.deleteCanceled
       && sceneContextMenu.keyboardOpened.clamped
       && sceneContextMenu.renameFocused],
     ["matrixBankMutationsUseOneStrictTauriLaneAndRefreshAuthoritatively", () => {

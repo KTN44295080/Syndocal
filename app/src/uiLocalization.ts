@@ -4441,7 +4441,7 @@ const japaneseText: Record<string, string> = {
   "Video live controls": "映像ライブ操作",
   "Video status": "映像状態",
   "µs": "マイクロ秒",
-  // In-app confirmation dialogs (inAppDialog.ts / inAppDialogCopy.ts / destructiveActions.ts).
+  // In-app confirmation dialogs (inAppDialog.ts / inAppDialogCopy.ts).
   "NOTICE": "お知らせ",
   "CAUTION": "注意",
   "CONFIRM": "確認",

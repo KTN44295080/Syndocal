@@ -306,20 +306,14 @@ import {
 } from "./dmxAddressing";
 import { verifiedFixtureProfileRequest, type FixtureProfileHealthSummary } from "./fixtureCatalog";
 import { bundledLibraryProfileRequest } from "./bundledLibrary";
-import { confirmCueRemoval, confirmDestructiveAction, type DestructiveActionKind } from "./destructiveActions";
-import { confirmDialog, isInAppDialogOpen, type ConfirmDialogOptions } from "./inAppDialog";
+import { confirmDialog, isInAppDialogOpen } from "./inAppDialog";
 import {
   abandonPublicationDialog,
   adoptMediaReplacementDialog,
-  blackoutDialog,
   deleteBackupDialog,
-  disarmDjLinkDialog,
   discardFxDraftDialog,
   discardTimelineEditsDialog,
   installUpdateDialog,
-  newProjectDuringShowDialog,
-  removeFixturesDialog,
-  returnDjControlDialog,
   rotateDjLinkTokenDialog,
 } from "./inAppDialogCopy";
 import { InAppDialogHost } from "./components/InAppDialogHost";
@@ -11049,19 +11043,6 @@ export default function App() {
       },
     }));
   };
-  // Removals ask in the app. The question can outlive the project it was asked about (a remote or
-  // MIDI action may replace it), so an answer given after the project epoch changed is a cancel.
-  const confirmCurrentProject = async (options: ConfirmDialogOptions): Promise<boolean> => {
-    const epoch = captureProjectAuthorityIdentity().project_epoch;
-    if (!await confirmDialog(options)) return false;
-    if (captureProjectAuthorityIdentity().project_epoch !== epoch) {
-      setMessage("The project changed while the question was open. Nothing was removed.");
-      return false;
-    }
-    return true;
-  };
-  const confirmRemoval = (kind: DestructiveActionKind, label: string) =>
-    confirmDestructiveAction(kind, label, confirmCurrentProject);
   const confirmDiscardTimelineEditorDrafts = async (): Promise<boolean> =>
     !timelineEditorDirty() || await confirmDialog(discardTimelineEditsDialog());
 
@@ -13217,10 +13198,6 @@ export default function App() {
   };
 
   const removeFixture = async (fixtureId: number) => {
-    const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
-    if (fixture && !await confirmRemoval("fixture", fixture.label)) {
-      return;
-    }
     try {
       await invoke("remove_fixture", { fixtureId });
       if (selectedFixtureId() === fixtureId) {
@@ -13853,7 +13830,6 @@ export default function App() {
   };
 
   const removeReferencePalette = async (palette: ReferencePaletteSummary) => {
-    if (!await confirmRemoval("palette", palette.label)) return;
     try {
       await invoke("remove_reference_palette", { paletteId: palette.id });
       setMessage(`Removed ${palette.label} and its Cue references.`);
@@ -13937,7 +13913,6 @@ export default function App() {
   };
 
   const removeFxColorPalette = async (paletteId: number, label: string) => {
-    if (!await confirmRemoval("palette", label)) return false;
     if (viewportFixture) {
       setSnapshot((current) => ({
         ...current,
@@ -14293,9 +14268,6 @@ export default function App() {
       return;
     }
     const removeLabel = fixtures.length === 1 ? fixtures[0].label : `${fixtures.length} selected fixtures`;
-    if (!await confirmCurrentProject(removeFixturesDialog(fixtures.length, fixtures[0].label))) {
-      return;
-    }
     const removedIds = new Set(fixtures.map((fixture) => fixture.id));
     try {
       for (const fixture of fixtures) {
@@ -15892,8 +15864,6 @@ export default function App() {
     if (newProjectInFlight) return;
     newProjectInFlight = true;
     try {
-      if (workspaceTab() === "touch" && controlMode() === "perform" &&
-        !await confirmDialog(newProjectDuringShowDialog())) return;
       if (!await confirmDiscardProjectChanges("create a new project")) {
         setMessage("New project canceled.");
         return;
@@ -18939,7 +18909,6 @@ export default function App() {
   };
   const disarmDjLinkMachine = async () => {
     if (djLinkTokenOperationBusy()) return;
-    if (!await confirmDialog(disarmDjLinkDialog())) return;
     const operationGeneration = ++djLinkTokenOperationGeneration;
     djLinkMachineRequestGeneration += 1;
     setDjLinkTokenOperationBusy(true);
@@ -19015,7 +18984,6 @@ export default function App() {
 
   const requestDjLinkOperatorReturn = async () => {
     if (djLinkOperatorReturnBusy()) return;
-    if (!await confirmDialog(returnDjControlDialog())) return;
     setDjLinkOperatorReturnBusy(true);
     try {
       await invoke("request_dj_link_operator_return_to_dj_control", {
@@ -19414,7 +19382,6 @@ export default function App() {
     }
     const deletingSelectedBank = selectedCueListId() === cueList.id;
     const deletedBankIndex = snapshot().cue_lists.findIndex((candidate) => candidate.id === cueList.id);
-    if (!confirmed && !await confirmRemoval("Bank", cueList.label)) return false;
     if (!isTauriRuntime()) {
       const beforeCues = structuredClone(snapshot().cues);
       const beforeCueLists = structuredClone(snapshot().cue_lists);
@@ -19670,7 +19637,6 @@ export default function App() {
       if (authority) setMessage(`Playback Executor ${executor.id} is no longer available.`);
       return;
     }
-    if (!await confirmRemoval("playback executor", executor.label)) return;
     try {
       await invoke("remove_playback_executor", { executorId: executor.id });
       setMessage(`Removed Playback Executor ${executor.label}.`);
@@ -20230,12 +20196,6 @@ export default function App() {
   const removeCue = async (cueId: number, confirmed = false): Promise<boolean> => {
     const cue = requireAuthoritativeCue(cueId);
     if (!cue) return false;
-    if (cue && !confirmed) {
-      const impact = cueRemovalImpact(cueId);
-      if (!await confirmCueRemoval(cue.label, impact.linkedPlacements, impact.incomingJumps, confirmCurrentProject)) {
-        return false;
-      }
-    }
     try {
       await invoke("remove_cue", { cueId });
       setMessage(`Removed cue ${cueId}`);
@@ -24535,9 +24495,6 @@ export default function App() {
 
   const removeEffect = async (effectId: number) => {
     const effect = snapshot().effects.find((candidate) => candidate.id === effectId);
-    if (effect && !await confirmRemoval("effect", effect.label)) {
-      return;
-    }
     try {
       await invoke("remove_effect", { effectId });
       if (editingEffectId() === effectId) {
@@ -26674,14 +26631,12 @@ export default function App() {
   // Perform confirms only the UI request; the existing blackout owner remains authoritative.
   const requestPerformVideoBlackout = async (enabled: boolean) => {
     if (workspaceTab() === "touch" && controlMode() === "perform") {
-      // Explain a machine that cannot act before asking, so nothing fails
-      // after the operator has confirmed.
+      // Explain a machine that cannot act instead of failing silently.
       const drive = await readOutputDrive();
       if (drive.kind === "blocked") {
         setMessage(blackoutNotAppliedMessage(drive), BLACKOUT_STATUS_KEY);
         return;
       }
-      if (!await confirmDialog(blackoutDialog(enabled))) return;
     }
     return setVideoBlackout(enabled);
   };

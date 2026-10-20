@@ -7,8 +7,6 @@ import { videoClipSlotBankCells } from "../videoClipSlotBankModel";
 import { VideoClipSlotBankPanel } from "./VideoClipSlotBankPanel";
 import { defaultVideoGroupMix, videoGroupBlends } from "../videoLayerGroups";
 import { VideoLayerListPanel } from "./VideoLayerListPanel";
-import { confirmDialog } from "../inAppDialog";
-import { addEffectToLiveLayerDialog } from "../inAppDialogCopy";
 import "./VideoPerformMatrix.css";
 import { FX_DRAG_MIME, readFxDragPayload, type FxCatalogEntry } from "../fxCatalogModel";
 
@@ -258,10 +256,8 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
         if (!entry) return;
         event.preventDefault(); event.stopPropagation();
         selectLayer(layer().id);
-        // A row may differ from the browser's selected target. Review the exact
-        // destination before changing its live chain.
-        const target = layer();
-        if (await confirmDialog(addEffectToLiveLayerDialog(`${target.id} · ${target.label}`, entry.label))) void props.onAddEffect?.(entry, target.id);
+        // A row may differ from the browser's selected target; add to this row.
+        void props.onAddEffect?.(entry, layer().id);
       }}>
       <div class="videoPerformLayerStrip" role="rowheader">
         <div class="videoPerformLayerTop">
