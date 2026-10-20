@@ -12,6 +12,11 @@ import { createServer } from "vite";
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const evidenceDir = resolve(process.env.SYNDOCAL_PERFORM_SCREENSHOT_DIR ?? join(appRoot, "../target/qa/vj-perform-ui/browser"));
+const requestedVitePort = Number(process.env.SYNDOCAL_CHECK_PORT ?? 0);
+const requestedCdpPort = Number(process.env.SYNDOCAL_CDP_PORT ?? 0);
+for (const port of [requestedVitePort, requestedCdpPort]) {
+  assert.ok(Number.isSafeInteger(port) && (port === 0 || (port >= 1024 && port <= 65535)), "Invalid Perform check port");
+}
 const browserPath = [process.env.CHROME_PATH,
   "C:/Program Files/Google/Chrome/Application/chrome.exe",
   "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
@@ -121,7 +126,10 @@ function inspectInPage(selector) {
   const style = getComputedStyle(element);
   let failure = rect.width <= 0 || rect.height <= 0 || style.visibility !== "visible" || style.display === "none" ? "hidden" : null;
   let clip = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
-  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+  // Modal dialogs paint in the top layer, outside their DOM ancestors' clips.
+  // Keep viewport/hit checks and all clipping ancestors inside the modal.
+  const modal = element.closest("dialog:modal");
+  for (let parent = element === modal ? null : element.parentElement; parent; parent = parent === modal ? null : parent.parentElement) {
     const bounds = parent.getBoundingClientRect();
     const parentStyle = getComputedStyle(parent);
     if (/(auto|scroll|hidden|clip)/.test(parentStyle.overflowX)) { clip.left = Math.max(clip.left, bounds.left); clip.right = Math.min(clip.right, bounds.right); }
@@ -332,15 +340,18 @@ try {
       assert.ok(tempo.sourceFits && tempo.statusFits, label+': sync text is not truncated '+JSON.stringify(tempo));
       assert.ok(tempo.cluster.right <= tempo.state.left + 1 && tempo.state.right <= tempo.windowControls.left + 1 && tempo.windowControls.right <= tempo.viewportWidth + 1 && tempo.topbarOverflow <= 0, label+': top bar tempo cluster fits without overlap or overflow '+JSON.stringify(tempo));
       const rowSelector=root+' [data-video-perform-row="1"]';
-      // Every Perform control is MIDI-learnable with stable ids: clip, Take, Stop, blend, transition type and time.
+      // Every Perform control is MIDI/OSC/DMX-learnable with stable ids: clip, Take, Stop, blend, transition type and time.
       const learnTargets = await cdp.evaluate('(()=>{const read=(q)=>{try{const t=JSON.parse(document.querySelector(q)?.dataset.controlMapTarget??"null");return t&&t[0]}catch{return null}};return {pad:read('+JSON.stringify(selectors.launch)+'),stop:read('+JSON.stringify(root+' [data-video-perform-row="1"] [data-video-layer-stop]')+'),blend:read('+JSON.stringify(root+' [data-video-perform-row="1"] [data-video-layer-blend]')+'),take:read('+JSON.stringify(selectors.take)+'),kind:read('+JSON.stringify(selectors.transitionKind)+'),time:read('+JSON.stringify(selectors.transitionDuration)+'),padSlotId:Number(document.querySelector('+JSON.stringify(selectors.launch)+')?.closest("[data-video-clip-slot-id]")?.dataset.videoClipSlotId)}})()');
-      assert.deepEqual([learnTargets.pad?.action, learnTargets.pad?.layer_id, learnTargets.pad?.midi_only], ['VideoClipSlotTrigger', 1, true], label+': the pad is a MIDI target '+JSON.stringify(learnTargets));
+      assert.deepEqual([learnTargets.pad?.action, learnTargets.pad?.layer_id], ['VideoClipSlotTrigger', 1], label+': the pad is a shared Learn target '+JSON.stringify(learnTargets));
+      for (const name of ['pad', 'stop', 'blend', 'take', 'kind', 'time']) {
+        assert.ok(learnTargets[name] && learnTargets[name].midi_only !== true, label+': '+name+' is available to MIDI, OSC and DMX Learn');
+      }
       assert.ok(Number.isSafeInteger(learnTargets.pad?.clip_slot_id) && learnTargets.pad.clip_slot_id > 0 && learnTargets.pad.clip_slot_id === learnTargets.padSlotId, label+': the pad targets its stable clip slot id, not its column '+JSON.stringify(learnTargets));
-      assert.deepEqual([learnTargets.stop?.action, learnTargets.stop?.layer_id], ['VideoLayerStop', 1], label+': Stop is a MIDI target');
-      assert.deepEqual([learnTargets.blend?.action, learnTargets.blend?.layer_id], ['VideoLayerBlendMode', 1], label+': Blend is a MIDI target');
-      assert.equal(learnTargets.take?.action, 'VideoTake', label+': Take is a MIDI target');
-      assert.equal(learnTargets.kind?.action, 'VideoTransitionKind', label+': transition type is a MIDI target');
-      assert.deepEqual([learnTargets.time?.action, learnTargets.time?.low, learnTargets.time?.high], ['VideoTransitionTime', 0.1, 10], label+': transition time is a MIDI target');
+      assert.deepEqual([learnTargets.stop?.action, learnTargets.stop?.layer_id], ['VideoLayerStop', 1], label+': Stop is a shared Learn target');
+      assert.deepEqual([learnTargets.blend?.action, learnTargets.blend?.layer_id], ['VideoLayerBlendMode', 1], label+': Blend is a shared Learn target');
+      assert.equal(learnTargets.take?.action, 'VideoTake', label+': Take is a shared Learn target');
+      assert.equal(learnTargets.kind?.action, 'VideoTransitionKind', label+': transition type is a shared Learn target');
+      assert.deepEqual([learnTargets.time?.action, learnTargets.time?.low, learnTargets.time?.high], ['VideoTransitionTime', 0.1, 10], label+': transition time is a shared Learn target');
       const legendText = await cdp.evaluate('document.querySelector('+JSON.stringify(root+' [data-video-perform-legend]')+').textContent');
       assert.doesNotMatch(legendText, /not supported by the current control model|現在の制御モデルは/, label+': the legend no longer reports unsupported MIDI targets');
       // Density: complete layer rows inside the matrix viewport (excluding the sticky head and horizontal scrollbar).

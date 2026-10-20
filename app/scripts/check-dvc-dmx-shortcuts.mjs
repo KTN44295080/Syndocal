@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 const importer = await readFile(new URL("../src-tauri/src/dvc_import.rs", import.meta.url), "utf8");
 const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const protocol = await readFile(new URL("../../crates/protocol/src/lib.rs", import.meta.url), "utf8");
+const forwarding = await readFile(new URL("../src-tauri/src/renderer_control_forwarding.rs", import.meta.url), "utf8");
 const dmxInput = await readFile(new URL("../../crates/io/src/dmx_input.rs", import.meta.url), "utf8");
 const osc = await readFile(new URL("../../crates/io/src/osc.rs", import.meta.url), "utf8");
 const app = (await readFile(new URL("../src/App.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
@@ -54,6 +55,7 @@ const dmxLearnRoute = sectionBetween(
 );
 
 const checks = [
+  [dmxLearnRoute.includes("projectAuthorityLearnContinuation") && dmxLearnRoute.includes("await flushDmxLearnMappings()"), "DMX Learn accepts only its own trusted mapping acknowledgements"],
   [protocol.includes("pub merge_enabled: bool") && protocol.includes('serde(default = "default_true")'), "legacy DMX input remains raw-merge compatible"],
   [protocol.includes("pub struct DmxControlMapping") && protocol.includes("pub type DmxControlAction = OscControlAction"), "DMX mappings persist the shared typed action surface"],
   [protocol.includes("pub struct LearnedDmxControl"), "DMX learn result is typed"],
@@ -76,8 +78,8 @@ const checks = [
   "the shared external-control dispatcher applies every captured fence to its final engine send"],
   [/dispatch_external_control_event\(\s*&engine,\s*&operator_selection,\s*\(\s*&callback_epoch_for_worker,\s*&project_transaction_active_for_worker,\s*&project_external_command_admission_for_worker,\s*&callback_installed_for_worker,\s*captured_callback_epoch,\s*\),\s*event,\s*"DMX",\s*\);/.test(dmxInputCommand),
   "DMX controls pass the complete captured fence state into the shared backend command dispatcher"],
-  [backend.includes("if merge_enabled {") && backend.includes("} else {\n                let previous = previous_control_frames"), "raw merge and control mapping modes are mutually exclusive"],
-  [backend.includes("control_events_from_changed_frame") && backend.includes("previous_control_frames"), "streaming DMX dispatch is edge-aware"],
+  [backend.includes("if merge_enabled {") && backend.includes("} else {\n                let Some(events) = renderer_control_forwarding::forward_dmx_frame("), "raw merge and control mapping modes are mutually exclusive"],
+  [forwarding.includes("control_events_from_changed_frame") && backend.includes("previous_control_frames"), "streaming DMX dispatch is edge-aware"],
   [backend.includes("fn learn_dmx_control") && backend.includes("learn_dmx_control,"), "DMX Learn is exposed through the desktop backend"],
   [dmxInput.includes("previous.is_none_or") && dmxInput.includes("unchanged_streaming_dmx_does_not_retrigger_control_actions"), "unchanged streaming input cannot retrigger discrete controls"],
   [dmxInput.includes("artnet_packet_drives_a_mapped_control_once_until_the_channel_changes"), "real UDP Art-Net input reaches a mapping exactly once per change"],
@@ -101,7 +103,7 @@ const checks = [
     && app.includes("expectedEpoch: authority.project_epoch"),
   "global DMX Learn uses the same direct visual workflow as MIDI and OSC under the captured project authority"],
   [app.includes('await invoke("stop_dmx_input", { expectedEpoch: authority.project_epoch })')
-    && /await invoke\("start_dmx_input", \{\s*config: controlConfig,\s*mappings: dmxMappings\(\),\s*expectedEpoch: authority\.project_epoch,\s*\}\);/.test(app),
+    && /const connection = await invoke<unknown>\("start_dmx_input", \{\s*config: controlConfig,\s*mappings: dmxMappings\(\),\s*expectedEpoch: authority\.project_epoch,\s*\}\);\s*if \(!authorityIsCurrent\(\)\) return;\s*dmxPerformInput\.setConnection\(midiFaderConnection\(connection, "DMX"\)\);/.test(app),
   "learned mappings are persisted and applied to the active input under one captured project authority"],
   [/const\s+requestGeneration\s*=\s*\+\+dmxInputStatusRequestGeneration/.test(dmxStatusRefresh)
     && /if\s*\(dmxInputStatusDisposed\s*\|\|\s*requestGeneration\s*!==\s*dmxInputStatusRequestGeneration\)\s*return;/.test(dmxStatusRefresh)

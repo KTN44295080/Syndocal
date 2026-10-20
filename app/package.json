@@ -115,7 +115,7 @@
     "check:live-audio-viewport": "node scripts/check-viewport-containment.mjs --live-audio-only",
     "check:move-effect-helpers": "node scripts/check-move-effect-helpers.mjs",
     "check:project-storage": "node scripts/check-project-storage-helpers.mjs",
-    "check:project-transaction": "node scripts/check-project-transaction.mjs && node scripts/check-project-authority.mjs",
+    "check:project-transaction": "node scripts/check-project-transaction.mjs && node scripts/check-project-authority.mjs && node scripts/check-project-undo-grouping.mjs",
     "check:project-recovery-e3": "node scripts/check-project-recovery-e3.mjs",
     "check:project-publication-e4": "node scripts/check-project-publication-e4.mjs",
     "check:project-open-bootstrap": "node --no-warnings --experimental-strip-types scripts/check-project-open-bootstrap.mjs",

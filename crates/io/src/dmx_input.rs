@@ -98,7 +98,12 @@ pub fn control_events_from_changed_frame(
         .filter(|mapping| mapping.universe == universe && (1..=512).contains(&mapping.channel))
         .filter(|mapping| {
             let index = usize::from(mapping.channel - 1);
-            previous.is_none_or(|previous| previous[index] != values[index])
+            if previous.is_some_and(|previous| previous[index] == values[index]) {
+                return false;
+            }
+            // A streaming nonzero level is one press, even if it jitters.
+            !crate::osc::is_perform_trigger(&mapping.action)
+                || (values[index] > 0 && previous.is_none_or(|previous| previous[index] == 0))
         })
         .filter_map(|mapping| {
             let normalized = values[usize::from(mapping.channel - 1)] as f32 / 255.0;
@@ -110,6 +115,8 @@ pub fn control_events_from_changed_frame(
                 group_id: mapping.group_id.clone(),
                 cue_id: mapping.cue_id,
                 layer_id: mapping.layer_id,
+                clip_slot_id: mapping.clip_slot_id,
+                isf_stage_id: mapping.isf_stage_id,
                 output_id: mapping.output_id,
                 video_param: mapping.video_param.clone(),
                 cue_point_index: mapping.cue_point_index,
@@ -397,6 +404,8 @@ mod tests {
             group_id: None,
             cue_id: None,
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,
@@ -489,6 +498,8 @@ mod tests {
             group_id: None,
             cue_id: Some(77),
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,
@@ -516,6 +527,8 @@ mod tests {
             group_id: None,
             cue_id: Some(77),
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,

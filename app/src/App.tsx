@@ -1,6 +1,6 @@
 import { sceneEditFaderValues } from "./sceneEditFaderValues";
 import { createSceneEditWriteBarrier } from "./createSceneEditWriteBarrier";
-import { createMidiFaderInput } from "./midiFaderInput";
+import { createMidiFaderInput, midiFaderConnection } from "./midiFaderInput";
 import { createProjectControlMappingsFlusher } from "./createProjectControlMappingsFlusher";
 import { createSceneRenameController } from "./createSceneRenameController";
 import { installControlLearnCapture } from "./createControlLearnCapture";
@@ -951,6 +951,7 @@ import {
   invalidateProjectAuthorityIdentity,
   markProjectAuthorityPersisted,
   noteLocalProjectAuthorityEdit,
+  projectAuthorityLearnContinuation,
   projectAuthorityCanApply,
   projectAuthorityCanApplyHistoryStatus,
   projectAuthorityHasDirtyMappings,
@@ -2349,7 +2350,7 @@ export default function App() {
   let routePerformInput: (input: PerformRoutedInput) => void = () => undefined;
   const midiFaderInput = createMidiFaderInput({
     projectEpoch: () => captureProjectAuthorityIdentity().project_epoch,
-    applyRouted: input => routePerformInput(input),
+    applyRouted: (input, sourceIsCurrent) => routePerformInput({ ...input, sourceIsCurrent }),
     apply: values => {
       if (!faderValueController.applyMidiInput(values)) return;
       const cueId = controlEditCueIdForWrite();
@@ -2358,6 +2359,32 @@ export default function App() {
       const fixtureIds = new Set(Object.keys(values).map(key => Number(key.split(":")[0])));
       for (const fixtureId of fixtureIds) queueControlEditLookUpdate(cueId, { kind: "selectedFixture", fixtureId });
     },
+  });
+  const createPerformTransportInput = (source: "osc" | "dmx") => createMidiFaderInput({
+    projectEpoch: () => captureProjectAuthorityIdentity().project_epoch,
+    apply: () => undefined,
+    applyRouted: (input, sourceIsCurrent) => routePerformInput({ ...input, source, sourceIsCurrent }),
+    bufferRoutedUntilConnected: true,
+  });
+  const oscPerformInput = createPerformTransportInput("osc");
+  const dmxPerformInput = createPerformTransportInput("dmx");
+  let oscPerformMappingsIdentity: string | null = null;
+  let dmxPerformMappingsIdentity: string | null = null;
+  let oscPerformWasRunning = false;
+  let dmxPerformWasRunning = false;
+  createEffect(() => {
+    const identity = JSON.stringify(oscMappings());
+    const running = oscRunning();
+    if (identity !== oscPerformMappingsIdentity || (oscPerformWasRunning && !running)) oscPerformInput.setConnection(null);
+    oscPerformMappingsIdentity = identity;
+    oscPerformWasRunning = running;
+  });
+  createEffect(() => {
+    const identity = JSON.stringify(dmxMappings());
+    const running = dmxInputStatus().running;
+    if (identity !== dmxPerformMappingsIdentity || (dmxPerformWasRunning && !running)) dmxPerformInput.setConnection(null);
+    dmxPerformMappingsIdentity = identity;
+    dmxPerformWasRunning = running;
   });
   createEffect(() => { if (!midiControlConnected()) midiFaderInput.setConnection(null); });
   let midiFaderMappingsIdentity: string | null = null;
@@ -6065,22 +6092,26 @@ export default function App() {
     }
   };
   const startDmxInput = async () => {
-    const authority = captureProjectAuthorityIdentity();
+    let authority = captureProjectAuthorityIdentity();
     try {
-      await flushProjectControlMappingsAuthority();
-      if (!isProjectAuthorityIdentityCurrent(authority)) return;
+      const flushed = await flushProjectControlMappingsAuthority();
+      const continued = projectAuthorityLearnContinuation(authority, captureProjectAuthorityIdentity(), flushed);
+      if (continued === null) return;
+      authority = continued;
       setDmxInputStatus((current) => ({
         ...current,
         running: false,
         signal_present: false,
         source_address: null,
       }));
-      await invoke("start_dmx_input", {
+      dmxPerformInput.setConnection(null);
+      const connection = await invoke<unknown>("start_dmx_input", {
         config: dmxInputConfig(),
         mappings: dmxMappings(),
         expectedEpoch: authority.project_epoch,
       });
       if (!isProjectAuthorityIdentityCurrent(authority)) return;
+      dmxPerformInput.setConnection(midiFaderConnection(connection, "DMX"));
       await refreshDmxInputStatus();
       setMessage("DMX input started.");
     } catch (error) {
@@ -12378,6 +12409,26 @@ export default function App() {
       .catch((error) => setMessage(String(error)));
     onCleanup(() => { disposed = true; unlisten?.(); unlistenRouted?.(); midiFaderInput.setConnection(null); });
   });
+  onMount(() => {
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    const unlisten: (() => void)[] = [];
+    for (const [event, input] of [
+      ["syndocal://osc-perform-control-v1", oscPerformInput],
+      ["syndocal://dmx-perform-control-v1", dmxPerformInput],
+    ] as const) {
+      void listen<unknown>(event, ({ payload }) => {
+        if (!disposed) input.acceptRouted(payload);
+      }).then(stop => { if (disposed) stop(); else unlisten.push(stop); })
+        .catch(error => setMessage(String(error)));
+    }
+    onCleanup(() => {
+      disposed = true;
+      unlisten.forEach(stop => stop());
+      oscPerformInput.setConnection(null);
+      dmxPerformInput.setConnection(null);
+    });
+  });
   // Bootstrap reads capture reactive project/input signals synchronously.
   // They must run once: a tracked effect restarts hydration on each mapping ACK
   // and invalidates that same write while Learn is trying to reconnect.
@@ -18380,6 +18431,8 @@ export default function App() {
     stopOscInput,
   } = createControlInputController({
     onMidiControlConnection: midiFaderInput.setConnection,
+    onOscControlConnection: oscPerformInput.setConnection,
+    onOscControlStarting: () => oscPerformInput.setConnection(null),
     onMidiLearnBusy: setControlLearnBusy,
     listenMidiLearnReady: (handler) => listen<{ learn_request_id: string; project_epoch: number }>(
       "syndocal://midi-learn-ready", (event) => handler(event.payload),
@@ -18491,28 +18544,39 @@ export default function App() {
       setMessage("This control cannot be mapped to DMX input.");
       return;
     }
-    const authority = captureProjectAuthorityIdentity();
+    let authority = captureProjectAuthorityIdentity();
     const authorityIsCurrent = () => {
       if (isProjectAuthorityIdentityCurrent(authority)) return true;
       setMessage("Project changed while DMX Learn was waiting; the older learned input was discarded.");
       return false;
     };
+    const flushDmxLearnMappings = async (): Promise<boolean> => {
+      const flushed = await flushProjectControlMappingsAuthority();
+      const continued = projectAuthorityLearnContinuation(authority, captureProjectAuthorityIdentity(), flushed);
+      if (continued === null) {
+        setMessage("Project changed while DMX Learn was waiting; the older learned input was discarded.");
+        return false;
+      }
+      authority = continued;
+      return true;
+    };
     if (!dmxInputStatus().running) {
       try {
-        await flushProjectControlMappingsAuthority();
-        if (!authorityIsCurrent()) return;
+        if (!(await flushDmxLearnMappings())) return;
         setDmxInputStatus((current) => ({
           ...current,
           running: false,
           signal_present: false,
           source_address: null,
         }));
-        await invoke("start_dmx_input", {
+        dmxPerformInput.setConnection(null);
+        const connection = await invoke<unknown>("start_dmx_input", {
           config: dmxInputConfig(),
           mappings: dmxMappings(),
           expectedEpoch: authority.project_epoch,
         });
         if (!authorityIsCurrent()) return;
+        dmxPerformInput.setConnection(midiFaderConnection(connection, "DMX"));
         const status = await invoke<DmxInputStatus>("dmx_input_status");
         if (!authorityIsCurrent()) return;
         setDmxInputStatus(status);
@@ -18541,25 +18605,26 @@ export default function App() {
         ...learnedMappings,
       ];
       if (!authorityIsCurrent()) return;
-      setDmxMappings(nextMappings);
       const controlConfig = { ...dmxInputConfig(), merge_enabled: false };
-      setDmxInputConfig(controlConfig);
       await invoke("stop_dmx_input", { expectedEpoch: authority.project_epoch });
       if (!authorityIsCurrent()) return;
-      await flushProjectControlMappingsAuthority();
-      if (!authorityIsCurrent()) return;
+      setDmxMappings(nextMappings);
+      setDmxInputConfig(controlConfig);
+      if (!(await flushDmxLearnMappings())) return;
       setDmxInputStatus((current) => ({
         ...current,
         running: false,
         signal_present: false,
         source_address: null,
       }));
-      await invoke("start_dmx_input", {
+      dmxPerformInput.setConnection(null);
+      const connection = await invoke<unknown>("start_dmx_input", {
         config: controlConfig,
         mappings: dmxMappings(),
         expectedEpoch: authority.project_epoch,
       });
       if (!authorityIsCurrent()) return;
+      dmxPerformInput.setConnection(midiFaderConnection(connection, "DMX"));
       const status = await invoke<DmxInputStatus>("dmx_input_status");
       if (!authorityIsCurrent()) return;
       setDmxInputStatus(status);
@@ -18623,7 +18688,7 @@ export default function App() {
     },
     learn: (mode, targets) => {
       if (mode === "midi") return learnMidiControlForTargets(targets);
-      // Perform controls are owned by the renderer and have no OSC/DMX binding.
+      // Every transport uses the same stable target identity and renderer dispatch.
       const shared = controlMappingTargetsForMode(mode, targets);
       if (shared.length === 0) {
         setMessage("This control can only be mapped with MIDI.");
@@ -21961,7 +22026,7 @@ export default function App() {
       await stopVideoLayerAudioMonitor(layerId);
     }
   };
-  // Perform MIDI targets and beat-division triggers run the same functions the
+  // Perform MIDI/OSC/DMX targets and beat-division triggers run the same functions the
   // on-screen pad, Take button, selects and FX controls call.
   const performDispatcher = createPerformControlDispatcher({
     layers: () => snapshot().video.layers,

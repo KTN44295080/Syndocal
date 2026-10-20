@@ -102,3 +102,63 @@ console.log('PASS: Perform Learn keeps stable ids; beat division assign/replace/
 const notified=harness({notifyConnection:true});await notified.controller.connectMidiControl();assert.equal(notified.connections.length,1);assert.equal(notified.connections[0].input_session,41);
 const invalidIdentity=harness({notifyConnection:true,connectionStatus:{schema_version:2,project_epoch:3,input_session:41}});await invalidIdentity.controller.connectMidiControl();assert.equal(invalidIdentity.connected,false);assert.equal(invalidIdentity.connections.length,0);assert.ok(invalidIdentity.messages.some(m=>m.includes("identity was invalid")));
 console.log("PASS: MIDI input event connection identity is published only after valid native ACK");
+
+
+// OSC Learn uses the same trusted mapping continuation and returned connection identities.
+function oscHarness({ deferredLearn = false, learnedResult = { address: "/perform", value: 1, argument_count: 1 } } = {}) {
+  let authority = { ...token }, running = true, mappings = [{ address: "/master", action: "LightingMaster", low: 0, high: 1 }], finish;
+  const calls = [], messages = [], connections = [];
+  const options = {
+    invoke: async (command, args) => {
+      calls.push({ command, args });
+      if (command === "learn_osc_control") {
+        if (learnedResult instanceof Error) throw learnedResult;
+        return deferredLearn ? new Promise(resolve => { finish = resolve; }) : learnedResult;
+      }
+      if (command === "start_osc_input") return { schema_version: 1, project_epoch: args.expectedEpoch, input_session: 71 };
+    },
+    flushProjectControlMappingsAuthority: async () => {
+      authority = { ...authority, project_revision: authority.project_revision + 1, checkpoint_hash: "b".repeat(64) };
+      return { trusted: true, ownAcknowledgements: [{ ...authority }] };
+    },
+    captureProjectAuthorityIdentity: () => ({ ...authority }),
+    isProjectAuthorityIdentityCurrent: captured => JSON.stringify(captured) === JSON.stringify(authority),
+    oscRunning: () => running, setOscRunning: next => { running = next; },
+    oscMappings: () => mappings, setOscMappings: next => { mappings = typeof next === "function" ? next(mappings) : next; },
+    oscBindIp: () => "127.0.0.1", oscPort: () => 5410,
+    setOscMapAddress: () => {}, setMessage: message => messages.push(message),
+    onOscControlConnection: connection => connections.push(connection),
+  };
+  return { controller: createControlInputController(options), calls, messages, connections, get mappings() { return mappings; }, get running() { return running; }, finish: result => finish(result), replaceProject: () => { authority = { ...authority, project_epoch: authority.project_epoch + 1 }; } };
+}
+const oscSlot = { action: "VideoClipSlotTrigger", label: "Clip", layer_id: 1, clip_slot_id: 102 };
+const osc = oscHarness();
+assert.equal(await osc.controller.learnOscControlForTargets([oscSlot]), true);
+assert.deepEqual(osc.calls.map(call => call.command), ["stop_osc_input", "learn_osc_control", "start_osc_input"]);
+assert.equal(osc.mappings.at(-1).clip_slot_id, 102);
+assert.equal(osc.connections.length, 1);
+assert.equal(osc.running, true);
+const oscTimeout = oscHarness({ learnedResult: null });
+assert.equal(await oscTimeout.controller.learnOscControlForTargets([oscSlot]), false);
+assert.equal(oscTimeout.connections.length, 1);
+assert.equal(oscTimeout.mappings.length, 1);
+const oscError = oscHarness({ learnedResult: new Error("test OSC failure") });
+assert.equal(await oscError.controller.learnOscControlForTargets([oscSlot]), false);
+assert.equal(oscError.connections.length, 1);
+assert.equal(oscError.running, true);
+const oscCanceled = oscHarness({ deferredLearn: true });
+const pendingOsc = oscCanceled.controller.learnOscControlForTargets([oscSlot]);
+for (let i = 0; i < 20 && !oscCanceled.calls.some(call => call.command === "learn_osc_control"); i++) await Promise.resolve();
+assert.ok(oscCanceled.calls.some(call => call.command === "learn_osc_control"));
+oscCanceled.replaceProject();
+oscCanceled.finish({ address: "/perform", value: 1, argument_count: 1 });
+assert.equal(await pendingOsc, false);
+assert.equal(oscCanceled.mappings.length, 1);
+assert.equal(oscCanceled.connections.length, 0);
+assert.equal(oscCanceled.calls.some(call => call.command === "start_osc_input"), false);
+const oscStart = oscHarness();
+await oscStart.controller.startOscInput();
+assert.equal(oscStart.connections.length, 1);
+await oscStart.controller.stopOscInput();
+assert.equal(oscStart.running, false);
+console.log("PASS: OSC Perform Learn, trusted mapping ACK, all listener restoration paths, and stale project cancellation");

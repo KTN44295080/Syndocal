@@ -119,6 +119,8 @@ export type PreparedMediaAssetCommitResult<C extends MediaAssetAuthoritativeComm
 };
 
 export type PreparedMediaAssetRelinkOptions = MediaAssetOperationOptions & {
+  /** Adjacent publications may share history; their exact tickets remain separate. */
+  undoGroupId?: string;
   assetId: MediaAssetId;
   replacementPath: string;
   policy: MediaAssetRelinkPolicy;
@@ -347,7 +349,10 @@ const authoritativeCommitDescriptor = (
     case "commit_prepared_media_assets_authoritative":
       return { commandKind: "import", terminalKind: "import", shapeFields: [] };
     case "commit_prepared_media_asset_relink_authoritative":
-      return { commandKind: "relink", terminalKind: "relink", shapeFields: [] };
+      return {
+        commandKind: "relink", terminalKind: "relink",
+        shapeFields: typeof args?.undoGroupId === "string" ? ["undo_group_v1", args.undoGroupId] : [],
+      };
     case "commit_prepared_video_file_layer_authoritative":
       return {
         commandKind: "video_file_layer",
@@ -796,7 +801,7 @@ export async function prepareFinalizeAndCommitMediaAssetRelink(
     const response = await invokeAuthoritativeCommit(
       options.invoke,
       "commit_prepared_media_asset_relink_authoritative",
-      {},
+      options.undoGroupId === undefined ? {} : { undoGroupId: options.undoGroupId },
       token,
       knownOperation,
       startedAuthority,

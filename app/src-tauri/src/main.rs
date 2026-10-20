@@ -304,6 +304,7 @@ mod output_blackout_control;
 mod output_control_request_identity;
 mod new_project_output_reset;
 mod continuous_fixture_fader;
+mod project_undo_grouping;
 mod fixture_repatch_request;
 mod output_lease_receipt_retention;
 mod extensions;
@@ -311,6 +312,9 @@ mod extensions_config;
 mod scene_edit_capture;
 mod midi_fader_input;
 mod midi_renderer_routed;
+mod renderer_control_forwarding;
+#[cfg(test)]
+mod perform_input_validation_tests;
 #[cfg(test)]
 #[path = "output_managed_route_completion_tests.rs"]
 mod output_managed_route_completion_tests;
@@ -12349,6 +12353,34 @@ fn commit_authoritative_video_effect_catalog(
     }
     let before_snapshot = state.engine.persistence_snapshot()?;
     let normalized_request = normalize_video_effect_catalog_ids(state, &before_snapshot, request)?;
+    let before_video = before_snapshot
+        .authored_video
+        .as_ref()
+        .unwrap_or(&before_snapshot.video);
+    let control_change = if before_video.effect_presets == normalized_request.effect_presets
+        && before_video.layer_groups == normalized_request.layer_groups
+        && before_video.transition_buses == normalized_request.transition_buses
+    {
+        project_undo_grouping::single_isf_control_change(
+            &before_video.effect_chains,
+            &normalized_request.effect_chains,
+        )
+    } else {
+        None
+    };
+    let history_coalesce_key = if let Some((scope, stage, control)) = control_change {
+        let (window_label, incarnation) = project_undo_owner_binding(state, owner_id)?;
+        project_undo_grouping::isf_control_undo_key(
+            owner_id,
+            &window_label,
+            incarnation,
+            &scope,
+            stage,
+            &control,
+        )
+    } else {
+        String::new()
+    };
     let before_project =
         project_file_for_save_from_parts(before_snapshot.clone(), &coordinator.ancillary);
     let before = ProjectCheckpoint {
@@ -12372,7 +12404,7 @@ fn commit_authoritative_video_effect_catalog(
     let plan = prepare_internal_media_asset_commit(
         &coordinator,
         "Apply video effect catalog",
-        "",
+        &history_coalesce_key,
         before,
         after,
         current_unix_ms().min(u64::MAX as u128) as u64,
@@ -31506,6 +31538,8 @@ fn validate_dmx_control_mapping(
         group_id: mapping.group_id.clone(),
         cue_id: mapping.cue_id,
         layer_id: mapping.layer_id,
+        clip_slot_id: mapping.clip_slot_id,
+        isf_stage_id: mapping.isf_stage_id,
         output_id: mapping.output_id,
         video_param: mapping.video_param.clone(),
         cue_point_index: mapping.cue_point_index,
@@ -31587,6 +31621,22 @@ fn validate_mapping_required_fields_for_osc(
         OscControlAction::ClearFixtureFlags => {
             normalize_mapping_fixture_flag_kind(&mut mapping.attribute, owner)?;
         }
+        OscControlAction::VideoClipSlotTrigger => {
+            require_mapping_id(mapping.layer_id, owner, "video layer")?;
+            require_mapping_id(mapping.clip_slot_id, owner, "clip slot")?;
+        }
+        OscControlAction::VideoLayerStop | OscControlAction::VideoLayerBlendMode => {
+            require_mapping_id(mapping.layer_id, owner, "video layer")?;
+        }
+        OscControlAction::VideoIsfStageEnabled => {
+            require_mapping_id(mapping.layer_id, owner, "video layer")?;
+            require_mapping_id(mapping.isf_stage_id, owner, "effect stage")?;
+        }
+        OscControlAction::VideoIsfParam => {
+            require_mapping_id(mapping.layer_id, owner, "video layer")?;
+            require_mapping_id(mapping.isf_stage_id, owner, "effect stage")?;
+            normalize_mapping_attribute(&mut mapping.attribute, owner)?;
+        }
         OscControlAction::TriggerNextCue
         | OscControlAction::TriggerPreviousCue
         | OscControlAction::TimelinePlay
@@ -31603,7 +31653,10 @@ fn validate_mapping_required_fields_for_osc(
         | OscControlAction::CueFadePause
         | OscControlAction::Blackout
         | OscControlAction::AllBlackout
-        | OscControlAction::VideoBlackout => {}
+        | OscControlAction::VideoBlackout
+        | OscControlAction::VideoTake
+        | OscControlAction::VideoTransitionKind
+        | OscControlAction::VideoTransitionTime => {}
     }
     Ok(())
 }
@@ -31780,6 +31833,9 @@ fn dispatch_external_control_event(
         return;
     }
     let command = match event {
+        // Perform input requires a live, fenced renderer connection. It has
+        // no direct-engine equivalent in this dispatcher.
+        OscInputEvent::RendererRouted(_) => return,
         OscInputEvent::SetAttribute {
             fixture_id,
             attribute,
@@ -32007,11 +32063,12 @@ fn dispatch_external_control_event(
 
 #[tauri::command]
 fn start_osc_input(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     config: OscInputConfig,
     mappings: Option<Vec<OscControlMapping>>,
     expected_epoch: Option<u64>,
-) -> Result<(), String> {
+) -> Result<midi_fader_input::Connection, String> {
     let received_mappings = validate_osc_control_mappings(mappings.unwrap_or_default())?;
     let _external_admission = lock_project_external_command_admission(&state)?;
     let coordinator = lock_project_coordinator(&state)?;
@@ -32024,6 +32081,8 @@ fn start_osc_input(
     }
     let mappings = coordinator.mappings.osc_mappings.clone();
     let coordinator_epoch = coordinator.epoch;
+    let ui_connection = midi_fader_input::Connection::new(coordinator_epoch)?;
+    let ui_sequence = AtomicU64::new(0);
     let callback_epoch = Arc::clone(&state.project_mapping_callback_epoch);
     let captured_callback_epoch = callback_epoch.load(Ordering::Acquire);
     let previous = state
@@ -32045,6 +32104,23 @@ fn start_osc_input(
             return;
         }
         let command = match event {
+            OscInputEvent::RendererRouted(input) => {
+                renderer_control_forwarding::forward(
+                    &app,
+                    midi_renderer_routed::OSC_EVENT,
+                    ui_connection,
+                    &ui_sequence,
+                    (
+                        &callback_epoch_for_worker,
+                        &project_transaction_active_for_worker,
+                        &project_external_command_admission_for_worker,
+                        &callback_installed_for_worker,
+                        captured_callback_epoch,
+                    ),
+                    input,
+                );
+                return;
+            }
             OscInputEvent::SetAttribute {
                 fixture_id,
                 attribute,
@@ -32302,7 +32378,7 @@ fn start_osc_input(
         .map_err(|_| "OSC state lock was poisoned".to_string())?;
     *guard = Some(input);
     callback_installed.store(true, Ordering::Release);
-    Ok(())
+    Ok(ui_connection)
 }
 
 #[tauri::command]
@@ -33257,11 +33333,12 @@ fn validate_dmx_input_config(config: &DmxInputConfig) -> Result<(), String> {
 
 #[tauri::command]
 fn start_dmx_input(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     config: DmxInputConfig,
     mappings: Option<Vec<DmxControlMapping>>,
     expected_epoch: Option<u64>,
-) -> Result<(), String> {
+) -> Result<midi_fader_input::Connection, String> {
     validate_dmx_input_config(&config)?;
     let received_mappings = validate_dmx_control_mappings(mappings.unwrap_or_default())?;
     let _external_admission = lock_project_external_command_admission(&state)?;
@@ -33275,6 +33352,8 @@ fn start_dmx_input(
     }
     let mappings = coordinator.mappings.dmx_mappings.clone();
     let coordinator_epoch = coordinator.epoch;
+    let ui_connection = midi_fader_input::Connection::new(coordinator_epoch)?;
+    let ui_sequence = AtomicU64::new(0);
     let callback_epoch = Arc::clone(&state.project_mapping_callback_epoch);
     let captured_callback_epoch = callback_epoch.load(Ordering::Acquire);
     let previous = state
@@ -33317,16 +33396,27 @@ fn start_dmx_input(
                     },
                 );
             } else {
-                let previous = previous_control_frames
-                    .lock()
-                    .ok()
-                    .and_then(|mut frames| frames.insert(control_mapping_universe, values.clone()));
-                for event in io::dmx_input::control_events_from_changed_frame(
-                    control_mapping_universe,
-                    &values,
-                    previous.as_deref(),
-                    &mappings,
-                ) {
+                let Some(events) = renderer_control_forwarding::forward_dmx_frame(
+                    &app,
+                    ui_connection,
+                    &ui_sequence,
+                    (
+                        &callback_epoch_for_worker,
+                        &project_transaction_active_for_worker,
+                        &project_external_command_admission_for_worker,
+                        &callback_installed_for_worker,
+                        captured_callback_epoch,
+                    ),
+                    renderer_control_forwarding::DmxFrame {
+                        universe: control_mapping_universe,
+                        values: &values,
+                        previous: &previous_control_frames,
+                        mappings: &mappings,
+                    },
+                ) else {
+                    return;
+                };
+                for event in events {
                     dispatch_external_control_event(
                         &engine,
                         &operator_selection,
@@ -33376,7 +33466,7 @@ fn start_dmx_input(
         .map_err(|_| "DMX input state lock was poisoned".to_string())?;
     *active = Some(input);
     callback_installed.store(true, Ordering::Release);
-    Ok(())
+    Ok(ui_connection)
 }
 
 #[tauri::command]
@@ -39521,6 +39611,7 @@ fn commit_authoritative_media_asset_transaction<R>(
     expected_authority: &MediaAssetPrepareAuthority,
     history_label: &str,
     history_coalesce_key: &str,
+    undo_group_id: Option<&str>,
     legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
     finalized_sources: &[&FinalizedLocalMediaSource],
     build: impl FnOnce(&EngineSnapshot) -> Result<(MediaAssetTransaction, R), String>,
@@ -39566,10 +39657,21 @@ fn commit_authoritative_media_asset_transaction<R>(
         revision: coordinator.revision,
         hash: String::new(),
     };
+    let history_coalesce_key = if let Some(group_id) = undo_group_id {
+        let (window_label, incarnation) = project_undo_owner_binding(state, owner_id)?;
+        project_undo_grouping::media_relink_undo_key(
+            group_id,
+            owner_id,
+            &window_label,
+            incarnation,
+        )?
+    } else {
+        history_coalesce_key.to_string()
+    };
     let plan = prepare_internal_media_asset_commit(
         &coordinator,
         history_label,
-        history_coalesce_key,
+        &history_coalesce_key,
         before,
         after,
         current_unix_ms().min(u64::MAX as u128) as u64,
@@ -39668,6 +39770,7 @@ fn commit_prepared_media_assets_authoritative_command_impl(
             &expected_authority,
             "Import media assets",
             "",
+            None,
             None,
             &finalized_source_refs,
             |snapshot| {
@@ -41234,6 +41337,7 @@ fn commit_prepared_media_asset_relink_authoritative_impl(
     state: &AppState,
     request: MediaAssetAuthoritativeRequest,
     legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
+    undo_group_id: Option<&str>,
 ) -> Result<MediaAssetAuthoritativeRelinkResult, String> {
     let MediaAssetAuthoritativeRequest {
         prepared_token: prepared_relink_token,
@@ -41257,7 +41361,13 @@ fn commit_prepared_media_asset_relink_authoritative_impl(
         expected_checkpoint_hash,
     )?;
     let expected_authority = media_asset_authoritative_expected_authority(&operation_key);
-    let shape = media_asset_authoritative_shape(MediaAssetAuthoritativeCommitKind::Relink, &[]);
+    let shape = match undo_group_id {
+        Some(group_id) => media_asset_authoritative_shape(
+            MediaAssetAuthoritativeCommitKind::Relink,
+            &["undo_group_v1", group_id],
+        ),
+        None => media_asset_authoritative_shape(MediaAssetAuthoritativeCommitKind::Relink, &[]),
+    };
     let terminal = registry.authoritative_terminal_single_flight(&operation_key, &shape, || {
         let prepared = registry.prepared_relink_exact(
             prepared_relink_token,
@@ -41290,8 +41400,13 @@ fn commit_prepared_media_asset_relink_authoritative_impl(
             expected_epoch,
             &owner_id,
             &expected_authority,
-            "Relink media asset",
+            if undo_group_id.is_some() {
+                "Relink media folder"
+            } else {
+                "Relink media asset"
+            },
             "",
+            undo_group_id,
             legacy_operation,
             &finalized_source_refs,
             |snapshot| {
@@ -41354,9 +41469,10 @@ fn commit_prepared_media_asset_relink_authoritative_impl(
 fn commit_prepared_media_asset_relink_authoritative_command_impl(
     state: &AppState,
     mut request: MediaAssetAuthoritativeRequest,
+    undo_group_id: Option<&str>,
 ) -> Result<MediaAssetAuthoritativeRelinkResult, String> {
     request.owner_id = normalize_project_transaction_owner_id(request.owner_id)?;
-    commit_prepared_media_asset_relink_authoritative_impl(state, request, None)
+    commit_prepared_media_asset_relink_authoritative_impl(state, request, None, undo_group_id)
 }
 
 #[tauri::command]
@@ -41373,6 +41489,7 @@ fn commit_prepared_media_asset_relink_authoritative(
         expected_revision: u64 => "expectedRevision",
         expected_checkpoint_hash: String => "expectedCheckpointHash",
         owner_id: String => "ownerId",
+        undo_group_id: Option<String> => "undoGroupId",
     );
     project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     commit_prepared_media_asset_relink_authoritative_command_impl(
@@ -41386,6 +41503,7 @@ fn commit_prepared_media_asset_relink_authoritative(
             expected_checkpoint_hash,
             owner_id,
         },
+        undo_group_id.as_deref(),
     )
 }
 
@@ -41466,6 +41584,7 @@ fn commit_prepared_media_asset_layers_authoritative(
             &expected_authority,
             history_label,
             "",
+            None,
             legacy_operation,
             &finalized_source_refs,
             |snapshot| {
@@ -42662,6 +42781,7 @@ async fn refresh_video_layer_metadata(
                 owner_id: operation.owner_id.clone(),
             },
             Some(&operation),
+            None,
         )?;
         match committed.report.outcome {
             MediaAssetRelinkOutcome::Relinked { asset_id, .. } if asset_id == target.asset_id => {
@@ -56023,6 +56143,12 @@ fn begin_project_transaction_for_window_label(
         validate_project_transaction_expected_checkpoint_hash(&expected_checkpoint_hash)?;
     let normalized_label = label.trim().chars().take(80).collect::<String>();
     let normalized_coalesce_key = coalesce_key.trim().chars().take(240).collect::<String>();
+    if normalized_coalesce_key.starts_with(project_undo_grouping::PREFIX) {
+        return Err(
+            "Reserved Undo group identities cannot be supplied by renderer transactions"
+                .to_string(),
+        );
+    }
     let shape_fingerprint = validate_project_transaction_shape_fingerprint(&shape_fingerprint)?;
     let canonical_shape = canonical_project_transaction_shape(
         &command_name,
@@ -56905,6 +57031,29 @@ fn project_transaction_owner_binding_for_window(
         .get(window_label)
         .copied()
         .ok_or_else(|| "Project transaction owner incarnation is no longer registered".to_string())
+}
+
+/// Call while project external admission is held. The resolved renderer
+/// incarnation seals backend-created Undo groups across owner retirement.
+fn project_undo_owner_binding(state: &AppState, owner_id: &str) -> Result<(String, u64), String> {
+    let window_label = {
+        let owners = state
+            .project_transaction_owners
+            .lock()
+            .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
+        let mut matches = owners
+            .iter()
+            .filter(|(_, candidate)| candidate.as_str() == owner_id);
+        let (window, _) = matches
+            .next()
+            .ok_or_else(|| "Undo group renderer session is no longer registered".to_string())?;
+        if matches.next().is_some() {
+            return Err("Undo group renderer session is ambiguous".to_string());
+        }
+        window.clone()
+    };
+    let incarnation = project_transaction_owner_binding_for_window(state, &window_label, owner_id)?;
+    Ok((window_label, incarnation))
 }
 
 fn ensure_project_transaction_pending_binding(
@@ -59152,14 +59301,17 @@ fn commit_project_history_entry(
     if pending.before.project == after.project && pending.before.mappings == after.mappings {
         return Ok(project_history_status(history));
     }
-    let can_coalesce = history.undo.last().is_some_and(|entry| {
-        !pending.coalesce_key.is_empty()
-            && entry.coalesce_key == pending.coalesce_key
-            && entry.after.epoch == pending.before.epoch
+    let can_coalesce = history.redo.is_empty() && history.undo.last().is_some_and(|entry| {
+        entry.after.epoch == pending.before.epoch
             && entry.after.revision == pending.before.revision
             && entry.after.hash == pending.before.hash
-            && committed_at_unix_ms.saturating_sub(entry.committed_at_unix_ms)
-                <= PROJECT_HISTORY_COALESCE_MS
+            && project_undo_grouping::history_keys_can_coalesce(
+                &entry.coalesce_key,
+                &pending.coalesce_key,
+                entry.committed_at_unix_ms,
+                committed_at_unix_ms,
+                PROJECT_HISTORY_COALESCE_MS,
+            )
     });
     if can_coalesce {
         if let Some(entry) = history.undo.last_mut() {
@@ -60817,6 +60969,8 @@ fn rewrite_navigated_project_history_entry(
     undo: bool,
     actual_target: ProjectCheckpoint,
 ) -> ProjectHistoryEntry {
+    // Undo/Redo ends any gesture, including an explicit batch identity.
+    entry.coalesce_key.clear();
     if undo {
         entry.before = actual_target;
     } else {
@@ -102538,6 +102692,7 @@ pub(crate) mod tests {
                     expected_checkpoint_hash,
                     owner_id
                 ),
+                None,
             )
         });
         assert_eq!(results.len(), 2);
@@ -102563,6 +102718,7 @@ pub(crate) mod tests {
                 expected_checkpoint_hash,
                 owner_id
             ),
+            None,
         )
         .expect("third exact Relink retry returns its canonical terminal result");
         assert_media_asset_a6_same_terminal(&results[0], &third);
@@ -114798,6 +114954,8 @@ pub(crate) mod tests {
             group_id: None,
             cue_id: None,
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             video_param: None,
             cue_point_index: None,
             output_id: None,
@@ -114847,6 +115005,8 @@ pub(crate) mod tests {
             group_id: None,
             cue_id: None,
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,
@@ -114982,6 +115142,8 @@ pub(crate) mod tests {
             group_id: None,
             cue_id: None,
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             video_param: None,
             cue_point_index: None,
             output_id: None,
@@ -114998,6 +115160,8 @@ pub(crate) mod tests {
             group_id: None,
             cue_id: None,
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,
@@ -115443,6 +115607,8 @@ pub(crate) mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -115494,6 +115660,8 @@ pub(crate) mod tests {
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -116434,6 +116602,133 @@ pub(crate) mod tests {
         assert!(
             checked_project_authority_disposition_generation_after_change(&coordinator).is_err()
         );
+    }
+
+    fn task25_history_checkpoint(
+        before: &ProjectCheckpoint,
+        value: f32,
+        revision: u64,
+    ) -> ProjectCheckpoint {
+        let mut project = before.project.clone();
+        project.snapshot.lighting_master = value;
+        test_project_checkpoint(project, revision)
+    }
+
+    #[test]
+    fn task25_history_folder_batch_keeps_the_original_checkpoint_across_long_members() {
+        let key =
+            project_undo_grouping::media_relink_undo_key("folder-1", "owner", "main", 3).unwrap();
+        let mut history = ProjectHistory::default();
+        let original = test_project_checkpoint(empty_project_file(), 0);
+        let mut before = original.clone();
+        for (revision, value, time) in [(1, 0.8, 100), (2, 0.6, 90_100), (3, 0.4, 180_100)] {
+            let after = task25_history_checkpoint(&before, value, revision);
+            commit_project_history_entry(
+                &mut history,
+                test_pending_project_transaction(revision, "Relink media folder", &key, before),
+                after.clone(),
+                time,
+            )
+            .unwrap();
+            before = after;
+        }
+        assert_eq!(history.undo.len(), 1);
+        assert_eq!(history.undo[0].before.hash, original.hash);
+        assert_eq!(history.undo[0].after.hash, before.hash);
+        let other =
+            project_undo_grouping::media_relink_undo_key("folder-2", "owner", "main", 3).unwrap();
+        let after = task25_history_checkpoint(&before, 0.2, 4);
+        commit_project_history_entry(
+            &mut history,
+            test_pending_project_transaction(4, "Relink media folder", &other, before),
+            after,
+            180_101,
+        )
+        .unwrap();
+        assert_eq!(
+            history.undo.len(),
+            2,
+            "a later folder operation is a separate undo step"
+        );
+    }
+
+    #[test]
+    fn task25_history_isf_idle_window_and_redo_stack_end_grouping() {
+        let key =
+            project_undo_grouping::isf_control_undo_key("owner", "main", 3, "layer:1", 8, "gain");
+        let mut history = ProjectHistory::default();
+        let mut before = test_project_checkpoint(empty_project_file(), 0);
+        for (revision, value, time) in [(1, 0.8, 100), (2, 0.6, 300), (3, 0.4, 1_051)] {
+            let after = task25_history_checkpoint(&before, value, revision);
+            commit_project_history_entry(
+                &mut history,
+                test_pending_project_transaction(revision, "ISF control", &key, before),
+                after.clone(),
+                time,
+            )
+            .unwrap();
+            before = after;
+        }
+        assert_eq!(
+            history.undo.len(),
+            2,
+            "the idle boundary closes the previous fader burst"
+        );
+        history.redo.push(history.undo.last().unwrap().clone());
+        let after = task25_history_checkpoint(&before, 0.2, 4);
+        commit_project_history_entry(
+            &mut history,
+            test_pending_project_transaction(4, "ISF control", &key, before),
+            after,
+            1_052,
+        )
+        .unwrap();
+        assert_eq!(
+            history.undo.len(),
+            3,
+            "branching from undo cannot join the previous burst"
+        );
+        assert!(history.redo.is_empty());
+    }
+
+    #[test]
+    fn task25_history_undo_redo_cannot_resume_a_previous_idle_or_folder_group() {
+        for key in [
+            project_undo_grouping::isf_control_undo_key("owner", "main", 3, "layer:1", 8, "gain"),
+            project_undo_grouping::media_relink_undo_key("folder-1", "owner", "main", 3).unwrap(),
+        ] {
+            let mut history = ProjectHistory::default();
+            let original = test_project_checkpoint(empty_project_file(), 0);
+            let after = task25_history_checkpoint(&original, 0.8, 1);
+            commit_project_history_entry(
+                &mut history,
+                test_pending_project_transaction(1, "First edit", &key, original.clone()),
+                after.clone(),
+                100,
+            )
+            .unwrap();
+            let entry = history.undo.pop().unwrap();
+            let applied_undo = test_project_checkpoint(original.project, 2);
+            let redo_entry = rewrite_navigated_project_history_entry(entry, true, applied_undo);
+            let applied_redo = test_project_checkpoint(after.project, 3);
+            let undo_entry =
+                rewrite_navigated_project_history_entry(redo_entry, false, applied_redo.clone());
+            assert!(undo_entry.coalesce_key.is_empty());
+            history.undo.push(undo_entry);
+            let edited = task25_history_checkpoint(&applied_redo, 0.6, 4);
+            commit_project_history_entry(
+                &mut history,
+                test_pending_project_transaction(4, "New edit", &key, applied_redo),
+                edited,
+                101,
+            )
+            .unwrap();
+            assert_eq!(
+                history.undo.len(),
+                2,
+                "navigation is a boundary even inside the idle window"
+            );
+        }
     }
 
     #[test]
@@ -117987,6 +118282,8 @@ f 1 2 3
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 output_id: None,
                 video_param: None,
                 cue_point_index: None,
@@ -118065,6 +118362,8 @@ f 1 2 3
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 output_id: None,
                 video_param: None,
                 cue_point_index: None,
@@ -118081,6 +118380,8 @@ f 1 2 3
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 output_id: None,
                 video_param: None,
                 cue_point_index: None,
@@ -118727,6 +119028,8 @@ f 1 2 3
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 output_id: None,
                 video_param: None,
                 cue_point_index: None,
@@ -118742,6 +119045,8 @@ f 1 2 3
                 group_id: None,
                 cue_id: None,
                 layer_id: None,
+                clip_slot_id: None,
+                isf_stage_id: None,
                 output_id: Some(7),
                 video_param: None,
                 cue_point_index: None,
@@ -118764,6 +119069,8 @@ f 1 2 3
             group_id: None,
             cue_id: None,
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,
@@ -118782,6 +119089,8 @@ f 1 2 3
             group_id: None,
             cue_id: None,
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,
@@ -121848,6 +122157,8 @@ f 1 2 3
             group_id: None,
             cue_id: None,
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             video_param: None,
             cue_point_index: None,
             output_id: None,
@@ -121864,6 +122175,8 @@ f 1 2 3
             group_id: None,
             cue_id: None,
             layer_id: None,
+            clip_slot_id: None,
+            isf_stage_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,

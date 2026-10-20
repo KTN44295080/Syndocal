@@ -249,8 +249,7 @@ export type MidiControlAction =
   | "VideoMaster"
   | "VideoBlackout"
   | "ClearFixtureFlags"
-  /** The Perform actions below are MIDI-only; the renderer runs the same
-   * ticketed commands as the on-screen control. */
+  /** Perform actions use the renderer's same ticketed commands for every transport. */
   | "VideoClipSlotTrigger"
   | "VideoTake"
   | "VideoLayerStop"
@@ -428,9 +427,20 @@ export type OscControlAction =
   | "AllBlackout"
   | "VideoMaster"
   | "VideoBlackout"
-  | "ClearFixtureFlags";
+  | "ClearFixtureFlags"
+  | "VideoClipSlotTrigger"
+  | "VideoTake"
+  | "VideoLayerStop"
+  | "VideoLayerBlendMode"
+  | "VideoTransitionKind"
+  | "VideoTransitionTime"
+  | "VideoIsfStageEnabled"
+  | "VideoIsfParam";
 
 export interface OscControlMapping {
+  /** Optional stable identities; absent in projects saved before Perform Learn. */
+  clip_slot_id?: number | null;
+  isf_stage_id?: number | null;
   address: string;
   action: OscControlAction;
   fixture_id?: number | null;
@@ -449,6 +459,9 @@ export interface OscControlMapping {
 export type DmxControlAction = OscControlAction;
 
 export interface DmxControlMapping {
+  /** Optional stable identities; absent in projects saved before Perform Learn. */
+  clip_slot_id?: number | null;
+  isf_stage_id?: number | null;
   universe: number;
   channel: number;
   action: DmxControlAction;
