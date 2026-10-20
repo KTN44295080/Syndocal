@@ -16,7 +16,10 @@ use serde_json::Value;
 use wgpu::util::DeviceExt;
 
 use crate::{convert_frame_to_rgba8, CpuCompositeError, VideoFrame, VideoPixelFormat};
-use protocol::{VideoIsfControlKind, VideoIsfControlSummary, VideoIsfEffectSummary};
+use protocol::{
+    VideoIsfControlKind, VideoIsfControlSummary, VideoIsfEffectSummary, VideoIsfTempoSyncUnit,
+    VIDEO_ISF_TEMPO_SYNC_BEATS_PER_BAR,
+};
 
 pub const ISF_MAX_SOURCE_BYTES: usize = 512 * 1024;
 pub const ISF_MAX_CONTROL_INPUTS: usize = 16;
@@ -583,14 +586,20 @@ impl IsfGpuRuntime {
 pub fn resolved_isf_control_values(
     shader: &PreparedIsfShader,
     effect: &VideoIsfEffectSummary,
+    bpm: Option<f32>,
 ) -> Vec<[f32; 4]> {
-    resolved_isf_control_values_from_controls(shader, &effect.controls)
+    resolved_isf_control_values_from_controls(shader, &effect.controls, bpm)
 }
 
+/// Resolves authored controls for this frame without changing project state.
+/// A clock with no usable tempo keeps the authored value. A stopped external
+/// clock retains its last BPM; transport and shader TIME remain unchanged.
 pub fn resolved_isf_control_values_from_controls(
     shader: &PreparedIsfShader,
     controls: &[VideoIsfControlSummary],
+    bpm: Option<f32>,
 ) -> Vec<[f32; 4]> {
+    let bpm = bpm.filter(|bpm| bpm.is_finite() && *bpm > 0.0);
     shader
         .controls
         .iter()
@@ -598,7 +607,23 @@ pub fn resolved_isf_control_values_from_controls(
             let candidate = controls
                 .iter()
                 .find(|control| control.name == definition.name)
-                .map(|control| control.value)
+                .map(|control| {
+                    let mut value = control.value;
+                    if definition.kind == IsfControlKind::Float
+                        && control.kind == VideoIsfControlKind::Float
+                    {
+                        if let (Some(bpm), Some(sync)) =
+                            (bpm, control.tempo_sync.filter(|sync| sync.is_valid()))
+                        {
+                            let beats_per_unit = match sync.unit {
+                                VideoIsfTempoSyncUnit::Beats => 1.0,
+                                VideoIsfTempoSyncUnit::Bars => VIDEO_ISF_TEMPO_SYNC_BEATS_PER_BAR,
+                            };
+                            value[0] = bpm / 60.0 / (sync.count * beats_per_unit);
+                        }
+                    }
+                    value
+                })
                 .unwrap_or(definition.default);
             sanitize_control_value(
                 definition.kind,

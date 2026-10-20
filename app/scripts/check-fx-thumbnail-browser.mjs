@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const vitePort = Number(process.env.SYNDOCAL_VITE_PORT ?? 0);
+const cdpPort = Number(process.env.SYNDOCAL_CDP_PORT ?? 0);
 const browserPath = [process.env.CHROME_PATH, "C:/Program Files/Google/Chrome/Application/chrome.exe", "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"].filter(Boolean).find(existsSync);
 assert.ok(browserPath, "Chromium browser is required");
 const modulePath = "/src/__fx-thumbnail-fixture.ts";
@@ -39,12 +41,13 @@ async function send(method, params = {}) {
 }
 async function evaluate(expression) { const value = await send("Runtime.evaluate", { expression, returnByValue: true }); assert.ok(!value.exceptionDetails, JSON.stringify(value.exceptionDetails)); return value.result.value; }
 try {
-  server = await createServer({ root, server: { host: "127.0.0.1", port: 0, strictPort: false }, plugins: [plugin], clearScreen: false });
+  // This virtual fixture has no app entry; scanning app/index.html can outlive it.
+  server = await createServer({ root, optimizeDeps: { noDiscovery: true, include: [] }, server: { host: "127.0.0.1", port: vitePort, strictPort: vitePort !== 0 }, plugins: [plugin], clearScreen: false });
   await server.listen();
   profile = await mkdtemp(join(tmpdir(), "syndocal-fx-thumbnail-"));
-  browser = spawn(browserPath, ["--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--no-first-run", "--no-default-browser-check", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
-  const port = await until(async () => Number((await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]));
-  const page = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((entry) => entry.type === "page");
+  browser = spawn(browserPath, ["--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--no-first-run", "--no-default-browser-check", `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
+  const port = cdpPort || await until(async () => Number((await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]));
+  const page = await until(async () => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((entry) => entry.type === "page"));
   socket = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((done, reject) => { socket.addEventListener("open", done, { once: true }); socket.addEventListener("error", reject, { once: true }); });
   socket.addEventListener("message", ({ data }) => { const value = JSON.parse(data); if (value.method === "Runtime.exceptionThrown") errors.push(value.params.exceptionDetails); const call = pending.get(value.id); if (!call) return; clearTimeout(call.timer); pending.delete(value.id); if (value.error) call.reject(new Error(JSON.stringify(value.error))); else call.done(value.result); });

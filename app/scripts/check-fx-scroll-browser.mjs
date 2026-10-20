@@ -10,12 +10,14 @@ const require = createRequire(import.meta.url);
 let chromium;
 try { ({chromium} = require("playwright")); }
 catch { ({chromium} = require(resolve(homedir(), ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright"))); }
+const vitePort = Number(process.env.SYNDOCAL_VITE_PORT ?? 0);
+const browserArgs = process.env.SYNDOCAL_CDP_PORT ? [`--remote-debugging-port=${process.env.SYNDOCAL_CDP_PORT}`] : [];
 let server, browser;
 const results = [];
 try {
   let url = process.env.SYNDOCAL_UI_TEST_URL;
   if (!url) {
-    server = await createServer({root: resolve(import.meta.dirname, ".."), server: {host: "127.0.0.1", port: 0}});
+    server = await createServer({root: resolve(import.meta.dirname, ".."), server: {host: "127.0.0.1", port: vitePort, strictPort: vitePort !== 0}});
     await server.listen();
     url = "http://127.0.0.1:" + server.httpServer.address().port;
   }
@@ -24,10 +26,10 @@ try {
     "C:/Program Files/Google/Chrome/Application/chrome.exe",
     "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
   ].find(existsSync);
-  try { browser = await chromium.launch({headless: true}); }
+  try { browser = await chromium.launch({headless: true, args: browserArgs}); }
   catch (error) {
     if (!executablePath) throw error;
-    browser = await chromium.launch({headless: true, executablePath});
+    browser = await chromium.launch({headless: true, executablePath, args: browserArgs});
   }
   const page = await browser.newPage();
   for (const viewport of [{width:1920,height:1080},{width:1920,height:1032},{width:2048,height:1152},{width:1366,height:768},{width:1280,height:720}]) {

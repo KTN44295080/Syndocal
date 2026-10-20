@@ -43915,7 +43915,9 @@ fn sanitize_video_isf_stage(
     }
     let prepared =
         video::prepare_isf_shader(effect.source.as_ref()).map_err(|error| error.to_string())?;
-    let resolved = video::resolved_isf_control_values_from_controls(&prepared, &effect.controls);
+    // Validate authored values without baking the current runtime tempo into the project.
+    let resolved =
+        video::resolved_isf_control_values_from_controls(&prepared, &effect.controls, None);
     protocol::validate_video_isf_tempo_sync(&effect.controls)?;
     let requested_tempo_sync = effect
         .controls
