@@ -24,6 +24,18 @@ const browserPath = [process.env.CHROME_PATH,
 ].filter(Boolean).find(existsSync);
 assert.ok(browserPath, "Set CHROME_PATH to an installed Chromium browser");
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+function requestedPort(name) {
+  const port = Number(process.env[name] ?? 0);
+  assert.ok(Number.isInteger(port) && port >= 0 && port <= 65535, `${name} must be an integer port from 0 to 65535`);
+  return port;
+}
+async function availableLocalPort(preferred) {
+  const reservation = createTcpServer();
+  await new Promise((done, reject) => { reservation.once("error", reject); reservation.listen(preferred, "127.0.0.1", done); });
+  const port = reservation.address().port;
+  await new Promise((done, reject) => reservation.close((error) => error ? reject(error) : done()));
+  return port;
+}
 async function waitFor(check, label, timeout = 30_000) {
   const deadline = Date.now() + timeout;
   let lastError;

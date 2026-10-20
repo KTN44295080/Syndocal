@@ -79,6 +79,7 @@ export interface VideoControlPanelProps {
   audioReactive: ComponentProps<typeof AudioReactiveVjStrip>;
   mediaLibrary: {
     assets: MediaAssetSummary[];
+    ndiInputs?: MediaHealthLibrary["ndiInputs"];
     thumbnails: Record<number, string>;
     thumbnailsBusy?: boolean;
     thumbnailsAvailable?: boolean;

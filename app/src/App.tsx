@@ -1,3 +1,4 @@
+import { buildNdiInputHealthRows } from "./ndiInputHealth";
 import { sceneEditFaderValues } from "./sceneEditFaderValues";
 import { createSceneEditWriteBarrier } from "./createSceneEditWriteBarrier";
 import { createMidiFaderInput, midiFaderConnection } from "./midiFaderInput";
@@ -28735,6 +28736,7 @@ export default function App() {
           }}
           mediaLibrary={mergeThumbnailViewProps(thumbnailController.assetThumbnailView, {
             get assets() { return snapshot().video.media_assets; },
+            get ndiInputs() { return buildNdiInputHealthRows(snapshot().video.layers, externalVideoTransportStatus()); },
             get availabilityById() { return mediaAssetAvailabilityById(); },
             get activeOperations() { return activeMediaAssetOperations(); },
             get lastImportReport() { return lastMediaAssetImportReport(); },

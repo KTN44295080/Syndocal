@@ -3,6 +3,7 @@ import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
 import type { VideoSourceKind } from "../types";
 import { videoSourceCanBrowseFile, videoSourceInputLabel, videoSourceInputPlaceholder } from "../videoHelpers";
 import { VideoCameraProfilePicker } from "./VideoCameraProfilePicker";
+import { VideoNdiSourcePicker } from "./VideoNdiSourcePicker";
 
 interface VideoPreviewImagePanelProps {
   previewUrl: string | null;
@@ -18,7 +19,7 @@ interface VideoSourceCreatePanelProps {
   onBrowseSource: () => void | Promise<void>;
   onImportMultiple: () => void | Promise<void>;
   onAddLayer: () => void | Promise<void>;
-  /** The mounted App's typed bridge. Camera discovery is unavailable without it. */
+  /** The mounted App's typed bridge for camera and NDI discovery. */
   invokeCommand?: FrontendTauriInvoke;
 }
 
@@ -34,15 +35,18 @@ export function VideoPreviewImagePanel(props: VideoPreviewImagePanelProps) {
 
 export function VideoSourceCreatePanel(props: VideoSourceCreatePanelProps) {
   const [cameraAddAllowed, setCameraAddAllowed] = createSignal(false);
+  const [ndiAddAllowed, setNdiAddAllowed] = createSignal(false);
 
   const selectSourceKind = (kind: VideoSourceKind) => {
     setCameraAddAllowed(false);
-    if (kind === "Camera") props.onSetPath("");
+    setNdiAddAllowed(false);
+    if (kind === "Camera" || kind === "Ndi" || props.sourceKind === "Ndi") props.onSetPath("");
     props.onSetSourceKind(kind);
   };
 
   const handleAddLayer = async () => {
     if (props.sourceKind === "Camera" && !cameraAddAllowed()) return;
+    if (props.sourceKind === "Ndi" && !ndiAddAllowed()) return;
     await props.onAddLayer();
   };
 
@@ -65,28 +69,37 @@ export function VideoSourceCreatePanel(props: VideoSourceCreatePanelProps) {
         <input value={props.label} onInput={(event) => props.onSetLabel(event.currentTarget.value)} />
       </label>
 
-      <Show when={props.sourceKind === "Camera"} fallback={
-        <>
-          <label>
-            {videoSourceInputLabel(props.sourceKind)}
-            <input
-              value={props.path}
-              placeholder={videoSourceInputPlaceholder(props.sourceKind)}
-              onInput={(event) => props.onSetPath(event.currentTarget.value)}
-            />
-          </label>
-          <Show when={props.sourceKind === "ScreenCapture"}>
-            <p class="fieldHint" data-screen-capture-contract>
-              Screen capture uses a separate truthful 1280x720 / 30fps path. Leave Display source blank for the primary desktop.
-            </p>
-          </Show>
-        </>
+      <Show when={props.sourceKind === "Ndi"} fallback={
+        <Show when={props.sourceKind === "Camera"} fallback={
+          <>
+            <label>
+              {videoSourceInputLabel(props.sourceKind)}
+              <input
+                value={props.path}
+                placeholder={videoSourceInputPlaceholder(props.sourceKind)}
+                onInput={(event) => props.onSetPath(event.currentTarget.value)}
+              />
+            </label>
+            <Show when={props.sourceKind === "ScreenCapture"}>
+              <p class="fieldHint" data-screen-capture-contract>
+                Screen capture uses a separate truthful 1280x720 / 30fps path. Leave Display source blank for the primary desktop.
+              </p>
+            </Show>
+          </>
+        }>
+          <VideoCameraProfilePicker
+            path={props.path}
+            onSetPath={props.onSetPath}
+            invokeCommand={props.invokeCommand}
+            onAdmissionChange={setCameraAddAllowed}
+          />
+        </Show>
       }>
-        <VideoCameraProfilePicker
+        <VideoNdiSourcePicker
           path={props.path}
           onSetPath={props.onSetPath}
           invokeCommand={props.invokeCommand}
-          onAdmissionChange={setCameraAddAllowed}
+          onAdmissionChange={setNdiAddAllowed}
         />
       </Show>
 
@@ -100,7 +113,7 @@ export function VideoSourceCreatePanel(props: VideoSourceCreatePanelProps) {
         class="primary"
         data-video-add-layer
         onClick={() => { void handleAddLayer(); }}
-        disabled={props.sourceKind === "Camera" && !cameraAddAllowed()}
+        disabled={(props.sourceKind === "Camera" && !cameraAddAllowed()) || (props.sourceKind === "Ndi" && !ndiAddAllowed())}
       >
         Add Video Layer
       </button>

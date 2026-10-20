@@ -120,7 +120,9 @@ assert.match(
   /width: 4096,[\s\S]*?height: 2160,[\s\S]*?frame_rate_numerator: 120,[\s\S]*?\.is_err\(\)\);/,
   "native camera bounds must fail closed for 4K120",
 );
-assert.match(panel, /disabled=\{props\.sourceKind === "Camera" && !cameraAddAllowed\(\)\}/);
+assert.match(panel, /disabled=\{\(props\.sourceKind === "Camera" && !cameraAddAllowed\(\)\) \|\| \(props\.sourceKind === "Ndi" && !ndiAddAllowed\(\)\)\}/);
+assert.match(panel, /if \(props\.sourceKind === "Camera" && !cameraAddAllowed\(\)\) return;/);
+assert.match(panel, /if \(props\.sourceKind === "Ndi" && !ndiAddAllowed\(\)\) return;/);
 assert.match(picker, /Refresh cameras/);
 assert.match(picker, /data-video-camera-device/);
 assert.match(picker, /data-video-camera-profile/);
