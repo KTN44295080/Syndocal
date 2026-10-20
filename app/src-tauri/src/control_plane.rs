@@ -74,7 +74,7 @@ const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
 const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 591;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "2256afa0d6a07bad401d8f7bd5947b12a0616030e4e0679cc8406bbd20429e18";
+    "8910316b231c1a76e447a9800ade5249e56a2410395d0164153f37ba8b003adf";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -2714,7 +2714,7 @@ mod tests {
         // Spout reset account for the six manifest entries below.
         // RequestPlaybackLayerSnapshot (DEC-PLAYBACK-LAYER-001) adds one
         // read-only Engine source.
-        const ENGINE_COMMAND_COUNT: usize = 286;
+        const ENGINE_COMMAND_COUNT: usize = 287;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
@@ -3152,7 +3152,7 @@ mod tests {
         const TAURI_COUNT: usize = FROZEN_TAURI_ROUTE_ADMISSION_COUNT;
         // 277 prior engine sources plus the distinct atomic
         // `ResetShowSpoutOutputsExactPublished` source.
-        const ENGINE_COUNT: usize = 286;
+        const ENGINE_COUNT: usize = 287;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 240;
         const FRONTEND_COUNT: usize = 511;
