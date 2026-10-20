@@ -13,6 +13,7 @@
 .topbarOrganized > .status { overflow: visible; }
 .topbarOrganized > .topbarProject { justify-content: flex-start; }
 .topbarOrganized > .status { width: auto; flex-wrap: nowrap; gap: 8px; }
+.topbarReadoutStrip { display: contents; }
 
 .topbarOrganized .topbarTempoCluster,
 .topbarOrganized .topbarStateCluster {
@@ -102,6 +103,29 @@
   /* The 14px chrome badge and key labels need a little less tracking and padding here so the
      whole bar stays inside the 960px minimum window. */
   .topbarOrganized .topbarShowClockStatus { letter-spacing: .02em; padding-inline: 4px; }
+}
+
+/* Compact workspaces can be narrower than the native window minimum.
+   Keep navigation, GO/Blackout, Tools and window controls fixed; tempo and
+   status readouts scroll locally without reducing authored control sizes. */
+@media (max-width: 959px) {
+  .workspaceChrome:has(> .topbarOrganized) { min-width: 0; }
+  .topbar.topbarOrganized {
+    grid-template-columns: max-content minmax(0, 1fr) 120px;
+    width: 100%;
+    min-width: 0;
+  }
+  .topbarOrganized > .status { justify-content: flex-start; }
+  .topbarReadoutStrip {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    overflow: auto hidden;
+    scrollbar-width: none;
+  }
+  .topbarReadoutStrip::-webkit-scrollbar { display: none; }
 }
 
 /* Condensed label typography retains the existing title row and hit targets. */

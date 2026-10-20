@@ -818,6 +818,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
           </span>
             </section>
           </TopbarTools>
+          <div class="topbarReadoutStrip">
           <div class="topbarTempoCluster" role="group" aria-label="Tempo and audio input">
           <TopbarBpmControl bpm={props.bpm} onSetBpm={props.onSetBpm} />
           <button
@@ -844,6 +845,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             <strong data-no-localize>{showClockShell().label}</strong>
           </span>
 
+          </div>
           </div>
         </div>
         <WindowControls />
