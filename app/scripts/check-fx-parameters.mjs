@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
@@ -63,10 +62,15 @@ try {
   assert.equal(saved.effect_presets[0].id, 0, "native allocator owns new IDs");
   assert.equal(model.saveFxStagePreset(catalog, stage, "  "), catalog);
   assert.deepEqual(saved.layer_groups, catalog.layer_groups);
-  const project = JSON.parse(await readFile(resolve(appRoot, "../target/qa/vj-perform-ui/vj-perform-native.sdc"), "utf8"));
+  // Use a tracked project so this model round-trip also runs in a clean worktree.
+  const projectPath = process.env.SYNDOCAL_FX_PARAMETER_PROJECT
+    ?? resolve(appRoot, "../samples/phase1-mini-show.sdc");
+  const project = JSON.parse(await readFile(projectPath, "utf8"));
   project.snapshot.video.effect_presets = saved.effect_presets;
   if (project.snapshot.authored_video) project.snapshot.authored_video.effect_presets = saved.effect_presets;
-  temporary = await mkdtemp(join(tmpdir(), "syndocal-fx-parameters-"));
+  const temporaryRoot = resolve(appRoot, "../target/qa/fx-parameters");
+  await mkdir(temporaryRoot, { recursive: true });
+  temporary = await mkdtemp(join(temporaryRoot, "preset-"));
   const path = join(temporary, "preset-project.sdc");
   await writeFile(path, JSON.stringify(project), "utf8");
   const reopened = JSON.parse(await readFile(path, "utf8"));

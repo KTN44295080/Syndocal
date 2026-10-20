@@ -27621,7 +27621,8 @@ fn select_video_isf_file(window: WebviewWindow) -> Result<Option<VideoIsfEffectS
 fn load_video_isf_effect_from_path(path: &Path) -> Result<VideoIsfEffectSummary, String> {
     let source = fs::read_to_string(path)
         .map_err(|error| format!("Failed to read ISF shader '{}': {error}", path.display()))?;
-    let prepared = video::prepare_isf_shader(&source).map_err(|error| error.to_string())?;
+    let prepared = video::prepare_isf_shader_with_path(&source, Some(path))
+        .map_err(|error| error.to_string())?;
     let label = path
         .file_stem()
         .and_then(OsStr::to_str)
@@ -43907,8 +43908,11 @@ fn sanitize_video_isf_stage(
     if label.is_empty() || label.chars().count() > 128 {
         return Err("ISF effect label must contain 1-128 characters".to_string());
     }
-    let prepared =
-        video::prepare_isf_shader(effect.source.as_ref()).map_err(|error| error.to_string())?;
+    let prepared = video::prepare_isf_shader_with_path(
+        effect.source.as_ref(),
+        effect.source_path.as_deref().map(Path::new),
+    )
+    .map_err(|error| error.to_string())?;
     let resolved = video::resolved_isf_control_values_from_controls(&prepared, &effect.controls);
     protocol::validate_video_isf_tempo_sync(&effect.controls)?;
     let requested_tempo_sync = effect
