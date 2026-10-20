@@ -9,6 +9,7 @@ import {
   selectorIndex,
   type PerformRoutedInput,
 } from "./controlMappingPerform";
+import type { AudioRuntimeBatch } from "./audioControlMapping";
 import type {
   VideoBlendMode,
   VideoClipLayerRuntimeSummary,
@@ -103,6 +104,8 @@ export interface PerformControlDispatcherDeps {
     value: [number, number, number, number],
   ) => Promise<unknown> | unknown;
   triggerIsfEvent: (layerId: number, index: number, name: string) => Promise<unknown> | unknown;
+  /** Runtime overlay publication: this never calls an authored parameter setter. */
+  setAudioRuntime?: (batch: AudioRuntimeBatch) => Promise<unknown>;
   report?: (message: string) => void;
 }
 
@@ -238,7 +241,7 @@ export function createPerformControlDispatcher(deps: PerformControlDispatcherDep
           if (!stillCurrent()) return { handled: false, reason: "unsupported" };
           if (!deps.takeEnabled() && !queuedRecently()) {
             // A beat fires every division; only a controller press deserves a message.
-            if (input.source !== "beat") deps.report?.("Take ignored: no clip is queued.");
+            if (input.source !== "beat" && input.source !== "audio") deps.report?.("Take ignored: no clip is queued.");
             return { handled: false, reason: "nothing-queued" };
           }
           justQueued.clear();
@@ -345,5 +348,12 @@ export function createPerformControlDispatcher(deps: PerformControlDispatcherDep
     }
   };
 
-  return { dispatch };
+  const dispatchAudioRuntime = (batch: AudioRuntimeBatch, sourceIsCurrent: () => boolean) => {
+    const epoch = deps.projectEpoch();
+    return lanes.latest("audio-runtime", () => {
+      if (deps.projectEpoch() === epoch && sourceIsCurrent()) return deps.setAudioRuntime?.(batch);
+    }, { spacingMs: 50 });
+  };
+
+  return { dispatch, dispatchAudioRuntime };
 }

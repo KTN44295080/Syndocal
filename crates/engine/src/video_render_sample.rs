@@ -26,6 +26,7 @@ pub struct VideoRenderSample {
     pub bpm: f32,
     pub video: VideoSnapshot,
     pub clip_runtime: VideoClipRuntimeSnapshot,
+    pub live_audio_textures: Option<Arc<protocol::LiveAudioTextureFrame>>,
     pub transition_runtime: VideoLayerTransitionRuntimeSnapshot,
     pub mode: VideoSamplingMode,
     pub fence: VideoRenderSampleFence,
@@ -258,6 +259,7 @@ impl VideoSamplingPublication {
         }
         Ok(Some(VideoRenderSample { project_render_epoch: epoch, bpm: snapshot.clock.bpm, video,
             clip_runtime: snapshot.video_clip_runtime.clone(), transition_runtime: snapshot.video_transition_runtime.clone(),
+            live_audio_textures: snapshot.live_audio_textures.clone(),
             mode: self.mode, fence: VideoRenderSampleFence { generation: self.generation, output_epoch: epoch,
                 deadline } }))
     }

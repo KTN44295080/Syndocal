@@ -21,6 +21,8 @@ pub(super) fn clone_public_snapshot(snapshot: &EngineSnapshot) -> EngineSnapshot
         timeline_bank: snapshot.timeline_bank.clone(),
         video: snapshot.video.clone(),
         video_clip_runtime: snapshot.video_clip_runtime.clone(),
+        live_audio_textures: snapshot.live_audio_textures.clone(),
+        live_audio_control_targets: None,
         video_transition_runtime: snapshot.video_transition_runtime.clone(),
         authored_video: None,
         effects: snapshot.effects.clone(),

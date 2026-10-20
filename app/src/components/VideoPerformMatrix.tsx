@@ -207,9 +207,15 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
   const GroupHeader = (header: { id: number }) => {
     const group = () => ({ ...defaultVideoGroupMix, ...props.groups!.find(item => item.id === header.id)! });
     const patch = (value: Partial<VideoLayerGroupSummary>) => props.onPatchGroup?.(header.id, value);
-    // The current learn model cannot represent a video group. Do not claim a
-    // child-layer mapping is group control; preserve explicit target metadata.
-    const mapping = (property: string) => ({ ...controlMappingTargetData(null), "data-control-map-group-id": header.id, "data-control-map-group-property": property, "data-control-map-unsupported": "video-group" });
+    // Audio opacity uses the group's stable id; other group actions stay separate.
+    const mapping = (property: string) => ({
+      ...controlMappingTargetData(property === "opacity" ? {
+        action: "VideoParam", video_param: "Opacity", group_id: String(header.id),
+        label: "Group opacity", midi_only: true, audio_only: true,
+      } : null),
+      "data-control-map-group-id": header.id, "data-control-map-group-property": property,
+      "data-control-map-unsupported": property === "opacity" ? undefined : "video-group",
+    });
     return <div class="videoPerformGroupRow" data-video-perform-group={header.id} role="row">
       <div class="videoPerformGroupStrip" role="rowheader">
         <button type="button" data-video-group-collapse={header.id} aria-label={collapsed().includes(header.id) ? "Expand group" : "Collapse group"} aria-expanded={!collapsed().includes(header.id)} onClick={() => setCollapsed(ids => ids.includes(header.id) ? ids.filter(id => id !== header.id) : [...ids, header.id])}>{collapsed().includes(header.id) ? "\u25b8" : "\u25be"}</button>

@@ -21,6 +21,7 @@ pub mod fixture_stage_layout;
 pub mod show_clock;
 pub mod show_clock_runtime;
 pub mod timeline_audio_policy;
+pub mod audio_mapping;
 pub mod timeline_persistence;
 pub mod playback_layer;
 pub mod hidden_console_command;
@@ -411,6 +412,30 @@ impl Default for LiveAudioReactiveFeatures {
 }
 
 pub const MAX_LIVE_AUDIO_FRAME_ONSETS: usize = 4;
+pub const LIVE_AUDIO_TEXTURE_SAMPLES: usize = 512;
+
+/// Native-only textures for the selected mono input mix. Signed waveform samples
+/// span the current analysis window; FFT magnitudes span DC through Nyquist.
+/// Never serialize captured input into a project, recovery image, or UI query.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveAudioTextureFrame {
+    pub generation: u64,
+    pub feature_sequence: u64,
+    pub sample_rate: u32,
+    pub waveform: [f32; LIVE_AUDIO_TEXTURE_SAMPLES],
+    pub fft: [f32; LIVE_AUDIO_TEXTURE_SAMPLES],
+}
+
+impl LiveAudioTextureFrame {
+    pub fn is_valid(&self) -> bool {
+        self.generation != 0
+            && self.sample_rate > 0
+            && self.waveform.iter().all(|value| value.is_finite()
+                && (-1.0..=1.0).contains(value))
+            && self.fft.iter().all(|value| value.is_finite()
+                && (0.0..=1.0).contains(value))
+    }
+}
 
 /// One atomic analysis publication from a live input generation.
 ///
@@ -425,6 +450,8 @@ pub struct LiveAudioFrame {
     pub features: LiveAudioReactiveFeatures,
     pub onset_feature_sequences: [u64; MAX_LIVE_AUDIO_FRAME_ONSETS],
     pub onset_count: u8,
+    #[serde(skip, default)]
+    pub textures: Option<std::sync::Arc<LiveAudioTextureFrame>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -8135,6 +8162,8 @@ pub enum MidiControlMessage {
     /// and the mapping channel is omitted. No MIDI input ever matches it; the
     /// renderer's beat scheduler fires the mapped action instead.
     BeatDivision,
+    /// Live audio feature source, evaluated in the renderer; never matches MIDI.
+    Audio,
 }
 
 /// Beat lengths selectable by a `BeatDivision` mapping, indexed by the mapping
@@ -8275,6 +8304,8 @@ impl MidiControlAction {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MidiControlMapping {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<audio_mapping::AudioMappingSettings>,
     pub channel: Option<u8>,
     pub message: MidiControlMessage,
     pub number: u8,
@@ -10204,6 +10235,12 @@ pub struct EngineSnapshot {
     /// active, queued, pending, or playhead state.
     #[serde(skip, default)]
     pub video_clip_runtime: VideoClipRuntimeSnapshot,
+    /// Native renderer-only captured audio; excluded from both JSON directions.
+    #[serde(skip, default)]
+    pub live_audio_textures: Option<std::sync::Arc<LiveAudioTextureFrame>>,
+    /// Bounded native-only identities whose rendered values must not feed UI edits.
+    #[serde(skip, default)]
+    pub live_audio_control_targets: Option<std::sync::Arc<[audio_mapping::AudioControlTarget]>>,
     /// Runtime-only Layer Transition Bus truth. Project files cannot persist
     /// or inject active from/to/progress state.
     #[serde(skip, default)]
@@ -13240,6 +13277,8 @@ impl Default for EngineSnapshot {
             timeline_bank: Vec::new(),
             video: VideoSnapshot::default(),
             video_clip_runtime: VideoClipRuntimeSnapshot::default(),
+            live_audio_textures: None,
+            live_audio_control_targets: None,
             video_transition_runtime: VideoLayerTransitionRuntimeSnapshot::default(),
             authored_video: None,
             effects: Vec::new(),
@@ -16522,6 +16561,7 @@ mod tests {
             },
             onset_feature_sequences: [8, 10, 13, 0],
             onset_count: 3,
+            textures: None,
         };
 
         let encoded = serde_json::to_value(&frame).unwrap();

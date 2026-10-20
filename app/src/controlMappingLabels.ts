@@ -21,7 +21,9 @@ export const controlMappingTargetLabel = (mapping: DmxControlMapping | MidiContr
     case "TriggerPreviousCue": return "Cue previous";
     case "EffectEnabled": return `Effect ${mapping.cue_id} enabled`;
     case "NodeGraphEnabled": return `Node graph ${mapping.cue_id} enabled`;
-    case "VideoParam": return `Video Layer ${mapping.layer_id} ${mapping.video_param}`;
+    case "VideoParam": return mapping.group_id != null && mapping.layer_id == null
+      ? `Video Group ${mapping.group_id} ${mapping.video_param}`
+      : `Video Layer ${mapping.layer_id} ${mapping.video_param}`;
     case "VideoCuePointAdd":
       return `Video Layer ${mapping.layer_id} add cue point ${
         mapping.duration_ms === null || mapping.duration_ms === undefined ? "current" : `${mapping.duration_ms}ms`

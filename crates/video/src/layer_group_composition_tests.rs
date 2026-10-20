@@ -106,6 +106,7 @@ fn display(
         .prepare_output_display_render_preview_with_effects_and_transitions(
             snapshot,
             VideoEffectRenderContext {
+                audio_frame: None,
                 clip_runtime: &VideoClipRuntimeSnapshot::default(),
                 project_render_epoch: 1,
             },

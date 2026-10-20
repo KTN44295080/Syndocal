@@ -9,7 +9,11 @@ import "./VideoLayerGroups.css";
 
 export function VideoGroupInspector(props: { group: VideoLayerGroupSummary; effects: VideoControlPanelProps["effectScopes"] }) {
   const patch = (value: Partial<VideoLayerGroupSummary>) => props.effects.onApplyCatalog(patchVideoGroup(props.effects.catalog, props.group.id, value));
-  const groupMapping = { ...controlMappingTargetData(null), "data-control-map-group-id": props.group.id, "data-control-map-group-property": "opacity", "data-control-map-unsupported": "video-group" };
+  const groupMapping = () => ({
+    ...controlMappingTargetData({ action: "VideoParam", video_param: "Opacity", group_id: String(props.group.id),
+      label: "Group opacity", midi_only: true, audio_only: true }),
+    "data-control-map-group-id": props.group.id, "data-control-map-group-property": "opacity",
+  });
   const transform = () => props.group.transform ?? { ...defaultTransform };
   const patchTransform = (key: keyof Transform2D, value: number) => {
     if (Number.isFinite(value)) void patch({ transform: { ...transform(), [key]: value } });
@@ -18,7 +22,7 @@ export function VideoGroupInspector(props: { group: VideoLayerGroupSummary; effe
     <strong data-no-localize>{props.group.label}</strong>
     <label class="checkbox"><input type="checkbox" checked={props.group.enabled} disabled={props.effects.busy} onChange={event => void patch({ enabled: event.currentTarget.checked })} />Group enabled</label>
     <div class="videoGroupInspectorMix">
-      <label>Group opacity<input type="range" min="0" max="1" step="0.01" value={props.group.opacity} {...groupMapping} disabled={props.effects.busy} onChange={event => void patch({ opacity: Number(event.currentTarget.value) })} /></label>
+      <label>Group opacity<input type="range" min="0" max="1" step="0.01" value={props.group.opacity} {...groupMapping()} disabled={props.effects.busy} onChange={event => void patch({ opacity: Number(event.currentTarget.value) })} /></label>
       <label>Group blend<select value={props.group.blend_mode} disabled={props.effects.busy} onChange={event => void patch({ blend_mode: event.currentTarget.value as VideoLayerGroupSummary["blend_mode"] })}><For each={videoGroupBlends}>{blend => <option value={blend}>{blend === "SoftLight" ? "Soft Light" : blend}</option>}</For></select></label>
     </div>
     <fieldset disabled={props.effects.busy}>

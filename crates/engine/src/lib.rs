@@ -40,6 +40,8 @@ mod snapshot_public;
 mod snapshot_read;
 mod telemetry_percentiles;
 mod timeline_audio_live_fence;
+mod audio_control;
+mod audio_control_snapshot;
 mod timeline_follow_hold;
 mod video_generator;
 mod video_render_sample;
@@ -4975,6 +4977,14 @@ define_engine_command! {
         count_in_beats: u8,
     },
     SetLiveAudioSpectrum(Option<AudioSpectrumPoint>),
+    SetAudioControlRuntime {
+        values: Vec<protocol::audio_mapping::AudioControlRuntimeValue>,
+        generation: u64,
+        feature_sequence: u64,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     PublishLiveAudioFrame {
         frame: LiveAudioFrame,
         captured_at: Instant,
@@ -5791,9 +5801,10 @@ macro_rules! engine_command_video_presentation_relevance {
             | EngineCommand::SyncExternalClock { .. }
             | EngineCommand::MidiSongPositionPointer(_)
             | EngineCommand::SyncTimelineTimecode { .. } => false,
-            // Live audio input streams never invalidate rendered video.
+            // Audio publications are runtime data, not video configuration changes.
             EngineCommand::SetLiveAudioSpectrum(_)
             | EngineCommand::PublishLiveAudioFrame { .. }
+            | EngineCommand::SetAudioControlRuntime { .. }
             | EngineCommand::ClearLiveAudioInput { .. }
             | EngineCommand::ClearLiveAudioInputPublished { .. }
             | EngineCommand::ReportLiveAudioOnset { .. } => false,
@@ -5984,6 +5995,7 @@ impl EngineCommand {
                 | EngineCommand::SetCueFadePaused(_)
                 | EngineCommand::SetLiveAudioSpectrum(_)
                 | EngineCommand::PublishLiveAudioFrame { .. }
+                | EngineCommand::SetAudioControlRuntime { .. }
                 | EngineCommand::ClearLiveAudioInput { .. }
                 | EngineCommand::ClearLiveAudioInputPublished { .. }
                 | EngineCommand::ReportLiveAudioOnset { .. }
@@ -6175,6 +6187,7 @@ impl EngineCommand {
                 | EngineCommand::SetDirectChildTimelinePlaying { .. }
                 | EngineCommand::SetLiveAudioSpectrum(_)
                 | EngineCommand::PublishLiveAudioFrame { .. }
+                | EngineCommand::SetAudioControlRuntime { .. }
                 | EngineCommand::ClearLiveAudioInput { .. }
                 | EngineCommand::ClearLiveAudioInputPublished { .. }
                 | EngineCommand::ReportLiveAudioOnset { .. }
@@ -12646,6 +12659,7 @@ impl EngineHandle {
             | EngineCommand::SetTimelineMetronome { .. }
             | EngineCommand::SetLiveAudioSpectrum(_)
             | EngineCommand::PublishLiveAudioFrame { .. }
+            | EngineCommand::SetAudioControlRuntime { .. }
             | EngineCommand::ClearLiveAudioInput { .. }
             | EngineCommand::ClearLiveAudioInputPublished { .. }
             | EngineCommand::ReportLiveAudioOnset { .. }
@@ -20467,6 +20481,9 @@ struct DjLinkTimelineStartRollbackImage {
 
 #[derive(Clone)]
 enum PendingCommandRollback {
+    RestoreAudioControls {
+        previous: audio_control::RuntimeAudioControls,
+    },
     KeepApplied,
     /// A Cue change that started (or cleared a stale) Blind FX hold: undo the
     /// authored change and put that Cue's hold back exactly as it was.
@@ -21167,6 +21184,8 @@ struct EngineRuntime {
     video_presentation_config_dirty: bool,
     live_audio_spectrum: Option<AudioSpectrumPoint>,
     live_audio_features: Option<LiveAudioReactiveFeatures>,
+    live_audio_textures: Option<Arc<protocol::LiveAudioTextureFrame>>,
+    audio_controls: audio_control::RuntimeAudioControls,
     live_audio_onset_latched: bool,
     live_audio_onset_strength_latched: f32,
     live_audio_kick_latched: bool,
@@ -21627,6 +21646,8 @@ impl EngineRuntime {
             video_presentation_config_dirty: false,
             live_audio_spectrum: None,
             live_audio_features: None,
+            live_audio_textures: None,
+            audio_controls: audio_control::RuntimeAudioControls::default(),
             live_audio_onset_latched: false,
             live_audio_onset_strength_latched: 0.0,
             live_audio_kick_latched: false,
@@ -22636,6 +22657,8 @@ impl EngineRuntime {
         }
         self.live_audio_spectrum = None;
         self.live_audio_features = None;
+        self.live_audio_textures = None;
+        self.audio_controls = audio_control::RuntimeAudioControls::default();
         self.live_audio_onset_latched = false;
         self.live_audio_onset_strength_latched = 0.0;
         self.live_audio_kick_latched = false;
@@ -23524,6 +23547,7 @@ impl EngineRuntime {
                     | EngineCommand::SetAutoVjConfigPublished { .. }
                     | EngineCommand::SetAutoVjArmedPublished { .. }
                     | EngineCommand::SetAutoVjHoldPublished { .. }
+                    | EngineCommand::SetAudioControlRuntime { .. }
                     | EngineCommand::PulseVideoLayerIsfEvent { .. }
                     | EngineCommand::AddColorEffect { .. }
                     | EngineCommand::UpdateColorEffect { .. }
@@ -28926,6 +28950,8 @@ impl EngineRuntime {
             EngineCommand::SetLiveAudioSpectrum(spectrum) => {
                 let input_cleared = spectrum.is_none();
                 self.live_audio_features = None;
+                self.live_audio_textures = None;
+                self.audio_controls = audio_control::RuntimeAudioControls::default();
                 self.live_audio_onset_latched = false;
                 self.live_audio_onset_strength_latched = 0.0;
                 self.live_audio_kick_latched = false;
@@ -28946,6 +28972,21 @@ impl EngineRuntime {
                     self.invalidate_live_audio_source();
                 }
             }
+            EngineCommand::SetAudioControlRuntime {
+                values,
+                generation,
+                feature_sequence,
+                expires_at,
+                admission,
+                ack,
+            } => self.apply_audio_control_runtime_published(
+                values,
+                generation,
+                feature_sequence,
+                expires_at,
+                admission,
+                ack,
+            ),
             EngineCommand::PublishLiveAudioFrame { frame, captured_at } => {
                 self.apply_live_audio_frame(frame, captured_at, Instant::now());
             }
@@ -32018,6 +32059,9 @@ impl EngineRuntime {
                 self.pending_video_isf_event_resets = pending_video_isf_event_resets;
                 self.last_error = last_error;
             }
+            PendingCommandRollback::RestoreAudioControls { previous } => {
+                self.audio_controls = previous;
+            }
             PendingCommandRollback::RestoreVideoEffectCatalog {
                 effect_chains,
                 effect_presets,
@@ -33224,6 +33268,8 @@ impl EngineRuntime {
     fn invalidate_live_audio_source(&mut self) {
         self.live_audio_spectrum = None;
         self.live_audio_features = None;
+        self.live_audio_textures = None;
+        self.audio_controls = audio_control::RuntimeAudioControls::default();
         self.live_audio_onset_latched = false;
         self.live_audio_onset_strength_latched = 0.0;
         self.live_audio_kick_latched = false;
@@ -33348,6 +33394,11 @@ impl EngineRuntime {
             .max(features.onset_strength);
         self.live_audio_kick_latched |= features.kick_event;
         self.live_audio_snare_latched |= features.snare_event;
+        self.live_audio_textures = frame.textures.filter(|textures| {
+            textures.generation == frame.generation
+                && textures.feature_sequence == frame.feature_sequence
+                && textures.is_valid()
+        });
         self.live_audio_features = Some(features);
         self.live_audio_spectrum_updated_at = Some(captured_at);
         self.live_audio_frame_verified = true;
@@ -48511,7 +48562,7 @@ impl EngineRuntime {
         compositions.extend(
             self.resolved_custom_video_compositions_for_render(&outputs, &timeline_projections),
         );
-        VideoSnapshot {
+        let mut snapshot = VideoSnapshot {
             layers,
             media_assets: self.media_assets.clone(),
             effect_chains: self.video_effect_chains.clone(),
@@ -48527,7 +48578,9 @@ impl EngineRuntime {
                 config: self.auto_vj.config.clone(),
                 status: self.auto_vj.status.clone(),
             },
-        }
+        };
+        self.apply_audio_controls_to_video(&mut snapshot);
+        snapshot
     }
 
     fn timeline_follow_incoming_video_snapshot(
@@ -48847,7 +48900,7 @@ impl EngineRuntime {
         compositions.extend(
             self.resolved_custom_video_compositions_for_render(&outputs, &timeline_projections),
         );
-        VideoSnapshot {
+        let mut snapshot = VideoSnapshot {
             layers,
             media_assets: self.media_assets.clone(),
             effect_chains: self.video_effect_chains.clone(),
@@ -48863,7 +48916,9 @@ impl EngineRuntime {
                 config: self.auto_vj.config.clone(),
                 status: self.auto_vj.status.clone(),
             },
-        }
+        };
+        self.apply_audio_controls_to_video(&mut snapshot);
+        snapshot
     }
 
     fn video_clip_runtime_snapshot(&self) -> VideoClipRuntimeSnapshot {
@@ -49109,7 +49164,7 @@ impl EngineRuntime {
             compositions,
             outputs: rendered.outputs.clone(),
             mapping_presets: rendered.mapping_presets.clone(),
-            master_opacity: rendered.master_opacity,
+            master_opacity: self.video_master_opacity,
             blackout: rendered.blackout,
             auto_vj: rendered.auto_vj.clone(),
         }
@@ -51365,6 +51420,8 @@ impl EngineRuntime {
             video: rendered_video,
             authored_video,
             video_clip_runtime,
+            live_audio_textures: self.live_audio_textures.clone(),
+            live_audio_control_targets: self.audio_control_ui_targets(),
             video_transition_runtime: self.video_layer_transition_runtime_snapshot(),
             effects: self.effects.iter().map(effect_summary).collect(),
             node_graphs: self
@@ -51518,6 +51575,8 @@ impl EngineRuntime {
         // serde, and is also cleared for callers which inspect this in-memory
         // snapshot before serializing it.
         snapshot.video_clip_runtime = VideoClipRuntimeSnapshot::default();
+        snapshot.live_audio_textures = None;
+        snapshot.live_audio_control_targets = None;
         snapshot.direct_child_timeline_transports.clear();
         // T17: latched live overrides are runtime-only and never reach `.sdc`.
         snapshot.cue_live_modifiers.clear();
@@ -69363,6 +69422,9 @@ mod tests {
     #[path = "../snapshot_read_tests.rs"]
     mod snapshot_read_tests;
 
+    #[path = "../audio_control_tests.rs"]
+    mod audio_control_tests;
+
     #[path = "../fixture_repatch_tests.rs"]
     mod fixture_repatch_tests;
 
@@ -69636,6 +69698,7 @@ mod tests {
             features: LiveAudioReactiveFeatures::default(),
             onset_feature_sequences,
             onset_count: u8::try_from(onsets.len()).unwrap(),
+            textures: None,
         }
     }
 

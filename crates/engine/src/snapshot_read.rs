@@ -36,6 +36,7 @@ pub struct ControlPlaneRuntimeSnapshot {
 #[derive(Debug, Clone, PartialEq)]
 pub struct VideoOutputEffectRuntimeSnapshot {
     pub clip_runtime: VideoClipRuntimeSnapshot,
+    pub live_audio_textures: Option<std::sync::Arc<protocol::LiveAudioTextureFrame>>,
     pub transition_runtime: VideoLayerTransitionRuntimeSnapshot,
     pub clock_bpm: f32,
     pub timeline_id: TimelineId,
@@ -245,6 +246,11 @@ impl EngineHandle {
         self.read_snapshot_field(|snapshot| snapshot.video_clip_runtime.clone())
     }
 
+    /// Native-only live texture publication. One Arc clone, no sample copy.
+    pub fn live_audio_texture_snapshot(&self) -> Option<std::sync::Arc<protocol::LiveAudioTextureFrame>> {
+        self.read_snapshot_field(|snapshot| snapshot.live_audio_textures.clone())
+    }
+
     /// Read the video image and BPM needed by the native layer-thumbnail
     /// renderer from one published snapshot without cloning unrelated state.
     pub fn video_layer_thumbnail_snapshot(&self) -> (VideoSnapshot, f32) {
@@ -259,6 +265,7 @@ impl EngineHandle {
         VideoSnapshot,
         VideoClipRuntimeSnapshot,
         VideoLayerTransitionRuntimeSnapshot,
+        Option<std::sync::Arc<protocol::LiveAudioTextureFrame>>,
         f32,
     ) {
         self.read_snapshot_field(|snapshot| {
@@ -266,6 +273,7 @@ impl EngineHandle {
                 snapshot.video.clone(),
                 snapshot.video_clip_runtime.clone(),
                 snapshot.video_transition_runtime.clone(),
+                snapshot.live_audio_textures.clone(),
                 snapshot.clock.bpm,
             )
         })
@@ -276,6 +284,7 @@ impl EngineHandle {
     pub fn video_output_effect_runtime_snapshot(&self) -> VideoOutputEffectRuntimeSnapshot {
         self.read_snapshot_field(|snapshot| VideoOutputEffectRuntimeSnapshot {
             clip_runtime: snapshot.video_clip_runtime.clone(),
+            live_audio_textures: snapshot.live_audio_textures.clone(),
             transition_runtime: snapshot.video_transition_runtime.clone(),
             clock_bpm: snapshot.clock.bpm,
             timeline_id: snapshot.timeline.id,

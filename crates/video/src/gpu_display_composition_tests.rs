@@ -168,6 +168,7 @@ fn render_with(
         .prepare_output_display_render_preview_with_effects_and_transitions(
             snapshot,
             VideoEffectRenderContext {
+                audio_frame: None,
                 clip_runtime: &clip_runtime,
                 project_render_epoch: 1,
             },
@@ -493,6 +494,7 @@ fn generator_outgoing_clip_edits_retire_the_blended_layer_queue() {
             .prepare_output_display_render_preview_with_effects_and_transitions(
                 snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 1,
                 },

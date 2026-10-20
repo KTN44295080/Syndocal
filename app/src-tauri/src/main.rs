@@ -284,6 +284,7 @@ mod asio_timeline_output;
 mod asio_timeline_transport;
 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
 mod audio_output_router;
+mod audio_control_mapping;
 mod authored_control_plane;
 mod capture_catalog;
 mod capture_process_lifecycle;
@@ -3128,6 +3129,7 @@ struct AppState {
     live_audio_input_lifecycle: Mutex<()>,
     live_audio_input_devices: Mutex<LiveAudioInputDeviceCatalog>,
     live_audio_input: Mutex<Option<LiveAudioInput>>,
+    audio_control_runtime: Mutex<audio_control_mapping::RuntimeAdmission>,
     /// Durable machine storage for the explicit ABI v2 ASIO selection. The
     /// path is installed once during setup; the selection and its stale-lock
     /// status are restored at startup and rewritten after every successful
@@ -21082,6 +21084,7 @@ struct VideoAudioMonitorStatus {
 
 #[derive(Debug, Clone, Serialize, Default)]
 struct LiveAudioInputStatus {
+    generation: u64,
     running: bool,
     stale: bool,
     safety_clear_pending: bool,
@@ -21137,6 +21140,7 @@ struct LiveAudioInputStatus {
 
 #[derive(Debug, Clone, Copy, Serialize, Default, PartialEq)]
 struct LiveAudioInputLevels {
+    generation: u64,
     running: bool,
     stale: bool,
     safety_clear_pending: bool,
@@ -21215,6 +21219,7 @@ impl LiveAudioInputLevels {
             } else {
                 0.0
             },
+            generation: if safe { status.generation } else { 0 },
             feature_sequence: if safe { status.feature_sequence } else { 0 },
         }
     }
@@ -21769,6 +21774,7 @@ impl Drop for LiveAudioInput {
             status.bpm = None;
             status.bpm_confidence = 0.0;
             status.beat_phase = 0.0;
+            status.generation = 0;
             status.feature_sequence = 0;
             status.last_error = stream_close_failure.or_else(|| {
                 clear_pending.then(|| {
@@ -25495,6 +25501,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "send_usb_rdm_request",
     "set_asio_output_solo",
     "set_asio_output_test",
+    "set_audio_control_runtime",
     "set_blackout_output_control_v2",
     "set_display_output_window_open_v2",
     "set_explicit_wdm_cue_test",
@@ -26260,6 +26267,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::SetTimelineMetronome { .. }
         | EngineCommand::SetLiveAudioSpectrum(..)
         | EngineCommand::PublishLiveAudioFrame { .. }
+        | EngineCommand::SetAudioControlRuntime { .. }
         | EngineCommand::ClearLiveAudioInput { .. }
         | EngineCommand::ClearLiveAudioInputPublished { .. }
         | EngineCommand::ReportLiveAudioOnset { .. }
@@ -27121,7 +27129,11 @@ fn project_authority_bundle_from_coordinator(
     state: &AppState,
     coordinator: &ProjectCoordinator,
 ) -> ProjectAuthorityBundle {
-    project_authority_bundle_from_captured_snapshot(state, coordinator, state.engine.snapshot())
+    project_authority_bundle_from_captured_snapshot(
+        state,
+        coordinator,
+        state.engine.snapshot_for_ui(),
+    )
 }
 
 struct RetiredProjectControlInputs {
@@ -31220,6 +31232,7 @@ fn load_osc_mappings(window: WebviewWindow) -> Result<Option<Vec<OscControlMappi
 fn validate_midi_control_mappings(
     mappings: Vec<MidiControlMapping>,
 ) -> Result<Vec<MidiControlMapping>, String> {
+    protocol::audio_mapping::validate_audio_control_mappings(&mappings)?;
     mappings
         .into_iter()
         .enumerate()
@@ -31271,6 +31284,10 @@ fn validate_midi_control_mapping(
     mut mapping: MidiControlMapping,
 ) -> Result<MidiControlMapping, String> {
     let owner = format!("MIDI mapping {index}");
+    protocol::audio_mapping::validate_audio_control_mapping(&mapping)?;
+    if mapping.message == protocol::MidiControlMessage::Audio {
+        return Ok(mapping);
+    }
     if let Some(channel) = mapping.channel {
         if channel > 15 {
             return Err(format!("{owner} channel must be 0-15 or omitted"));
@@ -31360,9 +31377,12 @@ fn validate_midi_feedback_message(
             "{owner} MIDI feedback {state} cannot be a relative encoder message"
         ));
     }
-    if message.message == protocol::MidiControlMessage::BeatDivision {
+    if matches!(
+        message.message,
+        protocol::MidiControlMessage::BeatDivision | protocol::MidiControlMessage::Audio
+    ) {
         return Err(format!(
-            "{owner} MIDI feedback {state} cannot be a beat division"
+            "{owner} MIDI feedback {state} cannot be a beat division or audio source"
         ));
     }
     if message.message == protocol::MidiControlMessage::PitchBend && message.number != 0 {
@@ -48046,6 +48066,7 @@ fn zero_live_audio_input_status(status: &mut LiveAudioInputStatus, error: String
     status.bpm = None;
     status.bpm_confidence = 0.0;
     status.beat_phase = 0.0;
+    status.generation = 0;
     status.feature_sequence = 0;
     status.last_error = Some(error);
 }
@@ -48351,6 +48372,7 @@ fn recover_live_audio_input_status(
 
 #[derive(Debug, Clone, Copy)]
 struct LiveAudioFeaturePresentation {
+    generation: u64,
     frame: audio::live_features::LiveAudioFeatureFrame,
     beat_phase: f32,
 }
@@ -48457,6 +48479,7 @@ fn publish_live_audio_analysis_with(
                 } else {
                     0.0
                 };
+                status.generation = features.generation;
                 status.feature_sequence = frame.sequence;
             }
             status.analyzed_windows = status.analyzed_windows.saturating_add(1);
@@ -48529,6 +48552,13 @@ fn publish_live_audio_features(context: LiveAudioFeaturePublishContext<'_>) -> b
                             feature_sequence,
                             spectrum: published_spectrum,
                             features: reactive_features,
+                            textures: Some(Arc::new(protocol::LiveAudioTextureFrame {
+                                generation,
+                                feature_sequence,
+                                sample_rate: features.frame.sample_rate,
+                                waveform: features.frame.waveform,
+                                fft: features.frame.fft,
+                            })),
                             onset_feature_sequences,
                             onset_count,
                         },
@@ -48849,10 +48879,14 @@ fn run_live_audio_fft(context: LiveAudioFftContext) {
             };
             let spectrum = live_audio_feature_spectrum(&frame);
             let beat_phase = live_audio_feature_beat_phase(&frame, last_onset_end_sample);
-            let presentation = LiveAudioFeaturePresentation { frame, beat_phase };
+            let presentation = LiveAudioFeaturePresentation {
+                generation: generation.load(Ordering::Acquire),
+                frame,
+                beat_phase,
+            };
             if !publish_live_audio_features(LiveAudioFeaturePublishContext {
                 engine: &engine,
-                generation: generation.load(Ordering::Acquire),
+                generation: presentation.generation,
                 captured_at,
                 status: &status,
                 safety: &safety,
@@ -55487,6 +55521,38 @@ fn get_project_control_mappings(
 }
 
 #[tauri::command]
+fn set_audio_control_runtime(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    args: FlatInvokeArgs<Value>,
+) -> Result<audio_control_mapping::RuntimeResult, String> {
+    read_flat_invoke_args!(args;
+        owner_id: String => "ownerId",
+        expected_epoch: u64 => "expectedEpoch",
+        expected_revision: u64 => "expectedRevision",
+        expected_checkpoint_hash: String => "expectedCheckpointHash",
+        request_id: u64 => "requestId",
+        audio_generation: u64 => "audioGeneration",
+        feature_sequence: u64 => "featureSequence",
+        values: Vec<audio_control_mapping::MappedValue> => "values",
+    );
+    audio_control_mapping::apply(
+        &state,
+        window.label(),
+        audio_control_mapping::RuntimeRequest {
+            owner_id,
+            expected_epoch,
+            expected_revision,
+            expected_checkpoint_hash,
+            request_id,
+            audio_generation,
+            feature_sequence,
+            values,
+        },
+    )
+}
+
+#[tauri::command]
 fn set_project_control_mappings(
     window: WebviewWindow,
     state: State<'_, AppState>,
@@ -55902,7 +55968,7 @@ fn poll_project_authority_bundle_seqlock(
             // coordinator guard is live while it does, so live callback sends are
             // never held behind a UI poll.
             let persistence_snapshot = state.engine.persistence_snapshot()?;
-            let published_snapshot = state.engine.snapshot();
+            let published_snapshot = state.engine.snapshot_for_ui();
             if state.project_external_command_admission.generation() != admitted_before {
                 return Ok(ProjectAuthoritySeqlockCapture::Retry);
             }
@@ -72581,7 +72647,7 @@ fn compatible_fixture_preset_targets(
 
 #[tauri::command]
 fn get_snapshot(state: State<'_, AppState>) -> EngineSnapshotRuntimeWireResponse {
-    let snapshot = state.engine.snapshot();
+    let snapshot = state.engine.snapshot_for_ui();
     EngineSnapshotRuntimeWireResponse {
         timeline_runtime: timeline_runtime_snapshot_wire(&snapshot),
         snapshot,
@@ -72602,7 +72668,7 @@ async fn get_snapshot_delta(
         // Capture under the synchronization lock so concurrent windows cannot
         // publish an older captured sample after a newer one. Snapshot cloning
         // still holds this lock; reducing engine snapshot cost is a separate task.
-        let current = state.engine.snapshot();
+        let current = state.engine.snapshot_for_ui();
         let timeline_runtime = timeline_runtime_snapshot_wire(&current);
         let payload = sync.publish(client_revision, current)?;
         Ok(EngineSnapshotSyncResponse {
@@ -80179,6 +80245,7 @@ impl VideoOutputEffectRuntimeContext {
     fn render_context(&self) -> video::VideoEffectRenderContext<'_> {
         video::VideoEffectRenderContext {
             clip_runtime: &self.runtime.clip_runtime,
+            audio_frame: self.runtime.live_audio_textures.as_deref(),
             project_render_epoch: self.project_render_epoch,
         }
     }
@@ -80653,7 +80720,7 @@ fn get_debug_video_output_preview(
     decode_budget: Option<usize>,
 ) -> Result<video::VideoFrame, String> {
     let project_render_epoch = state.engine.output_ownership_status().epoch;
-    let (video, clip_runtime, transition_runtime, bpm) =
+    let (video, clip_runtime, transition_runtime, live_audio_textures, bpm) =
         state.engine.video_output_preview_snapshot();
     let mut renderer = state
         .video_preview
@@ -80670,6 +80737,7 @@ fn get_debug_video_output_preview(
             &video,
             video::VideoEffectRenderContext {
                 clip_runtime: &clip_runtime,
+                audio_frame: live_audio_textures.as_deref(),
                 project_render_epoch,
             },
             &transition_runtime,
@@ -81070,6 +81138,7 @@ fn render_live_video_monitor_frame(
                     &snapshot.video,
                     video::VideoEffectRenderContext {
                         clip_runtime: &snapshot.clip_runtime,
+                        audio_frame: snapshot.live_audio_textures.as_deref(),
                         project_render_epoch: program_render_epoch
                             .expect("Program monitor captures an output render epoch"),
                     },
@@ -81082,6 +81151,7 @@ fn render_live_video_monitor_frame(
         }
         LiveVideoMonitorKind::Preview => {
             let (snapshot, bpm) = state.engine.video_layer_thumbnail_snapshot();
+            let live_audio_textures = state.engine.live_audio_texture_snapshot();
             // layer_id remains in the binary IPC contract for compatibility, but Preview is
             // rendered exclusively from the explicitly staged ephemeral transport.
             let _ = layer_id;
@@ -81142,7 +81212,13 @@ fn render_live_video_monitor_frame(
                 .frame_provider_mut()
                 .set_bpm(Some(bpm));
             let frame = renderer
-                .render_layer_preview(&preview_video, layer_id, width, height)
+                .render_layer_preview_with_audio_frame(
+                    &preview_video,
+                    layer_id,
+                    width,
+                    height,
+                    live_audio_textures.as_deref(),
+                )
                 .map_err(|error| format!("{error:?}"))?;
             drop(renderer);
 
@@ -81692,6 +81768,7 @@ mod live_video_monitor_tests {
         let captured = VideoOutputEffectRuntimeContext {
             runtime: engine::VideoOutputEffectRuntimeSnapshot {
                 clip_runtime: snapshot.video_clip_runtime,
+                live_audio_textures: snapshot.live_audio_textures,
                 transition_runtime: snapshot.video_transition_runtime,
                 clock_bpm: snapshot.clock.bpm,
                 timeline_id: snapshot.timeline.id,
@@ -84040,6 +84117,7 @@ fn prepare_native_display_output(
             &snapshot.video,
             video::VideoEffectRenderContext {
                 clip_runtime: &snapshot.video_clip_runtime,
+                audio_frame: snapshot.live_audio_textures.as_deref(),
                 project_render_epoch: authority.ownership.epoch,
             },
             &snapshot.video_transition_runtime,
@@ -84265,6 +84343,7 @@ fn prepare_native_timeline_follow_video_output(
     // each unweighted side before the canonical Follow combiner runs.
     let render_context = video::VideoEffectRenderContext {
         clip_runtime: &context.runtime.clip_runtime,
+        audio_frame: context.runtime.live_audio_textures.as_deref(),
         project_render_epoch: follow.epoch,
     };
     let mut faults = Vec::new();
@@ -92938,6 +93017,7 @@ pub(crate) mod tests {
                 live_audio_input_lifecycle: Mutex::new(()),
                 live_audio_input_devices: Mutex::new(LiveAudioInputDeviceCatalog::default()),
                 live_audio_input: Mutex::new(None),
+                audio_control_runtime: Mutex::new(audio_control_mapping::RuntimeAdmission::default()),
                 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
                 asio_input_selection: Mutex::new(AsioInputSelectionState::default()),
                 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
@@ -100902,6 +100982,7 @@ pub(crate) mod tests {
             project_render_epoch: 21,
             runtime: engine::VideoOutputEffectRuntimeSnapshot {
                 clip_runtime: context_snapshot.video_clip_runtime,
+                live_audio_textures: context_snapshot.live_audio_textures,
                 transition_runtime: context_snapshot.video_transition_runtime,
                 clock_bpm: context_snapshot.clock.bpm,
                 timeline_id: context_snapshot.timeline.id,
@@ -114977,6 +115058,7 @@ pub(crate) mod tests {
     #[test]
     fn daslight_import_mapping_result_keeps_report_midi_and_dmx_in_the_project_checkpoint() {
         let midi = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: protocol::MidiControlMessage::ControlChange,
             number: 7,
@@ -115101,6 +115183,7 @@ pub(crate) mod tests {
     fn project_backup_preserves_control_mappings() {
         let directory = unique_test_directory("backup-control-mappings");
         let midi_mapping = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: protocol::MidiControlMessage::ControlChange,
             number: 1,
@@ -118231,6 +118314,7 @@ f 1 2 3
             version: 1,
             mappings: vec![
                 MidiControlMapping {
+                    audio: None,
                     channel: Some(0),
                     message: protocol::MidiControlMessage::ControlChange,
                     number: 24,
@@ -118251,6 +118335,7 @@ f 1 2 3
                     isf_stage_id: None,
                 },
                 MidiControlMapping {
+                    audio: None,
                     channel: Some(0),
                     message: protocol::MidiControlMessage::NoteOn,
                     number: 25,
@@ -118335,6 +118420,7 @@ f 1 2 3
             label: "  Festival Base  ".to_string(),
             project,
             midi_mappings: vec![MidiControlMapping {
+                audio: None,
                 channel: Some(0),
                 message: protocol::MidiControlMessage::ControlChange,
                 number: 24,
@@ -118501,6 +118587,7 @@ f 1 2 3
     fn control_mapping_validation_normalizes_external_midi_files() {
         let mappings = validate_midi_control_mappings(vec![
             MidiControlMapping {
+                audio: None,
                 channel: Some(0),
                 message: protocol::MidiControlMessage::ControlChange,
                 number: 24,
@@ -118535,6 +118622,7 @@ f 1 2 3
                 isf_stage_id: None,
             },
             MidiControlMapping {
+                audio: None,
                 channel: None,
                 message: protocol::MidiControlMessage::NoteOn,
                 number: 25,
@@ -118555,6 +118643,7 @@ f 1 2 3
                 isf_stage_id: None,
             },
             MidiControlMapping {
+                audio: None,
                 channel: None,
                 message: protocol::MidiControlMessage::NoteOn,
                 number: 26,
@@ -118575,6 +118664,7 @@ f 1 2 3
                 isf_stage_id: None,
             },
             MidiControlMapping {
+                audio: None,
                 channel: None,
                 message: protocol::MidiControlMessage::NoteOn,
                 number: 27,
@@ -118611,6 +118701,7 @@ f 1 2 3
         assert_eq!(mappings[3].attribute.as_deref(), Some("Reverse"));
 
         let error = validate_midi_control_mappings(vec![MidiControlMapping {
+            audio: None,
             channel: Some(16),
             message: protocol::MidiControlMessage::ControlChange,
             number: 200,
@@ -118634,6 +118725,7 @@ f 1 2 3
         assert!(error.contains("channel"));
 
         let error = validate_midi_control_mappings(vec![MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: protocol::MidiControlMessage::ControlChange,
             number: 24,
@@ -118666,6 +118758,7 @@ f 1 2 3
         assert!(error.contains("feedback Off channel"));
 
         let error = validate_midi_control_mappings(vec![MidiControlMapping {
+            audio: None,
             channel: None,
             message: protocol::MidiControlMessage::ControlChange,
             number: 24,
@@ -118689,6 +118782,7 @@ f 1 2 3
         assert!(error.contains("video layer"));
 
         let error = validate_midi_control_mappings(vec![MidiControlMapping {
+            audio: None,
             channel: None,
             message: protocol::MidiControlMessage::NoteOn,
             number: 27,
@@ -118718,6 +118812,7 @@ f 1 2 3
         number: u8,
     ) -> MidiControlMapping {
         MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message,
             number,
@@ -122116,6 +122211,7 @@ f 1 2 3
         assert_eq!(legacy_mappings, ProjectControlMappings::default());
 
         let midi_mapping = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: protocol::MidiControlMessage::ControlChange,
             number: 74,
@@ -135671,6 +135767,7 @@ fn main() {
             live_audio_input_lifecycle: Mutex::new(()),
             live_audio_input_devices: Mutex::new(LiveAudioInputDeviceCatalog::default()),
             live_audio_input: Mutex::new(None),
+            audio_control_runtime: Mutex::new(audio_control_mapping::RuntimeAdmission::default()),
             #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
             asio_input_selection: Mutex::new(AsioInputSelectionState::default()),
             #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
@@ -136328,6 +136425,7 @@ fn main() {
             poll_project_authority_bundle,
             get_project_control_mappings,
             set_project_control_mappings,
+            set_audio_control_runtime,
             load_project_checkpoint,
             acknowledge_project_recovery_applied,
             get_project_history_status,

@@ -341,6 +341,7 @@
   "set_asio_output_solo",
   "set_asio_output_test",
   "set_attribute",
+  "set_audio_control_runtime",
   "set_auto_vj_armed",
   "set_auto_vj_config",
   "set_auto_vj_hold",

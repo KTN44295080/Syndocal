@@ -38,6 +38,10 @@ export interface ControlMappingTarget {
   isf_stage_id?: number | null;
   /** Explicitly transport-specific targets may opt out of OSC/DMX. */
   midi_only?: boolean;
+  /** Audio-only group opacity does not add hardware group actions. */
+  audio_only?: boolean;
+  /** Event controls keep their existing hardware trigger behavior. */
+  audio_disabled?: boolean;
   low?: number;
   high?: number;
 }
@@ -51,11 +55,11 @@ export const controlMappingTargetsForMode = (
   targets: readonly ControlMappingTarget[],
 ): ControlMappingTarget[] => mode === "midi"
   ? [...targets]
-  : targets.filter((target) => !target.midi_only);
+  : targets.filter((target) => !target.midi_only && !target.audio_only);
 
 const sharedTargets = (targets: readonly ControlMappingTarget[]): SharedControlMappingTarget[] =>
   targets.filter((target): target is SharedControlMappingTarget =>
-    !target.midi_only);
+    !target.midi_only && !target.audio_only);
 
 type ControlMappingDataAttributes = {
   "data-control-map-target"?: string;
@@ -169,7 +173,7 @@ const midiMappingFieldsForTarget = (target: ControlMappingTarget): Omit<MidiCont
 export const midiMappingsFromLearnedControl = (
   targets: readonly ControlMappingTarget[],
   learned: LearnedMidiControl,
-): MidiControlMapping[] => targets.map((target) => ({
+): MidiControlMapping[] => targets.filter((target) => !target.audio_only).map((target) => ({
   channel: learned.channel,
   message: learned.message,
   number: learned.number,

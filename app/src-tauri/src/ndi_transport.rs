@@ -64,6 +64,7 @@ fn ndi_output_effect_render_context(
 ) -> video::VideoEffectRenderContext<'_> {
     video::VideoEffectRenderContext {
         clip_runtime: &snapshot.video_clip_runtime,
+        audio_frame: snapshot.live_audio_textures.as_deref(),
         project_render_epoch,
     }
 }

@@ -1242,6 +1242,7 @@ fn dvc_midi_mapping(
     cue_id: Option<u64>,
 ) -> MidiControlMapping {
     MidiControlMapping {
+        audio: None,
         channel: Some(event.channel),
         message: event.message,
         number: event.number,
@@ -10382,6 +10383,7 @@ mod tests {
         assert_eq!(
             outcome.report.midi_mappings[0],
             MidiControlMapping {
+                audio: None,
                 channel: Some(2),
                 message: MidiControlMessage::NoteOn,
                 number: 60,

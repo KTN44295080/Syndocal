@@ -367,6 +367,7 @@ fn keyed_input_generator_edits_retire_older_animated_queue_frames() {
     let snapshot = VideoSnapshot::default();
     let clip_runtime = VideoClipRuntimeSnapshot::default();
     let context = VideoEffectRenderContext {
+        audio_frame: None,
         clip_runtime: &clip_runtime,
         project_render_epoch: 1,
     };
