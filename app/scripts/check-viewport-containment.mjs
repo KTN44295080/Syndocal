@@ -39645,6 +39645,11 @@ async function main() {
       const results = [];
       for (const viewport of viewports) {
         const result = await runSetupVideoViewport(client, viewport);
+        if (screenshotDir && shouldCaptureViewport(viewport)) {
+          mkdirSync(screenshotDir, { recursive: true });
+          const screenshot = await client.send("Page.captureScreenshot", { format: "png" });
+          writeFileSync(join(screenshotDir, `${result.label}.png`), screenshot.data, "base64");
+        }
         results.push(result);
         const passed = isContained(result) && hasExpectedSetupSurface(result);
         const failedChecks = [

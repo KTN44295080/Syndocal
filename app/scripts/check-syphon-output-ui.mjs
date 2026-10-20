@@ -45,6 +45,9 @@ const moduleUrl = async (path, replacements = {}) => {
 };
 const localizationUrl = await moduleUrl("uiLocalization.ts");
 const policyUrl = await moduleUrl("liveVideoMonitorPolicy.ts");
+const performanceBudgetUrl = await moduleUrl("liveVideoPerformanceBudget.ts", {
+  "./liveVideoMonitorPolicy": policyUrl,
+});
 const authoringUrl = await moduleUrl("videoOutputAuthoring.ts");
 const createPanelUrl = await moduleUrl("components/VideoOutputCreatePanel.tsx", {
   "../uiLocalization": localizationUrl,
@@ -57,6 +60,7 @@ const { VideoOutputConfigPanel } = await import(await moduleUrl("components/Vide
 }));
 const { LiveVideoOutputHealthReadout } = await import(await moduleUrl("components/LiveVideoOutputHealthReadout.tsx", {
   "../liveVideoMonitorPolicy": policyUrl,
+  "../liveVideoPerformanceBudget": performanceBudgetUrl,
 }));
 const { translateUiText } = await import(localizationUrl);
 const nodes = (tree) => Array.isArray(tree) ? tree.flatMap(nodes)

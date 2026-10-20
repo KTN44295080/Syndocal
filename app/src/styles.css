@@ -39483,7 +39483,7 @@ button.timelineExternalSourceCard:active,
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
   border-right: 0;
   background: var(--theme-panel);
   padding: 8px;
@@ -39531,11 +39531,17 @@ button.timelineExternalSourceCard:active,
 
 .videoOutputStatusPane > .advancedProjectionCorrection {
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 44px;
   overflow: auto;
   border: 1px solid var(--ray-border);
   background: var(--theme-bg);
   padding: 0 8px 8px;
+}
+
+/* Output configuration adds another disclosure above correction. Keep the
+   expanded editor usable and let the status pane scroll when both need room. */
+.videoOutputStatusPane > .advancedProjectionCorrection[open] {
+  min-height: 120px;
 }
 
 .advancedProjectionCorrection > summary {
