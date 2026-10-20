@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertTimelineSourceTargetReveal } from "./timeline-source-target-reveal-proof.mjs";
+import { reserveBrowserCheckPort } from "./browser-check-ports.mjs";
 
 // PROOF BOUNDARY: this gate drives the timeline-layered browser fixture. Its
 // split/lane-move fixture callbacks intercept requests before
@@ -15,9 +16,14 @@ import { assertTimelineSourceTargetReveal } from "./timeline-source-target-revea
 // physical-output completion.
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const host = "127.0.0.1";
-const vitePort = 5193;
-const cdpPort = 9243;
-const baseUrl = `http://${host}:${vitePort}/?syndocalViewportFixture=timeline-layered`;
+const vitePort = Number(process.env.SYNDOCAL_VIEWPORT_VITE_PORT ?? 5193);
+assert.ok(Number.isSafeInteger(vitePort) && vitePort >= 1024 && vitePort <= 65535, "Invalid Timeline Vite port");
+const defaultOrigin = `http://${host}:${vitePort}/`;
+const fixtureUrl = new URL(process.env.SYNDOCAL_TIMELINE_URL ?? defaultOrigin);
+fixtureUrl.searchParams.set("syndocalViewportFixture", "timeline-layered");
+const baseUrl = fixtureUrl.toString();
+const shouldStartVite = !process.env.SYNDOCAL_TIMELINE_URL && process.env.SYNDOCAL_TIMELINE_NO_SERVER !== "1";
+const cdpPort = await reserveBrowserCheckPort("SYNDOCAL_CDP_PORT", 9243);
 const screenshotDir = process.env.SYNDOCAL_CONTROL_SCREENSHOT_DIR || process.env.SYNDOCAL_TIMELINE_SCREENSHOT_DIR
   ? resolve(process.env.SYNDOCAL_CONTROL_SCREENSHOT_DIR || process.env.SYNDOCAL_TIMELINE_SCREENSHOT_DIR)
   : null;
@@ -60,11 +66,23 @@ class CdpClient {
     this.pending = new Map();
     this.socket.onmessage = (event) => {
       const message = JSON.parse(event.data);
+      if (message.method === "Page.javascriptDialogOpening" && message.params.type === "beforeunload" && this.expectedFixtureNavigation) {
+        void this.send("Page.handleJavaScriptDialog", { accept: true }).catch(() => {});
+        return;
+      }
       const pending = this.pending.get(message.id);
       if (!pending) return;
       this.pending.delete(message.id);
+      clearTimeout(pending.timeout);
       if (message.error) pending.reject(new Error(message.error.message));
       else pending.resolve(message.result);
+    };
+    this.socket.onclose = () => {
+      for (const pending of this.pending.values()) {
+        clearTimeout(pending.timeout);
+        pending.reject(new Error("Timeline CDP socket closed"));
+      }
+      this.pending.clear();
     };
   }
   async ready() {
@@ -75,9 +93,14 @@ class CdpClient {
     });
   }
   send(method, params = {}) {
+    if (this.socket.readyState !== WebSocket.OPEN) return Promise.reject(new Error("Timeline CDP socket is not open"));
     const id = ++this.nextId;
     return new Promise((resolveSend, reject) => {
-      this.pending.set(id, { resolve: resolveSend, reject });
+      const timeout = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Timeline CDP timed out: ${method}`));
+      }, 30_000);
+      this.pending.set(id, { resolve: resolveSend, reject, timeout });
       this.socket.send(JSON.stringify({ id, method, params }));
     });
   }
@@ -95,6 +118,22 @@ const click = (client, selector) => evaluate(client, `(() => {
   element.click();
   return true;
 })()`);
+const clickReachable = async (client, selector) => {
+  const point = await evaluate(client, `(() => {
+    const element = document.querySelector(${JSON.stringify(selector)});
+    if (!(element instanceof HTMLElement)) return null;
+    element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const bounds = element.getBoundingClientRect();
+    const x = bounds.left + bounds.width / 2;
+    const y = bounds.top + bounds.height / 2;
+    const hit = document.elementFromPoint(x, y);
+    return hit && (hit === element || element.contains(hit)) ? { x, y } : null;
+  })()`);
+  if (!point) return false;
+  await client.send("Input.dispatchMouseEvent", { type: "mousePressed", ...point, button: "left", clickCount: 1 });
+  await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...point, button: "left", clickCount: 1 });
+  return true;
+};
 const dispatchTimelineWheel = (client, {
   deltaX = 0,
   deltaY = 0,
@@ -668,6 +707,10 @@ const measure = (client) => evaluate(client, `(() => {
       return bounds.width > 0 && bounds.height > 0 && bounds.height < 43.5;
     }).length,
     shortTargets,
+    outerSize: {
+      document: [document.documentElement.scrollWidth, document.documentElement.clientWidth, document.documentElement.scrollHeight, document.documentElement.clientHeight],
+      app: [app.scrollWidth, app.clientWidth, app.scrollHeight, app.clientHeight],
+    },
     fixedOuter: document.documentElement.scrollWidth === document.documentElement.clientWidth
       && document.documentElement.scrollHeight === document.documentElement.clientHeight
       && app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight,
@@ -794,7 +837,7 @@ const measureControlDomainGeometry = (client, domain) => evaluate(client, `(() =
     if (!(element instanceof HTMLElement)) return false;
     const bounds = element.getBoundingClientRect();
     const style = getComputedStyle(element);
-    return bounds.width > 0 && bounds.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    return element.checkVisibility() && bounds.width > 0 && bounds.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
   };
   const activeDomain = document.querySelector('[data-edit-domain-navigation] [data-control-mode-option][aria-selected="true"]')?.getAttribute('data-control-mode-option') ?? '';
   const upper = document.querySelector('[data-workspace-pane="upper"]');
@@ -806,13 +849,74 @@ const measureControlDomainGeometry = (client, domain) => evaluate(client, `(() =
     const card = scroller?.querySelector('[data-scene-matrix-cue-id]');
     return { activeDomain, upper: rect(upper), lower: rect(lower), primary: rect(matrix), header: rect(header), content: rect(scroller), item: rect(card), primaryVisible: visible(matrix), contentVisible: visible(scroller), itemVisible: visible(card), primaryPosition: matrix ? getComputedStyle(matrix).position : '' };
   }
-  const library = upper?.matches('[data-video-media-library="true"]') ? upper : document.querySelector('[data-video-media-library="true"]');
-  const header = library?.querySelector(':scope > .panelHeader');
-  const clip = library?.querySelector('.videoMixerClipPane');
-  const surface = library?.querySelector('.videoMediaLibrarySurface');
+  const workspace = document.querySelector('.layoutSharedWorkspace.layoutControl.controlModeMixer');
+  const mixer = workspace?.querySelector(':scope > #edit-domain-panel-mixer.videoControlPanelMixer');
+  const header = mixer?.querySelector(':scope > .panelHeader');
+  const clip = mixer?.querySelector('.videoMixerClipPane');
+  const rail = mixer?.querySelector('[data-media-library-rail]');
+  const summary = rail?.querySelector(':scope > summary');
+  const surface = rail?.querySelector('.videoMediaLibrarySurface');
   const card = surface?.querySelector('.videoMediaLibraryItem');
-  const importSummary = library?.querySelector('[data-edit-video-import-disclosure] > summary');
-  return { activeDomain, upper: rect(upper), lower: rect(lower), primary: rect(library), header: rect(header), content: rect(clip), surface: rect(surface), item: rect(card), importSummary: rect(importSummary), primaryVisible: visible(library), contentVisible: visible(clip), surfaceVisible: visible(surface), itemVisible: visible(card), importVisible: visible(importSummary), surfacePosition: surface ? getComputedStyle(surface).position : '', panelRows: library ? getComputedStyle(library).gridTemplateRows : '', clipRow: clip ? getComputedStyle(clip).gridRowStart : '' };
+  const importSummary = mixer?.querySelector('[data-vj-media-import-disclosure] > summary');
+  // Derive the upper slot from its independent workspace grid, not from the
+  // mixer itself: comparing a panel with its own rectangle hides overflow.
+  const workspaceBounds = rect(workspace);
+  const firstRowHeight = workspace ? parseFloat(getComputedStyle(workspace).gridTemplateRows) : 0;
+  const upperSlot = workspaceBounds && firstRowHeight > 0
+    ? [workspaceBounds[0], workspaceBounds[1], workspaceBounds[2], workspaceBounds[1] + firstRowHeight, workspaceBounds[4], firstRowHeight]
+    : null;
+  const outerScroll = () => [scrollX, scrollY, document.querySelector('.app')?.scrollLeft, document.querySelector('.app')?.scrollTop];
+  const before = outerScroll();
+  const reachable = (target) => {
+    if (!visible(target)) return false;
+    const saved = [];
+    for (let ancestor = target.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      saved.push([ancestor, ancestor.scrollLeft, ancestor.scrollTop]);
+    }
+    target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const bounds = target.getBoundingClientRect();
+    const hit = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+    const result = hit !== null && (hit === target || target.contains(hit));
+    saved.forEach(([ancestor, left, top]) => { ancestor.scrollLeft = left; ancestor.scrollTop = top; });
+    return result;
+  };
+  const controls = [...(surface?.querySelectorAll('button, input, select') ?? [])].filter(visible);
+  const reachableControls = controls.map(reachable);
+  const summaryReachable = reachable(summary);
+  // Import is a sibling disclosure; test its reachability with the catalog
+  // closed, then restore the catalog through the actual summary control.
+  const libraryOpen = rail?.open === true;
+  if (libraryOpen) summary.click();
+  const importReachable = reachable(importSummary);
+  if (libraryOpen) summary.click();
+  const surfaceBounds = rect(surface);
+  const primaryBounds = rect(mixer);
+  // The popup's containing block is outside the Clip scroller. Its visible
+  // area is bounded by the mixer, workspace and viewport, with its own scroll.
+  const surfaceVisibleHeight = surfaceBounds && primaryBounds && workspaceBounds
+    ? Math.max(0, Math.min(surfaceBounds[3], primaryBounds[3], workspaceBounds[3], innerHeight)
+      - Math.max(surfaceBounds[1], primaryBounds[1], workspaceBounds[1], 0))
+    : 0;
+  return {
+    activeDomain, upper: upperSlot, lower: rect(lower), workspace: workspaceBounds,
+    primary: primaryBounds, header: rect(header), content: rect(clip), surface: surfaceBounds,
+    item: rect(card), summary: rect(summary), importSummary: rect(importSummary),
+    primaryCount: workspace?.querySelectorAll(':scope > #edit-domain-panel-mixer.videoControlPanelMixer').length ?? 0,
+    primaryVisible: visible(mixer), contentVisible: visible(clip), surfaceVisible: visible(surface),
+    itemVisible: visible(card), importVisible: visible(importSummary), libraryOpen: rail?.open === true,
+    surfaceAnchoredToMixer: surface?.offsetParent === mixer, surfaceVisibleHeight,
+    surfaceOverflowY: surface ? getComputedStyle(surface).overflowY : '',
+    summaryReachable, importReachable, controlCount: controls.length, reachableControls,
+    outerScrollStable: JSON.stringify(before) === JSON.stringify(outerScroll()),
+    monitorsVisible: visible(mixer?.querySelector('.videoMixerTopPane')),
+    contextVisible: visible(mixer?.querySelector('.videoMixerContextPane')),
+    previewVisible: visible(document.querySelector('[data-edit-video-preview]')),
+    inspectorVisible: visible(document.querySelector('[data-edit-video-inspector]')),
+    documentFixed: document.documentElement.scrollWidth === document.documentElement.clientWidth
+      && document.documentElement.scrollHeight === document.documentElement.clientHeight,
+    workspaceFixed: workspace?.scrollWidth === workspace?.clientWidth,
+    clipRow: clip ? getComputedStyle(clip).gridRowStart : '',
+  };
 })()`);
 
 const assertControlDomainGeometry = (geometry, viewport, domain) => {
@@ -825,15 +929,20 @@ const assertControlDomainGeometry = (geometry, viewport, domain) => {
   const [contentLeft, contentTop, contentRight, contentBottom, , contentHeight] = geometry.content;
   assert.ok(upperBottom <= lowerTop + 1, `${domain} upper surface does not overlap the lower band at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
   assert.ok(geometry.primaryVisible && primaryLeft >= upperLeft - 1 && primaryRight <= upperRight + 1 && primaryTop >= upperTop - 1 && primaryBottom <= upperBottom + 1 && primaryHeight >= upperHeight - 24, `${domain} primary content fills and stays inside the upper pane at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
-  assert.ok(geometry.contentVisible && contentLeft >= primaryLeft - 1 && contentRight <= primaryRight + 1 && contentTop >= primaryTop - 1 && contentBottom <= primaryBottom + 1 && contentHeight >= 120, `${domain} content owns usable height instead of a collapsed rail at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.contentVisible && contentLeft >= primaryLeft - 1 && contentRight <= primaryRight + 1 && contentTop >= primaryTop - 1 && contentBottom <= primaryBottom + 1 && contentHeight > 0, `${domain} content stays inside its authored pane at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
   if (domain === 'edit') {
+    assert.ok(contentHeight >= 120, `Lighting retains a usable Scene scrollport at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
     assert.ok(geometry.itemVisible && geometry.item && geometry.item[5] >= 44, `Lighting exposes at least one usable Scene card at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
     return;
   }
-  assert.ok(geometry.surfaceVisible && geometry.surface && geometry.surfacePosition !== 'absolute' && geometry.surface[5] >= 120, `Video Media Library surface is in-flow and usable at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
-  assert.ok(geometry.itemVisible && geometry.item && geometry.item[5] >= 48, `Video exposes at least one usable media card at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
-  assert.ok(geometry.importVisible && geometry.importSummary && geometry.importSummary[5] >= 43.5, `Video keeps Import Media reachable at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
-  assert.equal(geometry.clipRow, '2', `Video clip/library pane stays in explicit row 2 at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.equal(geometry.primaryCount, 1, 'Video owns one full mixer');
+  assert.ok(geometry.monitorsVisible && geometry.contextVisible && geometry.previewVisible && geometry.inspectorVisible, `Video retains its monitors, Outputs/Layers and lower Preview/Inspector at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.libraryOpen && geometry.surfaceVisible && geometry.surfaceAnchoredToMixer && geometry.surfaceVisibleHeight >= 120 && ['auto', 'scroll'].includes(geometry.surfaceOverflowY), `Video Media Library opens a usable, unclipped 120px scrollport at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.surface[0] >= primaryLeft - 1 && geometry.surface[2] <= primaryRight + 1 && geometry.surface[1] >= primaryTop - 1 && geometry.surface[3] <= primaryBottom + 1, `Video catalog overlay stays inside the mixer at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.itemVisible && geometry.item && geometry.item[5] >= 48 && geometry.controlCount > 0 && geometry.reachableControls.every(Boolean), `Video retains usable media cards and every catalog control can be revealed and hit at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.summary?.[5] >= 43.5 && geometry.summaryReachable && geometry.importVisible && geometry.importSummary?.[5] >= 43.5 && geometry.importReachable, `Video keeps Media Library and Import Media reachable with 44px targets at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.documentFixed && geometry.workspaceFixed && geometry.outerScrollStable && geometry.lower[0] >= geometry.workspace[0] - 1 && geometry.lower[2] <= geometry.workspace[2] + 1, `Video scrolling preserves the outer workspace and lower band at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.equal(geometry.clipRow, '4', `Video Clips follow the full mixer's monitor row and divider at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
 };
 
 const saveScreenshot = async (client, name) => {
@@ -849,7 +958,10 @@ let profileDir;
 try {
   const browserPath = browsers.find((candidate) => existsSync(candidate));
   assert.ok(browserPath, "Chrome or Edge is required for the Timeline performance browser gate");
-  vite = spawn(process.execPath, [resolve(appRoot, "node_modules/vite/bin/vite.js"), "--host", host, "--port", String(vitePort), "--strictPort"], { cwd: appRoot, stdio: "ignore" });
+  if (shouldStartVite) {
+    await reserveBrowserCheckPort("SYNDOCAL_VIEWPORT_VITE_PORT", 5193);
+    vite = spawn(process.execPath, [resolve(appRoot, "node_modules/vite/bin/vite.js"), "--host", host, "--port", String(vitePort), "--strictPort"], { cwd: appRoot, stdio: "ignore" });
+  }
   await waitFor(async () => (await fetch(baseUrl)).ok, "Vite fixture server");
   profileDir = await mkdtemp(join(tmpdir(), "syndocal-timeline-performance-"));
   browser = spawn(browserPath, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${profileDir}`, "about:blank"], { stdio: "ignore" });
@@ -865,8 +977,17 @@ try {
 
   for (const viewport of viewports) {
     await client.send("Emulation.setDeviceMetricsOverride", { ...viewport, deviceScaleFactor: 1, mobile: false });
-    await client.send("Page.navigate", { url: baseUrl });
-    await waitFor(() => evaluate(client, "document.querySelector('.app') && document.readyState === 'complete'"), "app mount");
+    const viewportUrl = new URL(baseUrl);
+    viewportUrl.searchParams.set("syndocalTimelineViewport", `${viewport.width}x${viewport.height}`);
+    // Real disclosure clicks activate the document's dirty-project unload
+    // guard. Accept it only during our explicit transition to a fresh fixture.
+    client.expectedFixtureNavigation = true;
+    try {
+      await client.send("Page.navigate", { url: viewportUrl.toString() });
+      await waitFor(() => evaluate(client, `location.href === ${JSON.stringify(viewportUrl.toString())} && document.querySelector('.app') && document.readyState === 'complete'`), "app mount");
+    } finally {
+      client.expectedFixtureNavigation = false;
+    }
     assert.equal(await click(client, '[data-workspace-option="control"]'), true);
 
     assert.equal(await click(client, '[data-edit-domain-navigation] [data-control-mode-option="edit"]'), true);
@@ -948,10 +1069,14 @@ try {
     await saveScreenshot(client, `control-lighting-${viewport.width}x${viewport.height}.png`);
 
     assert.equal(await click(client, '[data-edit-domain-navigation] [data-control-mode-option="mixer"]'), true);
-    await waitFor(() => evaluate(client, "document.querySelector('[data-video-media-library=\"true\"] .videoMediaLibraryItem')?.getBoundingClientRect().height > 48"), "Video Media Library surface");
+    await waitFor(() => evaluate(client, "document.querySelector('#edit-domain-panel-mixer.videoControlPanelMixer')?.getBoundingClientRect().height > 120"), "full Video authoring surface");
+    assert.equal(await clickReachable(client, '#edit-domain-panel-mixer [data-media-library-rail] > summary'), true, 'Video opens Media Library through its disclosure');
+    await waitFor(() => evaluate(client, "document.querySelector('#edit-domain-panel-mixer [data-media-library-rail][open] .videoMediaLibraryItem')?.getBoundingClientRect().height >= 48"), "Video Media Library surface");
     const videoGeometry = await measureControlDomainGeometry(client, 'mixer');
     assertControlDomainGeometry(videoGeometry, viewport, 'mixer');
     await saveScreenshot(client, `control-video-${viewport.width}x${viewport.height}.png`);
+    assert.equal(await clickReachable(client, '#edit-domain-panel-mixer [data-media-library-rail] > summary'), true, 'Video closes Media Library before changing domains');
+    assert.equal(await evaluate(client, "document.querySelector('#edit-domain-panel-mixer [data-media-library-rail]')?.open"), false);
 
     assert.equal(await click(client, '[data-edit-domain-navigation] [data-control-mode-option="live"]'), true);
     assert.equal(await waitFor(() => click(client, '[data-timeline-desk-surface="show"]'), "Timeline Show tab"), true);
@@ -1874,12 +1999,12 @@ try {
     }
     assert.equal(targetProof.every((proof) => proof?.rect[0] > 0 && proof?.rect[1] > 0 && proof.count > 0 && proof.short === 0), true, `Timeline bank, Cue Audio, Phase, and loop controls preserve 44px targets at ${viewport.width}x${viewport.height}: ${JSON.stringify(targetProof)}`);
     assert.equal(state.shortTargets, 0, `Visible Timeline performance controls preserve 44px targets at ${viewport.width}x${viewport.height}`);
-    assert.equal(state.fixedOuter, true, `Timeline disclosures keep app/document outer scroll fixed at ${viewport.width}x${viewport.height}`);
+    assert.equal(state.fixedOuter, true, `Timeline disclosures keep app/document outer scroll fixed at ${viewport.width}x${viewport.height}: ${JSON.stringify(state.outerSize)}`);
     console.log(`${viewport.width}x${viewport.height}: phases=${state.phaseLabels.join('/')} bank=${state.bankItems} media=${state.videoClips}+${state.audioClips} selected=${state.selectedVideo}+${state.selectedAudio} (fixture request/DOM/geometry proof only -- not native or authoritative completion)`);
   }
 
   client.close();
-  const directResizeUrl = `http://${host}:${vitePort}/scripts/fixtures/timeline-direct-resize.html`;
+  const directResizeUrl = new URL("scripts/fixtures/timeline-direct-resize.html", baseUrl).toString();
   const directResizeTarget = await waitFor(async () => {
     const response = await fetch(`http://${host}:${cdpPort}/json/new?${encodeURIComponent(directResizeUrl)}`, { method: "PUT" });
     return response.ok ? response.json() : null;
@@ -1946,8 +2071,17 @@ try {
   assert.equal(trimByKind.get("video_automation").boundary_ms > 8_300, true, "linked Video automation start edge moves later");
   console.log("direct resize fixture: linked Scene/Audio/Video/Lighting automation/Video automation + unlinked local routes + Alt isolate ok (fixture request/DOM proof only -- not native completion)");
 } finally {
-  client?.close();
-  await stopChild(browser);
-  await stopChild(vite);
-  if (profileDir) await rm(profileDir, { recursive: true, force: true });
+  try {
+    // Chrome may reparent on Windows; the launcher PID alone does not own it.
+    if (client) await Promise.race([client.send("Browser.close").catch(() => {}), sleep(2_000)]);
+    await stopChild(browser);
+    if (browser) await waitFor(async () => {
+      try { await fetch(`http://${host}:${cdpPort}/json/version`); return false; }
+      catch { return true; }
+    }, "Timeline browser shutdown", 5_000);
+  } finally {
+    client?.close();
+    await stopChild(vite);
+    if (profileDir) await rm(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
 }

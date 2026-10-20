@@ -146,7 +146,13 @@ const defaultUrl =
   viewportFixture === "none"
     ? defaultOrigin
     : `${defaultOrigin}?syndocalViewportFixture=${encodeURIComponent(viewportFixture)}`;
-const appUrl = process.env.SYNDOCAL_VIEWPORT_URL ?? defaultUrl;
+// A custom server address must not silently discard the scenario's fixture.
+// Preserve explicit fixture overrides and the intentional empty-state mode.
+const resolvedAppUrl = new URL(process.env.SYNDOCAL_VIEWPORT_URL ?? defaultUrl);
+if (viewportFixture !== "none" && !resolvedAppUrl.searchParams.has("syndocalViewportFixture")) {
+  resolvedAppUrl.searchParams.set("syndocalViewportFixture", viewportFixture);
+}
+const appUrl = resolvedAppUrl.toString();
 const fixtureUrl = (fixture) => {
   const url = new URL(appUrl);
   url.searchParams.set("syndocalViewportFixture", fixture);
@@ -23624,15 +23630,26 @@ async function runVjBankViewport(client, viewport) {
       return element.checkVisibility() && rect.width > 0 && rect.height > 0 &&
         style.display !== 'none' && style.visibility !== 'hidden';
     };
-    // Reach through each actual scroll owner, and intersect every clipping
-    // ancestor. A bank-only rectangle would miss a clipped mixer column.
+    // Reach through actual scroll owners and intersect applicable clipping
+    // ancestors. Absolute popups escape overflow scrollers between themselves
+    // and their containing block; the popup's own scroller still applies.
     const reachable = (target) => {
       if (!visible(target)) return false;
       const ancestors = [];
       for (let element = target.parentElement; element; element = element.parentElement) ancestors.push(element);
+      const escapedOverflow = new Set();
+      for (let box = target; box; box = box.parentElement) {
+        if (getComputedStyle(box).position !== 'absolute') continue;
+        const containingBlock = box.offsetParent;
+        if (!(containingBlock instanceof HTMLElement) || !containingBlock.contains(box)) continue;
+        for (let element = box.parentElement; element && element !== containingBlock; element = element.parentElement) {
+          escapedOverflow.add(element);
+        }
+      }
       const saved = ancestors.map((element) => [element, element.scrollLeft, element.scrollTop]);
       for (let pass = 0; pass < 3; pass += 1) {
         for (const element of ancestors) {
+          if (escapedOverflow.has(element)) continue;
           const style = getComputedStyle(element);
           const bounds = element.getBoundingClientRect();
           const rect = target.getBoundingClientRect();
@@ -23646,16 +23663,23 @@ async function runVjBankViewport(client, viewport) {
           }
         }
       }
-      const bounds = ancestors.filter((element) => {
+      const bounds = ancestors.reduce((bounds, element) => {
         const style = getComputedStyle(element);
-        return /(auto|scroll|hidden|clip)/.test(style.overflowX + ' ' + style.overflowY);
-      }).reduce((bounds, element) => {
+        const clips = (overflow) => overflow === 'clip' ||
+          (!escapedOverflow.has(element) && /^(auto|scroll|hidden)$/.test(overflow));
         const rect = element.getBoundingClientRect();
-        return {left: Math.max(bounds.left, rect.left), right: Math.min(bounds.right, rect.right),
-          top: Math.max(bounds.top, rect.top), bottom: Math.min(bounds.bottom, rect.bottom)};
+        return {
+          left: clips(style.overflowX) ? Math.max(bounds.left, rect.left) : bounds.left,
+          right: clips(style.overflowX) ? Math.min(bounds.right, rect.right) : bounds.right,
+          top: clips(style.overflowY) ? Math.max(bounds.top, rect.top) : bounds.top,
+          bottom: clips(style.overflowY) ? Math.min(bounds.bottom, rect.bottom) : bounds.bottom,
+        };
       }, {left: 0, top: 0, right: innerWidth, bottom: innerHeight});
       const rect = target.getBoundingClientRect();
-      const result = rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1 &&
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const hittable = !target.matches('button, input, select, summary') ||
+        (hit !== null && (hit === target || target.contains(hit)));
+      const result = hittable && rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1 &&
         rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1;
       saved.forEach(([element, left, top]) => { element.scrollLeft = left; element.scrollTop = top; });
       return result;
@@ -25864,8 +25888,11 @@ async function exerciseSceneMatrixBankMutationTauriLane(client) {
 
   await openContext(createdBankId);
   await clickVisibleSelector(client, '[data-scene-matrix-context-delete]');
-  await waitForClientCondition(client, 'document.querySelector("[data-scene-matrix-delete-dialog][open]")', 'strict Bank delete dialog');
-  await clickVisibleSelector(client, '[data-scene-matrix-delete-confirm]');
+  assert.equal(
+    await client.evaluate('Boolean(document.querySelector("[data-scene-matrix-delete-dialog]"))'),
+    false,
+    'Undo-able Bank deletion proceeds without a confirmation dialog in the strict command lane',
+  );
   await waitForClientCondition(
     client,
     `!document.querySelector('[data-scene-matrix-column="${createdBankId}"]')`,

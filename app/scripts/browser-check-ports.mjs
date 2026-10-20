@@ -3,8 +3,8 @@ import { createServer } from "node:net";
 
 // Keep ephemeral ports by default; parallel worktrees can pin their assigned
 // Vite/CDP ports. Binding first fails closed if another process owns the port.
-export async function reserveBrowserCheckPort(environmentVariable) {
-  const raw = process.env[environmentVariable] ?? "0";
+export async function reserveBrowserCheckPort(environmentVariable, defaultPort = 0) {
+  const raw = process.env[environmentVariable] ?? String(defaultPort);
   const requestedPort = Number(raw);
   assert.ok(
     /^(0|[1-9]\d*)$/.test(raw)

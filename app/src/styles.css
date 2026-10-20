@@ -39857,6 +39857,55 @@ button.timelineExternalSourceCard:active,
   min-height: 160px;
 }
 
+/* The full Edit Video library is a disclosure over the authored mixer,
+   not content clipped to its short, scrolling Clip row. Anchor it to the
+   mixer so the catalog keeps a usable scrollport without moving the bank. */
+.app:not(.paneWindow-mixer) .layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelMixer {
+  position: relative;
+}
+
+.app:not(.paneWindow-mixer) .layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelMixer .videoMediaLibraryRail {
+  position: static;
+}
+
+.app:not(.paneWindow-mixer) .layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelMixer .videoMediaLibrarySurface {
+  top: 44px;
+  right: auto;
+  left: 8px;
+  width: min(720px, calc(100% - 16px));
+  max-height: min(340px, calc(100% - 100px));
+}
+
+.app:not(.paneWindow-mixer) .layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelMixer .videoMediaLibraryRail > summary,
+.app:not(.paneWindow-mixer) .layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelMixer .videoMixerClipPane .videoMixerPaneHeader
+  .videoMixerSourceDisclosure > summary {
+  min-height: 44px;
+}
+
+/* The shared Edit workspace also supports compact main windows. Keep the
+   outer grid inside that window; wide Outputs/Layer controls scroll locally
+   with their existing sizes, as they do in the separate mixer pane. */
+@media (max-width: 1000px) {
+  .app:not(.paneWindow-mixer) .layout.layoutSharedWorkspace.layoutControl.controlModeMixer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app:not(.paneWindow-mixer) .layoutSharedWorkspace.layoutControl.controlModeMixer
+    > .videoControlPanelMixer {
+    grid-template-columns: minmax(300px, 1fr) minmax(0, 1.2fr);
+  }
+
+  .app:not(.paneWindow-mixer) .layoutSharedWorkspace.layoutControl.controlModeMixer
+    > .videoControlPanelMixer .videoMixerContextPane {
+    overflow: auto;
+  }
+}
+
 .videoClipSlotEmptyState {
   display: grid;
   place-items: center;

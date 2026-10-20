@@ -64,12 +64,15 @@ export function WorkspaceSplitHandle(props: WorkspaceSplitHandleProps) {
       1,
       contentLayoutPx - handleLayoutPx - gapLayoutPx * 2 - firstTrackBonusPx,
     );
-    const rawMinimum = Math.max(0, props.minFirstPx - firstTrackBonusPx) / usableLayoutPx;
+    const firstMinimumPx = Math.max(0, props.minFirstPx - firstTrackBonusPx);
+    const rawMinimum = firstMinimumPx / usableLayoutPx;
     const rawMaximum = 1 - props.minSecondPx / usableLayoutPx;
     let minimumRatio: number;
     let maximumRatio: number;
     if (rawMinimum > rawMaximum) {
-      const fixed = props.minFirstPx / Math.max(1, props.minFirstPx + props.minSecondPx);
+      // The bonus is already reserved outside the ratio-controlled space.
+      // Scale the remaining minimums equally instead of counting it twice.
+      const fixed = firstMinimumPx / Math.max(1, firstMinimumPx + props.minSecondPx);
       minimumRatio = fixed;
       maximumRatio = fixed;
     } else {
