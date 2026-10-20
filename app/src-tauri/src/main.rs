@@ -12370,6 +12370,18 @@ fn commit_authoritative_video_effect_catalog(
     } else {
         None
     };
+    let group_control_change = if before_video.effect_chains == normalized_request.effect_chains
+        && before_video.effect_presets == normalized_request.effect_presets
+        && before_video.transition_buses == normalized_request.transition_buses
+        && normalized_request.composition_layer_orders.is_empty()
+    {
+        project_undo_grouping::single_group_control_change(
+            &before_video.layer_groups,
+            &normalized_request.layer_groups,
+        )
+    } else {
+        None
+    };
     let history_coalesce_key = if let Some((scope, stage, control)) = control_change {
         let (window_label, incarnation) = project_undo_owner_binding(state, owner_id)?;
         project_undo_grouping::isf_control_undo_key(
@@ -12379,6 +12391,15 @@ fn commit_authoritative_video_effect_catalog(
             &scope,
             stage,
             &control,
+        )
+    } else if let Some((group, control)) = group_control_change {
+        let (window_label, incarnation) = project_undo_owner_binding(state, owner_id)?;
+        project_undo_grouping::video_group_control_undo_key(
+            owner_id,
+            &window_label,
+            incarnation,
+            group,
+            control,
         )
     } else {
         String::new()
@@ -31380,6 +31401,36 @@ fn validate_mapping_required_fields_for_midi(
     owner: &str,
     mapping: &mut MidiControlMapping,
 ) -> Result<(), String> {
+    if mapping.action.is_video_group() {
+        let group = mapping
+            .video_group_id
+            .ok_or_else(|| format!("{owner} requires a video group target"))?;
+        if !(1..=9_007_199_254_740_991).contains(&group.0) {
+            return Err(format!(
+                "{owner} video group ID must be a positive safe integer"
+            ));
+        }
+        if mapping.layer_id.is_some()
+            || mapping.clip_slot_id.is_some()
+            || mapping.isf_stage_id.is_some()
+            || mapping.attribute.is_some()
+            || mapping.fixture_id.is_some()
+            || mapping.group_id.is_some()
+            || mapping.cue_id.is_some()
+            || mapping.output_id.is_some()
+            || mapping.video_param.is_some()
+            || mapping.cue_point_index.is_some()
+            || mapping.duration_ms.is_some()
+        {
+            return Err(format!(
+                "{owner} video group target cannot include another target identity"
+            ));
+        }
+    } else if mapping.video_group_id.is_some() {
+        return Err(format!(
+            "{owner} video group ID requires a video group action"
+        ));
+    }
     match &mapping.action {
         MidiControlAction::FixtureAttribute => {
             require_mapping_id(mapping.fixture_id, owner, "fixture")?;
@@ -31458,6 +31509,11 @@ fn validate_mapping_required_fields_for_midi(
         MidiControlAction::VideoLayerStop | MidiControlAction::VideoLayerBlendMode => {
             require_mapping_id(mapping.layer_id, owner, "video layer")?;
         }
+        MidiControlAction::VideoGroupOpacity
+        | MidiControlAction::VideoGroupSolo
+        | MidiControlAction::VideoGroupBypass
+        | MidiControlAction::VideoGroupBlendMode
+        | MidiControlAction::VideoGroupEnabled => {}
         MidiControlAction::VideoIsfStageEnabled => {
             require_mapping_id(mapping.layer_id, owner, "video layer")?;
             require_mapping_id(mapping.isf_stage_id, owner, "effect stage")?;
@@ -31542,6 +31598,7 @@ fn validate_dmx_control_mapping(
         layer_id: mapping.layer_id,
         clip_slot_id: mapping.clip_slot_id,
         isf_stage_id: mapping.isf_stage_id,
+        video_group_id: mapping.video_group_id,
         output_id: mapping.output_id,
         video_param: mapping.video_param.clone(),
         cue_point_index: mapping.cue_point_index,
@@ -31559,6 +31616,36 @@ fn validate_mapping_required_fields_for_osc(
     owner: &str,
     mapping: &mut OscControlMapping,
 ) -> Result<(), String> {
+    if mapping.action.is_video_group() {
+        let group = mapping
+            .video_group_id
+            .ok_or_else(|| format!("{owner} requires a video group target"))?;
+        if !(1..=9_007_199_254_740_991).contains(&group.0) {
+            return Err(format!(
+                "{owner} video group ID must be a positive safe integer"
+            ));
+        }
+        if mapping.layer_id.is_some()
+            || mapping.clip_slot_id.is_some()
+            || mapping.isf_stage_id.is_some()
+            || mapping.attribute.is_some()
+            || mapping.fixture_id.is_some()
+            || mapping.group_id.is_some()
+            || mapping.cue_id.is_some()
+            || mapping.output_id.is_some()
+            || mapping.video_param.is_some()
+            || mapping.cue_point_index.is_some()
+            || mapping.duration_ms.is_some()
+        {
+            return Err(format!(
+                "{owner} video group target cannot include another target identity"
+            ));
+        }
+    } else if mapping.video_group_id.is_some() {
+        return Err(format!(
+            "{owner} video group ID requires a video group action"
+        ));
+    }
     match &mapping.action {
         OscControlAction::FixtureAttribute => {
             require_mapping_id(mapping.fixture_id, owner, "fixture")?;
@@ -31630,6 +31717,11 @@ fn validate_mapping_required_fields_for_osc(
         OscControlAction::VideoLayerStop | OscControlAction::VideoLayerBlendMode => {
             require_mapping_id(mapping.layer_id, owner, "video layer")?;
         }
+        OscControlAction::VideoGroupOpacity
+        | OscControlAction::VideoGroupSolo
+        | OscControlAction::VideoGroupBypass
+        | OscControlAction::VideoGroupBlendMode
+        | OscControlAction::VideoGroupEnabled => {}
         OscControlAction::VideoIsfStageEnabled => {
             require_mapping_id(mapping.layer_id, owner, "video layer")?;
             require_mapping_id(mapping.isf_stage_id, owner, "effect stage")?;
@@ -114965,6 +115057,7 @@ pub(crate) mod tests {
             layer_id: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             video_param: None,
             cue_point_index: None,
             output_id: None,
@@ -115004,6 +115097,7 @@ pub(crate) mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let dmx = DmxControlMapping {
             universe: 0,
@@ -115016,6 +115110,7 @@ pub(crate) mod tests {
             layer_id: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,
@@ -115142,6 +115237,7 @@ pub(crate) mod tests {
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let osc_mapping = OscControlMapping {
             address: "/show/video_master".to_string(),
@@ -115153,6 +115249,7 @@ pub(crate) mod tests {
             layer_id: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             video_param: None,
             cue_point_index: None,
             output_id: None,
@@ -115171,6 +115268,7 @@ pub(crate) mod tests {
             layer_id: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,
@@ -115618,6 +115716,7 @@ pub(crate) mod tests {
                 layer_id: None,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -115671,6 +115770,7 @@ pub(crate) mod tests {
                 layer_id: None,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
                 video_param: None,
                 cue_point_index: None,
                 output_id: None,
@@ -118258,6 +118358,7 @@ f 1 2 3
                     high: 300.0,
                     clip_slot_id: None,
                     isf_stage_id: None,
+                    video_group_id: None,
                 },
                 MidiControlMapping {
                     channel: Some(0),
@@ -118278,6 +118379,7 @@ f 1 2 3
                     high: 1.0,
                     clip_slot_id: None,
                     isf_stage_id: None,
+                    video_group_id: None,
                 },
             ],
         };
@@ -118293,6 +118395,7 @@ f 1 2 3
                 layer_id: None,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
                 output_id: None,
                 video_param: None,
                 cue_point_index: None,
@@ -118362,6 +118465,7 @@ f 1 2 3
                 high: 300.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             }],
             osc_mappings: vec![OscControlMapping {
                 address: "/touchosc/tap".to_string(),
@@ -118373,6 +118477,7 @@ f 1 2 3
                 layer_id: None,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
                 output_id: None,
                 video_param: None,
                 cue_point_index: None,
@@ -118391,6 +118496,7 @@ f 1 2 3
                 layer_id: None,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
                 output_id: None,
                 video_param: None,
                 cue_point_index: None,
@@ -118542,6 +118648,7 @@ f 1 2 3
                 high: 1.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             },
             MidiControlMapping {
                 channel: None,
@@ -118562,6 +118669,7 @@ f 1 2 3
                 high: 1.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             },
             MidiControlMapping {
                 channel: None,
@@ -118582,6 +118690,7 @@ f 1 2 3
                 high: 1.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             },
             MidiControlMapping {
                 channel: None,
@@ -118602,6 +118711,7 @@ f 1 2 3
                 high: 1.0,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
             },
         ])
         .unwrap();
@@ -118638,6 +118748,7 @@ f 1 2 3
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         }])
         .unwrap_err();
         assert!(error.contains("channel"));
@@ -118670,6 +118781,7 @@ f 1 2 3
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         }])
         .unwrap_err();
         assert!(error.contains("feedback Off channel"));
@@ -118693,6 +118805,7 @@ f 1 2 3
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         }])
         .unwrap_err();
         assert!(error.contains("video layer"));
@@ -118716,6 +118829,7 @@ f 1 2 3
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         }])
         .unwrap_err();
         assert!(error.contains("Forward, Reverse, or Bounce"));
@@ -118742,6 +118856,7 @@ f 1 2 3
             duration_ms: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             feedback: None,
             low: 0.0,
             high: 1.0,
@@ -119039,6 +119154,7 @@ f 1 2 3
                 layer_id: None,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
                 output_id: None,
                 video_param: None,
                 cue_point_index: None,
@@ -119056,6 +119172,7 @@ f 1 2 3
                 layer_id: None,
                 clip_slot_id: None,
                 isf_stage_id: None,
+                video_group_id: None,
                 output_id: Some(7),
                 video_param: None,
                 cue_point_index: None,
@@ -119080,6 +119197,7 @@ f 1 2 3
             layer_id: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,
@@ -119100,6 +119218,7 @@ f 1 2 3
             layer_id: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,
@@ -122157,6 +122276,7 @@ f 1 2 3
             high: 1.0,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
         };
         let osc_mapping = OscControlMapping {
             address: "/show/go".to_string(),
@@ -122168,6 +122288,7 @@ f 1 2 3
             layer_id: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             video_param: None,
             cue_point_index: None,
             output_id: None,
@@ -122186,6 +122307,7 @@ f 1 2 3
             layer_id: None,
             clip_slot_id: None,
             isf_stage_id: None,
+            video_group_id: None,
             output_id: None,
             video_param: None,
             cue_point_index: None,

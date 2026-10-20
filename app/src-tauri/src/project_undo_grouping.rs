@@ -47,6 +47,57 @@ pub(crate) fn isf_control_undo_key(
     append_field(&mut key, control);
     key
 }
+pub(crate) fn video_group_control_undo_key(
+    owner: &str,
+    window: &str,
+    incarnation: u64,
+    group: u64,
+    control: &str,
+) -> String {
+    let mut key = owner_key("idle", owner, window, incarnation);
+    append_field(&mut key, "video_group_control");
+    append_field(&mut key, &group.to_string());
+    append_field(&mut key, control);
+    key
+}
+
+/// Only one group's opacity or blend may change. Identity, order, membership,
+/// flags, transform and all other group metadata must remain identical.
+pub(crate) fn single_group_control_change(
+    before: &[protocol::VideoLayerGroupSummary],
+    after: &[protocol::VideoLayerGroupSummary],
+) -> Option<(u64, &'static str)> {
+    if before.len() != after.len() {
+        return None;
+    }
+    let mut changed = None;
+    for (old, new) in before.iter().zip(after) {
+        if old == new {
+            continue;
+        }
+        if changed.is_some() || new.id.0 == 0 || old.id != new.id {
+            return None;
+        }
+        let mut restored = new.clone();
+        let control = match (old.opacity != new.opacity, old.blend_mode != new.blend_mode) {
+            (true, false) if old.opacity.is_finite() && new.opacity.is_finite() => {
+                restored.opacity = old.opacity;
+                "opacity"
+            }
+            (false, true) => {
+                restored.blend_mode = old.blend_mode.clone();
+                "blend"
+            }
+            _ => return None,
+        };
+        if &restored != old {
+            return None;
+        }
+        changed = Some((new.id.0, control));
+    }
+    changed
+}
+
 /// Caller additionally requires E/R/H continuity and empty redo stack.
 pub(crate) fn history_keys_can_coalesce(
     previous: &str,
@@ -261,5 +312,113 @@ mod tests {
             count: 2.0,
         });
         assert!(single_isf_control_change(&before, &after).is_none());
+    }
+
+    fn group_catalog() -> Vec<VideoLayerGroupSummary> {
+        [(10, vec![1, 2]), (20, vec![3])]
+            .into_iter()
+            .map(|(id, layer_ids)| VideoLayerGroupSummary {
+                id: VideoLayerGroupId(id),
+                label: format!("Group {id}"),
+                layer_ids,
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn continuous_group_changes_have_stable_targets() {
+        let before = group_catalog();
+        let mut after = before.clone();
+        after[1].opacity = 0.25;
+        assert_eq!(
+            single_group_control_change(&before, &after),
+            Some((20, "opacity"))
+        );
+        let mut after = before.clone();
+        after[1].blend_mode = VideoBlendMode::Screen;
+        assert_eq!(
+            single_group_control_change(&before, &after),
+            Some((20, "blend"))
+        );
+        let mut reordered = before.clone();
+        reordered.reverse();
+        let mut after = reordered.clone();
+        after[0].opacity = 0.25;
+        assert_eq!(
+            single_group_control_change(&reordered, &after),
+            Some((20, "opacity"))
+        );
+        assert!(single_group_control_change(&before, &before).is_none());
+        assert!(single_group_control_change(&[], &[]).is_none());
+    }
+
+    #[test]
+    fn group_metadata_flags_membership_and_order_never_join_control_history() {
+        let before = group_catalog();
+        let edits: &[fn(&mut [VideoLayerGroupSummary])] = &[
+            |groups| groups[0].label.push_str(" changed"),
+            |groups| groups[0].composition_id = 2,
+            |groups| groups[0].layer_ids.push(4),
+            |groups| groups[0].layer_ids.reverse(),
+            |groups| groups[0].enabled = false,
+            |groups| groups[0].solo = true,
+            |groups| groups[0].bypassed = true,
+            |groups| groups[0].transform = Some(Transform2D::default()),
+            |groups| groups[0].id = VideoLayerGroupId(77),
+            |groups| groups[1].label.push_str(" changed"),
+            |groups| groups.swap(0, 1),
+        ];
+        for edit in edits {
+            for with_opacity in [false, true] {
+                let mut after = before.clone();
+                if with_opacity {
+                    after[0].opacity = 0.25;
+                }
+                edit(&mut after);
+                assert!(single_group_control_change(&before, &after).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn multiple_or_unidentified_group_controls_stay_separate() {
+        let before = group_catalog();
+        let mut after = before.clone();
+        after[0].opacity = 0.25;
+        after[0].blend_mode = VideoBlendMode::Add;
+        assert!(single_group_control_change(&before, &after).is_none());
+        let mut after = before.clone();
+        after[0].opacity = 0.25;
+        after[1].opacity = 0.5;
+        assert!(single_group_control_change(&before, &after).is_none());
+        assert!(single_group_control_change(&before, &before[..1]).is_none());
+        assert!(single_group_control_change(&before[..1], &before).is_none());
+        let mut unidentified = before.clone();
+        unidentified[0].id = VideoLayerGroupId(0);
+        let mut after = unidentified.clone();
+        after[0].opacity = 0.25;
+        assert!(single_group_control_change(&unidentified, &after).is_none());
+        let mut after = before.clone();
+        after[0].opacity = f32::NAN;
+        assert!(single_group_control_change(&before, &after).is_none());
+    }
+
+    #[test]
+    fn group_control_history_is_scoped_to_owner_target_and_idle_window() {
+        let key = video_group_control_undo_key("owner", "main", 7, 10, "opacity");
+        assert!(history_keys_can_coalesce(&key, &key, 1000, 1750, 750));
+        assert!(!history_keys_can_coalesce(&key, &key, 1000, 1751, 750));
+        assert!(!history_keys_can_coalesce(&key, &key, 1000, 999, 750));
+        for other in [
+            video_group_control_undo_key("other", "main", 7, 10, "opacity"),
+            video_group_control_undo_key("owner", "other", 7, 10, "opacity"),
+            video_group_control_undo_key("owner", "main", 8, 10, "opacity"),
+            video_group_control_undo_key("owner", "main", 7, 20, "opacity"),
+            video_group_control_undo_key("owner", "main", 7, 10, "blend"),
+            isf_control_undo_key("owner", "main", 7, "group10", 10, "opacity"),
+        ] {
+            assert!(!history_keys_can_coalesce(&key, &other, 1000, 1001, 750));
+        }
     }
 }

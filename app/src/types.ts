@@ -257,7 +257,12 @@ export type MidiControlAction =
   | "VideoTransitionKind"
   | "VideoTransitionTime"
   | "VideoIsfStageEnabled"
-  | "VideoIsfParam";
+  | "VideoIsfParam"
+  | "VideoGroupOpacity"
+  | "VideoGroupSolo"
+  | "VideoGroupBypass"
+  | "VideoGroupBlendMode"
+  | "VideoGroupEnabled";
 
 export interface MidiControlMapping {
   channel?: number | null;
@@ -277,6 +282,8 @@ export interface MidiControlMapping {
   clip_slot_id?: number | null;
   /** Stable effect-stage id for `VideoIsfStageEnabled` / `VideoIsfParam`. */
   isf_stage_id?: number | null;
+  /** Stable video group identity; distinct from the lighting group_id. */
+  video_group_id?: number | null;
   feedback?: MidiControlFeedback | null;
   low: number;
   high: number;
@@ -435,12 +442,19 @@ export type OscControlAction =
   | "VideoTransitionKind"
   | "VideoTransitionTime"
   | "VideoIsfStageEnabled"
-  | "VideoIsfParam";
+  | "VideoIsfParam"
+  | "VideoGroupOpacity"
+  | "VideoGroupSolo"
+  | "VideoGroupBypass"
+  | "VideoGroupBlendMode"
+  | "VideoGroupEnabled";
 
 export interface OscControlMapping {
   /** Optional stable identities; absent in projects saved before Perform Learn. */
   clip_slot_id?: number | null;
   isf_stage_id?: number | null;
+  /** Stable video group identity; distinct from the lighting group_id. */
+  video_group_id?: number | null;
   address: string;
   action: OscControlAction;
   fixture_id?: number | null;
@@ -462,6 +476,8 @@ export interface DmxControlMapping {
   /** Optional stable identities; absent in projects saved before Perform Learn. */
   clip_slot_id?: number | null;
   isf_stage_id?: number | null;
+  /** Stable video group identity; distinct from the lighting group_id. */
+  video_group_id?: number | null;
   universe: number;
   channel: number;
   action: DmxControlAction;
@@ -2558,6 +2574,10 @@ export interface VideoLayerGroupSummary {
   bypassed: boolean;
   transform?: Transform2D | null;
 }
+
+/** Only the group mix controls accepted from a learned input. */
+export type VideoGroupControlPatch = Partial<Pick<VideoLayerGroupSummary,
+  "enabled" | "opacity" | "blend_mode" | "solo" | "bypassed">>;
 
 export interface VideoCompositionLayerOrder {
   composition_id: number;
