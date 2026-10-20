@@ -17,6 +17,11 @@ export const performRoutedActions = [
   "VideoTransitionTime",
   "VideoIsfStageEnabled",
   "VideoIsfParam",
+  "VideoGroupOpacity",
+  "VideoGroupSolo",
+  "VideoGroupBypass",
+  "VideoGroupBlendMode",
+  "VideoGroupEnabled",
 ] as const;
 export type PerformRoutedAction = (typeof performRoutedActions)[number];
 
@@ -31,8 +36,19 @@ export const performTriggerActions: ReadonlySet<string> = new Set<PerformRoutedA
   "VideoTake",
   "VideoLayerStop",
   "VideoIsfStageEnabled",
+  "VideoGroupSolo",
+  "VideoGroupBypass",
+  "VideoGroupEnabled",
 ]);
 export const isPerformTriggerAction = (action: string) => performTriggerActions.has(action);
+
+export const isPerformGroupAction = (action: string): boolean =>
+  action === "VideoGroupOpacity" || action === "VideoGroupSolo" || action === "VideoGroupBypass"
+  || action === "VideoGroupBlendMode" || action === "VideoGroupEnabled";
+
+export const isPerformToggleAction = (action: string): boolean =>
+  action === "VideoIsfStageEnabled" || action === "VideoGroupSolo"
+  || action === "VideoGroupBypass" || action === "VideoGroupEnabled";
 
 export const performBlendModes: readonly VideoBlendMode[] = [
   "Normal", "Add", "Multiply", "Screen", "Overlay", "Subtract", "Difference", "Lighten", "Darken", "SoftLight",
@@ -84,6 +100,8 @@ export interface PerformRoutedInput {
   layer_id?: number | null;
   clip_slot_id?: number | null;
   isf_stage_id?: number | null;
+  /** Stable video group id; independent of layer and lighting group ids. */
+  video_group_id?: number | null;
   /** ISF control name for `VideoIsfParam`. */
   control?: string | null;
   /** Input position 0..1 before the mapping range. */
@@ -112,7 +130,11 @@ export function performRoutedInputFromPayload(value: unknown): PerformRoutedInpu
   const layer = optionalId(raw.layer_id);
   const slot = optionalId(raw.clip_slot_id);
   const stage = optionalId(raw.isf_stage_id);
-  if (layer === undefined || slot === undefined || stage === undefined) return null;
+  const group = optionalId(raw.video_group_id);
+  if (layer === undefined || slot === undefined || stage === undefined || group === undefined) return null;
+  if (isPerformGroupAction(raw.action)
+    ? group === null || layer !== null || slot !== null || stage !== null || raw.control != null
+    : group !== null) return null;
   if (raw.control !== undefined && raw.control !== null
     && (typeof raw.control !== "string" || raw.control.length === 0 || raw.control.length > 128)) return null;
   if (typeof raw.position !== "number" || !Number.isFinite(raw.position)) return null;
@@ -124,6 +146,7 @@ export function performRoutedInputFromPayload(value: unknown): PerformRoutedInpu
     layer_id: layer,
     clip_slot_id: slot,
     isf_stage_id: stage,
+    ...(group !== null ? { video_group_id: group } : {}),
     control: typeof raw.control === "string" ? raw.control : null,
     position: raw.position,
     value: raw.value,
@@ -136,19 +159,20 @@ export function performRoutedInputFromPayload(value: unknown): PerformRoutedInpu
 export function performRoutedInputFromBeatMapping(mapping: MidiControlMapping): PerformRoutedInput | null {
   if (mapping.message !== "BeatDivision" || !isPerformTriggerAction(mapping.action)) return null;
   const action = mapping.action as PerformRoutedAction;
-  return {
+  const input = performRoutedInputFromPayload({
     action,
     layer_id: mapping.layer_id ?? null,
     clip_slot_id: mapping.clip_slot_id ?? null,
     isf_stage_id: mapping.isf_stage_id ?? null,
+    video_group_id: mapping.video_group_id ?? null,
     control: null,
     position: 1,
     value: 1,
     active: true,
-    // A beat flips a stage once per boundary.
-    toggle: action === "VideoIsfStageEnabled",
-    source: "beat",
-  };
+    // A beat flips a stage or group flag once per boundary.
+    toggle: isPerformToggleAction(action),
+  });
+  return input ? { ...input, source: "beat" } : null;
 }
 
 /** The renderer sees the engine clock only as often as it applies a snapshot
@@ -248,11 +272,12 @@ export const midiSourceDescription = (mapping: Pick<MidiControlMapping, "message
 
 /** The stored action of a mapping created from a target. */
 export const performMappingKey = (mapping: Pick<MidiControlMapping,
-  "action" | "layer_id" | "clip_slot_id" | "isf_stage_id" | "attribute">): string => JSON.stringify([
+  "action" | "layer_id" | "clip_slot_id" | "isf_stage_id" | "video_group_id" | "attribute">): string => JSON.stringify([
   mapping.action,
   mapping.layer_id ?? null,
   mapping.clip_slot_id ?? null,
   mapping.isf_stage_id ?? null,
+  mapping.video_group_id ?? null,
   mapping.action === "VideoIsfParam" ? mapping.attribute ?? null : null,
 ]);
 

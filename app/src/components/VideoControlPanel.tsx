@@ -67,6 +67,8 @@ export interface VideoControlPanelProps {
     outputs: VideoOutputSummary[];
     transitionRuntime: VideoLayerTransitionRuntimeSnapshot;
     busy?: boolean;
+    canvasAuthority?: string;
+    onLoadGroupPreview?: (compositionId: number, width: number, height: number) => Promise<string>;
     onApplyCatalog: (catalog: VideoEffectCatalog) => void | Promise<unknown>;
     onImportIsf: (scope: VideoEffectScope) => void | Promise<unknown>;
     onApplyPreset: (scope: VideoEffectScope, presetId: VideoEffectPresetId) => void | Promise<unknown>;

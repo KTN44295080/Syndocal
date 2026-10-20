@@ -1001,6 +1001,7 @@ import {
   beatDivisionLabel,
   createBeatTriggerScheduler,
   isPerformTriggerAction,
+  isPerformGroupAction,
   midiSourceDescription,
   type PerformRoutedInput,
 } from "./controlMappingPerform";
@@ -1055,6 +1056,7 @@ const tauriBackendUnavailableMessage = "Syndocal desktop backend is not connecte
 
 const emptyVjPreviewTransport = (): VjPreviewTransportSummary => ({
   layer_id: null,
+  slot_id: null,
   playing: false,
   position_ms: 0,
   duration_ms: null,
@@ -18677,7 +18679,10 @@ export default function App() {
     mode: controlLearnMode,
     busy: controlLearnBusy,
     setBusy: setControlLearnBusy,
-    targets: controlMappingTargetsFromElement,
+    targets: element => controlMappingTargetsFromElement(element).map(target =>
+      isPerformGroupAction(target.action)
+        ? { ...target, label: translateUiText(target.label, uiLocale()) }
+        : target),
     select: selectControlLearnElement,
     message: setMessage,
     assign: (request) => {
@@ -21113,6 +21118,8 @@ export default function App() {
     setVideoLayerIsfControl,
     triggerVideoLayerIsfEvent,
     applyVideoEffectCatalog,
+    loadVideoGroupCanvasPreview,
+    patchVideoLayerGroup,
     importVideoEffectScopeIsf,
     applyVideoEffectPreset,
     removeVideoEffectChain,
@@ -21478,6 +21485,7 @@ export default function App() {
     layerId: number,
     expectedAuthority?: ProjectAuthorityToken,
     onFailure?: (reason: string) => void,
+    slotId?: VideoClipSlotId,
   ) => {
     const resultIsCurrent = expectedAuthority
       ? () => isProjectAuthorityIdentityCurrent(expectedAuthority)
@@ -21492,19 +21500,19 @@ export default function App() {
       : { layerId };
     const summary = await runVjPreviewTransportCommand(
       "stage_vj_preview_layer",
-      args,
+      { ...args, ...(slotId === undefined ? {} : { slotId }) },
       {
         resultIsCurrent,
         // Automatic Bootstrap staging reports through the first-run status;
         // never let a stale B request write a transient Preview error into C.
-        showError: expectedAuthority === undefined,
+        showError: expectedAuthority === undefined || slotId !== undefined,
         onError: onFailure,
       },
     );
     if (!summary) return false;
     if (resultIsCurrent && !resultIsCurrent()) return false;
-    if (summary.layer_id !== layerId) {
-      const mismatch = `Preview staged layer ${summary.layer_id ?? "none"}, expected ${layerId}.`;
+    if (summary.layer_id !== layerId || (summary.slot_id ?? null) !== (slotId ?? null)) {
+      const mismatch = translateUiText("Preview changed. Audition the clip again.", uiLocale());
       setVjPreviewTransportError(mismatch);
       onFailure?.(mismatch);
       return false;
@@ -21633,25 +21641,50 @@ export default function App() {
     />
   );
   const previewVideoClipSlot = async (slotId: VideoClipSlotId) => {
-    // B3 has no isolated clip-slot preview transport. Selecting the pad reveals
-    // its catalog thumbnail without staging or claiming the whole layer.
+    const layer = selectedVideoClipSlotLayer();
+    if (!layer?.clip_slots?.some((slot) => slot.id === slotId)) return false;
     authorizeVideoThumbnailAccess();
     setSelectedVideoClipSlotId(slotId);
+    // Capture both identities before dispatch; selecting or queueing another
+    // cell while staging is in flight cannot retarget this Preview session.
+    return stageVjPreviewLayer(layer.id, captureProjectAuthorityIdentity(), undefined, slotId);
   };
-  const takeSelectedVideoClipSlot = async () => {
-    const layer = selectedVideoClipSlotLayer();
-    if (!layer) return;
+  const videoClipSlotTakeEnabled = () => {
+    if (vjPreviewTransportBusy()) return false;
+    const preview = vjPreviewTransport();
+    if (preview.slot_id != null) {
+      const layer = snapshot().video.layers.find((candidate) => candidate.id === preview.layer_id);
+      const runtime = videoClipRuntime().layers.find((candidate) => candidate.layer_id === preview.layer_id);
+      return Number.isSafeInteger(preview.generation) && preview.generation > 0 &&
+        Boolean(layer?.clip_slots?.some((slot) => slot.id === preview.slot_id)) && !runtime?.transition;
+    }
     const runtime = selectedVideoClipSlotRuntime();
-    const activeTransition = runtime?.transition ?? null;
+    return runtime?.transition != null || runtime?.queued_slot_id != null;
+  };
+  const videoClipSlotTakeLabel = () => vjPreviewTransport().slot_id != null
+    ? "Take Preview"
+    : selectedVideoClipSlotRuntime()?.transition ? "Reverse" : "Take";
+  const takeSelectedVideoClipSlot = async () => {
+    if (!videoClipSlotTakeEnabled()) return;
+    const preview = vjPreviewTransport();
+    const auditioning = preview.slot_id != null;
+    const layer = auditioning
+      ? snapshot().video.layers.find((candidate) => candidate.id === preview.layer_id)
+      : selectedVideoClipSlotLayer();
+    if (!layer) return;
+    const runtime = videoClipRuntime().layers.find((candidate) => candidate.layer_id === layer.id);
+    const activeTransition = auditioning ? null : runtime?.transition ?? null;
     const result = await launchVideoClipSlot(
       layer.id,
-      activeTransition?.outgoing_slot_id ?? null,
+      auditioning ? preview.slot_id! : activeTransition?.outgoing_slot_id ?? null,
       activeTransition?.kind ?? videoClipTakeKind(),
       activeTransition?.duration ?? {
         unit: videoClipTakeDurationUnit(),
         value_milliunits: videoClipTakeDurationMilliunits(),
       },
+      auditioning ? preview.generation : undefined,
     );
+    if (auditioning) await readVjPreviewTransport();
     if (result && videoProgramAudioEnabled() && videoLayerHasMonitorableAudio(layer.id)) {
       await refreshVideoAudioMonitorStatus(true);
     }
@@ -21723,9 +21756,13 @@ export default function App() {
     outputHealth: liveVideoOutputHealth.outputs,
     outputHealthError: liveVideoOutputHealth.error,
   });
-  const liveVideoPreviewLabel = createMemo(() =>
-    snapshot().video.layers.find((layer) => layer.id === videoPreviewLayerId())?.label ?? null,
-  );
+  const liveVideoPreviewLabel = createMemo(() => {
+    const preview = vjPreviewTransport();
+    const layer = snapshot().video.layers.find((candidate) => candidate.id === preview.layer_id);
+    const slot = layer?.clip_slots?.find((candidate) => candidate.id === preview.slot_id);
+    const asset = slot && snapshot().video.media_assets.find((candidate) => candidate.id === slot.media_asset_id);
+    return slot ? `${layer?.label ?? ""} · ${asset?.label ?? preview.source_name ?? slot.id}` : layer?.label ?? null;
+  });
   const liveVideoProgramLabel = createMemo(() =>
     snapshot().video.outputs.find((output) => output.id === selectedVideoOutputId())?.label ?? null,
   );
@@ -22029,15 +22066,16 @@ export default function App() {
   };
   // Perform MIDI/OSC/DMX targets and beat-division triggers run the same functions the
   // on-screen pad, Take button, selects and FX controls call.
+  const performInputSuspended = () => Boolean(paneWindow) || controlLearnMode() !== null || controlLearnBusy()
+    || isInAppDialogOpen() || Boolean(document.querySelector("dialog[open]"));
   const performDispatcher = createPerformControlDispatcher({
     layers: () => snapshot().video.layers,
     effectCatalog: videoEffectCatalog,
+    patchGroup: patchVideoLayerGroup,
+    inputSuspended: performInputSuspended,
     projectEpoch: () => captureProjectAuthorityIdentity().project_epoch,
     clipRuntime: (layerId) => videoClipRuntime().layers.find((runtime) => runtime.layer_id === layerId) ?? null,
-    takeEnabled: () => {
-      const runtime = selectedVideoClipSlotRuntime();
-      return runtime?.transition != null || runtime?.queued_slot_id != null;
-    },
+    takeEnabled: videoClipSlotTakeEnabled,
     selectLayer: selectVideoClipSlotLayer,
     selectSlot: selectVideoClipSlot,
     queueSlot: queueVideoClipSlot,
@@ -22072,7 +22110,7 @@ export default function App() {
   const beatTriggers = createBeatTriggerScheduler({
     mappings: midiMappings,
     dispatch: (input) => { void performDispatcher.dispatch(input); },
-    suspended: () => controlLearnMode() !== null || controlLearnBusy(),
+    suspended: performInputSuspended,
   });
   createEffect(() => {
     const clock = snapshot().clock;
@@ -23482,6 +23520,12 @@ export default function App() {
     [nextLayerIds[index], nextLayerIds[nextIndex]] = [nextLayerIds[nextIndex], nextLayerIds[index]];
     void setVideoCompositionLayers(compositionId, nextLayerIds);
   };
+
+  // Native build availability is needed before the operator opens Setup.
+  // This read never initializes a sender or requires output ownership.
+  onMount(() => {
+    if (isTauriRuntime()) void refreshVideoRuntimeStatus(true);
+  });
 
   const addDisplayVideoOutput = async (monitor: VideoDisplayMonitorDescriptor) => {
     if (!isTauriRuntime()) {
@@ -28006,11 +28050,8 @@ export default function App() {
             ),
           }}
           clipSlotTake={{
-            get enabled() {
-              const runtime = selectedVideoClipSlotRuntime();
-              return runtime?.transition != null || runtime?.queued_slot_id != null;
-            },
-            get label() { return selectedVideoClipSlotRuntime()?.transition ? "Reverse" : "Take"; },
+            get enabled() { return videoClipSlotTakeEnabled(); },
+            get label() { return videoClipSlotTakeLabel(); },
             onTake: takeSelectedVideoClipSlot,
           }}
           transitionBuses={{
@@ -28465,6 +28506,9 @@ export default function App() {
           outputMonitorId={videoOutputMonitorId()}
           outputFullscreen={videoOutputFullscreen()}
           outputEndpoint={videoOutputEndpoint()}
+          syphonAvailable={videoRuntimeStatus()?.backends.some(
+            (backend) => backend.id === "syphon" && backend.state === "Available",
+          ) ?? false}
           mappingPresetLabel={videoOutputMappingPresetLabel()}
           selectedMappingPresetLabel={selectedVideoOutputMappingPresetLabel()}
           selectedOutputId={selectedVideoOutputId()}
@@ -28727,11 +28771,8 @@ export default function App() {
             ),
           }}
           clipSlotTake={{
-            get enabled() {
-              const runtime = selectedVideoClipSlotRuntime();
-              return runtime?.transition != null || runtime?.queued_slot_id != null;
-            },
-            get label() { return selectedVideoClipSlotRuntime()?.transition ? "Reverse" : "Take"; },
+            get enabled() { return videoClipSlotTakeEnabled(); },
+            get label() { return videoClipSlotTakeLabel(); },
             onTake: takeSelectedVideoClipSlot,
           }}
           mediaLibrary={mergeThumbnailViewProps(thumbnailController.assetThumbnailView, {
@@ -28771,6 +28812,8 @@ export default function App() {
             get transitionRuntime() { return videoTransitionRuntime(); },
             get busy() { return isfEventPulseBusy(); },
             onApplyCatalog: applyVideoEffectCatalog,
+            get canvasAuthority() { return JSON.stringify(projectMappingsAuthority()); },
+            onLoadGroupPreview: loadVideoGroupCanvasPreview,
             onImportIsf: importVideoEffectScopeIsf,
             onApplyPreset: applyVideoEffectPreset,
             onRemoveChain: removeVideoEffectChain,
@@ -28877,6 +28920,8 @@ export default function App() {
                   get transitionRuntime() { return videoTransitionRuntime(); },
                   get busy() { return isfEventPulseBusy(); },
                   onApplyCatalog: applyVideoEffectCatalog,
+                  get canvasAuthority() { return JSON.stringify(projectMappingsAuthority()); },
+                  onLoadGroupPreview: loadVideoGroupCanvasPreview,
                   onImportIsf: importVideoEffectScopeIsf,
                   onApplyPreset: applyVideoEffectPreset,
                   onRemoveChain: removeVideoEffectChain,

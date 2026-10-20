@@ -24,7 +24,7 @@ export function LiveVideoOutputHealthReadout(props: {
       data-output-health-id={`${output.kind}:${output.outputId}`}
     >
       <span class="liveVideoOutputHealthCadence">
-      <span data-no-localize>{output.kind === "display" ? "Display" : output.kind === "spout" ? "Spout" : "NDI"} #{output.outputId}</span>
+      <span data-no-localize>{output.kind === "display" ? "Display" : output.kind === "spout" ? "Spout" : output.kind === "syphon" ? "Syphon" : "NDI"} #{output.outputId}</span>
       <span>Output</span>
       <span data-no-localize>{output.sampleCount >= 2 && (output.lastFrameAgeMs ?? 0) < 1_000 ? output.deliveredFps.toFixed(1) : "—"}fps</span>
       <span title={`Missed output intervals in the last 10 s: ${recentMissed(output)}; total since output start: ${output.droppedFrames}`}>Missed (10 s)</span>

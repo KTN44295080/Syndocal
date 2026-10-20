@@ -36,6 +36,8 @@ export interface ControlMappingTarget {
   clip_slot_id?: number | null;
   /** Stable effect-stage id (`VideoIsfStageEnabled` / `VideoIsfParam`). */
   isf_stage_id?: number | null;
+  /** Stable video group id, never a strip position or lighting group id. */
+  video_group_id?: number | null;
   /** Explicitly transport-specific targets may opt out of OSC/DMX. */
   midi_only?: boolean;
   low?: number;
@@ -129,6 +131,7 @@ export const controlMappingTargetKey = (target: ControlMappingTarget) => JSON.st
   duration_ms: target.duration_ms ?? null,
   clip_slot_id: target.clip_slot_id ?? null,
   isf_stage_id: target.isf_stage_id ?? null,
+  video_group_id: target.video_group_id ?? null,
 });
 
 const mappingFieldsForTarget = (target: SharedControlMappingTarget) => ({
@@ -148,6 +151,8 @@ const mappingFieldsForTarget = (target: SharedControlMappingTarget) => ({
     ? { clip_slot_id: target.clip_slot_id } : {}),
   ...(target.isf_stage_id !== null && target.isf_stage_id !== undefined
     ? { isf_stage_id: target.isf_stage_id } : {}),
+  ...(target.video_group_id !== null && target.video_group_id !== undefined
+    ? { video_group_id: target.video_group_id } : {}),
 });
 
 /** The persisted fields of a MIDI mapping. Perform ids are written only when the
@@ -210,7 +215,8 @@ export const midiMappingDrivesTarget = (mapping: MidiControlMapping, target: Con
     && (mapping.video_param ?? null) === (fields.video_param ?? null)
     && (mapping.cue_point_index ?? null) === (fields.cue_point_index ?? null)
     && (mapping.clip_slot_id ?? null) === (fields.clip_slot_id ?? null)
-    && (mapping.isf_stage_id ?? null) === (fields.isf_stage_id ?? null);
+    && (mapping.isf_stage_id ?? null) === (fields.isf_stage_id ?? null)
+    && (mapping.video_group_id ?? null) === (fields.video_group_id ?? null);
 };
 
 export const oscMappingsFromLearnedControl = (

@@ -91,6 +91,7 @@ export const initialVideoDisplayMonitor = (
 type VideoOutputCreatePanelProps = {
   label: string;
   kind: VideoOutputKind;
+  syphonAvailable: boolean;
   width: number;
   height: number;
   fadeMs: number;
@@ -250,13 +251,17 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
           <Show when={props.kind === "Display"} fallback={
             <>
               <p class="hint videoOutputQuickHint" role="status">
-                Configure the output type and endpoint in Advanced output settings.
+                {props.kind === "SyphonServer" && props.syphonAvailable
+                  ? "Syphon output is available for configured project outputs. Creating external outputs is not available yet."
+                  : "Configure the output type and endpoint in Advanced output settings."}
               </p>
               <button class="primary" data-video-output-add disabled>
                 Add configured output
               </button>
               <p class="inlineWarning" role="status" data-video-output-kind-status>
-                External output creation is unavailable until its canonical transport is configured; nothing was applied.
+                {props.kind === "SyphonServer" && !props.syphonAvailable
+                  ? "Syphon output is available on macOS only."
+                  : "External output creation is unavailable until its canonical transport is configured; nothing was applied."}
               </p>
             </>
           }>
@@ -364,7 +369,13 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
                   <option value="Display">Display</option>
                   <option value="NdiSender">NDI Sender</option>
                   <option value="SpoutSender">Spout Sender</option>
-                  <option value="SyphonServer">Syphon Server</option>
+                  <Show when={props.syphonAvailable} fallback={
+                    <Show when={props.kind === "SyphonServer"}>
+                      <option value="SyphonServer" disabled>Syphon Server (macOS only)</option>
+                    </Show>
+                  }>
+                    <option value="SyphonServer">Syphon Server</option>
+                  </Show>
                 </select>
               </label>
             </div>
@@ -400,9 +411,14 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
                 </label>
               </div>
             </Show>
+            <Show when={props.kind === "SyphonServer" && props.syphonAvailable}>
+              <p class="hint" data-syphon-output-help>
+                Publishes video to Syphon clients on this Mac. Enable Output to start; Standby stops transmission.
+              </p>
+            </Show>
             <Show when={props.kind !== "Display"}>
               <label>
-                Endpoint
+                {props.kind === "SyphonServer" ? "Server name" : "Endpoint"}
                 <input value={props.endpoint} onInput={(event) => props.onEndpoint(event.currentTarget.value)} />
               </label>
             </Show>

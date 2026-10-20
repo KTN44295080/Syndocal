@@ -40,7 +40,7 @@ const fallbackLabel = (kind: "preview" | "program", status: LiveVideoMonitorStat
   if (status === "desktop-required") return "Open the desktop app for live video.";
   if (status === "paused") return "Monitor paused outside the VJ desk.";
   if (status === "error") return "The last frame is preserved while the monitor retries.";
-  return kind === "preview" ? "Stage a clip with its P button." : "Waiting for a program source.";
+  return kind === "preview" ? "Use Inspect or Shift + 1–0 to audition a clip, or P for the current layer." : "Waiting for a program source.";
 };
 
 const timingLabel = (state: LiveVideoMonitorBusState) => {

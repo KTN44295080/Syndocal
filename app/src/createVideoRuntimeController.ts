@@ -6,6 +6,7 @@ import { requestNativeThumbnail, type ThumbnailStartChannel } from "./nativeThum
 import { videoFrameToDataUrl } from "./videoFrameCanvas";
 import { normalizeVideoClipRuntimeSnapshot, normalizeVideoLayerTransitionRuntimeSnapshot } from "./videoRuntimeCollectionWire";
 import { defaultColorAdjust, defaultFxAdjust, defaultTransform } from "./videoLayerDefaults";
+import { patchVideoGroup } from "./videoLayerGroups";
 import {
   mediaAssetImportReportMessage,
   mediaAssetRelinkOutcomeMessage,
@@ -42,6 +43,7 @@ import type {
   VideoFrame,
   VideoEffectCatalog,
   VideoEffectCatalogUpdate,
+  VideoGroupControlPatch,
   VideoEffectCatalogAuthoritativeResult,
   VideoEffectCatalogTerminalEnvelope,
   VideoEffectPresetId,
@@ -189,13 +191,18 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     options.setMessage("Wait for the active FX Event pulse to finish.");
     return false;
   };
-  const commitVideoEffectCatalog = async (catalog: VideoEffectCatalogUpdate) => {
+  type CatalogRequest = VideoEffectCatalogUpdate | (() => VideoEffectCatalogUpdate | null);
+  const commitVideoEffectCatalog = async (catalog: CatalogRequest) => {
     if (!canMutateVideoIsf()) return null;
     const beforePreflight = options.getCurrentProjectAuthority();
     const { authority } = await options.prepareMediaAssetOperationStart(beforePreflight);
+    // A mapped group patch must read the catalog after pending authored writes
+    // have settled; a full catalog captured before preflight could overwrite them.
+    const request = typeof catalog === "function" ? catalog() : catalog;
+    if (!request) return null;
     const requestId = nextVideoEffectCatalogRequestId();
     const args = {
-      request: catalog,
+      request,
       requestId,
       expectedRevision: authority.project_revision,
       expectedCheckpointHash: authority.checkpoint_hash,
@@ -237,7 +244,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     await refreshVideoPreviewDiagnostics(true);
     return result;
   };
-  const applyVideoEffectCatalog = async (catalog: VideoEffectCatalogUpdate) => {
+  const applyVideoEffectCatalog = async (catalog: CatalogRequest) => {
     try {
       return await commitVideoEffectCatalog(catalog);
     } catch (error) {
@@ -254,6 +261,17 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       transition_buses: structuredClone(video.transition_buses ?? []),
     };
   };
+  const patchVideoLayerGroup = (
+    groupId: number,
+    patch: VideoGroupControlPatch,
+    isCurrent: () => boolean,
+  ) => applyVideoEffectCatalog(() => {
+    // The project/input or FX pulse may have changed while preflight awaited its owners.
+    if (!isCurrent() || !canMutateVideoIsf()) return null;
+    const catalog = currentVideoEffectCatalog();
+    if (!catalog.layer_groups.some((group) => group.id === groupId)) return null;
+    return patchVideoGroup(catalog, groupId, patch);
+  });
   const sameVideoEffectScope = (left: VideoEffectScope, right: VideoEffectScope) =>
     JSON.stringify(left) === JSON.stringify(right);
   const importVideoEffectScopeIsf = async (scope: VideoEffectScope) => {
@@ -718,11 +736,15 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     slotId: VideoClipSlotId | null = null,
     transitionKind: VideoClipTakeKind = "Cut",
     transitionDuration: VideoClipTakeDuration = { unit: "Milliseconds", value_milliunits: 0 },
+    previewGeneration?: number,
   ) => {
     try {
       const result = await runVideoClipSlotRuntime("launch_video_clip_slot_authoritative", {
         layer_id: layerId,
         slot_id: slotId,
+        // The native commit validates this exact Preview session; a refused
+        // audition must never fall through to the queued/default clip.
+        ...(previewGeneration === undefined ? {} : { preview_generation: previewGeneration }),
         transition_kind: transitionKind,
         transition_duration_ms: 0,
         transition_duration: transitionKind === "Cut"
@@ -1649,6 +1671,10 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       if (!silent) options.setMessage("Updated video preview diagnostics.");
     } catch (error) { options.setMessage(String(error)); }
   };
+  const loadVideoGroupCanvasPreview = async (compositionId: number, width: number, height: number) => {
+    const frame = await options.invoke<VideoFrame>("get_debug_video_preview", { compositionId, width, height });
+    return videoFrameToDataUrl(frame);
+  };
   const renderDebugVideoPreview = async () => {
     try {
       const frame = await options.invoke<VideoFrame>("get_debug_video_preview", { width: 64, height: 36 });
@@ -1729,12 +1755,12 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   const refreshSnapshotAndVideoOutputRenderPlans = async () => {
     await Promise.all([options.refreshSnapshot(), refreshVideoOutputRenderPlans(true), refreshVideoOutputWindowStatuses(true)]);
   };
-  const refreshVideoRuntimeStatus = async () => {
+  const refreshVideoRuntimeStatus = async (silent = false) => {
     try {
       const status = await options.invoke<VideoRuntimeStatus>("get_video_runtime_status");
       options.setVideoRuntimeStatus(status);
-      options.setMessage(`Video backends: ${status.backends.filter((backend) => backend.state === "Available").length}/${status.backends.length} available.`);
-    } catch (error) { options.setMessage(String(error)); }
+      if (!silent) options.setMessage(`Video backends: ${status.backends.filter((backend) => backend.state === "Available").length}/${status.backends.length} available.`);
+    } catch (error) { if (!silent) options.setMessage(String(error)); }
   };
   let externalVideoTransportStatusRefreshInFlight = false;
   const clearExternalVideoTransportStatus = () => {
@@ -1886,8 +1912,8 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     refreshVideoLayerMetadata, relinkMediaAsset, scanMediaRelinkFolder, applyMediaRelinkRequests, importVideoLayerIsf, importVideoIsfToCatalog, addVideoLayerIsfEffect, applyBuiltinVideoIsfEffect, setVideoLayerIsfEffect,
     moveVideoLayerIsfEffect, removeVideoLayerIsfEffect, setVideoLayerIsfEffectEnabled,
     resetVideoLayerIsfEffect, setVideoLayerIsfControl, triggerVideoLayerIsfEvent,
-    applyVideoEffectCatalog, importVideoEffectScopeIsf, applyVideoEffectPreset, removeVideoEffectChain,
-    renderDebugVideoPreview, loadVideoLayerThumbnail, loadMediaAssetThumbnail, beginMediaAssetPreview, loadMediaAssetPreviewFrame, endMediaAssetPreview, refreshVideoPreviewDiagnostics,
+    applyVideoEffectCatalog, patchVideoLayerGroup, importVideoEffectScopeIsf, applyVideoEffectPreset, removeVideoEffectChain,
+    loadVideoGroupCanvasPreview, renderDebugVideoPreview, loadVideoLayerThumbnail, loadMediaAssetThumbnail, beginMediaAssetPreview, loadMediaAssetPreviewFrame, endMediaAssetPreview, refreshVideoPreviewDiagnostics,
     refreshVideoOutputRenderPlans, refreshVideoOutputWindowStatuses, refreshSnapshotAndVideoOutputRenderPlans,
     refreshVideoRuntimeStatus, refreshExternalVideoTransportStatus, refreshExternalVideoIoPlans, syncExternalVideoTransports,
     renderDebugVideoOutputPreview, setVideoLayerState, setVideoLayerTransform, setVideoLayerColor,

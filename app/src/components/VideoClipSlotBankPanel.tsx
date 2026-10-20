@@ -286,7 +286,7 @@ export function VideoClipSlotBankPanel(props: VideoClipSlotBankPanelProps) {
               <Show when={cell.slot}>
                 {(slot) => (
                   <div class="videoClipSlotPadActions" role="group" aria-label={`Slot ${cell.index + 1} actions`}>
-                    <button type="button" onClick={() => void props.onPreview(slot().id)} aria-label={`Preview thumbnail for slot ${slot().id}`}>Preview</button>
+                    <button type="button" onClick={() => void props.onPreview(slot().id)} aria-label={`Audition slot ${slot().id} in Preview`}>Preview</button>
                     <button type="button" onClick={(event) => props.onMore(slot().id, event.currentTarget)} aria-label={`More actions for slot ${slot().id}`}>More</button>
                   </div>
                 )}

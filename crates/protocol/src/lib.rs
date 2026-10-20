@@ -7897,6 +7897,25 @@ pub enum OscControlAction {
     VideoTransitionTime,
     VideoIsfStageEnabled,
     VideoIsfParam,
+    VideoGroupOpacity,
+    VideoGroupSolo,
+    VideoGroupBypass,
+    VideoGroupBlendMode,
+    VideoGroupEnabled,
+}
+
+impl OscControlAction {
+    /// Video groups use their stable catalog identity, never a layer index.
+    pub fn is_video_group(&self) -> bool {
+        matches!(
+            self,
+            Self::VideoGroupOpacity
+                | Self::VideoGroupSolo
+                | Self::VideoGroupBypass
+                | Self::VideoGroupBlendMode
+                | Self::VideoGroupEnabled
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -7915,6 +7934,9 @@ pub struct OscControlMapping {
     pub clip_slot_id: Option<VideoClipSlotId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isf_stage_id: Option<VideoEffectStageId>,
+    /// Stable video-group identity, independent of layer order and lighting groups.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_group_id: Option<VideoLayerGroupId>,
     #[serde(default)]
     pub output_id: Option<VideoOutputId>,
     pub video_param: Option<VideoParam>,
@@ -7949,6 +7971,9 @@ pub struct DmxControlMapping {
     pub clip_slot_id: Option<VideoClipSlotId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isf_stage_id: Option<VideoEffectStageId>,
+    /// Stable video-group identity, independent of layer order and lighting groups.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_group_id: Option<VideoLayerGroupId>,
     #[serde(default)]
     pub output_id: Option<VideoOutputId>,
     pub video_param: Option<VideoParam>,
@@ -8239,9 +8264,37 @@ pub enum MidiControlAction {
     /// Perform: drive one ISF control (`attribute` is its name) of the stage
     /// `isf_stage_id`; `low`..`high` is the fraction of the control's range.
     VideoIsfParam,
+    VideoGroupOpacity,
+    VideoGroupSolo,
+    VideoGroupBypass,
+    VideoGroupBlendMode,
+    VideoGroupEnabled,
 }
 
 impl MidiControlAction {
+    /// Video groups use their stable catalog identity, never a layer index.
+    pub fn is_video_group(&self) -> bool {
+        matches!(
+            self,
+            Self::VideoGroupOpacity
+                | Self::VideoGroupSolo
+                | Self::VideoGroupBypass
+                | Self::VideoGroupBlendMode
+                | Self::VideoGroupEnabled
+        )
+    }
+
+    /// Buttons toggle these switches; controller levels set their state.
+    pub fn is_renderer_routed_switch(&self) -> bool {
+        matches!(
+            self,
+            Self::VideoIsfStageEnabled
+                | Self::VideoGroupSolo
+                | Self::VideoGroupBypass
+                | Self::VideoGroupEnabled
+        )
+    }
+
     /// Actions whose runtime owner is the renderer: the native input worker
     /// only forwards the accepted input, and the renderer runs the same ticketed
     /// commands the on-screen control runs.
@@ -8256,6 +8309,11 @@ impl MidiControlAction {
                 | Self::VideoTransitionTime
                 | Self::VideoIsfStageEnabled
                 | Self::VideoIsfParam
+                | Self::VideoGroupOpacity
+                | Self::VideoGroupSolo
+                | Self::VideoGroupBypass
+                | Self::VideoGroupBlendMode
+                | Self::VideoGroupEnabled
         )
     }
 
@@ -8268,6 +8326,9 @@ impl MidiControlAction {
                 | Self::VideoTake
                 | Self::VideoLayerStop
                 | Self::VideoIsfStageEnabled
+                | Self::VideoGroupSolo
+                | Self::VideoGroupBypass
+                | Self::VideoGroupEnabled
         )
     }
 }
@@ -8299,6 +8360,9 @@ pub struct MidiControlMapping {
     /// `VideoIsfParam`. Omitted (and not written) for every other action.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isf_stage_id: Option<VideoEffectStageId>,
+    /// Stable video-group identity, independent of layer order and lighting groups.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_group_id: Option<VideoLayerGroupId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feedback: Option<MidiControlFeedback>,
     pub low: f32,
@@ -8318,6 +8382,9 @@ pub struct RendererRoutedInput {
     pub clip_slot_id: Option<VideoClipSlotId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isf_stage_id: Option<VideoEffectStageId>,
+    /// Stable video-group identity, independent of layer order and lighting groups.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_group_id: Option<VideoLayerGroupId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control: Option<String>,
     /// Normalized 0..1 input position before the mapping range.
@@ -8325,7 +8392,7 @@ pub struct RendererRoutedInput {
     pub value: f32,
     pub active: bool,
     /// The input is a button press that flips the target instead of setting it
-    /// to `active`. Only stage enable switches driven by a note, program or
+    /// to `active`. Stage/group switches driven by a note, program or
     /// beat trigger, or a value-less OSC pulse use it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub toggle: bool,
@@ -22039,3 +22106,6 @@ mod tests {
         assert!(super::validate_project_file_fixture_group_registry(&hierarchical).is_ok());
     }
 }
+
+#[cfg(test)]
+mod video_group_mapping_tests;
