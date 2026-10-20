@@ -5,7 +5,7 @@ import ts from "typescript";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer as createTcpServer } from "node:net";
+import { reserveBrowserCheckPort } from "./browser-check-ports.mjs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -182,21 +182,22 @@ const results = [];
 let currentStep = "startup";
 try {
   await mkdir(evidenceDir, { recursive: true });
-  const reservation = createTcpServer();
-  await new Promise((done, reject) => { reservation.once("error", reject); reservation.listen(Number(process.env.SYNDOCAL_IA_PORT ?? 0), "127.0.0.1", done); });
-  const vitePort = reservation.address().port;
-  await new Promise(done => reservation.close(done));
+  const vitePort = await reserveBrowserCheckPort("SYNDOCAL_VIEWPORT_VITE_PORT");
   server = await createServer({ root: appRoot, cacheDir: resolve(evidenceDir, "ia-vite-cache"), server: { host: "127.0.0.1", port: vitePort, strictPort: true }, clearScreen: false });
   await server.listen();
   // Complete Vite dependency discovery before opening the first cold document.
   await server.environments.client.depsOptimizer?.scanProcessing;
   await server.transformRequest("/src/App.tsx");
   const origin = server.resolvedUrls.local[0];
+  const port = await reserveBrowserCheckPort("SYNDOCAL_CDP_PORT");
   profile = await mkdtemp(join(tmpdir(), "syndocal-ia-check-"));
-  browser = spawn(browserPath, ["--headless=new", "--disable-gpu", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--no-first-run", "--no-default-browser-check", `--remote-debugging-port=${process.env.SYNDOCAL_CDP_PORT ?? 0}`, `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
-  const port = process.env.SYNDOCAL_CDP_PORT ? Number(process.env.SYNDOCAL_CDP_PORT) : await waitFor(async () => Number((await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]), "owned browser debugger");
-  await waitFor(async () => (await fetch(`http://127.0.0.1:${port}/json/version`)).ok, "owned browser ready");
-  const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+  browser = spawn(browserPath, ["--headless=new", "--disable-gpu", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--no-first-run", "--no-default-browser-check", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
+  const targets = await waitFor(async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1000) });
+    if (!response.ok) return null;
+    const candidates = await response.json();
+    return candidates.some((target) => target.type === "page") ? candidates : null;
+  }, "owned browser debugger");
   let target = targets.find(x => x.type === "page");
   const connect = async () => { cdp = new Cdp(); await cdp.connect(target.webSocketDebuggerUrl); await cdp.send("Page.enable"); await cdp.send("Runtime.enable"); await cdp.send("Page.bringToFront"); };
   await connect();
@@ -402,7 +403,21 @@ try {
   throw error;
 } finally {
   if(cdp?.socket?.readyState===WebSocket.OPEN){await cdp.send("Browser.close").catch(()=>{});cdp.socket.close();}
-  if(browser && browser.exitCode===null){try{await waitFor(()=>browser.exitCode!==null || browser.signalCode!==null,"owned browser exit",5000);}catch{browser.kill();}}
+  let browserExitError;
+  if (browser && browser.exitCode === null && browser.signalCode === null) {
+    const exited = () => browser.exitCode !== null || browser.signalCode !== null;
+    try {
+      await waitFor(exited, "owned browser exit", 5_000);
+    } catch {
+      try {
+        browser.kill();
+        await waitFor(exited, "owned browser exit after forced termination", 5_000);
+      } catch (error) {
+        browserExitError = error;
+      }
+    }
+  }
   await server?.close();
+  if (browserExitError) throw browserExitError;
   if(profile){assert.equal(resolve(dirname(profile)),resolve(tmpdir()));assert.ok(basename(profile).startsWith("syndocal-ia-check-"));await rm(profile,{recursive:true,force:true,maxRetries:15,retryDelay:250});}
 }
