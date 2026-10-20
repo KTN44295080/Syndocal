@@ -266,6 +266,7 @@ fn syphon_output_effect_render_context(
 ) -> video::VideoEffectRenderContext<'_> {
     video::VideoEffectRenderContext {
         clip_runtime: &snapshot.video_clip_runtime,
+        audio_frame: snapshot.live_audio_textures.as_deref(),
         project_render_epoch,
     }
 }
@@ -1541,6 +1542,33 @@ fn syphon_render_error_decision(
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn syphon_effect_context_preserves_live_audio_frame_identity_and_silence() {
+        let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
+            enabled: false,
+            ..protocol::DmxOutputConfig::default()
+        });
+        let mut snapshot = engine.snapshot();
+        assert!(syphon_output_effect_render_context(&snapshot, 27)
+            .audio_frame
+            .is_none());
+        let audio = Arc::new(protocol::LiveAudioTextureFrame {
+            generation: 27,
+            feature_sequence: 1,
+            sample_rate: 48_000,
+            waveform: [0.25; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+            fft: [0.5; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+        });
+        snapshot.live_audio_textures = Some(audio.clone());
+        let context = syphon_output_effect_render_context(&snapshot, 27);
+        assert!(std::ptr::eq(context.audio_frame.unwrap(), audio.as_ref()));
+        assert_eq!(context.project_render_epoch, 27);
+        snapshot.live_audio_textures = None;
+        assert!(syphon_output_effect_render_context(&snapshot, 28)
+            .audio_frame
+            .is_none());
+    }
 
     struct FakeSender {
         owner: std::thread::ThreadId,

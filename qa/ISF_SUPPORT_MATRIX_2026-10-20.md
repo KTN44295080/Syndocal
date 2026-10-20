@@ -1,4 +1,4 @@
-# ISF support matrix — T23 — 2026-10-20
+# ISF support matrix — T23 / T27 — 2026-10-20
 
 ## Scope and conclusion
 
@@ -6,7 +6,9 @@ This audit covers the ISF filter path in `crates/video`, its native import/valid
 
 T23 adds ordered multi-pass rendering, named targets, persistent feedback, RGBA32Float targets, bounded per-frame dimension expressions, and shader-relative PNG/JPEG imports. Point2D, color and event controls already existed; their actual rendered output is now covered by small fixtures. Image helpers now use each sampled texture's dimensions.
 
-The work is isolated to branch `task23-isf` in `wt-task23`, based on `036a268c01e7a6dcf8b41830e99e4593f2922817`. No application, native harness, release build, push or merge is part of this evidence.
+The historical T23 work was isolated to branch `task23-isf` in `wt-task23`, based on `036a268c01e7a6dcf8b41830e99e4593f2922817`. No application, native harness, release build, push or merge is part of this evidence.
+
+T27 adds bounded mono `audio` / `audioFFT` textures using the live input selected in Setup. It is isolated to `task27-audio-mapping` in `wt-task27`, based on `e1d72e2306620d9c64454abf426ded50c1261f4d`. The audio contract and evidence below supersede T23's unsupported-audio finding. See [T27 acceptance](T27_AUDIO_CONTROL_ISF_ACCEPTANCE_2026-10-20.md) for mapping safety, validation and the remaining native acceptance boundary.
 
 ### Official comparison sources
 
@@ -21,7 +23,7 @@ Sources were inspected on 2026-10-19/20 UTC. The status column describes the res
 
 ## Passes, targets and resources
 
-| Feature | Status after T23 | Implemented behavior and remaining boundary | Evidence |
+| Feature | Status after T23 / T27 | Implemented behavior and remaining boundary | Evidence |
 | --- | --- | --- | --- |
 | Ordered `PASSES` | Supported, bounded | One shader runs once per declared pass, in order. Missing/empty PASSES becomes one ordinary pass. The declared image input remains the stage's input across all passes; named targets expose earlier pass results. Maximum 16 passes. | S1/S5; `isf_runtime.rs:644`; `isf_pass_runtime.rs:163`; fixture `multipass.fs`. |
 | Named `TARGET` | Partially supported | Each distinct name has separate read/write textures. A pass reads its previous front and writes the opposite texture; later passes see the new front. Names must be safe and unique across inputs, targets and imports. Reusing the same TARGET name in multiple pass declarations is rejected. | `isf_runtime.rs:506`; `isf_pass_runtime.rs:163`; multipass and invalid-metadata tests. |
@@ -39,11 +41,11 @@ All short Rust paths in this document are relative to `crates/video/src/` unless
 
 ### Resource bounds
 
-- Maximum 16 passes, 16 total sampled textures (the one image input plus targets/imports), and 16 scalar/vector controls.
+- Maximum 16 passes, 16 total sampled textures (the one image input plus targets/imports/audio inputs), and 16 scalar/vector controls.
 - Dimension expressions: at most 1,024 ASCII bytes, 256 AST nodes and 32 nested parse levels.
 - Imported images: at most 15, at most 16 MiB per encoded file, at most 8,192 pixels per axis, and at most 64 MiB of combined decoded RGBA per prepared shader. The total-texture limit can reduce the available import count.
-- The prepared-shader cache and pipeline cache each retain at most 64 entries. Pipeline identity includes WGSL hash, target format and texture count. Persistent/import GPU instance resources are retained in a 64-entry LRU pool.
-- Main texture/readback accounting is capped at 256 MiB per stage and 512 MiB across the pool and current encoder. Accounting includes both target textures, imports, every separately allocated unnamed intermediate, host upload/ping/pong and padded readback. Anonymous allocations accumulate until submission completes; a cache hit recalculates their cost for the current host size. Driver overhead and small pipeline/uniform allocations are outside this texture/readback estimate.
+- The prepared-shader cache and pipeline cache each retain at most 64 entries. Pipeline identity includes WGSL hash, target format and texture count. Persistent/import/audio GPU instance resources are retained in a 64-entry LRU pool.
+- Main texture/readback accounting is capped at 256 MiB per stage and 512 MiB across the pool and current encoder. Accounting includes both target textures, imports, audio textures, every separately allocated unnamed intermediate, host upload/ping/pong and padded readback. Anonymous allocations accumulate until submission completes; a cache hit recalculates their cost for the current host size. Driver overhead and small pipeline/uniform allocations are outside this texture/readback estimate.
 - LRU eviction, a failed stage that loses its resource state, changed target dimensions, changed shader/resource fingerprint, a new renderer, or a new project namespace can reset feedback. A failed submitted stack cannot publish new history. This is bounded live-renderer state, not project-persisted feedback.
 
 The main checks and allocation ownership are in `isf_pass_runtime.rs:128`, `:163`, `:430`, and `:464`. Resource decode bounds are in `isf_resources.rs:9` and `:465`.
@@ -61,14 +63,18 @@ ISF defines nine input kinds (S1). The filter API still requires exactly one dyn
 | `point2D` | Supported | Two components, default and overridden coordinates. This was already implemented; T23 adds a rendered fixture. | `isf_completeness_tests.rs:251`; `point2d.fs`. |
 | `color` | Supported | Four components including alpha, with existing defaults/ranges. This was already implemented; T23 pins all four rendered channels. | `isf_completeness_tests.rs:270`; `color.fs`. |
 | `event` | Partially supported | Existing host pulse value is shared by all passes and stops affecting pixels once the host resets it. The renderer does not consume/reset the event itself after exactly one frame; existing host pulse timing is preserved. Preview audition keeps its existing event restrictions. | `isf_completeness_tests.rs:283`; `event.fs`; FX audition/UX checks. |
-| `audio` | Unsupported | Clear prepare-time rejection with a suggestion to drive ordinary controls through Syndocal Audio FFT nodes. No placeholder waveform texture. | `isf_runtime.rs:506`; `app/src/fxRejectionExplanation.ts:53`; bilingual rejection fixture. |
-| `audioFFT` | Unsupported | Same explicit rejection. Existing reactive-band values are not exposed as though they were ISF's channel/sample texture contract. | Same runtime/UI evidence; audio data-flow assessment below. |
+| `audio` | Partially supported, T27 | One channel row from the selected live-input mix. Default width 512; integer MAX from 1 to 512. Signed waveform samples map to grayscale around 0.5, with alpha 1. Smaller widths use linear resampling. MAX=1 uses RMS of the published 512-sample window, mapped to 0.5–1; this is an explicit host policy, not a prescribed RMS formula in S1. RGBA8 precision. | S1; `isf_runtime.rs`; `isf_pass_runtime.rs`; `isf_audio_tests.rs`; `audio.fs`. |
+| `audioFFT` | Partially supported, T27 | One channel row of normalized FFT magnitudes on a linear frequency axis. Default width 512; integer MAX 1–512. Smaller widths preserve the peak in each bin group. Uses the analyzer's existing FFT, with no second transform. RGBA8 precision; no stereo rows, custom FFT size or arbitrary texture widths. | Same fixture and tests; `crates/audio/src/live_features.rs`. |
 
-### Why audio textures remain unsupported
+### T27 publication, ownership and cost
 
-The existing live publication exposes an `AudioSpectrumPoint`, up to 16 reactive bands, level/onset/beat features and generation/sequence identifiers. Its protocol structures contain no per-channel waveform or full FFT texture payload: `crates/protocol/src/lib.rs:358`, `:369`, `:420`.
+The analyzer publishes two fixed 512-element float arrays: waveform and FFT. The sample payload is 4 KiB plus generation, sequence and sample-rate metadata, shared by Arc with engine/render consumers. It is excluded from project JSON and UI snapshot serialization. The recording worker carries the same 4 KiB in its bounded binary request, with generation, sequence and sample rate in the request header. Program, live Preview, display, Spout, NDI and recording contexts capture the publication; ordinary thumbnails explicitly select silence.
 
-Native publication converts analyzer output into those reactive features in `app/src-tauri/src/main.rs:48376` and `:48416`. The video effect context at `lib.rs:188` carries clip runtime and project epoch, not an audio texture feed. ISF's audio contract has channel rows and sample/FFT columns (S1). A faithful implementation therefore needs a new publication and renderer ownership path with explicit generation, channel and lifetime semantics. There is no clean existing texture hook in these inspected seams. T23 preserves the explicit unsupported result and the existing Audio FFT control alternative.
+Each renderer retains only a changed generation/sequence. Each ISF instance allocates one width-by-one RGBA8 texture per declared audio input and uploads only a new publication or a transition to silence. Waveform silence is byte 128 (the nearest 8-bit representation of 0.5); FFT silence is zero. Stop, stale input, generation retirement, project replacement and invalid samples clear the publication. Reusing a static decoded image still evaluates its ISF stages, so audio changes do not depend on a media PTS change.
+
+At width 512 each input costs 2 KiB of texture storage. Audio inputs count toward the existing 16 sampled-texture limit and the 256 MiB per-stage / 512 MiB pool accounting. No capture thread, extra FFT or unbounded waveform queue is introduced. The runtime uses the existing GPU ISF stage and readback boundary, including when a CPU compositor consumes its result. There is **no pure CPU ISF evaluator**: an unavailable adapter retains the existing explicit effect failure behavior. C1 compositor eligibility, mapping, pacing and marked last-valid fallback remain in place.
+
+The five-test T27 suite includes three actual GPU pixel tests without an adapter-skip branch and two metadata tests, covering: initial silence; new and duplicate identities; generation replacement; stop/invalid-frame clearing; width 2 endpoint/FFT-peak resampling; width 1 RMS; invalid MAX values; and texture-count bounds. These are bounded-host acceptance tests, not full ISF conformance or real-device acceptance.
 
 ## Sampling helpers and standard variables
 
@@ -106,6 +112,7 @@ Fixture directory: `crates/video/src/isf_fixtures/`. Image assets are generated 
 
 | Fixture / regression | Known result or invariant |
 | --- | --- |
+| `audio.fs` (T27) | Silent waveform/FFT gives [128,0,255,255]; waveform -0.5 / FFT 0.75 gives [64,191,255,255]. Five tests also check lifecycle, publication identity, MAX bounds and resampling. |
 | `multipass.fs` | An 8×4 host with a half-size target yields RGBA [128,128,255,255], checking current pass size, actual IMG_SIZE, target sampling and PASSINDEX. |
 | `persistent.fs` | Red advances 1,2,3 across frames. A different preview/stage/input/project namespace starts at 1. Changed target dimensions start at 1. Nonpersistent form stays at 1. |
 | `float.fs` | Stores 2049, -2 and 2 in a FLOAT target; final RGBA [255,128,128,255] distinguishes full 32-bit storage from half precision and proves unclamped intermediates. |
@@ -119,7 +126,9 @@ Fixture directory: `crates/video/src/isf_fixtures/`. Image assets are generated 
 | Fixed pass dimensions / host resize | Host 16→8→16 with fixed 16×16 targets preserves red history 1→2→3 and recalculates transient bytes 0→1024→0. |
 | Public renderer isolation | Composition/output scopes, Preview/output namespaces, legacy output/Preview/thumbnails and epoch changes are exercised through public render methods. |
 
-## Validation and review
+## Historical T23 validation and review
+
+The following counts and ports are the recorded T23 checkpoint, not T27 reruns. Current T27 evidence is in the linked acceptance note.
 
 The final Rust acceptance runs used the debug profile through `pcargo-here.cmd`, with the worktree as CWD and **CARGO_TARGET_DIR removed**, following the corrected handoff. Earlier shared-target output is not acceptance evidence.
 

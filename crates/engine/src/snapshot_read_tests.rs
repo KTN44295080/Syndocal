@@ -251,6 +251,7 @@ fn assert_same_read_model(handle: &EngineHandle) {
             expected.video.clone(),
             expected.video_clip_runtime.clone(),
             expected.video_transition_runtime.clone(),
+            expected.live_audio_textures.clone(),
             expected.clock.bpm,
         )
     );

@@ -104,3 +104,27 @@
 .controlAssignMenuList li button {
   min-height: 32px;
 }
+
+.controlAssignAudioFields,
+.controlAssignAudioFields label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.controlAssignAudioFields { gap: 10px; }
+.controlAssignAudioFields label { font-size: var(--fs-control); }
+.controlAssignAudioPair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.controlAssignAudioFields input,
+.controlAssignAudioFields select {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid var(--line-strong);
+  background: var(--s2);
+  color: var(--text);
+  padding: 4px 8px;
+  font: inherit;
+}
+.controlAssignAudioFields input:focus-visible,
+.controlAssignAudioFields select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }

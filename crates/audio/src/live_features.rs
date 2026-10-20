@@ -10,6 +10,8 @@ use thiserror::Error;
 
 pub const MAX_LIVE_AUDIO_BANDS: usize = 16;
 pub const MIN_LIVE_AUDIO_BANDS: usize = 8;
+/// Bounded mono textures reuse the analyzer's existing window and FFT.
+pub const LIVE_AUDIO_TEXTURE_SAMPLES: usize = 512;
 pub const MIN_TRACKED_BPM: f32 = 60.0;
 pub const MAX_TRACKED_BPM: f32 = 200.0;
 
@@ -105,6 +107,10 @@ pub struct LiveAudioFeatureFrame {
     /// Exclusive mono input sample index at the end of this FFT window.
     pub end_sample: u64,
     pub sample_rate: u32,
+    /// Oldest-to-newest samples across the analysis window, in -1..=1.
+    pub waveform: [f32; LIVE_AUDIO_TEXTURE_SAMPLES],
+    /// Linear positive-frequency magnitude, DC to Nyquist, in 0..=1.
+    pub fft: [f32; LIVE_AUDIO_TEXTURE_SAMPLES],
     /// Linear full-window RMS in the range 0..=1 after finite-value sanitizing.
     pub rms: f32,
     /// Linear full-window absolute peak in the range 0..=1.
@@ -542,10 +548,34 @@ impl LiveAudioFeatureAnalyzer {
         let mut bands = [0.0; MAX_LIVE_AUDIO_BANDS];
         bands[..self.config.band_count]
             .copy_from_slice(&self.smoothed_bands[..self.config.band_count]);
+        let mut waveform = [0.0; LIVE_AUDIO_TEXTURE_SAMPLES];
+        let mut fft = [0.0; LIVE_AUDIO_TEXTURE_SAMPLES];
+        for index in 0..LIVE_AUDIO_TEXTURE_SAMPLES {
+            let position = index as f32 * (self.config.fft_size - 1) as f32
+                / (LIVE_AUDIO_TEXTURE_SAMPLES - 1) as f32;
+            let first = position.floor() as usize;
+            let second = (first + 1).min(self.config.fft_size - 1);
+            let left = self.sample_ring[(self.write_index + first) % self.config.fft_size];
+            let right = self.sample_ring[(self.write_index + second) % self.config.fft_size];
+            waveform[index] = left + (right - left) * position.fract();
+            // Peak-pool contiguous FFT bins so a narrow tone survives the bounded
+            // texture width. This reuses the one FFT, without another allocation.
+            let start = index * self.magnitudes.len() / LIVE_AUDIO_TEXTURE_SAMPLES;
+            let end = ((index + 1) * self.magnitudes.len() / LIVE_AUDIO_TEXTURE_SAMPLES)
+                .max(start + 1)
+                .min(self.magnitudes.len());
+            fft[index] = self.magnitudes[start..end]
+                .iter()
+                .copied()
+                .fold(0.0_f32, f32::max)
+                .clamp(0.0, 1.0);
+        }
         let frame = LiveAudioFeatureFrame {
             sequence: self.sequence,
             end_sample: self.total_samples,
             sample_rate: self.config.sample_rate,
+            waveform,
+            fft,
             rms,
             peak,
             bands,
@@ -965,6 +995,41 @@ mod tests {
         assert_eq!(config.fft_size, 2_048);
         assert_eq!(config.hop_size, 1_024);
         assert!((analyzer.analysis_rate_hz() - 46.875).abs() < 0.001);
+    }
+
+    #[test]
+    fn audio_textures_reuse_real_waveform_and_fft_then_reset_to_silence() {
+        let config = LiveAudioFeatureConfig::for_sample_rate(48_000);
+        let mut analyzer = LiveAudioFeatureAnalyzer::new(config).unwrap();
+        let samples = sine(48_000, 1_500.0, 0.2, 0.8);
+        let mut last = None;
+        analyzer.push_samples(&samples, |frame| last = Some(frame));
+        let frame = last.unwrap();
+        let end = frame.end_sample as usize;
+        assert_eq!(frame.waveform[0], samples[end - config.fft_size]);
+        assert_eq!(frame.waveform[LIVE_AUDIO_TEXTURE_SAMPLES - 1], samples[end - 1]);
+        assert!(frame
+            .waveform
+            .iter()
+            .all(|value| value.is_finite() && (-1.0..=1.0).contains(value)));
+        let (dominant, magnitude) = frame
+            .fft
+            .iter()
+            .enumerate()
+            .max_by(|left, right| left.1.total_cmp(right.1))
+            .unwrap();
+        assert!((dominant as i32 - 32).abs() <= 1);
+        assert!(*magnitude > 0.75 && *magnitude <= 1.0);
+        assert!(frame
+            .fft
+            .iter()
+            .all(|value| value.is_finite() && (0.0..=1.0).contains(value)));
+        analyzer.reset();
+        let invalid_samples = vec![f32::NAN; config.fft_size];
+        analyzer.push_samples(&invalid_samples, |frame| last = Some(frame));
+        let silent = last.unwrap();
+        assert!(silent.waveform.iter().all(|value| *value == 0.0));
+        assert!(silent.fft.iter().all(|value| *value == 0.0));
     }
 
     #[test]

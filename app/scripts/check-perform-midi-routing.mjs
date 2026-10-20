@@ -711,7 +711,7 @@ const desk = read("components/VideoPerformDesk.tsx");
 const quickFx = read("components/VideoPerformQuickFx.tsx");
 const editor = read("components/VideoFxParameterEditor.tsx");
 const mappingPanel = read("components/MidiControlMappingPanel.tsx");
-assert.match(mappingPanel, /<Show when=\{mapping\.message !== "BeatDivision" && !isPerformRoutedAction\(mapping\.action\)\}>\s*<details class="mappingFeedbackEditor">/, "tempo sources and renderer-owned targets offer no controller feedback");
+assert.match(mappingPanel, /<Show when=\{mapping\.message !== "BeatDivision" && mapping\.message !== "Audio" && !isPerformRoutedAction\(mapping\.action\)\}>\s*<details class="mappingFeedbackEditor">/, "tempo/audio sources and renderer-owned targets offer no controller feedback");
 assert.match(desk, /disabled=\{Boolean\(props\.clipSlotBank\.runtime\?\.transition\) && !props\.performContext\?\.controlLearnActive\}/, "transition controls stay reachable for Learn");
 assert.match(matrix, /data-video-clip-slot-pad-index=\{cell\.index\} \{\.\.\.controlMappingTargetData\(cell\.slot \? \{ action: "VideoClipSlotTrigger"[\s\S]{0,160}clip_slot_id: cell\.slot\.id \} : null\)\}/, "every occupied pad targets its stable slot id");
 assert.match(matrix, /data-video-layer-stop=\{layer\(\)\.id\} \{\.\.\.controlMappingTargetData\(\{ action: "VideoLayerStop"/);

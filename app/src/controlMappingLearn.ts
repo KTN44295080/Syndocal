@@ -40,6 +40,8 @@ export interface ControlMappingTarget {
   video_group_id?: number | null;
   /** Explicitly transport-specific targets may opt out of OSC/DMX. */
   midi_only?: boolean;
+  /** Event controls keep their existing hardware trigger behavior. */
+  audio_disabled?: boolean;
   low?: number;
   high?: number;
 }

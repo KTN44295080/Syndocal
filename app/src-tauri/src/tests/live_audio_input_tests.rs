@@ -27,6 +27,8 @@ mod live_audio_input_tests {
             sequence: 7,
             end_sample: 96_000,
             sample_rate: 48_000,
+            waveform: [0.0; audio::live_features::LIVE_AUDIO_TEXTURE_SAMPLES],
+            fft: [0.0; audio::live_features::LIVE_AUDIO_TEXTURE_SAMPLES],
             rms: 0.4,
             peak: 0.8,
             bands,
@@ -70,6 +72,7 @@ mod live_audio_input_tests {
         assert_eq!(levels.onset_strength, 0.0);
         assert_eq!(levels.bpm, None);
         assert_eq!((levels.bpm_confidence, levels.beat_phase), (0.0, 0.0));
+        assert_eq!(levels.generation, 0);
         assert_eq!(levels.feature_sequence, 0);
     }
 
@@ -262,6 +265,7 @@ mod live_audio_input_tests {
         frame.bpm_confidence = 0.85;
 
         let features = live_audio_reactive_features(&LiveAudioFeaturePresentation {
+            generation: 27,
             frame,
             beat_phase: 1.25,
         });
@@ -362,6 +366,7 @@ mod live_audio_input_tests {
                 high: f32::INFINITY,
             },
             Some(&LiveAudioFeaturePresentation {
+                generation: 27,
                 frame,
                 beat_phase: f32::NAN,
             }),
@@ -394,6 +399,7 @@ mod live_audio_input_tests {
         assert_eq!(current.onset_strength, 1.0);
         assert_eq!(current.bpm, None);
         assert_eq!((current.bpm_confidence, current.beat_phase), (0.0, 0.0));
+        assert_eq!(current.generation, 27);
         assert_eq!(current.feature_sequence, 7);
         assert!(serde_json::to_value(current).is_ok());
     }
@@ -2442,6 +2448,7 @@ mod live_audio_input_tests {
                     features: protocol::LiveAudioReactiveFeatures::default(),
                     onset_feature_sequences: [0; protocol::MAX_LIVE_AUDIO_FRAME_ONSETS],
                     onset_count: 0,
+                    textures: None,
                 },
                 captured_at: Instant::now(),
             })

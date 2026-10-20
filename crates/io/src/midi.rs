@@ -481,6 +481,7 @@ control_plane_variant_inventory!(
     PitchBend => MidiControlMessage::PitchBend,
     RelativeControlChange => MidiControlMessage::RelativeControlChange,
     BeatDivision => MidiControlMessage::BeatDivision,
+    Audio => MidiControlMessage::Audio,
 );
 
 control_plane_variant_inventory!(
@@ -1487,7 +1488,7 @@ fn midi_feedback_message_from_spec(spec: &MidiFeedbackMessage) -> Option<Vec<u8>
         MidiControlMessage::ProgramChange => Some(vec![0xc0 | channel, number]),
         MidiControlMessage::PitchBend => Some(vec![0xe0 | channel, 0, value]),
         // A tempo source is not a controller message and has no wire form.
-        MidiControlMessage::BeatDivision => None,
+        MidiControlMessage::BeatDivision | MidiControlMessage::Audio => None,
     }
 }
 
@@ -1511,7 +1512,8 @@ fn midi_feedback_message(mapping: &MidiControlMapping, normalized: f32) -> Optio
         // absolute echo.
         MidiControlMessage::ProgramChange
         | MidiControlMessage::RelativeControlChange
-        | MidiControlMessage::BeatDivision => None,
+        | MidiControlMessage::BeatDivision
+        | MidiControlMessage::Audio => None,
     }
 }
 
@@ -1797,8 +1799,11 @@ impl MtcQuarterFrameDecoder {
 }
 
 fn mapping_matches(mapping: &MidiControlMapping, message: &MidiMessage) -> bool {
-    // A beat division is fired by the tempo clock, never by a controller.
-    if mapping.message == MidiControlMessage::BeatDivision {
+    // Tempo and audio sources are never fired by a controller message.
+    if matches!(
+        mapping.message,
+        MidiControlMessage::BeatDivision | MidiControlMessage::Audio
+    ) {
         return false;
     }
     let message_matches = mapping.message == message.message
@@ -2339,6 +2344,7 @@ mod tests {
 
     fn fixture_cc_mapping() -> MidiControlMapping {
         MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 7,
@@ -2729,6 +2735,7 @@ mod tests {
         fixture_id: FixtureId,
     ) -> MidiControlMapping {
         MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number,
@@ -2757,6 +2764,7 @@ mod tests {
         group_id: &str,
     ) -> MidiControlMapping {
         MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number,
@@ -2785,6 +2793,7 @@ mod tests {
         number: u8,
     ) -> MidiControlMapping {
         MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message,
             number,
@@ -3186,6 +3195,7 @@ mod tests {
     #[test]
     fn midi_scene_toggle_presses_and_feedback_track_active_scene() {
         let mut mapping = MidiControlMapping {
+            audio: None,
             channel: None,
             message: MidiControlMessage::NoteOn,
             number: 60,
@@ -3247,6 +3257,7 @@ mod tests {
     #[test]
     fn maps_note_to_cue_and_ignores_note_off_for_triggers() {
         let mapping = MidiControlMapping {
+            audio: None,
             channel: None,
             message: MidiControlMessage::NoteOn,
             number: 60,
@@ -3268,6 +3279,7 @@ mod tests {
             video_group_id: None,
         };
         let next = MidiControlMapping {
+            audio: None,
             channel: None,
             message: MidiControlMessage::NoteOn,
             number: 61,
@@ -3289,6 +3301,7 @@ mod tests {
             video_group_id: None,
         };
         let previous = MidiControlMapping {
+            audio: None,
             channel: None,
             message: MidiControlMessage::NoteOn,
             number: 62,
@@ -3328,6 +3341,7 @@ mod tests {
     #[test]
     fn flash_cue_triggers_on_press_and_releases_on_note_off() {
         let mapping = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::NoteOn,
             number: 63,
@@ -3362,6 +3376,7 @@ mod tests {
     #[test]
     fn directional_flash_cue_preserves_direction_and_releases() {
         let mapping = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::NoteOn,
             number: 62,
@@ -3399,6 +3414,7 @@ mod tests {
     #[test]
     fn note_off_mapping_can_drive_a_discrete_action() {
         let mapping = MidiControlMapping {
+            audio: None,
             channel: Some(2),
             message: MidiControlMessage::NoteOff,
             number: 64,
@@ -3429,6 +3445,7 @@ mod tests {
     #[test]
     fn cue_list_next_mapping_preserves_its_anchor_cue() {
         let mapping = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::NoteOn,
             number: 52,
@@ -3460,6 +3477,7 @@ mod tests {
     #[test]
     fn maps_video_param_and_hot_jump() {
         let video_param = MidiControlMapping {
+            audio: None,
             channel: Some(2),
             message: MidiControlMessage::ControlChange,
             number: 10,
@@ -3481,6 +3499,7 @@ mod tests {
             video_group_id: None,
         };
         let bpm_sync_param = MidiControlMapping {
+            audio: None,
             channel: Some(2),
             message: MidiControlMessage::ControlChange,
             number: 14,
@@ -3502,6 +3521,7 @@ mod tests {
             video_group_id: None,
         };
         let hot_jump = MidiControlMapping {
+            audio: None,
             channel: None,
             message: MidiControlMessage::ProgramChange,
             number: 2,
@@ -3523,6 +3543,7 @@ mod tests {
             video_group_id: None,
         };
         let cue_previous = MidiControlMapping {
+            audio: None,
             channel: None,
             message: MidiControlMessage::NoteOn,
             number: 5,
@@ -3544,6 +3565,7 @@ mod tests {
             video_group_id: None,
         };
         let cue_next = MidiControlMapping {
+            audio: None,
             channel: None,
             message: MidiControlMessage::NoteOn,
             number: 6,
@@ -3565,6 +3587,7 @@ mod tests {
             video_group_id: None,
         };
         let cue_add = MidiControlMapping {
+            audio: None,
             channel: None,
             message: MidiControlMessage::NoteOn,
             number: 3,
@@ -3586,6 +3609,7 @@ mod tests {
             video_group_id: None,
         };
         let cue_remove = MidiControlMapping {
+            audio: None,
             channel: None,
             message: MidiControlMessage::NoteOn,
             number: 4,
@@ -3607,6 +3631,7 @@ mod tests {
             video_group_id: None,
         };
         let layer_enabled = MidiControlMapping {
+            audio: None,
             channel: None,
             message: MidiControlMessage::NoteOn,
             number: 12,
@@ -3628,6 +3653,7 @@ mod tests {
             video_group_id: None,
         };
         let layer_solo = MidiControlMapping {
+            audio: None,
             channel: None,
             message: MidiControlMessage::NoteOn,
             number: 13,
@@ -3649,6 +3675,7 @@ mod tests {
             video_group_id: None,
         };
         let loop_toggle = MidiControlMapping {
+            audio: None,
             channel: None,
             message: MidiControlMessage::NoteOn,
             number: 11,
@@ -3670,6 +3697,7 @@ mod tests {
             video_group_id: None,
         };
         let layer_fade = MidiControlMapping {
+            audio: None,
             channel: Some(2),
             message: MidiControlMessage::ControlChange,
             number: 15,
@@ -3832,6 +3860,7 @@ mod tests {
     #[test]
     fn maps_video_output_controls_and_feedback() {
         let enabled = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::NoteOn,
             number: 40,
@@ -3853,6 +3882,7 @@ mod tests {
             video_group_id: None,
         };
         let opacity = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 41,
@@ -3874,6 +3904,7 @@ mod tests {
             video_group_id: None,
         };
         let fade = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 42,
@@ -3895,6 +3926,7 @@ mod tests {
             video_group_id: None,
         };
         let mapping_field = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 44,
@@ -3916,6 +3948,7 @@ mod tests {
             video_group_id: None,
         };
         let stage_mapping_field = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 45,
@@ -3937,6 +3970,7 @@ mod tests {
             video_group_id: None,
         };
         let mapping_preset = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::NoteOn,
             number: 46,
@@ -3958,6 +3992,7 @@ mod tests {
             video_group_id: None,
         };
         let blackout = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 43,
@@ -4091,6 +4126,7 @@ mod tests {
     #[test]
     fn maps_effect_enabled_control_and_feedback() {
         let mapping = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 46,
@@ -4170,6 +4206,7 @@ mod tests {
     #[test]
     fn maps_node_graph_enabled_control_and_feedback() {
         let mapping = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 47,
@@ -4227,6 +4264,7 @@ mod tests {
     #[test]
     fn maps_timeline_transport_controls() {
         let play = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 20,
@@ -4248,6 +4286,7 @@ mod tests {
             video_group_id: None,
         };
         let seek = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 21,
@@ -4269,6 +4308,7 @@ mod tests {
             video_group_id: None,
         };
         let beat_previous = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::NoteOn,
             number: 22,
@@ -4290,6 +4330,7 @@ mod tests {
             video_group_id: None,
         };
         let beat_next = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::NoteOn,
             number: 23,
@@ -4311,6 +4352,7 @@ mod tests {
             video_group_id: None,
         };
         let set_bpm = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 24,
@@ -4332,6 +4374,7 @@ mod tests {
             video_group_id: None,
         };
         let tap_bpm = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::NoteOn,
             number: 25,
@@ -4419,6 +4462,7 @@ mod tests {
     #[test]
     fn maps_master_and_cue_fade_pause_controls() {
         let master = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 11,
@@ -4440,6 +4484,7 @@ mod tests {
             video_group_id: None,
         };
         let pause = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 12,
@@ -4482,6 +4527,7 @@ mod tests {
     #[test]
     fn maps_video_master_control_and_feedback() {
         let mapping = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 10,
@@ -4528,6 +4574,7 @@ mod tests {
     #[test]
     fn maps_group_submaster_control_and_feedback() {
         let mapping = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 13,
@@ -4661,6 +4708,7 @@ mod tests {
     #[test]
     fn maps_blackout_controls() {
         let blackout = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 30,
@@ -4682,6 +4730,7 @@ mod tests {
             video_group_id: None,
         };
         let video_blackout = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 31,
@@ -4703,6 +4752,7 @@ mod tests {
             video_group_id: None,
         };
         let all_blackout = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 32,
@@ -4724,6 +4774,7 @@ mod tests {
             video_group_id: None,
         };
         let clear_fixture_flags = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 33,
@@ -4789,6 +4840,7 @@ mod tests {
             ..EngineSnapshot::default()
         };
         let mapping = MidiControlMapping {
+            audio: None,
             channel: Some(2),
             message: MidiControlMessage::NoteOn,
             number: 60,
@@ -4819,6 +4871,7 @@ mod tests {
     #[test]
     fn builds_midi_feedback_for_parallel_cue_list_and_group_activity() {
         let mapping = MidiControlMapping {
+            audio: None,
             channel: Some(2),
             message: MidiControlMessage::NoteOn,
             number: 60,
@@ -4870,6 +4923,7 @@ mod tests {
     #[test]
     fn custom_cue_feedback_uses_exact_off_and_on_messages() {
         let mut mapping = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::NoteOn,
             number: 81,
@@ -4940,6 +4994,7 @@ mod tests {
         };
         let mappings = vec![
             MidiControlMapping {
+                audio: None,
                 channel: Some(0),
                 message: MidiControlMessage::ControlChange,
                 number: 11,
@@ -4961,6 +5016,7 @@ mod tests {
                 video_group_id: None,
             },
             MidiControlMapping {
+                audio: None,
                 channel: Some(0),
                 message: MidiControlMessage::NoteOn,
                 number: 61,
@@ -4982,6 +5038,7 @@ mod tests {
                 video_group_id: None,
             },
             MidiControlMapping {
+                audio: None,
                 channel: Some(0),
                 message: MidiControlMessage::ControlChange,
                 number: 62,
@@ -5003,6 +5060,7 @@ mod tests {
                 video_group_id: None,
             },
             MidiControlMapping {
+                audio: None,
                 channel: Some(0),
                 message: MidiControlMessage::NoteOn,
                 number: 63,
@@ -5043,6 +5101,7 @@ mod tests {
         };
         let mappings = vec![
             MidiControlMapping {
+                audio: None,
                 channel: Some(0),
                 message: MidiControlMessage::NoteOn,
                 number: 30,
@@ -5064,6 +5123,7 @@ mod tests {
                 video_group_id: None,
             },
             MidiControlMapping {
+                audio: None,
                 channel: Some(0),
                 message: MidiControlMessage::ControlChange,
                 number: 31,
@@ -5085,6 +5145,7 @@ mod tests {
                 video_group_id: None,
             },
             MidiControlMapping {
+                audio: None,
                 channel: Some(0),
                 message: MidiControlMessage::ControlChange,
                 number: 32,
@@ -5130,6 +5191,7 @@ mod tests {
         };
         let mappings = vec![
             MidiControlMapping {
+                audio: None,
                 channel: Some(0),
                 message: MidiControlMessage::NoteOn,
                 number: 20,
@@ -5151,6 +5213,7 @@ mod tests {
                 video_group_id: None,
             },
             MidiControlMapping {
+                audio: None,
                 channel: Some(0),
                 message: MidiControlMessage::ControlChange,
                 number: 21,
@@ -5316,6 +5379,7 @@ mod tests {
             .unwrap_or_else(|| panic!("no virtual MIDI output matched '{output_match}'"));
 
         let mapping = MidiControlMapping {
+            audio: None,
             channel: Some(0),
             message: MidiControlMessage::ControlChange,
             number: 123,

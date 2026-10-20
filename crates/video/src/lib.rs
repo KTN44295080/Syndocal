@@ -193,6 +193,7 @@ pub struct ResolvedVideoEffectChain {
 pub struct VideoEffectRenderContext<'a> {
     pub clip_runtime: &'a VideoClipRuntimeSnapshot,
     pub project_render_epoch: u64,
+    pub audio_frame: Option<&'a protocol::LiveAudioTextureFrame>,
 }
 
 #[derive(Debug, Clone)]
@@ -2182,6 +2183,7 @@ pub struct VideoPreviewRenderer<P = PreviewFrameProvider> {
     generator_queue_sources: generator::GeneratorQueueSources,
     isf_shader_cache: HashMap<(Arc<str>, Option<String>), CachedIsfShader>,
     isf_render_namespace: (u64, Option<u64>, bool),
+    isf_audio_frame: Option<protocol::LiveAudioTextureFrame>,
     isf_shader_cache_clock: u64,
     isf_runtime: Option<Result<IsfGpuRuntime, IsfRuntimeError>>,
     last_isf_error: Option<String>,
@@ -4353,6 +4355,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             generator_queue_sources: generator::GeneratorQueueSources::default(),
             isf_shader_cache: HashMap::new(),
             isf_render_namespace: (0, None, false),
+            isf_audio_frame: None,
             isf_shader_cache_clock: 0,
             isf_runtime: None,
             last_isf_error: None,
@@ -4364,12 +4367,25 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         }
     }
 
+    fn set_isf_audio_frame(&mut self, audio_frame: Option<&protocol::LiveAudioTextureFrame>) {
+        let valid = audio_frame.filter(|frame| frame.is_valid());
+        if self
+            .isf_audio_frame
+            .as_ref()
+            .map(|frame| (frame.generation, frame.feature_sequence))
+            != valid.map(|frame| (frame.generation, frame.feature_sequence))
+        {
+            self.isf_audio_frame = valid.cloned();
+        }
+    }
+
     pub fn render(
         &mut self,
         snapshot: &VideoSnapshot,
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.set_isf_audio_frame(None);
         self.isf_render_namespace = (0, None, false);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
@@ -4409,6 +4425,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.set_isf_audio_frame(None);
         self.isf_render_namespace = (0, None, false);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
@@ -4489,6 +4506,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.set_isf_audio_frame(context.audio_frame);
         self.isf_render_namespace = (context.project_render_epoch, None, false);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
@@ -4611,6 +4629,20 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.set_isf_audio_frame(None);
+        self.render_layer_thumbnail(snapshot, layer_id, width, height, None)
+    }
+
+    /// Renders the live Preview bus with the same bounded audio publication as Program.
+    pub fn render_layer_preview_with_audio_frame(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        layer_id: VideoLayerId,
+        width: u32,
+        height: u32,
+        audio_frame: Option<&protocol::LiveAudioTextureFrame>,
+    ) -> Result<VideoFrame, VideoPreviewError> {
+        self.set_isf_audio_frame(audio_frame);
         self.render_layer_thumbnail(snapshot, layer_id, width, height, None)
     }
 
@@ -4619,6 +4651,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         snapshot: &VideoSnapshot,
         output_id: VideoOutputId,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.set_isf_audio_frame(None);
         self.isf_render_namespace = (0, Some(output_id), false);
         let plan = build_video_output_render_plan(snapshot, output_id)
             .map_err(VideoPreviewError::Output)?;
@@ -4632,6 +4665,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.set_isf_audio_frame(None);
         self.isf_render_namespace = (0, Some(output_id), true);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
@@ -4650,6 +4684,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         context: VideoEffectRenderContext<'_>,
         output_id: VideoOutputId,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.set_isf_audio_frame(context.audio_frame);
         self.isf_render_namespace = (context.project_render_epoch, Some(output_id), false);
         let plan = build_video_output_render_plan(snapshot, output_id)
             .map_err(VideoPreviewError::Output)?;
@@ -4672,6 +4707,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         context: VideoEffectRenderContext<'_>,
         output_id: VideoOutputId,
     ) -> Result<VideoOutputRenderResult, VideoPreviewError> {
+        self.set_isf_audio_frame(context.audio_frame);
         self.isf_render_namespace = (context.project_render_epoch, Some(output_id), false);
         let plan = build_video_output_render_plan(snapshot, output_id)
             .map_err(VideoPreviewError::Output)?;
@@ -4692,6 +4728,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         transition_runtime: &VideoLayerTransitionRuntimeSnapshot,
         output_id: VideoOutputId,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.set_isf_audio_frame(context.audio_frame);
         self.isf_render_namespace = (context.project_render_epoch, Some(output_id), false);
         let mut plan = build_video_output_render_plan(snapshot, output_id)
             .map_err(VideoPreviewError::Output)?;
@@ -4714,6 +4751,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         transition_runtime: &VideoLayerTransitionRuntimeSnapshot,
         output_id: VideoOutputId,
     ) -> Result<VideoOutputRenderResult, VideoPreviewError> {
+        self.set_isf_audio_frame(context.audio_frame);
         self.isf_render_namespace = (context.project_render_epoch, Some(output_id), false);
         let mut plan = build_video_output_render_plan(snapshot, output_id)
             .map_err(VideoPreviewError::Output)?;
@@ -4739,6 +4777,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.set_isf_audio_frame(context.audio_frame);
         self.isf_render_namespace = (context.project_render_epoch, Some(output_id), true);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
@@ -4758,6 +4797,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoOutputRenderResult, VideoPreviewError> {
+        self.set_isf_audio_frame(context.audio_frame);
         self.isf_render_namespace = (context.project_render_epoch, Some(output_id), true);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
@@ -4778,6 +4818,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.set_isf_audio_frame(context.audio_frame);
         self.isf_render_namespace = (context.project_render_epoch, Some(output_id), true);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
@@ -4809,6 +4850,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         height: u32,
         cancellation: &dyn VideoRenderCancellation,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.set_isf_audio_frame(context.audio_frame);
         self.isf_render_namespace = (context.project_render_epoch, Some(output_id), true);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
@@ -4842,6 +4884,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoOutputRenderResult, VideoPreviewError> {
+        self.set_isf_audio_frame(context.audio_frame);
         self.isf_render_namespace = (context.project_render_epoch, Some(output_id), true);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
@@ -5222,6 +5265,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.set_isf_audio_frame(context.audio_frame);
+        self.isf_render_namespace = (context.project_render_epoch, Some(plan.output_id), false);
         let result = self.prepare_output_artistic_render_result_impl(
             snapshot, context, None, plan, width, height,
         )?;
@@ -5237,6 +5282,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.set_isf_audio_frame(context.audio_frame);
+        self.isf_render_namespace = (context.project_render_epoch, Some(plan.output_id), false);
         let mut plan = plan.clone();
         apply_video_layer_transition_weights(snapshot, transition_runtime, &mut plan.composition)?;
         let result = self.prepare_output_artistic_render_result_impl(
@@ -5261,6 +5308,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         context: VideoEffectRenderContext<'_>,
         output_id: VideoOutputId,
     ) -> Result<VideoOutputArtisticRenderResult, VideoPreviewError> {
+        self.set_isf_audio_frame(context.audio_frame);
         self.isf_render_namespace = (context.project_render_epoch, Some(output_id), false);
         let plan = build_video_output_render_plan(snapshot, output_id)
             .map_err(VideoPreviewError::Output)?;
@@ -5283,6 +5331,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoOutputArtisticRenderResult, VideoPreviewError> {
+        self.set_isf_audio_frame(context.audio_frame);
         self.isf_render_namespace = (context.project_render_epoch, Some(output_id), true);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
@@ -5306,6 +5355,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoOutputArtisticRenderResult, VideoPreviewError> {
+        self.set_isf_audio_frame(context.audio_frame);
         self.isf_render_namespace = (context.project_render_epoch, Some(output_id), true);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
@@ -5341,6 +5391,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         height: u32,
         gpu: Option<VideoOutputGpuSupport>,
     ) -> Result<VideoOutputDisplayRender, VideoPreviewError> {
+        self.set_isf_audio_frame(context.audio_frame);
         self.isf_render_namespace = (context.project_render_epoch, Some(output_id), false);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
@@ -5815,6 +5866,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<PreparedVideoOutput, VideoPreviewError> {
+        self.set_isf_audio_frame(None);
         self.isf_render_namespace = (0, Some(output_id), false);
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
@@ -6468,6 +6520,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .iter()
             .map(|(_, shader, controls)| (shader.as_ref(), controls.as_slice()))
             .collect::<Vec<_>>();
+        runtime.set_audio_frame(self.isf_audio_frame.as_ref());
         let (rendered, runtime_failures) = runtime.apply_stack_stage_local_with_keys(
             &frame,
             &stage_refs,
@@ -15357,6 +15410,74 @@ mod tests {
         }
     }
 
+    #[test]
+    fn c1_audio_frame_only_apis_select_and_clear_audio_on_static_input() {
+        let source = include_str!("isf_fixtures/audio.fs");
+        let shader = prepare_isf_shader(source).unwrap();
+        let mut layer = c1_test_layer(1, VideoBlendMode::Normal);
+        layer.isf_effect = Some(isf_effect_from_prepared(
+            "Audio fixture".to_string(),
+            source,
+            None,
+            &shader,
+        ));
+        let snapshot = c1_test_snapshot(vec![layer]);
+        let plan = build_video_output_render_plan(&snapshot, 80).unwrap();
+        let clips = VideoClipRuntimeSnapshot::default();
+        let transitions = VideoLayerTransitionRuntimeSnapshot::default();
+        let first = protocol::LiveAudioTextureFrame {
+            generation: 1,
+            feature_sequence: 1,
+            sample_rate: 48_000,
+            waveform: [-0.5; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+            fft: [0.75; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+        };
+        let second = protocol::LiveAudioTextureFrame {
+            generation: 1,
+            feature_sequence: 2,
+            sample_rate: 48_000,
+            waveform: [0.5; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+            fft: [0.25; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+        };
+        for with_transitions in [false, true] {
+            let mut renderer = VideoPreviewRenderer::with_frame_provider(
+                VideoRuntimeConfig::default(),
+                C1SolidFrameProvider {
+                    pixels: HashMap::from([(1, [0, 0, 0, 255])]),
+                    fail: false,
+                },
+            );
+            for (audio_frame, expected) in [
+                (Some(&first), [64, 191, 255, 255]),
+                (Some(&second), [191, 64, 255, 255]),
+                (None, [128, 0, 255, 255]),
+            ] {
+                let context = VideoEffectRenderContext {
+                    clip_runtime: &clips,
+                    project_render_epoch: 27,
+                    audio_frame,
+                };
+                let frame = if with_transitions {
+                    renderer.prepare_output_artistic_frame_with_effects_and_transitions(
+                        &snapshot,
+                        context,
+                        &transitions,
+                        &plan,
+                        1,
+                        1,
+                    )
+                } else {
+                    renderer.prepare_output_artistic_frame_with_effects(
+                        &snapshot, context, &plan, 1, 1,
+                    )
+                }
+                .unwrap();
+                assert_eq!(frame.data, expected, "with_transitions={with_transitions}");
+                assert_eq!(frame.pts_ms, 0, "the source playhead never advances");
+            }
+        }
+    }
+
     fn c1_chain(
         chain_id: u64,
         scope: VideoEffectScope,
@@ -15528,6 +15649,7 @@ mod tests {
             .render_output_with_effects(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &VideoClipRuntimeSnapshot::default(),
                     project_render_epoch: 1,
                 },
@@ -15554,6 +15676,7 @@ mod tests {
             .render_output_with_effects_evidenced(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 41,
                 },
@@ -15565,6 +15688,7 @@ mod tests {
             .render_output_with_effects_evidenced(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 41,
                 },
@@ -15575,6 +15699,7 @@ mod tests {
             .render_output_with_effects_evidenced(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 42,
                 },
@@ -15631,6 +15756,7 @@ mod tests {
                 .render_output_with_effects(
                     &base,
                     VideoEffectRenderContext {
+                        audio_frame: None,
                         clip_runtime: &runtime,
                         project_render_epoch: 1,
                     },
@@ -15643,6 +15769,7 @@ mod tests {
                 .render_output_with_effects_evidenced(
                     &changed,
                     VideoEffectRenderContext {
+                        audio_frame: None,
                         clip_runtime: &runtime,
                         project_render_epoch: 1,
                     },
@@ -15675,6 +15802,7 @@ mod tests {
             .render_output_with_effects(
                 &base,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 1,
                 },
@@ -15687,6 +15815,7 @@ mod tests {
             .render_output_with_effects_evidenced(
                 &remapped,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 1,
                 },
@@ -15715,6 +15844,7 @@ mod tests {
         ));
         let runtime = VideoClipRuntimeSnapshot::default();
         let context = VideoEffectRenderContext {
+            audio_frame: None,
             clip_runtime: &runtime,
             project_render_epoch: 71,
         };
@@ -15796,6 +15926,7 @@ mod tests {
             .render_output_with_effects(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 1,
                 },
@@ -15807,6 +15938,7 @@ mod tests {
             .render_output_with_effects(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 1,
                 },
@@ -15819,6 +15951,7 @@ mod tests {
             .render_output_with_effects_evidenced(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 1,
                 },
@@ -15886,6 +16019,7 @@ mod tests {
             .render_output_with_effects(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &VideoClipRuntimeSnapshot::default(),
                     project_render_epoch: 1,
                 },
@@ -15930,6 +16064,7 @@ mod tests {
                 .render_output_with_effects_evidenced(
                     snapshot,
                     VideoEffectRenderContext {
+                        audio_frame: None,
                         clip_runtime: &VideoClipRuntimeSnapshot::default(),
                         project_render_epoch: 1,
                     },
@@ -15959,6 +16094,7 @@ mod tests {
                 .render_output_with_effects(
                     snapshot,
                     VideoEffectRenderContext {
+                        audio_frame: None,
                         clip_runtime: &VideoClipRuntimeSnapshot::default(),
                         project_render_epoch: 1,
                     },
@@ -16034,6 +16170,7 @@ mod tests {
         ]);
         let clip_runtime = VideoClipRuntimeSnapshot::default();
         let mut context = VideoEffectRenderContext {
+            audio_frame: None,
             clip_runtime: &clip_runtime,
             project_render_epoch: 23,
         };
@@ -16119,6 +16256,7 @@ mod tests {
             .render_output_with_effects_evidenced(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &VideoClipRuntimeSnapshot::default(),
                     project_render_epoch: 1,
                 },
@@ -16177,6 +16315,7 @@ mod tests {
             .render_output_with_effects(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 1,
                 },
@@ -16199,6 +16338,7 @@ mod tests {
             .render_output_with_effects(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 1,
                 },
@@ -16214,6 +16354,7 @@ mod tests {
             .render_output_with_effects(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 1,
                 },
@@ -16235,6 +16376,7 @@ mod tests {
             .render_output_with_effects(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 1,
                 },
@@ -16247,6 +16389,7 @@ mod tests {
             .render_output_with_effects(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 1,
                 },
@@ -16270,6 +16413,7 @@ mod tests {
         let mut snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
         let runtime = VideoClipRuntimeSnapshot::default();
         let context = VideoEffectRenderContext {
+            audio_frame: None,
             clip_runtime: &runtime,
             project_render_epoch: 1,
         };
@@ -16370,6 +16514,7 @@ mod tests {
         ));
         let runtime = VideoClipRuntimeSnapshot::default();
         let context = VideoEffectRenderContext {
+            audio_frame: None,
             clip_runtime: &runtime,
             project_render_epoch: 1,
         };
@@ -16484,6 +16629,7 @@ mod tests {
             .render_input_mix_with_effects(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &VideoClipRuntimeSnapshot::default(),
                     project_render_epoch: 91,
                 },
@@ -16516,6 +16662,7 @@ mod tests {
         );
         let runtime = VideoClipRuntimeSnapshot::default();
         let context = VideoEffectRenderContext {
+            audio_frame: None,
             clip_runtime: &runtime,
             project_render_epoch: 1,
         };
@@ -16598,6 +16745,7 @@ mod tests {
             .render_output_with_effects(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &active_runtime,
                     project_render_epoch: 1,
                 },
@@ -16608,6 +16756,7 @@ mod tests {
             .render_output_with_effects(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &VideoClipRuntimeSnapshot::default(),
                     project_render_epoch: 1,
                 },
@@ -16763,6 +16912,7 @@ mod tests {
             .render_output_with_effects_evidenced(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 77,
                 },
@@ -16778,6 +16928,7 @@ mod tests {
             .render_output_with_effects(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 77,
                 },
@@ -16807,6 +16958,7 @@ mod tests {
             .render_output_with_effects(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 77,
                 },
@@ -16832,6 +16984,7 @@ mod tests {
             .render_output_with_effects(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &runtime,
                     project_render_epoch: 77,
                 },
@@ -17472,6 +17625,7 @@ mod tests {
         let snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
         let runtime = VideoClipRuntimeSnapshot::default();
         let context = VideoEffectRenderContext {
+            audio_frame: None,
             clip_runtime: &runtime,
             project_render_epoch: 913,
         };
@@ -17665,6 +17819,7 @@ mod tests {
             .render_output_with_effects(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &VideoClipRuntimeSnapshot::default(),
                     project_render_epoch: 1,
                 },
@@ -17700,6 +17855,7 @@ mod tests {
             .render_output_with_effects_evidenced(
                 &snapshot,
                 VideoEffectRenderContext {
+                    audio_frame: None,
                     clip_runtime: &VideoClipRuntimeSnapshot::default(),
                     project_render_epoch: 1,
                 },
@@ -17848,6 +18004,7 @@ mod tests {
         ));
         let clip_runtime = VideoClipRuntimeSnapshot::default();
         let context = VideoEffectRenderContext {
+            audio_frame: None,
             clip_runtime: &clip_runtime,
             project_render_epoch: 77,
         };
@@ -17914,6 +18071,7 @@ mod tests {
         ));
         let clip_runtime = VideoClipRuntimeSnapshot::default();
         let context = VideoEffectRenderContext {
+            audio_frame: None,
             clip_runtime: &clip_runtime,
             project_render_epoch: 901,
         };
@@ -18072,6 +18230,7 @@ mod tests {
         };
         let transition_runtime = VideoLayerTransitionRuntimeSnapshot::default();
         let context = VideoEffectRenderContext {
+            audio_frame: None,
             clip_runtime: &clip_runtime,
             project_render_epoch: 905,
         };
@@ -18153,6 +18312,7 @@ mod tests {
         let clip_runtime = VideoClipRuntimeSnapshot::default();
         let transition_runtime = VideoLayerTransitionRuntimeSnapshot::default();
         let context = VideoEffectRenderContext {
+            audio_frame: None,
             clip_runtime: &clip_runtime,
             project_render_epoch: 903,
         };
@@ -18227,6 +18387,7 @@ mod tests {
         let clip_runtime = VideoClipRuntimeSnapshot::default();
         let transition_runtime = VideoLayerTransitionRuntimeSnapshot::default();
         let context = VideoEffectRenderContext {
+            audio_frame: None,
             clip_runtime: &clip_runtime,
             project_render_epoch: 904,
         };
@@ -18344,6 +18505,7 @@ mod tests {
         };
         let clip_runtime = VideoClipRuntimeSnapshot::default();
         let context = VideoEffectRenderContext {
+            audio_frame: None,
             clip_runtime: &clip_runtime,
             project_render_epoch: 12,
         };
@@ -18592,6 +18754,7 @@ mod tests {
         let mut snapshot = c1_test_snapshot(vec![c1_test_layer(1, VideoBlendMode::Normal)]);
         let clip_runtime = VideoClipRuntimeSnapshot::default();
         let context = VideoEffectRenderContext {
+            audio_frame: None,
             clip_runtime: &clip_runtime,
             project_render_epoch: 21,
         };

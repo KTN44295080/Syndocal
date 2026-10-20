@@ -18,6 +18,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "recording_audio_textures.rs"]
+mod recording_audio_textures;
+
 const WORKER_ARGUMENT: &str = "--syndocal-recording-renderer-worker";
 const MAX_WORKER_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 const MAX_FRAME_BYTES: usize = 4096 * 4096 * 4;
@@ -31,6 +34,8 @@ const REQUEST_MAGIC: &[u8; 4] = b"SRF1";
 pub(crate) struct RecordingRenderRequest {
     pub(crate) video: protocol::VideoSnapshot,
     pub(crate) clip_runtime: protocol::VideoClipRuntimeSnapshot,
+    #[serde(skip, default)]
+    pub(crate) live_audio_textures: Option<Arc<protocol::LiveAudioTextureFrame>>,
     pub(crate) transition_runtime: protocol::VideoLayerTransitionRuntimeSnapshot,
     pub(crate) project_render_epoch: u64,
     pub(crate) bpm: f32,
@@ -48,6 +53,7 @@ pub(crate) struct RecordingRenderRequest {
 struct RecordingRenderRequestHeader<'a> {
     video: &'a protocol::VideoSnapshot,
     clip_runtime: &'a protocol::VideoClipRuntimeSnapshot,
+    live_audio_textures: Option<recording_audio_textures::Header>,
     transition_runtime: &'a protocol::VideoLayerTransitionRuntimeSnapshot,
     project_render_epoch: u64,
     bpm: f32,
@@ -62,6 +68,8 @@ struct RecordingRenderRequestHeader<'a> {
 struct RecordingRenderRequestHeaderOwned {
     video: protocol::VideoSnapshot,
     clip_runtime: protocol::VideoClipRuntimeSnapshot,
+    #[serde(default)]
+    live_audio_textures: Option<recording_audio_textures::Header>,
     transition_runtime: protocol::VideoLayerTransitionRuntimeSnapshot,
     project_render_epoch: u64,
     bpm: f32,
@@ -281,6 +289,7 @@ pub(crate) fn run_worker() -> Result<(), String> {
             &request.video,
             video::VideoEffectRenderContext {
                 clip_runtime: &request.clip_runtime,
+                audio_frame: request.live_audio_textures.as_deref(),
                 project_render_epoch: request.project_render_epoch,
             },
             &request.transition_runtime,
@@ -348,6 +357,7 @@ fn encode_render_request(request: &RecordingRenderRequest) -> Result<Vec<u8>, St
     let header = serde_json::to_vec(&RecordingRenderRequestHeader {
         video: &request.video,
         clip_runtime: &request.clip_runtime,
+        live_audio_textures: recording_audio_textures::header(request.live_audio_textures.as_deref())?,
         transition_runtime: &request.transition_runtime,
         project_render_epoch: request.project_render_epoch,
         bpm: request.bpm,
@@ -362,6 +372,7 @@ fn encode_render_request(request: &RecordingRenderRequest) -> Result<Vec<u8>, St
         .checked_add(4)
         .and_then(|length| length.checked_add(header.len()))
         .and_then(|length| length.checked_add(frame_bytes))
+        .and_then(|length| length.checked_add(if request.live_audio_textures.is_some() { recording_audio_textures::PAYLOAD_BYTES } else { 0 }))
         .ok_or_else(|| "Recording renderer request length overflow".to_string())?;
     if total > MAX_WORKER_REQUEST_BYTES {
         return Err("Recording renderer request exceeded 128 MiB".to_string());
@@ -372,6 +383,7 @@ fn encode_render_request(request: &RecordingRenderRequest) -> Result<Vec<u8>, St
     payload.extend_from_slice(REQUEST_MAGIC);
     payload.extend_from_slice(&header_len.to_le_bytes());
     payload.extend_from_slice(&header);
+    recording_audio_textures::append(request.live_audio_textures.as_deref(), &mut payload);
     for frame in &request.injected_frames {
         payload.extend_from_slice(&frame.data);
     }
@@ -397,6 +409,7 @@ fn decode_render_request(payload: &[u8]) -> Result<RecordingRenderRequest, Strin
     let header: RecordingRenderRequestHeaderOwned = serde_json::from_slice(header)
         .map_err(|error| format!("Recording renderer request header is invalid: {error}"))?;
     let mut offset = header_end;
+    let live_audio_textures = recording_audio_textures::decode(header.live_audio_textures, payload, &mut offset)?;
     let mut injected_frames = Vec::with_capacity(header.injected_frames.len());
     for frame in header.injected_frames {
         let data_end = offset
@@ -423,6 +436,7 @@ fn decode_render_request(payload: &[u8]) -> Result<RecordingRenderRequest, Strin
     Ok(RecordingRenderRequest {
         video: header.video,
         clip_runtime: header.clip_runtime,
+        live_audio_textures,
         transition_runtime: header.transition_runtime,
         project_render_epoch: header.project_render_epoch,
         bpm: header.bpm,
@@ -592,6 +606,11 @@ mod tests {
         let request = RecordingRenderRequest {
             video: protocol::VideoSnapshot::default(),
             clip_runtime: protocol::VideoClipRuntimeSnapshot::default(),
+            live_audio_textures: Some(std::sync::Arc::new(protocol::LiveAudioTextureFrame {
+                generation: 27, feature_sequence: 9, sample_rate: 48_000,
+                waveform: [0.25; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+                fft: [0.75; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+            })),
             transition_runtime: protocol::VideoLayerTransitionRuntimeSnapshot::default(),
             project_render_epoch: 4,
             bpm: 120.0,
@@ -609,6 +628,11 @@ mod tests {
             }],
         };
         let encoded = encode_render_request(&request).unwrap();
+        assert_eq!(
+            decode_render_request(&encoded).unwrap().live_audio_textures,
+            request.live_audio_textures,
+        );
+        assert!(serde_json::to_value(&request).unwrap().get("live_audio_textures").is_none());
         assert!(encoded.windows(4).any(|window| window == [0, 17, 255, 255]));
         assert!(!encoded.windows(4).any(|window| window == [48, 49, 55, 44]));
         assert_eq!(

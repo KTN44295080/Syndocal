@@ -153,6 +153,7 @@ fn the_live_seam_decodes_a_tick_together_and_recording_does_not() {
     let clip_runtime = VideoClipRuntimeSnapshot::default();
     let transitions = VideoLayerTransitionRuntimeSnapshot::default();
     let context = VideoEffectRenderContext {
+        audio_frame: None,
         clip_runtime: &clip_runtime,
         project_render_epoch: 1,
     };
@@ -245,6 +246,7 @@ fn a_layer_without_effects_queues_the_decoders_own_frame() {
     let clip_runtime = VideoClipRuntimeSnapshot::default();
     let transitions = VideoLayerTransitionRuntimeSnapshot::default();
     let context = VideoEffectRenderContext {
+        audio_frame: None,
         clip_runtime: &clip_runtime,
         project_render_epoch: 1,
     };

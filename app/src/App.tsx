@@ -1001,6 +1001,8 @@ import {
 } from "./controlMappingPerform";
 import { createPerformControlDispatcher } from "./performControlDispatcher";
 import { ControlAssignMenu, type ControlAssignment } from "./components/ControlAssignMenu";
+import { audioMappingIntervalMs, audioMappingTargetExists, audioSourceLabel, audioTargetIsEligible, audioTargetIsTrigger, isAudioMapping } from "./audioControlMapping";
+import { createAudioControlRuntime, createAudioMappingSource } from "./audioControlRuntime";
 import type { ControlAssignRequest } from "./createControlLearnCapture";
 import {
   installUiLocalization,
@@ -1797,6 +1799,7 @@ type ViewportSceneMatrixBankMoveHistoryEntry = {
 };
 
 interface LiveAudioInputLevels {
+  generation: number;
   running: boolean;
   stale: boolean;
   safety_clear_pending: boolean;
@@ -3125,8 +3128,10 @@ export default function App() {
   };
   restoreSavedLiveAudioInputSelectionAtStartup();
   const [liveAudioInputTelemetryFresh, setLiveAudioInputTelemetryFresh] = createSignal(false);
+  const audioMappingSource = createAudioMappingSource();
   let liveAudioInputTelemetryAcceptedAt = 0;
   const clearLiveAudioInputTelemetryFreshness = () => {
+    audioMappingSource.clear();
     liveAudioInputTelemetryAcceptedAt = 0;
     setLiveAudioInputTelemetryFresh(false);
   };
@@ -18385,6 +18390,7 @@ export default function App() {
     learnMidiControl,
     learnMidiControlForTargets,
     assignBeatDivisionForTargets,
+    assignAudioForTargets,
     removeMidiAssignments,
     saveMidiMappings,
     loadMidiMappings,
@@ -18640,8 +18646,9 @@ export default function App() {
       .filter((mapping) => request.targets.some((target) => midiMappingDrivesTarget(mapping, target)))
       .map((mapping) => ({
         mapping,
-        kind: mapping.message === "BeatDivision" ? "Beat division" as const : "MIDI" as const,
-        detail: mapping.message === "BeatDivision" ? beatDivisionLabel(mapping.number) : midiSourceDescription(mapping),
+        kind: isAudioMapping(mapping) ? "Audio" as const : mapping.message === "BeatDivision" ? "Beat division" as const : "MIDI" as const,
+        detail: isAudioMapping(mapping) ? audioSourceLabel(mapping.audio.source)
+          : mapping.message === "BeatDivision" ? beatDivisionLabel(mapping.number) : midiSourceDescription(mapping),
         beat: mapping.message === "BeatDivision",
       }));
   };
@@ -22026,8 +22033,9 @@ export default function App() {
   };
   // Perform MIDI/OSC/DMX targets and beat-division triggers run the same functions the
   // on-screen pad, Take button, selects and FX controls call.
+  let audioRuntimeRequestId = 0;
   const performInputSuspended = () => Boolean(paneWindow) || controlLearnMode() !== null || controlLearnBusy()
-    || isInAppDialogOpen() || Boolean(document.querySelector("dialog[open]"));
+    || isInAppDialogOpen() || Boolean(document.querySelector("[role='dialog'], dialog[open], [aria-modal='true']"));
   const performDispatcher = createPerformControlDispatcher({
     layers: () => snapshot().video.layers,
     effectCatalog: videoEffectCatalog,
@@ -22062,9 +22070,34 @@ export default function App() {
     setIsfControl: (layerId, index, name, value) =>
       fxLiveSession.run(layerId, () => setVideoLayerIsfControl(layerId, index, name, value)),
     triggerIsfEvent: triggerVideoLayerIsfEvent,
+    setAudioRuntime: async (batch) => {
+      const authority = captureProjectAuthorityIdentity();
+      if (audioRuntimeRequestId >= Number.MAX_SAFE_INTEGER) return;
+      await invoke("set_audio_control_runtime", {
+        ownerId: projectTransactionOwnerId, expectedEpoch: authority.project_epoch,
+        expectedRevision: authority.project_revision, expectedCheckpointHash: authority.checkpoint_hash,
+        requestId: ++audioRuntimeRequestId, ...batch,
+      });
+    },
     report: setMessage,
   });
   routePerformInput = (input) => { void performDispatcher.dispatch(input); };
+  const audioControls = createAudioControlRuntime({
+    mappings: () => midiMappings().filter(mapping =>
+      audioMappingTargetExists(mapping, snapshot().video.layers, videoEffectCatalog())),
+    observation: audioMappingSource.current,
+    projectEpoch: () => captureProjectAuthorityIdentity().project_epoch,
+    suspended: () => !isTauriRuntime() || controlLearnMode() !== null || controlLearnBusy()
+      || isInAppDialogOpen() || document.querySelector("[role='dialog'], dialog[open], [aria-modal='true']") !== null,
+    dispatch: input => performDispatcher.dispatch(input),
+    dispatchRuntime: (batch, current) => performDispatcher.dispatchAudioRuntime(batch, current),
+  });
+  onMount(() => {
+    if (paneWindow) return;
+    const timer = window.setInterval(audioControls.advance, audioMappingIntervalMs);
+    onCleanup(() => { window.clearInterval(timer); audioControls.dispose(); });
+  });
+
   // Beat-division mappings fire from the project clock. Only the main window
   // runs the clock: a pop-out pane would fire every trigger a second time.
   const beatTriggers = createBeatTriggerScheduler({
@@ -23269,6 +23302,12 @@ export default function App() {
         return;
       }
       const safe = levels.running && !levels.stale && !levels.safety_clear_pending;
+      const currentStatus = liveAudioInputStatus();
+      if (safe && currentStatus.running && !currentStatus.stale && !currentStatus.safety_clear_pending) {
+        audioMappingSource.accept(levels);
+      } else {
+        audioMappingSource.clear();
+      }
       if (safe) {
         acceptLiveAudioInputTelemetry();
       } else {
@@ -23299,6 +23338,7 @@ export default function App() {
           bpm: presentationSafe ? levels.bpm : null,
           bpm_confidence: presentationSafe ? levels.bpm_confidence : 0,
           beat_phase: presentationSafe ? levels.beat_phase : 0,
+          generation: presentationSafe ? levels.generation : 0,
           feature_sequence: presentationSafe ? levels.feature_sequence : 0,
         };
       });
@@ -27645,6 +27685,15 @@ export default function App() {
             label={request().targets[0]?.label ?? ""}
             beatEligible={request().targets.length > 0
               && request().targets.every((target) => isPerformTriggerAction(target.midi_action ?? target.action))}
+            audioEligible={request().targets.length > 0 && request().targets.every(audioTargetIsEligible)}
+            audioTrigger={request().targets.every(audioTargetIsTrigger)}
+            audioLow={request().targets[0]?.low}
+            audioHigh={request().targets[0]?.high}
+            onAudio={(settings) => {
+              const targets = request().targets;
+              closeControlAssignMenu();
+              void assignAudioForTargets(targets, settings);
+            }}
             assignments={controlAssignments()}
             onLearn={() => { const learn = request().learn; closeControlAssignMenu(); learn(); }}
             onBeat={(division) => {

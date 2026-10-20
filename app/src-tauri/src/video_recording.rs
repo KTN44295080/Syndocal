@@ -324,6 +324,7 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
         let request = RecordingRenderRequest {
             video: output_preview.snapshot.video.clone(),
             clip_runtime: output_preview.snapshot.video_clip_runtime.clone(),
+            live_audio_textures: output_preview.snapshot.live_audio_textures.clone(),
             transition_runtime: output_preview.snapshot.video_transition_runtime.clone(),
             project_render_epoch: output_preview.project_render_epoch,
             bpm: output_preview.snapshot.clock.bpm,
