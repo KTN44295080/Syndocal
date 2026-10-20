@@ -95,6 +95,7 @@ mod video_monitor_snapshot;
 use video_monitor_snapshot::capture_video_monitor_snapshot;
 mod live_video_monitor_packet;
 mod live_video_output_health;
+mod native_display_lease_boundary;
 mod video_output_pacer;
 use live_video_monitor_packet::*;
 mod video_recording_lifecycle;
@@ -82532,8 +82533,8 @@ fn set_display_output_window_open_with_output_control_fence(
         submit_output_lease_lifecycle_request(state, lease_request, lease_now_ms, false)
             .map_err(|error| format!("Display window lease authorization failed: {error:?}"))?
     };
-    let changed =
-        if already_open == open && (open || (!has_registered_worker && !has_registered_metrics)) {
+    let changed = native_display_lease_boundary::commit_if_authorized(&lease_receipt, || {
+        Ok(if already_open == open && (open || (!has_registered_worker && !has_registered_metrics)) {
             // Terminal idempotent result still passes through the exact durable
             // authorization lane, so reply-loss retries retain one receipt.
             false
@@ -82653,7 +82654,8 @@ fn set_display_output_window_open_with_output_control_fence(
             let incarnation = record_live_video_window_open(app, output_id);
             install_live_video_window_destroyed_observer(app, output_id, incarnation);
             true
-        };
+        })
+    })?;
     Ok((changed, expected_fence.clone(), lease_receipt))
 }
 
@@ -118054,9 +118056,29 @@ f 1 2 3
         assert!(snapshot.video.layers[0].state.bpm_sync.enabled);
         assert_eq!(snapshot.video.compositions[0].layer_ids, vec![1]);
 
+        // The sample authors an NDI input. A missing real NDI frame is now
+        // correctly transparent; provide deterministic pixels for this
+        // project/cue smoke test instead of depending on a retired placeholder.
+        struct SampleVideoDecoder;
+        impl video::VideoFrameDecoder for SampleVideoDecoder {
+            fn retain_layers(&mut self, _layer_ids: &[VideoLayerId]) {}
+
+            fn decode_frame(
+                &mut self,
+                request: &video::VideoFrameRequest,
+            ) -> Result<Option<video::VideoFrame>, video::VideoDecodeError> {
+                assert_eq!(request.source.kind, VideoSourceKind::Ndi);
+                Ok(Some(video::debug_solid_frame_for_layer(
+                    request.layer_id,
+                    request.position_ms,
+                    request.width,
+                    request.height,
+                )))
+            }
+        }
         let mut renderer = video::VideoPreviewRenderer::with_frame_provider(
             video::VideoRuntimeConfig::default(),
-            video::DecoderBackedFrameProvider::new(video::NullVideoDecoder).with_prefetch(0, 33),
+            video::DecoderBackedFrameProvider::new(SampleVideoDecoder).with_prefetch(0, 33),
         );
         let frame = renderer
             .render_output_preview(&snapshot.video, 1, 64, 36)
