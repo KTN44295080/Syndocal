@@ -7,6 +7,10 @@ pub mod midi;
 pub mod mtc_output;
 #[cfg(feature = "ndi")]
 pub mod ndi;
+#[cfg(any(feature = "ndi", test))]
+mod ndi_input_state;
+#[cfg(any(feature = "ndi", test))]
+mod ndi_runtime;
 pub mod osc;
 pub mod rdm;
 pub mod remote_ws;

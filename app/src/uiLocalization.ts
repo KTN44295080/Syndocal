@@ -25,6 +25,28 @@ export const djLinkMachineBlockReasonText = (reason: string): string => ({
 }[reason] ?? "DJ Link is blocked until its machine authority can be verified.");
 
 const japaneseText: Record<string, string> = {
+  "NDI inputs": "NDI入力",
+  "Signal lost": "信号切断",
+  "NDI video frames are being received.": "NDI映像を受信しています。",
+  "Waiting for the first NDI video frame. Check the sender and network.": "NDI映像の受信を待っています。送信側とネットワークを確認してください。",
+  "NDI signal was lost. Reconnecting to the same source automatically.": "NDI信号が途切れました。同じソースへの再接続を自動で試みます。",
+  "NDI input status is unavailable. Check the runtime and input settings.": "NDI入力の状態を取得できません。ランタイムと入力設定を確認してください。",
+  "NDI input is disabled.": "NDI入力は無効です。",
+  "NDI runtime not installed": "NDIランタイムがインストールされていません",
+  "NDI source": "NDIソース",
+  "Refresh NDI sources": "NDIソースを再検索",
+  "Refreshing NDI sources…": "NDIソースを再検索中…",
+  "Select an NDI source": "NDIソースを選択",
+  "Searching for NDI sources…": "NDIソースを検索中…",
+  "NDI diagnostic details": "NDIの診断情報",
+  "NDI input is not included in this build.": "このビルドはNDI入力に対応していません。",
+  "NDI runtime not installed. Install the NDI runtime and restart Syndocal.": "NDIランタイムがインストールされていません。インストールしてからSyndocalを再起動してください。",
+  "NDI source discovery failed. Refresh to try again.": "NDIソースを検索できませんでした。再検索してください。",
+  "No NDI sources found. Check the sender and network, then refresh.": "NDIソースが見つかりません。送信側とネットワークを確認して、再検索してください。",
+  "Select the exact NDI source to add. Receiving starts after the layer is added.": "追加するNDIソースを選択してください。レイヤーを追加すると受信を開始します。",
+  "Refresh to discover NDI sources on this network.": "再検索すると、このネットワークのNDIソースを探します。",
+  "NDI discovery is unavailable until the native IPC bridge is connected.": "アプリ本体への接続が完了するまでNDIソースを検索できません。",
+  "NDI source discovery returned an invalid response.": "NDIソースの検索結果が不正です。",
   "Monitor quality": "モニター品質",
   "Balanced": "バランス",
   "Low CPU": "CPU負荷を抑える",
@@ -4347,6 +4369,15 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [/^(.+)\. NDI source identity is '(.+)'; the receiver reconnects only to this exact source\.$/,
+    (message, identity) => `${translateUiText(message, "ja")}。NDIソースの識別情報は「${identity}」です。このソースにだけ自動で再接続します。`],
+  [/^NDI input has no signal for (.+)$/,
+    (source) => `NDIソース ${source} の映像信号を待っています`],
+  [/^NDI input signal lost for (.+)$/,
+    (source) => `NDIソース ${source} の映像信号が途切れました`],
+  [/^NDI runtime not installed: (.+)$/,
+    (detail) => `NDIランタイムがインストールされていません：${detail}`],
+
   [/^Assigned (.+) to every (.+)\.$/,
     (label, division) => `${label}をビート分割（${japaneseText[division] ?? division}）ごとに実行する設定にしました。`],
   [/^Removed (\d+) assignment\(s\) from (.+)\.$/,

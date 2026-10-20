@@ -19,6 +19,18 @@ const browserPath = [process.env.CHROME_PATH,
 ].filter(Boolean).find(existsSync);
 assert.ok(browserPath, "Set CHROME_PATH to an installed Chromium browser");
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+function requestedPort(name) {
+  const port = Number(process.env[name] ?? 0);
+  assert.ok(Number.isInteger(port) && port >= 0 && port <= 65535, `${name} must be an integer port from 0 to 65535`);
+  return port;
+}
+async function availableLocalPort(preferred) {
+  const reservation = createTcpServer();
+  await new Promise((done, reject) => { reservation.once("error", reject); reservation.listen(preferred, "127.0.0.1", done); });
+  const port = reservation.address().port;
+  await new Promise((done, reject) => reservation.close((error) => error ? reject(error) : done()));
+  return port;
+}
 async function waitFor(check, label, timeout = 30_000) {
   const deadline = Date.now() + timeout;
   let lastError;
@@ -232,20 +244,26 @@ const results = [];
 let currentCase = "startup";
 try {
   await mkdir(evidenceDir, { recursive: true });
-  const reservation = createTcpServer();
-  await new Promise((done, reject) => { reservation.once("error", reject); reservation.listen(0, "127.0.0.1", done); });
-  const vitePort = reservation.address().port;
-  await new Promise((done, reject) => reservation.close((error) => error ? reject(error) : done()));
+  const vitePort = await availableLocalPort(requestedPort("SYNDOCAL_CHECK_PORT"));
+  const requestedDebuggerPort = requestedPort("SYNDOCAL_CDP_PORT");
+  if (requestedDebuggerPort) {
+    assert.notEqual(requestedDebuggerPort, vitePort, "Vite and CDP need different ports");
+    await availableLocalPort(requestedDebuggerPort);
+  }
   server = await createServer({ root: appRoot, cacheDir: resolve(evidenceDir, "vite-cache"), server: { host: "127.0.0.1", port: vitePort, strictPort: true }, clearScreen: false, plugins: [focusFixturePlugin] });
   await server.listen();
   await server.environments.client.depsOptimizer?.scanProcessing;
   await server.transformRequest("/src/App.tsx");
   const origin = server.resolvedUrls.local[0];
   profile = await mkdtemp(join(tmpdir(), "syndocal-perform-check-"));
-  browser = spawn(browserPath, ["--headless=new", "--disable-gpu", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--no-first-run", "--no-default-browser-check", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
+  browser = spawn(browserPath, ["--headless=new", "--disable-gpu", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--no-first-run", "--no-default-browser-check", `--remote-debugging-port=${requestedDebuggerPort}`, `--user-data-dir=${profile}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
   browser.on("error", (error) => { console.error(error); process.exitCode = 1; });
-  const port = await waitFor(async () => Number((await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]), "owned browser debugger");
-  const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+  const port = requestedDebuggerPort || await waitFor(async () => Number((await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]), "owned browser debugger");
+  const targets = await waitFor(async () => {
+    if (browser.exitCode !== null) throw new Error("Owned browser exited before CDP was ready");
+    const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+    return targets.some((target) => target.type === "page") ? targets : null;
+  }, "owned browser page");
   let pageTarget = targets.find((target) => target.type === "page");
   cdp = new Cdp();
   await cdp.connect(pageTarget.webSocketDebuggerUrl);

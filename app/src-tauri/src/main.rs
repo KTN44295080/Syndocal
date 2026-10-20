@@ -324,6 +324,7 @@ mod dvc_import;
 mod dvc_stage_layout;
 mod e3_native_acceptance;
 mod live_audio_ipc_v1;
+mod ndi_catalog;
 mod ndi_transport;
 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
 mod normal_audio_output;
@@ -539,6 +540,7 @@ mod flat_invoke_args_tests {
 }
 
 use capture_catalog::{list_video_camera_profiles, probe_video_camera_profile};
+use ndi_catalog::list_ndi_sources_v1;
 use control_plane_query::{
     get_control_plane_query_capabilities, get_control_plane_query_schema_catalog,
     poll_control_plane_observation_events, query_control_plane_output_ownership,
@@ -73704,7 +73706,7 @@ fn append_ndi_input_faults(
                 backend_id: route.backend_id.clone(),
                 label: route.label.clone(),
                 message: format!(
-                    "{message}. NDI source identity is '{}'; restart the route after the source returns.",
+                    "{message}. NDI source identity is '{}'; the receiver reconnects only to this exact source.",
                     video::LiveVideoSourceIdentity::new(&route.backend_id, &route.endpoint_name)
                         .map_err(|error| error.to_string())?
                         .stable_key()
@@ -135664,6 +135666,7 @@ fn main() {
             discover_art_rdm_devices,
             start_art_rdm_full_discovery,
             list_video_camera_profiles,
+            list_ndi_sources_v1,
             probe_video_camera_profile,
             list_video_display_monitors,
             create_scene_authoritative_v1,

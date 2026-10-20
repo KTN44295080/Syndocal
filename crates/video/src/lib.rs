@@ -3937,6 +3937,18 @@ fn legacy_layer_input(
     })
 }
 
+fn ndi_no_signal_frame(request: &VideoFrameRequest) -> VideoFrame {
+    // One transparent texel covers any composition size without allocating
+    // output-sized pixels on every no-signal tick.
+    let mut frame = video_output_transparent_black_frame(1, 1);
+    frame.layer_id = request.layer_id;
+    frame.pts_ms = request.position_ms;
+    frame
+}
+
+#[cfg(test)]
+mod ndi_input_frame_tests;
+
 impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
     /// The result `decode_inputs_ahead` already produced for exactly `input`.
     fn take_decoded_ahead(
@@ -4034,6 +4046,9 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
         };
         match decoded {
             Ok(Some(frame)) => Ok(frame),
+            Ok(None) if request.source.kind == VideoSourceKind::Ndi => {
+                Ok(Arc::new(ndi_no_signal_frame(request)))
+            }
             Ok(None) if self.placeholder_when_missing => Ok(Arc::new(debug_solid_frame_for_layer(
                 request.layer_id,
                 request.position_ms,
@@ -4118,6 +4133,13 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
         };
         match decoded {
             Ok(Some(frame)) => Ok(frame),
+            Ok(None) if request.source.kind == VideoSourceKind::Ndi => {
+                if cancellation.is_cancelled() {
+                    Err(VideoFrameProviderError::Cancelled)
+                } else {
+                    Ok(ndi_no_signal_frame(request))
+                }
+            }
             Ok(None) if self.placeholder_when_missing => {
                 if cancellation.is_cancelled() {
                     Err(VideoFrameProviderError::Cancelled)
