@@ -32,6 +32,8 @@ const workspaces = [
   { id: "video-edit", fixture: "operator-vj", workspace: "control", mode: "mixer" },
   { id: "control-perform", fixture: "vj-bank", workspace: "touch", mode: "perform" },
   { id: "timeline", fixture: "timeline-layered", workspace: "control", mode: "live" },
+  // Task 21: Control > Timeline is the playback surface (data-control-mode-option stays the stable "live" id).
+  { id: "control-timeline", fixture: "cue-recall", workspace: "touch", mode: "live" },
 ];
 const report = { typeRoles: [], timestamp: new Date().toISOString(), browserPlugin: "unavailable", fallbackReason: "Browser plugin not available; task requires existing fixture harness", softwareOnly: true, screenshots: [], themes: [], textContrast: [], interactions: [], errors: [], warnings: [], baselineAssetNotices: [], failedResponses: [] };
 let server, browser;
@@ -423,7 +425,7 @@ render(()=><main class="app" style="height:100vh;grid-template-rows:56px minmax(
     await sheet.locator("canvas").screenshot({ path: resolve(artifacts, `${workspace.id}-themes-contact-sheet.png`) });
   }
   await sheet.close();
-  assert.equal(report.screenshots.length, 80, "complete screenshot matrix");
+  assert.equal(report.screenshots.length, workspaces.length * themes.length * configurations.length, "complete screenshot matrix");
   assert.deepEqual(report.errors, [], "no JavaScript runtime exceptions");
   const contrastFailures = report.themes.flatMap(item => item.contrasts.filter(pair => pair.required && !pair.passes).map(pair => ({ theme: item.theme, ...pair })));
   report.contrastFailures = contrastFailures;

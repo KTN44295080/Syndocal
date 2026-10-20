@@ -2,7 +2,7 @@ export type WorkspaceTab = "setup" | "control" | "touch";
 export type SetupArea = "lighting" | "video" | "mapping" | "io" | "security";
 export type SetupSubTab = "patch" | "video" | "mapping" | "io" | "authority";
 export type ControlMode = "edit" | "live" | "mixer" | "both" | "perform";
-export type ControlDomain = "lighting" | "video" | "both";
+export type ControlDomain = "lighting" | "video" | "both" | "timeline";
 export type ControlCategory = "dimmer" | "color" | "position" | "gobo" | "beam" | "focus" | "other" | "fader";
 export type TimelineDeskSurface = "show" | "automation" | "playback";
 export type TimelineContextDrawer = "none" | "cue" | "block";
@@ -37,7 +37,7 @@ export const setupSubTabsForArea = (area: SetupArea) => setupSubTabs.filter((tab
 
 export const controlModes: { id: ControlMode; label: string; description: string }[] = [
   { id: "edit", label: "Lighting", description: "Lighting editing, fixture attributes, visual controls, and presets" },
-  { id: "live", label: "Timeline", description: "Cue playback, timeline, and blackout controls" },
+  { id: "live", label: "Timeline", description: "Timeline sequence, block and cue authoring, source shelf, and inspector" },
   { id: "mixer", label: "Video", description: "Media Library preparation, verification, preview, and clip properties" },
   { id: "both", label: "Both", description: "Combined Lighting and Video live control overview" },
   { id: "perform", label: "Perform", description: "Clip launch, Preview / Program and layer mixing in one performance desk" },
@@ -61,13 +61,16 @@ export const controlDomainModes: { id: ControlDomain; mode: ControlMode; label: 
   { id: "lighting", mode: "edit", label: "Lighting" },
   { id: "video", mode: "perform", label: "Video" },
   { id: "both", mode: "both", label: "Both" },
+  // Playback surface for running the show. It reuses the stable "live" mode id
+  // under the Control workspace; Edit > Timeline keeps authoring under "control".
+  { id: "timeline", mode: "live", label: "Timeline" },
 ];
 
 export const controlModeForDomain = (domain: ControlDomain): ControlMode =>
-  domain === "video" ? "perform" : domain === "both" ? "both" : "edit";
+  domain === "video" ? "perform" : domain === "both" ? "both" : domain === "timeline" ? "live" : "edit";
 
 export const controlDomainForMode = (mode: ControlMode): ControlDomain =>
-  mode === "perform" ? "video" : mode === "both" ? "both" : "lighting";
+  mode === "perform" ? "video" : mode === "both" ? "both" : mode === "live" ? "timeline" : "lighting";
 
 export const isPerformWorkspace = (workspace: WorkspaceTab, mode: ControlMode): boolean =>
   workspace === "touch" && mode === "perform";
@@ -75,8 +78,12 @@ export const isPerformWorkspace = (workspace: WorkspaceTab, mode: ControlMode): 
 export const isBothWorkspace = (workspace: WorkspaceTab, mode: ControlMode): boolean =>
   workspace === "touch" && mode === "both";
 
+/** Control > Timeline: the show-running surface. Edit > Timeline is workspace "control". */
+export const isTimelinePlaybackWorkspace = (workspace: WorkspaceTab, mode: ControlMode): boolean =>
+  workspace === "touch" && mode === "live";
+
 export const workspaceModeForTabShortcut = (workspace: WorkspaceTab, code: string): ControlMode | null => {
-  const match = code.match(/^(?:Digit|Numpad)([1-3])$/);
+  const match = code.match(/^(?:Digit|Numpad)([1-4])$/);
   if (!match) return null;
   const index = Number(match[1]) - 1;
   return workspace === "touch" ? controlDomainModes[index]?.mode ?? null

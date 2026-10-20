@@ -1,0 +1,296 @@
+/* Control > Timeline: the playback surface for running a show. Every control
+   keeps a 44px+ target and theme tokens only; the body scrolls internally. */
+.layoutControl.controlModePlayback {
+  grid-template-columns: minmax(760px, 1fr);
+}
+
+.layoutControl.controlModePlayback .controlPlaybackPanel {
+  grid-column: 1 / -1;
+  order: 0;
+}
+
+.controlPlaybackPanel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.controlPlaybackBody {
+  display: grid;
+  grid-template-columns: minmax(300px, 5fr) minmax(300px, 4fr);
+  gap: 12px;
+  min-height: 0;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.controlPlaybackColumn {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.controlPlaybackKeys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--theme-muted);
+  font-size: var(--fs-control);
+}
+
+.controlPlaybackKeys kbd {
+  padding: 0 6px;
+  border: 1px solid var(--theme-line-strong);
+  border-radius: 4px;
+  background: var(--theme-inset);
+  color: var(--theme-text);
+  font-family: var(--theme-font-number);
+  font-size: var(--fs-control);
+}
+
+.controlPlaybackRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  min-width: 0;
+}
+
+.controlPlaybackCard {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--theme-line-strong);
+  border-radius: 8px;
+  background: var(--theme-panel);
+}
+
+.controlPlaybackCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.controlPlaybackReadout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.controlPlaybackReadout > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--theme-line);
+  border-radius: 6px;
+  background: var(--theme-inset);
+}
+
+.controlPlaybackReadout dt {
+  color: var(--theme-dim);
+  font-size: var(--fs-control);
+}
+
+.controlPlaybackReadout dd {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  min-width: 0;
+}
+
+.controlPlaybackReadout dd > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-title, var(--fs-text));
+}
+
+.controlPlaybackReadout dd > small,
+.controlPlaybackNote,
+.controlPlaybackClockLength {
+  color: var(--theme-muted);
+  font-size: var(--fs-text);
+}
+
+.controlPlaybackNote {
+  margin: 0;
+}
+
+.controlPlaybackFade {
+  width: 100%;
+  height: 10px;
+  accent-color: var(--theme-fader-fill);
+}
+
+.controlPlaybackActions {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.controlPlaybackPanel button,
+.controlPlaybackPanel input[type="range"] {
+  min-height: 48px;
+}
+
+.controlPlaybackPanel .controlPlaybackActions > button {
+  min-width: 0;
+  padding-inline: 8px;
+}
+
+.controlPlaybackGo:not(:disabled) {
+  min-height: 64px;
+  border-color: var(--theme-program);
+  background: var(--theme-program);
+  color: var(--theme-on-program);
+  box-shadow: inset 0 -3px 0 var(--theme-program-deep);
+  font-weight: var(--fw-strong);
+}
+
+.controlPlaybackPanel .controlPlaybackActions > .controlPlaybackGo {
+  min-height: 64px;
+}
+
+.controlPlaybackBadge {
+  display: inline-grid;
+  place-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--theme-line-strong);
+  background: var(--theme-inset);
+  color: var(--theme-muted);
+  font-size: var(--fs-text);
+}
+
+.controlPlaybackBadge.engaged {
+  border-color: var(--theme-program);
+  background: var(--theme-program);
+  color: var(--theme-on-program);
+}
+
+.controlPlaybackClock {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.controlPlaybackClock > output {
+  font-family: var(--theme-font-number);
+  font-size: 28px;
+  line-height: 1.2;
+}
+
+.controlPlaybackSeek {
+  width: 100%;
+}
+
+.controlPlaybackCueList {
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.controlPlaybackCues {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  min-height: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.controlPlaybackCue {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  padding: 6px 12px;
+  border: 1px solid var(--theme-line);
+  border-inline-start: 6px solid var(--identity, var(--theme-line-strong));
+  border-radius: 6px;
+  background: var(--theme-raised);
+  color: var(--theme-text);
+  text-align: start;
+}
+
+.controlPlaybackCue:hover:not(:disabled) {
+  border-color: var(--theme-line-strong);
+  border-inline-start-color: var(--identity, var(--theme-line-strong));
+}
+
+.controlPlaybackCue.next {
+  border-color: var(--theme-queued);
+  border-inline-start-color: var(--identity, var(--theme-queued));
+}
+
+.controlPlaybackCue.active {
+  border-color: var(--theme-program);
+  border-inline-start-color: var(--identity, var(--theme-program));
+  background: var(--theme-selected);
+  color: var(--theme-on-selected);
+}
+
+.controlPlaybackCueNumber {
+  min-width: 2.5ch;
+  color: var(--theme-dim);
+  font-family: var(--theme-font-number);
+}
+
+.controlPlaybackCue.active .controlPlaybackCueNumber,
+.controlPlaybackCue.active .controlPlaybackCueFade,
+.controlPlaybackCue.active small {
+  color: inherit;
+}
+
+.controlPlaybackCueName {
+  display: grid;
+  min-width: 0;
+}
+
+.controlPlaybackCueName > strong,
+.controlPlaybackCueName > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.controlPlaybackCueName > small {
+  color: var(--theme-muted);
+  font-size: var(--fs-text);
+}
+
+.controlPlaybackCueFade {
+  color: var(--theme-muted);
+  font-size: var(--fs-control);
+}
+
+@media (max-width: 900px) {
+  .controlPlaybackBody {
+    grid-template-columns: minmax(0, 1fr);
+    overflow: auto;
+  }
+
+  .controlPlaybackColumn,
+  .controlPlaybackCueList {
+    overflow: visible;
+  }
+}

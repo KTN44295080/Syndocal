@@ -128,6 +128,7 @@ import { StagePreview2D } from "./components/StagePreview2D";
 import { EditVideoInspector } from "./components/EditVideoInspector";
 import { VideoControlPanel } from "./components/VideoControlPanel";
 import { ControlBothPanel } from "./components/ControlBothPanel";
+import { ControlTimelinePlaybackPanel } from "./components/ControlTimelinePlaybackPanel";
 import { liveVideoMonitorStatusLabel } from "./components/LiveVideoMonitorPanel";
 import { VideoClipSlotInspectorPanel } from "./components/VideoClipSlotInspectorPanel";
 import { defaultAutoVjSnapshot } from "./components/AutoVjStrip";
@@ -5906,7 +5907,8 @@ export default function App() {
   createEffect(() => {
     if (operatorLockMode() !== "Partial") return;
     const allowedAuthoring = workspaceTab() === "control" && controlMode() !== "edit";
-    const allowedLiveDesk = workspaceTab() === "touch" && (controlMode() === "perform" || controlMode() === "both");
+    const allowedLiveDesk = workspaceTab() === "touch"
+      && (controlMode() === "perform" || controlMode() === "both" || controlMode() === "live");
     if (!allowedAuthoring && !allowedLiveDesk) {
       setWorkspaceTab("control");
       setControlMode("live");
@@ -10064,9 +10066,7 @@ export default function App() {
         class="liveDeskIconButton liveDeskViewIconButton liveStatusToggle"
         data-live-status-toggle
         data-live-desk-view-action="status"
-        aria-controls={liveStatusExpanded()
-          ? controlMode() === "edit" ? "lighting-status-inspector" : "live-status-inspector"
-          : controlMode() === "live" ? "live-status-inspector" : undefined}
+        aria-controls={liveStatusExpanded() ? "lighting-status-inspector" : undefined}
         aria-expanded={liveStatusExpanded()}
         aria-label={controlMode() === "edit"
           ? liveStatusExpanded() ? "Hide lighting status details" : "Show lighting status details"
@@ -10095,7 +10095,9 @@ export default function App() {
       : workspaceTab() === "touch"
         ? touchControlDomain() === "lighting"
           ? "layoutSharedWorkspace layoutControl layoutTouch controlModeEdit editDesk-faders touchDomainLighting"
-          : `layoutSharedWorkspace layoutControl controlMode${touchControlDomain() === "video" ? "Perform" : "Both"}`
+          : touchControlDomain() === "timeline"
+            ? "layoutSharedWorkspace layoutControl controlModePlayback"
+            : `layoutSharedWorkspace layoutControl controlMode${touchControlDomain() === "video" ? "Perform" : "Both"}`
         : `layoutSharedWorkspace layoutControl controlMode${controlMode()[0].toUpperCase()}${controlMode().slice(1)}${
             controlMode() === "edit" ? ` editDesk-${editDeskSurface()}` : ""
           }`,
@@ -26616,7 +26618,8 @@ export default function App() {
     setCueFadePaused,
     playTimeline,
     pauseTimeline,
-    timelineSurfaceActive: () => controlMode() === "live" && timelineDeskSurface() === "show",
+    // Control > Timeline (workspace "touch") is the playback surface: Space stays GO there.
+    timelineSurfaceActive: () => workspaceTab() === "control" && controlMode() === "live" && timelineDeskSurface() === "show",
     timelineLoopEnabled: () => (activeTimeline().loop_runtime?.status ?? "disabled") !== "disabled",
     timelineLoopAvailable: () => activeTimeline().loop_region !== null && activeTimeline().loop_region !== undefined,
     setTimelineLoopEnabled,
@@ -26693,10 +26696,11 @@ export default function App() {
       event.preventDefault();
       return;
     }
-    // In Perform, native button activation owns Enter / Space. The global GO
-    // shortcut must not consume a focused clip, pager or blackout action.
+    // In Perform and Control > Timeline, native button activation owns Enter / Space.
+    // The global GO shortcut must not consume a focused clip, pager, cue row,
+    // Release or blackout action (G, Shift+Space and the other keys stay global).
     if (
-      workspaceTab() === "touch" && controlMode() === "perform" &&
+      workspaceTab() === "touch" && (controlMode() === "perform" || touchControlDomain() === "timeline") &&
       !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey &&
       (event.key === "Enter" || event.code === "Space") &&
       event.target instanceof HTMLElement && event.target.closest("button, summary")
@@ -27691,6 +27695,9 @@ export default function App() {
           <Show when={controlMode() !== "both"}>
             <section id="control-domain-panel-both" role="tabpanel" aria-labelledby="control-domain-both" hidden />
           </Show>
+          <Show when={touchControlDomain() !== "timeline"}>
+            <section id="control-domain-panel-timeline" role="tabpanel" aria-labelledby="control-domain-timeline" hidden />
+          </Show>
         </Show>
         <Show when={workspaceTab() === "control" && controlMode() === "edit"}>
           <section
@@ -27836,255 +27843,47 @@ export default function App() {
             data-timeline-arranger-upper
             aria-label="Timeline arranger"
           />
-          <div
-            id="live-status-inspector"
-            class="liveStatusGrid"
-            classList={{ sceneSettingsVisible: Boolean(selectedSceneCue()) }}
-            role="region"
-            aria-label="Live status details"
-            data-scene-settings-visible={selectedSceneCue() ? "true" : "false"}
-          >
-            <div class="liveStatusItem liveCueStatusCell">
-              <span class="uiMicroLabel">Active cue</span>
-              <strong data-no-localize>
-                <Show when={activeCue()}>
-                  <i
-                    class="liveCueIdentityChip"
-                    aria-hidden="true"
-                    style={{
-                      background: cueIdentityCss(
-                        activeCue()!.id,
-                        activeCue()!.color,
-                        "band",
-                        activeCue()!.group_id,
-                        activeCue()!.group_id ? groupColors()[activeCue()!.group_id!] : null,
-                      ),
-                    }}
-                  />
-                </Show>
-                {activeCue()?.label ?? "None"}
-              </strong>
-            </div>
-            <div class="liveStatusItem liveCueStatusCell">
-              <span class="uiMicroLabel">Next cue</span>
-              <strong data-no-localize>
-                <Show when={nextCue()}>
-                  <i
-                    class="liveCueIdentityChip"
-                    aria-hidden="true"
-                    style={{
-                      background: cueIdentityCss(
-                        nextCue()!.id,
-                        nextCue()!.color,
-                        "band",
-                        nextCue()!.group_id,
-                        nextCue()!.group_id ? groupColors()[nextCue()!.group_id!] : null,
-                      ),
-                    }}
-                  />
-                </Show>
-                {nextCue()?.label ?? "None"}
-              </strong>
-            </div>
-            <Show when={selectedSceneCue()} fallback={<>
-            <div class="liveStatusItem liveDeskSceneStatus">
-              <span>Show scenes</span>
-              <strong data-live-desk-scene-readout>{timelineTrack()} · {snapshot().cues.length} scenes</strong>
-            </div>
-            <div class="liveStatusItem">
-              <span>Fixtures</span>
-              <strong>{snapshot().fixtures.length}</strong>
-            </div>
-            <div class="liveStatusItem">
-              <span>Effects</span>
-              <strong>{activeEffectCount()} / {snapshot().effects.length}</strong>
-            </div>
-            <Show when={authoredEffectEnableControlEffect()}>
-              {(effect) => (
-                <div class="liveStatusItem" data-authored-effect-enable-control>
-                  <span>Global FX</span>
-                  <label>
-                    <select
-                      data-authored-effect-enable-select
-                      aria-label="Global effect to enable or bypass"
-                      value={String(effect().id)}
-                      onChange={(event) => setAuthoredEffectEnableControlId(Number(event.currentTarget.value))}
-                    >
-                      <For each={snapshot().effects}>
-                        {(candidate) => <option value={candidate.id}>{candidate.label}</option>}
-                      </For>
-                    </select>
-                  </label>
-                  <label data-authored-effect-enable-toggle={effect().id}>
-                    <input
-                      type="checkbox"
-                      checked={effect().enabled}
-                      aria-label={`${effect().enabled ? "Bypass" : "Enable"} global effect ${effect().id}`}
-                      onChange={(event) => void setEffectEnabled(effect().id, event.currentTarget.checked)}
-                    />
-                    <span>{effect().enabled ? "Enabled" : "Disabled"}</span>
-                  </label>
-                </div>
-              )}
-            </Show>
-            <div class="liveStatusItem">
-              <span>DMX routes</span>
-              <strong>{enabledDmxOutputCount()} / {snapshot().dmx_outputs.length}</strong>
-            </div>
-            <div class="liveStatusItem">
-              <span>Video outs</span>
-              <strong>{enabledVideoOutputCount()} / {snapshot().video.outputs.length}</strong>
-            </div>
-            <div class="liveStatusItem">
-              <span>Timeline</span>
-              <strong>{snapshot().timeline.playing ? "Playing" : "Stopped"}</strong>
-            </div>
-            <div class="liveStatusItem">
-              <span>BPM</span>
-              <strong>{snapshot().clock.bpm.toFixed(1)}</strong>
-            </div>
-            <div class="liveStatusItem">
-              <span>Clock</span>
-              <strong>{clockSourceLabel(snapshot().clock.source)}</strong>
-            </div>
-            <div class="liveStatusItem">
-              <span>Sync</span>
-              <strong class={`clockSyncLabel ${snapshot().clock.external_sync_locked ? "locked" : ""}`}>
-                {clockSyncStatusLabel(snapshot().clock)}
-              </strong>
-            </div>
-            <div class="liveStatusItem">
-              <span>Timecode</span>
-              <strong class="tabularNums" data-no-localize>{formatShowTimecode(snapshot().timeline.position_ms)}</strong>
-            </div>
-            </>}>
-              {(cue) => renderSceneSettingsPane(cue)}
-            </Show>
-          </div>
-          <Show when={controlLiveView() === "matrix"}>
-            <SceneMatrixPanel
-              projectEpoch={projectMappingsAuthority().project_epoch}
-              bankAuthority={bankAuthority()}
-              bankMutationFailureMessage={message()}
-              toolbar={liveDeskViewActions()}
-              selectedCueListId={selectedCueListId()}
-              onSelectCueList={setSelectedCueListId}
-              onCueListLabel={setCueListLabel}
-              onCreateCueList={createCueList}
-              onRenameCueList={renameCueList}
-              onRemoveCueList={removeCueList}
-              onCreateSceneForCueList={createSceneInCueList}
-              onRenameCue={renameScene}
-              onDuplicateCue={duplicateCue}
-              onRemoveCue={removeCue}
-              cueRemovalImpact={cueRemovalImpact}
-              onReorderCueLists={reorderCueLists}
-              groupColors={groupColors()}
-              onSetGroupColor={setGroupColor}
-              groupIds={sceneMatrixGroupIds()}
-              activeCueId={snapshot().active_cue_id}
-              activeGroupCueIds={snapshot().active_group_cue_ids ?? {}}
-              selectedCueId={selectedSceneCueId()}
-              activeFade={snapshot().active_fade}
-              cueLiveModifiers={snapshot().cue_live_modifiers}
-              onSetCueLiveModifier={setCueLiveModifierLive}
-              onClearCueLiveModifier={clearCueLiveModifierLive}
-              onReleaseCue={releaseCueById}
-              timelineTrack={timelineTrack()}
-              onTriggerCue={triggerCue}
-              onSelectCue={selectSceneCue}
-              onOpenSuperScene={(cueId) => void openOrCreateSuperScene(cueId)}
-              onOpenCueEditor={() => openCueEditor()}
-              onBeginTimelineCueDrag={beginTimelineCueDrag}
-              onMoveTimelineCueDrag={moveTimelineCueDrag}
-              onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
-            />
-          </Show>
-          <Show when={controlLiveView() === "pads"}>
-            <Show
-              when={bankAuthority().issue === null}
-              fallback={
-                <p class="empty" role="alert" data-bank-authority-unavailable={bankAuthority().issue?.kind}>
-                  {bankAuthority().issue ? bankAuthorityIssueMessage(bankAuthority().issue!) : ""}
-                </p>
-              }
-            >
-            <div class="liveCuePadSurface">
-              <div class="liveCuePadHeader">
-                <h3>Cue Pads</h3>
-                <span>{cuePadRangeLabel()}</span>
-                <label class="checkbox compactCheckbox">
-                  <input
-                    type="checkbox"
-                    checked={cuePadFollowActive()}
-                    onChange={(event) => setCuePadFollowActive(event.currentTarget.checked)}
-                  />
-                  Follow
-                </label>
-                <button
-                  onClick={() => {
-                    setCuePadFollowActive(false);
-                    setCuePadBank(Math.max(0, cuePadBank() - 1));
-                  }}
-                  disabled={cuePadBank() === 0}
-                >
-                  Prev
-                </button>
-                <button
-                  onClick={() => {
-                    setCuePadFollowActive(false);
-                    setCuePadBank(Math.min(cuePadBankCount() - 1, cuePadBank() + 1));
-                  }}
-                  disabled={cuePadBank() >= cuePadBankCount() - 1}
-                >
-                  Next
-                </button>
-                {liveDeskViewActions()}
-              </div>
-              <div class="liveCuePadGrid">
-                <For each={liveCuePads()}>
-                  {(pad) => (
-                    <button
-                      class={`liveCuePad ${pad.cue?.id === snapshot().active_cue_id ? "active" : ""} ${
-                        pad.cue?.id === nextCue()?.id ? "next" : ""
-                      }`}
-                      style={pad.cue ? {
-                        "--identity": cueIdentityCss(
-                          pad.cue.id,
-                          pad.cue.color,
-                          "text",
-                          pad.cue.group_id,
-                          pad.cue.group_id ? groupColors()[pad.cue.group_id] : null,
-                        ),
-                      } : undefined}
-                      disabled={!pad.cue}
-                      onClick={() => {
-                        if (pad.cue) {
-                          void triggerCue(pad.cue.id);
-                        }
-                      }}
-                    >
-                      <span>{pad.slot}</span>
-                      <strong>{pad.cue ? <span data-no-localize>{pad.cue.label}</span> : "Empty"}</strong>
-                      <small>{pad.cue ? `#${pad.index + 1} / ${displayNumber(pad.cue.fade_ms, 0)} ms` : "-"}</small>
-                    </button>
-                  )}
-                </For>
-              </div>
-            </div>
-            </Show>
-          </Show>
-          <Show when={snapshot().active_fade}>
-            {(fade) => (
-              <div class="liveFadeMeter">
-                <span>
-                  Fade {Math.round(fade().progress * 100)}% / {fade().remaining_ms} ms
-                </span>
-                <progress max="1" value={fade().progress} />
-              </div>
-            )}
-          </Show>
         </section>
+        </Show>
+        <Show when={workspaceTab() === "touch" && touchControlDomain() === "timeline"}>
+          <ControlTimelinePlaybackPanel
+            cues={snapshot().cues}
+            cueLists={snapshot().cue_lists}
+            activeCueId={snapshot().active_cue_id ?? null}
+            nextCueId={nextCue()?.id ?? null}
+            activeFade={snapshot().active_fade ?? null}
+            timelineEvents={activeTimeline().events}
+            timelinePositionMs={activeTimeline().position_ms}
+            timelineDurationMs={activeTimeline().duration_ms}
+            timelinePlaying={activeTimeline().playing}
+            childTimelineLabel={timelineChildCue()?.label ?? null}
+            blackout={snapshot().authored_blackout || snapshot().safety_blackout_engaged}
+            videoBlackout={snapshot().video.blackout}
+            safetyBlackoutEngaged={snapshot().safety_blackout_engaged}
+            blackoutBlockedReason={blackoutBlockedReason()}
+            cueIdentity={(cue) => cueIdentityCss(
+              cue.id,
+              cue.color,
+              "band",
+              cue.group_id,
+              cue.group_id ? groupColors()[cue.group_id] : null,
+            )}
+            onGo={() => void triggerNextCue()}
+            onBack={() => void triggerPreviousCue()}
+            onRelease={() => {
+              const cueId = snapshot().active_cue_id;
+              if (cueId !== null && cueId !== undefined) void releaseCueById(cueId);
+            }}
+            onTriggerCue={(cueId) => void triggerCue(cueId)}
+            onToggleFadePause={() => void setCueFadePaused(!snapshot().active_fade?.paused)}
+            onPlay={() => void playTimeline()}
+            onPause={() => void pauseTimeline()}
+            onSeek={(positionMs) => void seekTimeline(positionMs)}
+            onSetBlackout={(enabled) => void setBlackout(enabled)}
+            onSetVideoBlackout={(enabled) => void requestPerformVideoBlackout(enabled)}
+            onSetAllBlackout={(enabled) => void setAllBlackout(enabled)}
+            onOpenTimelineEditor={paneWindow ? undefined : () => selectControlMode("live")}
+          />
         </Show>
         <Show when={workspaceTab() === "touch" && touchControlDomain() === "video"}>
           <dialog class="controlVideoToolsDialog" ref={videoLiveControlsDialog} aria-labelledby="control-video-tools-title"
@@ -29353,7 +29152,7 @@ export default function App() {
             onClearFixtureFlags={() => clearFixtureFlags("all")}
             onSetFixtureTransform={setFixtureTransform}
           />
-          <Show when={controlMode() === "live" && timelineUpperHost()?.isConnected && timelineDeskSurface() === "playback"}>
+          <Show when={workspaceTab() === "control" && controlMode() === "live" && timelineUpperHost()?.isConnected && timelineDeskSurface() === "playback"}>
           <Portal mount={timelineUpperHost()!}>
           <section class="panel faders controlPanel timelineDesk-playback">
           <div class="playbackDeskSurface">
@@ -29538,7 +29337,7 @@ export default function App() {
           </Show>
           </FaderAttributeEditorPanel>
           <div class="timelinePanel">
-        <Show when={controlMode() === "live" && timelineUpperHost()?.isConnected && timelineDeskSurface() === "show"}>
+        <Show when={workspaceTab() === "control" && controlMode() === "live" && timelineUpperHost()?.isConnected && timelineDeskSurface() === "show"}>
             <Portal mount={timelineUpperHost()!}>
             <section class="panel faders controlPanel timelineDesk-show">
             <div class="timelinePanel">
@@ -29748,7 +29547,7 @@ export default function App() {
             </section>
             </Portal>
             </Show>
-            <Show when={controlMode() === "live" && timelineUpperHost()?.isConnected && timelineDeskSurface() === "automation"}>
+            <Show when={workspaceTab() === "control" && controlMode() === "live" && timelineUpperHost()?.isConnected && timelineDeskSurface() === "automation"}>
             <Portal mount={timelineUpperHost()!}>
             <section class="panel faders controlPanel timelineDesk-automation">
             <div class="timelinePanel">
