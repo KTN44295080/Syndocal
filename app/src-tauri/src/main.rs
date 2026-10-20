@@ -80630,8 +80630,15 @@ fn get_debug_video_preview(
     state: State<'_, AppState>,
     width: u32,
     height: u32,
+    composition_id: Option<CompositionId>,
 ) -> Result<video::VideoFrame, String> {
-    let (snapshot, bpm) = state.engine.video_layer_thumbnail_snapshot();
+    let (mut snapshot, bpm) = state.engine.video_layer_thumbnail_snapshot();
+    if let Some(composition_id) = composition_id {
+        snapshot.compositions.retain(|composition| composition.id == composition_id);
+        if snapshot.compositions.is_empty() {
+            return Err("Group preview composition no longer exists".to_string());
+        }
+    }
     let mut renderer = state
         .video_preview
         .lock()
