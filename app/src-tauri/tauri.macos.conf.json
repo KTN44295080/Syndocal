@@ -1,0 +1,12 @@
+{
+  "bundle": {
+    "resources": {
+      "../../licenses/Syphon-BSD.txt": "licenses/Syphon-BSD.txt"
+    },
+    "macOS": {
+      "frameworks": [
+        "../../target/syphon/frameworks/Syphon.framework"
+      ]
+    }
+  }
+}

@@ -1755,12 +1755,12 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   const refreshSnapshotAndVideoOutputRenderPlans = async () => {
     await Promise.all([options.refreshSnapshot(), refreshVideoOutputRenderPlans(true), refreshVideoOutputWindowStatuses(true)]);
   };
-  const refreshVideoRuntimeStatus = async () => {
+  const refreshVideoRuntimeStatus = async (silent = false) => {
     try {
       const status = await options.invoke<VideoRuntimeStatus>("get_video_runtime_status");
       options.setVideoRuntimeStatus(status);
-      options.setMessage(`Video backends: ${status.backends.filter((backend) => backend.state === "Available").length}/${status.backends.length} available.`);
-    } catch (error) { options.setMessage(String(error)); }
+      if (!silent) options.setMessage(`Video backends: ${status.backends.filter((backend) => backend.state === "Available").length}/${status.backends.length} available.`);
+    } catch (error) { if (!silent) options.setMessage(String(error)); }
   };
   let externalVideoTransportStatusRefreshInFlight = false;
   const clearExternalVideoTransportStatus = () => {

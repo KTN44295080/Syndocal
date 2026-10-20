@@ -24,6 +24,22 @@ binding for local inter-application video texture transport.
 
 Spout2 is linked statically and does not require a separate runtime DLL.
 
+macOS builds with the default `syphon` feature dynamically link the official
+Syphon.framework through Syndocal's Objective-C/Metal output bridge.
+
+- Project: Syphon Framework
+- Source: https://github.com/Syphon/Syphon-Framework
+- Pinned revision: `f4761677a45b8034a3c2069ec0f3d2553da81fba`
+- Archive SHA-256: `a3766088c46588c42b087f4e5ff7ae7bb0f83292af59a0aeb8bba69eba5311c5`
+- Licences: upstream BSD 3-Clause distribution licence and BSD 2-Clause
+  source-header notices, including the Metal contributor notices
+- Complete licence texts: `licenses/Syphon-BSD.txt`
+
+`app/scripts/prepare-syphon.sh` verifies the pinned source archive and builds the
+framework with Xcode. The macOS application bundles the framework, its Metal
+shader library, and the licence texts. No Syphon binary is used on Windows or
+Linux. Syphon input is not implemented.
+
 Syndocal uses `bcdec_rs` 0.2.0 to provide a safe, pure-Rust BC7 software
 fallback for HAP R frames when direct GPU BC texture sampling is unavailable or
 the frame must pass through a CPU-visible effect path.

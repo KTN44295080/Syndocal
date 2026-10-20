@@ -7,6 +7,7 @@ type MaybePromise = void | Promise<unknown>;
 type VideoOutputConfigPanelProps = {
   output: VideoOutputSummary;
   draft: VideoOutputConfigDraft;
+  syphonAvailable?: boolean;
   onDraft: (output: VideoOutputSummary, patch: Partial<VideoOutputConfigDraft>) => void;
   onApply: (output: VideoOutputSummary) => MaybePromise;
 };
@@ -36,7 +37,13 @@ export function VideoOutputConfigPanel(props: VideoOutputConfigPanelProps) {
             <option value="Display">Display</option>
             <option value="NdiSender">NDI Sender</option>
             <option value="SpoutSender">Spout Sender</option>
-            <option value="SyphonServer">Syphon Server</option>
+            <Show when={props.syphonAvailable} fallback={
+              <Show when={props.draft.kind === "SyphonServer"}>
+                <option value="SyphonServer" disabled>Syphon Server (macOS only)</option>
+              </Show>
+            }>
+              <option value="SyphonServer">Syphon Server</option>
+            </Show>
           </select>
         </label>
       </div>
@@ -81,9 +88,16 @@ export function VideoOutputConfigPanel(props: VideoOutputConfigPanelProps) {
           </label>
         </div>
       </Show>
+      <Show when={props.draft.kind === "SyphonServer"}>
+        <p class={props.syphonAvailable ? "hint" : "inlineWarning"} role="status" data-syphon-output-help>
+          {props.syphonAvailable
+            ? "Publishes video to Syphon clients on this Mac. Enable Output to start; Standby stops transmission."
+            : "Syphon output is available on macOS only. This saved output is preserved; choose another type to use it on this computer."}
+        </p>
+      </Show>
       <Show when={props.draft.kind !== "Display"}>
         <label>
-          Endpoint
+          {props.draft.kind === "SyphonServer" ? "Server name" : "Endpoint"}
           <input
             value={props.draft.endpoint_name}
             onInput={(event) => props.onDraft(props.output, { endpoint_name: event.currentTarget.value })}
@@ -91,7 +105,11 @@ export function VideoOutputConfigPanel(props: VideoOutputConfigPanelProps) {
         </label>
       </Show>
       <div class="buttonRow">
-        <button class="primary" onClick={() => void props.onApply(props.output)}>
+        <button
+          class="primary"
+          disabled={props.draft.kind === "SyphonServer" && !props.syphonAvailable}
+          onClick={() => void props.onApply(props.output)}
+        >
           Apply Output
         </button>
       </div>

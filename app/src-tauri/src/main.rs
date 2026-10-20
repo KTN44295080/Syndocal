@@ -358,6 +358,11 @@ mod network_dmx_routes;
 mod show_spout_transport;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 mod spout_transport;
+#[cfg(all(feature = "syphon", target_os = "macos"))]
+mod syphon_native;
+mod syphon_output_policy;
+#[cfg(any(all(feature = "syphon", target_os = "macos"), test))]
+mod syphon_transport;
 pub mod timeline_cue_audio;
 
 use scene_creation::{
@@ -3171,6 +3176,8 @@ struct AppState {
     ndi_inputs: ndi_transport::NdiInputRegistry,
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     spout_transport: Arc<Mutex<spout_transport::SpoutTransportState>>,
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    syphon_transport: Arc<Mutex<syphon_transport::SyphonTransportState>>,
     /// Strict show-owned fixed sender pair. Generic Spout routes remain in
     /// `spout_transport`; this state is deliberately separate so the show
     /// pair cannot be restarted through generic route synchronization.
@@ -74141,6 +74148,16 @@ fn harvest_spout_output_failures(
         .map_err(|error| error.message)
 }
 
+#[cfg(all(feature = "syphon", target_os = "macos"))]
+fn harvest_syphon_output_failures(state: &AppState) -> Result<(), String> {
+    state
+        .syphon_transport
+        .lock()
+        .map_err(|_| "Syphon transport state lock was poisoned".to_string())?
+        .harvest_failed_workers(&state.engine)
+        .map_err(|error| error.message)
+}
+
 fn show_spout_authority_change_stop_signals(state: &AppState) -> Result<Vec<Arc<AtomicBool>>, String> {
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     {
@@ -74334,14 +74351,18 @@ struct AppExternalVideoTransportDriver<'a> {
     ndi: &'a mut ndi_transport::NdiTransportState,
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     spout: &'a mut spout_transport::SpoutTransportState,
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    syphon: &'a mut syphon_transport::SyphonTransportState,
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     engine: EngineHandle,
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     activation: Option<OutputOwnershipActivation>,
 }
@@ -74349,14 +74370,15 @@ struct AppExternalVideoTransportDriver<'a> {
 impl AppExternalVideoTransportDriver<'_> {
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     fn validate_external_video_activation(
         &self,
         route: &video::ExternalVideoTransportRoute,
     ) -> Result<OutputOwnershipActivation, video::ExternalVideoTransportDriverError> {
         if route.direction == video::ExternalVideoTransportDirection::Output
-            && matches!(route.backend_id.as_str(), "ndi" | "spout")
+            && matches!(route.backend_id.as_str(), "ndi" | "spout" | "syphon")
         {
             let activation = self.activation.as_ref().ok_or_else(|| {
                 video::ExternalVideoTransportDriverError {
@@ -74370,7 +74392,7 @@ impl AppExternalVideoTransportDriver<'_> {
         }
         Err(video::ExternalVideoTransportDriverError {
             message:
-                "External video resource activation is only available for NDI/Spout output routes"
+                "External video resource activation is only available for NDI/Spout/Syphon output routes"
                     .to_string(),
         })
     }
@@ -74432,6 +74454,29 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
             );
             return Ok(());
         }
+        if route.backend_id == "syphon" {
+            if route.direction != video::ExternalVideoTransportDirection::Output {
+                return Err(video::ExternalVideoTransportDriverError {
+                    message: "Syphon input is not implemented".to_string(),
+                });
+            }
+            #[cfg(all(feature = "syphon", target_os = "macos"))]
+            {
+                let activation = self.validate_external_video_activation(route)?;
+                self.syphon
+                    .start_route(route, &self.engine, Some(activation))?;
+                self.recording.push_event(
+                    ExternalVideoTransportDriverAction::Start,
+                    route,
+                    format!("Started Syphon output route '{}'", route.endpoint_name),
+                );
+                return Ok(());
+            }
+            #[cfg(not(all(feature = "syphon", target_os = "macos")))]
+            return Err(video::ExternalVideoTransportDriverError {
+                message: "Syphon output requires a macOS build with the syphon feature".to_string(),
+            });
+        }
         self.recording.start_route(route)
     }
 
@@ -74479,6 +74524,22 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
             );
             return Ok(());
         }
+        if route.backend_id == "syphon" {
+            #[cfg(all(feature = "syphon", target_os = "macos"))]
+            {
+                self.syphon.stop_route(route, &self.engine)?;
+                self.recording.push_event(
+                    ExternalVideoTransportDriverAction::Stop,
+                    route,
+                    format!("Stopped Syphon output route '{}'", route.endpoint_name),
+                );
+                return Ok(());
+            }
+            #[cfg(not(all(feature = "syphon", target_os = "macos")))]
+            return Err(video::ExternalVideoTransportDriverError {
+                message: "Syphon output requires a macOS build with the syphon feature".to_string(),
+            });
+        }
         self.recording.stop_route(route)
     }
 }
@@ -74500,19 +74561,24 @@ struct ExternalVideoTransportSyncContext<'a> {
     ndi_transport: &'a Mutex<ndi_transport::NdiTransportState>,
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     spout_transport: &'a Mutex<spout_transport::SpoutTransportState>,
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    syphon_transport: &'a Mutex<syphon_transport::SyphonTransportState>,
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     engine: &'a EngineHandle,
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     activation: Option<OutputOwnershipActivation>,
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     maintenance_transition: Option<&'a mut engine::OutputOwnershipTransition>,
 }
@@ -74530,19 +74596,24 @@ fn sync_external_video_transports_from_snapshot(
         ndi_transport,
         #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
         spout_transport,
+        #[cfg(all(feature = "syphon", target_os = "macos"))]
+        syphon_transport,
         #[cfg(any(
             feature = "ndi",
-            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+            all(feature = "syphon", target_os = "macos")
         ))]
         engine,
         #[cfg(any(
             feature = "ndi",
-            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+            all(feature = "syphon", target_os = "macos")
         ))]
         activation,
         #[cfg(any(
             feature = "ndi",
-            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+            all(feature = "syphon", target_os = "macos")
         ))]
         maintenance_transition,
     } = context;
@@ -74575,6 +74646,14 @@ fn sync_external_video_transports_from_snapshot(
     spout
         .harvest_failed_workers(engine)
         .map_err(|error| error.message)?;
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    let mut syphon = syphon_transport
+        .lock()
+        .map_err(|_| "Syphon transport state lock was poisoned".to_string())?;
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    syphon
+        .harvest_failed_workers(engine)
+        .map_err(|error| error.message)?;
     let mut driver = AppExternalVideoTransportDriver {
         recording: RecordingExternalVideoTransportDriver {
             events: &mut events,
@@ -74585,20 +74664,25 @@ fn sync_external_video_transports_from_snapshot(
         ndi: &mut ndi,
         #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
         spout: &mut spout,
+        #[cfg(all(feature = "syphon", target_os = "macos"))]
+        syphon: &mut syphon,
         #[cfg(any(
             feature = "ndi",
-            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+            all(feature = "syphon", target_os = "macos")
         ))]
         engine: engine.clone(),
         #[cfg(any(
             feature = "ndi",
-            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+            all(feature = "syphon", target_os = "macos")
         ))]
         activation,
     };
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     let report = {
         let mut maintenance_transition = maintenance_transition;
@@ -74625,7 +74709,8 @@ fn sync_external_video_transports_from_snapshot(
     };
     #[cfg(not(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     )))]
     let report =
         transport.sync_routes_with_driver_and_role(&plans, &mut driver, output_ownership_role);
@@ -75469,7 +75554,8 @@ fn sync_output_ownership_routes_for_role(
     role: MachineOutputRole,
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     activation: Option<OutputOwnershipActivation>,
 ) -> Result<ExternalVideoTransportSyncResponse, String> {
@@ -75489,19 +75575,24 @@ fn sync_output_ownership_routes_for_role(
             ndi_transport: state.ndi_transport.as_ref(),
             #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
             spout_transport: state.spout_transport.as_ref(),
+            #[cfg(all(feature = "syphon", target_os = "macos"))]
+            syphon_transport: state.syphon_transport.as_ref(),
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             engine: &state.engine,
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             activation,
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             maintenance_transition: None,
         },
@@ -75522,7 +75613,8 @@ fn retire_project_swap_output_resources(
         MachineOutputRole::Standby,
         #[cfg(any(
             feature = "ndi",
-            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+            all(feature = "syphon", target_os = "macos")
         ))]
         None,
     ) {
@@ -79555,7 +79647,8 @@ fn apply_output_ownership_transition_after_reservation(
             MachineOutputRole::Standby,
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             None,
         )?;
@@ -79573,7 +79666,8 @@ fn apply_output_ownership_transition_after_reservation(
             state.engine.prepare_output_ownership_role(role)?;
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             if role.video_allowed() {
                 transition
@@ -79585,7 +79679,8 @@ fn apply_output_ownership_transition_after_reservation(
             }
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             let activation = if role.video_allowed() {
                 Some(
@@ -79604,7 +79699,8 @@ fn apply_output_ownership_transition_after_reservation(
                 role,
                 #[cfg(any(
                     feature = "ndi",
-                    all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                    all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                    all(feature = "syphon", target_os = "macos")
                 ))]
                 activation,
             )?;
@@ -79668,6 +79764,8 @@ fn reserve_standby_output_ownership_transition(
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     harvest_spout_output_failures(state.spout_transport.as_ref(), &state.engine)
         .map_err(|error| (Some(path.clone()), error))?;
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    harvest_syphon_output_failures(state).map_err(|error| (Some(path.clone()), error))?;
     state
         .engine
         .begin_output_ownership_transition(MachineOutputRole::Standby)
@@ -79702,6 +79800,8 @@ fn apply_output_ownership_role_with_transition_guard(
     harvest_show_spout_output_failures(state.show_spout_transport.as_ref(), &state.engine)?;
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     harvest_spout_output_failures(state.spout_transport.as_ref(), &state.engine)?;
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    harvest_syphon_output_failures(state)?;
 
     let path = match output_ownership_state_path(app) {
         Ok(path) => path,
@@ -79923,6 +80023,8 @@ fn sync_external_video_transports(
     harvest_show_spout_output_failures(state.show_spout_transport.as_ref(), &state.engine)?;
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     harvest_spout_output_failures(state.spout_transport.as_ref(), &state.engine)?;
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    harvest_syphon_output_failures(state)?;
     let role = state.engine.output_ownership_status().role;
     let transition = state
         .engine
@@ -79930,7 +80032,8 @@ fn sync_external_video_transports(
         .map_err(|error| format!("External video sync admission failed: {error}"))?;
     #[cfg(any(
         feature = "ndi",
-        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+        all(feature = "syphon", target_os = "macos")
     ))]
     let mut transition = transition;
     if let Err(error) = state.engine.fence_output_ownership() {
@@ -79949,19 +80052,24 @@ fn sync_external_video_transports(
             ndi_transport: state.ndi_transport.as_ref(),
             #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
             spout_transport: state.spout_transport.as_ref(),
+            #[cfg(all(feature = "syphon", target_os = "macos"))]
+            syphon_transport: state.syphon_transport.as_ref(),
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             engine: &state.engine,
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             activation: None,
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             maintenance_transition: Some(&mut transition),
         },
@@ -88731,6 +88839,13 @@ fn normalize_video_output_config(
         let trimmed = name.trim().to_string();
         (!trimmed.is_empty()).then_some(trimmed)
     });
+    if kind == VideoOutputKind::SyphonServer {
+        syphon_output_policy::validate_syphon_config(
+            endpoint_name.as_deref().unwrap_or_default(),
+            width,
+            height,
+        )?;
+    }
 
     Ok(NormalizedVideoOutputConfig {
         label,
@@ -88744,6 +88859,9 @@ fn normalize_video_output_config(
 }
 
 fn ensure_video_input_backend_available(kind: &VideoSourceKind) -> Result<(), String> {
+    if matches!(kind, VideoSourceKind::Syphon) {
+        return Err("Syphon input is not implemented".to_string());
+    }
     let Some((backend_id, feature_label)) = video_input_backend(kind) else {
         return Ok(());
     };
@@ -93160,6 +93278,13 @@ pub(crate) mod tests {
             let show_spout_transport = Arc::new(Mutex::new(
                 show_spout_transport::ShowSpoutTransportState::default(),
             ));
+            #[cfg(all(feature = "syphon", target_os = "macos"))]
+            let syphon_transport =
+                Arc::new(Mutex::new(syphon_transport::SyphonTransportState::new(
+                    #[cfg(feature = "ndi")]
+                    Arc::clone(&ndi_inputs),
+                    Arc::clone(&capture_inputs),
+                )));
             let app_video_decoder = ndi_transport::NdiAwareVideoFrameDecoder::from_env()
                 .with_capture_inputs(Arc::clone(&capture_inputs));
             #[cfg(feature = "ndi")]
@@ -93242,6 +93367,8 @@ pub(crate) mod tests {
                 spout_transport,
                 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
                 show_spout_transport,
+                #[cfg(all(feature = "syphon", target_os = "macos"))]
+                syphon_transport,
                 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
                 spout_inputs: Arc::clone(&spout_inputs),
                 custom_profiles: Mutex::new(HashMap::new()),
@@ -121249,6 +121376,15 @@ f 1 2 3
             Some(("ndi", "NDI output"))
         );
         assert_eq!(video_output_backend(&VideoOutputKind::Display), None);
+        assert_eq!(
+            video_output_backend(&VideoOutputKind::SyphonServer),
+            Some(("syphon", "Syphon output"))
+        );
+        assert!(
+            ensure_video_input_backend_available(&VideoSourceKind::Syphon)
+                .unwrap_err()
+                .contains("Syphon input is not implemented")
+        );
     }
 
     #[test]
@@ -135568,6 +135704,12 @@ fn main() {
     let show_spout_transport = Arc::new(Mutex::new(
         show_spout_transport::ShowSpoutTransportState::default(),
     ));
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    let syphon_transport = Arc::new(Mutex::new(syphon_transport::SyphonTransportState::new(
+        #[cfg(feature = "ndi")]
+        Arc::clone(&ndi_inputs),
+        Arc::clone(&capture_inputs),
+    )));
     let app_video_decoder = ndi_transport::NdiAwareVideoFrameDecoder::from_env()
         .with_capture_inputs(Arc::clone(&capture_inputs));
     #[cfg(feature = "ndi")]
@@ -135997,6 +136139,8 @@ fn main() {
             spout_transport,
             #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
             show_spout_transport,
+            #[cfg(all(feature = "syphon", target_os = "macos"))]
+            syphon_transport,
             #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
             spout_inputs: Arc::clone(&spout_inputs),
             custom_profiles: Mutex::new(HashMap::new()),
