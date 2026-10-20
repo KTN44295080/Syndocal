@@ -52,6 +52,7 @@ const stages = {
   strobe: () => builtin("strobe", [control("rate", "Float", [8, 0, 0, 0], [0.5, 0, 0, 0], [30, 0, 0, 0]), control("duty", "Float", [0.5, 0, 0, 0], [0.05, 0, 0, 0], [0.95, 0, 0, 0])]),
   mirror: () => builtin("mirror", [control("mode", "Long", [0, 0, 0, 0], z, [2, 0, 0, 0], { labels: ["Horizontal", "Vertical", "Both"], values: [0, 1, 2] })]),
 };
+const imageBlend = () => ({ enabled: true, label: "Two images", source_path: "C:/pack/blend.fs", categories: [], controls: [], source: '/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"},{"NAME":"overlay","LABEL":"Overlay picture","TYPE":"image"}]}*/void main(){}', stack: [] });
 createRoot(() => {
 const [locale, setLocale] = createSignal("en");
 const [rejectionsOn, setRejectionsOn] = createSignal(false);
@@ -73,7 +74,7 @@ const live = {
   onSetIsfEffectEnabled: (id, index, enabled) => { log.liveWrites++; updateLayer(id, (effect) => mapStages(effect, (stage, at) => at === index ? { ...stage, enabled } : stage)); },
   onMoveIsfEffect: (id, index, delta) => { log.liveWrites++; log.moves++; updateLayer(id, (effect) => { const list = fxChainStages(effect); [list[index], list[index + delta]] = [list[index + delta], list[index]]; return fxChainFromStages(list); }); },
   onRemoveIsfEffect: (id, index) => { log.liveWrites++; updateLayer(id, (effect) => fxChainFromStages(fxChainStages(effect).filter((_, at) => at !== index))); },
-  onSetIsfEffect: (id, effect) => { log.liveWrites++; log.sets++; updateLayer(id, () => effect); },
+  onSetIsfEffect: (id, effect) => { if (log.rejectImageWrite) throw new Error("ISF image input layer 1 did not produce a frame"); if (log.ignoreImageWrite) return; log.liveWrites++; log.sets++; updateLayer(id, () => effect); },
   onSetIsfControl: (id, index, name, value) => { log.liveWrites++; updateLayer(id, (effect) => mapStages(effect, (stage, at) => at === index ? { ...stage, controls: stage.controls.map((item) => item.name === name ? { ...item, value } : item) } : stage)); },
   onTriggerIsfEvent: () => { log.liveWrites++; },
   isfEventPulseBusy: false,
@@ -87,9 +88,9 @@ const audition = createFxAuditionSession({
   describeBuiltin: async (id) => { const make = stages[id]; return make ? fxChainFromStages([make()]) : null; },
   commit: async (layerId, effect) => { log.commits.push({ layerId, labels: effect ? fxChainStages(effect).map((stage) => stage.label) : [] }); updateLayer(layerId, () => effect); },
 });
-const badSource = '/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"},{"NAME":"music","TYPE":"audioFFT"}]}*/ void main(){}';
+const badSource = '/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"},{"NAME":"music","TYPE":"audioFFT","MAX":513}]}*/ void main(){}';
 const rejections = [
-  { label: "Rejected ISF", source: badSource, message: "ISF audio/audioFFT textures are not supported by this runtime; use Syndocal Audio FFT nodes" },
+  { label: "Rejected ISF", source: badSource, message: "ISF audio texture MAX must be an integer from 1 to 512 for input 'music'" },
   { label: "Rejected ISF", source: '/*{"INPUTS":[]}*/\nvoid main(){\n for (int i=0;i<9;i++){}\n}', message: "ISF source uses forbidden or unsupported construct 'for ('" },
 ];
 const [imported, setImported] = createSignal([]);
@@ -103,19 +104,26 @@ let dialog; let localizer;
 Object.assign(window, { __fxUx: {
   log, setBpm, resetLayers: () => setLayers(initialLayers()), setLocale: (value) => { setLocale(value); document.documentElement.lang = value; localizer?.refresh(); }, setView, setSize, setSelectedLayerId, setRejectionsOn,
   setRuntimeErrors, layers, transport, audition, catalog, openProblems: () => dialog.showModal(), problems,
+  imageFixture: () => setLayers([
+    { id: 1, label: "Source image", isf_effect: null },
+    { id: 2, label: "Image blend", isf_effect: imageBlend() },
+    { id: 3, label: "Depends on blend", isf_effect: { ...imageBlend(), image_bindings: [{ name: "overlay", source: { kind: "layer", layer_id: 2 } }] } },
+  ]),
+  reverseImageLayers: () => setLayers([...layers()].reverse()),
+  generatorFixture: () => updateLayer(2, () => ({ ...imageBlend(), source: '/*{"INPUTS":[]}*/void main(){}', source_path: null })),
   setCatalog: (value) => { log.catalogWrites++; setCatalog(value); },
 }});
 const frame = () => ({ width: size().width + "px", height: size().height + "px" });
 render(() => <div class="fxUxStage">
   <div class="fxUxFrame" style={frame()} data-video-perform-pane="inspector">
     {view() === "full"
-      ? <VideoIsfEffectPanel layerId={layer().id} layerLabel={layer().label} effect={layer().isf_effect} locale={locale()} bpm={bpm()} projectEpoch={1} liveSession={liveSession}
+      ? <VideoIsfEffectPanel availableLayers={layers()} layerId={layer().id} layerLabel={layer().label} effect={layer().isf_effect} locale={locale()} bpm={bpm()} projectEpoch={1} liveSession={liveSession}
           effectCatalog={catalog()} onApplyEffectCatalog={(value) => { window.__fxUx.setCatalog(value); return value; }}
           onImport={() => {}} onApplyBuiltin={() => {}} onResetEffect={() => {}}
           onSetEffect={live.onSetIsfEffect} onMoveEffect={live.onMoveIsfEffect} onRemoveEffect={live.onRemoveIsfEffect} onSetEffectEnabled={live.onSetIsfEffectEnabled}
           onSetControl={live.onSetIsfControl} onTriggerEvent={live.onTriggerIsfEvent} />
       : view() === "fx"
-      ? <VideoPerformQuickFx layer={layer()} layerList={live} locale={locale()} bpm={bpm()} projectEpoch={1} onOpenEditor={() => {}}
+      ? <VideoPerformQuickFx layer={layer()} layerList={{ ...live, layers: layers() }} locale={locale()} bpm={bpm()} projectEpoch={1} onOpenEditor={() => {}}
           effectCatalog={catalog()} onApplyEffectCatalog={(value) => { window.__fxUx.setCatalog(value); return value; }}
           liveSession={liveSession} audition={audition} />
       : <VideoEffectBrowser entries={entries()} layer={layer()} locale={locale()} onAdd={(entry, layerId) => { log.adds.push([entry.id, layerId]); }}
@@ -254,7 +262,7 @@ try {
     assert.equal(rejectionCards, 2, "rejected imports appear as cards");
     await evaluate("document.querySelector('[data-fx-card-state=rejected]').scrollIntoView({block:'start'})"); await settle();
     const explained = await text("[data-fx-card-state=rejected] [data-fx-rejection]");
-    assert.match(explained, locale === "ja" ? /音声/ : /Audio inputs/, `${locale}: reason is plain language`);
+    assert.match(explained, locale === "ja" ? /音声テクスチャーの幅が正しくありません/ : /Audio texture width is invalid/, `${locale}: reason is plain language`);
     assert.ok(!/ParseErrors|Span \{/.test(explained.split("\n").slice(0, 3).join("\n")), "stack text is not the headline");
     assert.equal(await evaluate("document.querySelector('[data-fx-card-state=rejected] [data-fx-catalog-add]').disabled"), true, "rejected cards cannot be added");
     assert.equal(await evaluate("document.querySelector('[data-fx-card-state=rejected] [data-fx-catalog-audition]').disabled"), true, "rejected cards cannot be auditioned");
@@ -266,7 +274,7 @@ try {
   assert.equal(await evaluate("document.querySelectorAll('[data-fx-problem]').length"), 2);
   assert.equal(await evaluate("document.querySelector('[data-fx-problem] details').open"), false, "raw text starts collapsed");
   await evaluate("document.querySelector('[data-fx-problem] details').open=true"); await settle();
-  assert.match(await text("[data-fx-problem] pre"), /audioFFT/, "raw engine text is available to experts");
+  assert.equal(await text("[data-fx-problem] pre"), "ISF audio texture MAX must be an integer from 1 to 512 for input 'music'", "raw engine text is available to experts");
   await shot("problems-ja-tally-1366x768");
   await evaluate("document.querySelector('[data-fx-problems-dialog]').close()");
   await ux("u.setRejectionsOn(false)");
@@ -596,6 +604,66 @@ try {
   await click("[data-fx-audition-discard]");
   await setView([1920, 1080], "ja", "tally", "browser", 900, 640);
   assert.deepEqual(await smallText("[data-effect-browser]"), [], "browser text is at least 14px");
+
+  // Stable image inputs through the real editor and existing live mutation.
+  await ux("u.imageFixture();u.log.rejectImageWrite=false;u.log.ignoreImageWrite=false");
+  await setView([1920, 1080], "en", "tally", "fx", 700, 740, 2);
+  const imageSelector = '[data-fx-image-input="overlay"] [data-fx-image-source]';
+  const chooseImage = async (value) => {
+    await evaluate("(()=>{const e=document.querySelector(" + JSON.stringify(imageSelector) + ");e.value=" + JSON.stringify(value) + ";e.dispatchEvent(new Event('change',{bubbles:true}));})()");
+    await settle();
+  };
+  const savedImage = () => ux("return u.layers().find(l=>l.id===2).isf_effect.image_bindings?.find(b=>b.name==='overlay')?.source??{kind:'none'}");
+  assert.equal(await evaluate("document.querySelector(" + JSON.stringify(imageSelector) + ").value"), "none", "old stages show transparent additional image");
+  assert.deepEqual(await evaluate("Array.from(document.querySelector(" + JSON.stringify(imageSelector) + ").options).filter(o=>o.value.startsWith('layer:')&&o.disabled).map(o=>o.value).sort()"), ["layer:2", "layer:3"], "self and indirect cycles are disabled by stable ID");
+  const imageWritesBefore = await ux("return u.log.sets");
+  await chooseImage("layer:1");
+  assert.deepEqual(await savedImage(), { kind: "layer", layer_id: 1 });
+  assert.equal(await ux("return u.log.sets"), imageWritesBefore + 1, "one image change uses one existing stage mutation");
+  await ux("u.reverseImageLayers()"); await settle();
+  assert.deepEqual(await savedImage(), { kind: "layer", layer_id: 1 }, "reordering preserves the stable layer reference");
+  assert.equal(await evaluate("document.querySelector(" + JSON.stringify(imageSelector) + ").value"), "layer:1");
+  await chooseImage("imported");
+  assert.equal(await ux("return u.log.sets"), imageWritesBefore + 1, "choosing Imported only opens a draft path");
+  const enterImagePath = async (value) => {
+    await evaluate("(()=>{const e=document.querySelector('[data-fx-image-path]');e.value=" + JSON.stringify(value) + ";e.dispatchEvent(new Event('input',{bubbles:true}));})()");
+    await settle();
+  };
+  await enterImagePath("../outside.png");
+  assert.equal(await evaluate("document.querySelector('[data-fx-image-apply]').disabled"), true, "parent traversal cannot be applied");
+  await enterImagePath("images/mask.png");
+  await click("[data-fx-image-apply]"); await settle();
+  assert.deepEqual(await savedImage(), { kind: "imported", path: "images/mask.png" });
+  for (const selector of ["[data-fx-image-source]", "[data-fx-image-path]", "[data-fx-image-apply]"]) {
+    for (const item of await geometry(selector)) assert.ok(item.h >= 44 && item.w >= 44 && item.font >= 14, selector + " keeps target/text size " + JSON.stringify(item));
+  }
+  await evaluate("document.querySelector('[data-fx-image-inputs]').scrollIntoView({block:'nearest'})");
+  await shot("image-inputs-en-tally-1920x1080");
+  await setView([1366, 768], "ja", "cobalt", "fx", 446, 680, 2);
+  assert.match(await text("[data-fx-image-inputs]"), /画像入力/);
+  await shot("image-inputs-ja-cobalt-1366x768");
+  await chooseImage("none");
+  assert.deepEqual(await savedImage(), { kind: "none" });
+  await ux("u.log.rejectImageWrite=true");
+  await chooseImage("layer:1");
+  assert.deepEqual(await savedImage(), { kind: "none" }, "rejected stage write preserves authored binding");
+  assert.equal(await evaluate("document.querySelector(" + JSON.stringify(imageSelector) + ").value"), "none", "rejected choice restores authoritative selection");
+  assert.match(await text("[data-fx-image-error]"), /利用できません/);
+  await ux("u.log.rejectImageWrite=false");
+  await chooseImage("layer:1");
+  assert.equal(await evaluate("Boolean(document.querySelector('[data-fx-image-error]'))"), false, "valid new edit clears old rejection");
+  await chooseImage("none");
+  await ux("u.log.ignoreImageWrite=true");
+  await chooseImage("layer:1");
+  assert.deepEqual(await savedImage(), { kind: "none" }, "a swallowed no-op cannot change authored binding");
+  assert.equal(await evaluate("document.querySelector(" + JSON.stringify(imageSelector) + ").value"), "none", "unconfirmed choice restores authoritative selection");
+  assert.match(await text("[data-fx-image-error]"), /保存されませんでした/);
+  await ux("u.log.ignoreImageWrite=false");
+  await ux("u.generatorFixture()"); await settle();
+  assert.match(await text("[data-fx-generator]"), /ジェネレーター/);
+  assert.equal(await evaluate("document.querySelectorAll('[data-fx-image-source]').length"), 0, "generator has no artificial image-input selector");
+  assert.equal(await evaluate("document.documentElement.scrollWidth<=window.innerWidth"), true, "image UI remains inside viewport");
+
   assert.deepEqual(errors, [], JSON.stringify(errors));
   console.log(`FX UX browser: parameters (labels, units, ranges, colour picker, reset), presets, Randomize, Preview-only audition with A/B and confirmed Take, rejection cards and problems dialog in EN/JA and two themes; tempo-synced beat/bar units (live BPM, zero clock-driven writes, range limit, Hz capture, audition draft), drag-and-drop stage reorder in the Perform FX tab and the Full FX editor, and always-visible category chips; evidence ${evidenceDir}`);
 } finally {

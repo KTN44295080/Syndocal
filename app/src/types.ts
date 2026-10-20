@@ -2476,6 +2476,16 @@ export interface VideoIsfControlSummary {
   tempo_sync?: VideoIsfTempoSync | null;
 }
 
+export type VideoIsfImageSource =
+  | { kind: "none" }
+  | { kind: "layer"; layer_id: number }
+  | { kind: "imported"; path: string };
+
+export interface VideoIsfImageBinding {
+  name: string;
+  source: VideoIsfImageSource;
+}
+
 export interface VideoIsfEffectStageSummary {
   enabled: boolean;
   label: string;
@@ -2484,6 +2494,7 @@ export interface VideoIsfEffectStageSummary {
   description?: string | null;
   categories: string[];
   controls: VideoIsfControlSummary[];
+  image_bindings?: VideoIsfImageBinding[];
 }
 
 export interface VideoIsfEffectSummary extends VideoIsfEffectStageSummary {

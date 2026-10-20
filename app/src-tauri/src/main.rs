@@ -103,6 +103,8 @@ use live_video_monitor_packet::*;
 mod video_recording_lifecycle;
 mod video_recording_runtime;
 mod video_recording_renderer_process;
+#[cfg(test)]
+mod isf_image_binding_native_tests;
 use video_recording_runtime::{
     stop_video_output_recording_runtime, VideoRecordingEndReason, VideoRecordingRuntime,
     VideoRecordingState, VideoRecordingStatus,
@@ -8952,6 +8954,7 @@ fn project_legacy_video_isf_from_catalog_chain(
             description: effect.description,
             categories: effect.categories,
             controls: effect.controls,
+            image_bindings: effect.image_bindings,
         })
         .collect();
     Ok(Some(root))
@@ -44256,6 +44259,7 @@ fn video_isf_stage_from_root(effect: VideoIsfEffectSummary) -> VideoIsfEffectSta
         description: effect.description,
         categories: effect.categories,
         controls: effect.controls,
+        image_bindings: effect.image_bindings,
     }
 }
 
@@ -44271,6 +44275,7 @@ fn video_isf_root_from_stages(
         description: first.description,
         categories: first.categories,
         controls: first.controls,
+        image_bindings: first.image_bindings,
         stack,
     }
 }
@@ -44282,9 +44287,10 @@ fn sanitize_video_isf_stage(
     if label.is_empty() || label.chars().count() > 128 {
         return Err("ISF effect label must contain 1-128 characters".to_string());
     }
-    let prepared = video::prepare_isf_shader_with_path(
+    let prepared = video::prepare_isf_shader_with_image_bindings(
         effect.source.as_ref(),
         effect.source_path.as_deref().map(Path::new),
+        &effect.image_bindings,
     )
     .map_err(|error| error.to_string())?;
     // Validate authored values without baking the current runtime tempo into the project.
@@ -44304,6 +44310,7 @@ fn sanitize_video_isf_stage(
         video::isf_effect_from_prepared(label.to_string(), effect.source, source_path, &prepared);
     let mut canonical = video_isf_stage_from_root(canonical_root);
     canonical.enabled = effect.enabled;
+    canonical.image_bindings = effect.image_bindings;
     for (control, value) in canonical.controls.iter_mut().zip(resolved) {
         control.value = value;
         // Tempo sync is an authored choice that only applies to Float time controls.
@@ -44357,6 +44364,7 @@ fn sanitize_video_isf_effect(
         description,
         categories,
         controls,
+        image_bindings,
         stack,
     } = effect;
     let first = sanitize_video_isf_stage(VideoIsfEffectStageSummary {
@@ -44367,6 +44375,7 @@ fn sanitize_video_isf_effect(
         description,
         categories,
         controls,
+        image_bindings,
     })?;
     let stack = stack
         .into_iter()
@@ -84985,6 +84994,7 @@ fn prepare_native_timeline_follow_video_output(
             source_timeline_id: follow.source_timeline_id,
             transition_chain: transition_chain.as_ref(),
             last_valid: last_valid.as_ref().map(|cached| &cached.frame),
+            audio_frame: render_context.audio_frame,
         })
         .map_err(|error| format!("Timeline Follow output transition failed: {error:?}"))?;
     if rendered.evidence.freshness != video::VideoOutputRenderFreshness::Fresh {
@@ -101256,6 +101266,7 @@ pub(crate) mod tests {
                             description: None,
                             categories: Vec::new(),
                             controls: Vec::new(),
+                            image_bindings: Vec::new(),
                             stack: Vec::new(),
                         },
                     },

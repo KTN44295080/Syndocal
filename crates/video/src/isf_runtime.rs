@@ -26,6 +26,11 @@ pub const ISF_MAX_CONTROL_INPUTS: usize = 16;
 const ISF_GPU_PIPELINE_CAPACITY: usize = 64;
 const ISF_MAX_PASSES: usize = 16;
 const ISF_MAX_TEXTURES: usize = 16;
+pub const ISF_MAX_IMAGE_INPUTS: usize = 4;
+
+#[path = "isf_date.rs"]
+mod date;
+pub use date::{isf_date_from_system_time, isf_date_now};
 
 #[path = "isf_pass_runtime.rs"]
 mod pass_runtime;
@@ -105,12 +110,30 @@ pub struct PreparedIsfShader {
     pub description: Option<String>,
     pub categories: Vec<String>,
     pub image_input_name: String,
+    pub image_input_names: Vec<String>,
+    pub(crate) image_binding_names: Vec<String>,
+    pub(crate) required_layer_images: Vec<(String, protocol::VideoLayerId)>,
     pub controls: Vec<IsfControlDefinition>,
     pub wgsl: String,
     pub(crate) passes: Vec<IsfPassDefinition>,
     pub(crate) imported_images: Vec<IsfImportedImage>,
+    pub(crate) bound_images: Vec<IsfImportedImage>,
     pub(crate) audio_inputs: Vec<IsfAudioInputDefinition>,
     pub(crate) fingerprint: u64,
+}
+
+/// Borrowed inputs: CPU frame bytes are uploaded once per stage, never cloned here.
+#[derive(Clone, Copy)]
+pub struct IsfImageInput<'a> {
+    pub name: &'a str,
+    pub frame: &'a VideoFrame,
+}
+
+#[derive(Clone, Copy)]
+pub struct IsfStageInputs<'a> {
+    pub shader: &'a PreparedIsfShader,
+    pub controls: &'a [[f32; 4]],
+    pub images: &'a [IsfImageInput<'a>],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -219,14 +242,39 @@ impl IsfGpuRuntime {
         )
     }
 
-    /// Applies an ordered set of ISF filters with one
-    /// host upload, GPU-local ping-pong textures, and one final readback.
+    /// Applies an ordered set with one upload and final readback.
     pub fn apply_stack(
         &mut self,
         frame: &VideoFrame,
         stages: &[(&PreparedIsfShader, &[[f32; 4]])],
         time_seconds: f32,
         time_delta_seconds: f32,
+    ) -> Result<VideoFrame, IsfRuntimeError> {
+        let stages = stages
+            .iter()
+            .map(|(shader, controls)| IsfStageInputs {
+                shader,
+                controls,
+                images: &[],
+            })
+            .collect::<Vec<_>>();
+        self.apply_stack_with_inputs(
+            frame,
+            &stages,
+            time_seconds,
+            time_delta_seconds,
+            isf_date_now(),
+        )
+    }
+
+    /// Explicit DATE and borrowed named inputs support reproducible offline rendering.
+    pub fn apply_stack_with_inputs(
+        &mut self,
+        frame: &VideoFrame,
+        stages: &[IsfStageInputs<'_>],
+        time_seconds: f32,
+        time_delta_seconds: f32,
+        date: [f32; 4],
     ) -> Result<VideoFrame, IsfRuntimeError> {
         let frame_index = self.frame_index;
         let keys = (0..stages.len())
@@ -238,10 +286,9 @@ impl IsfGpuRuntime {
             time_seconds,
             time_delta_seconds,
             frame_index,
+            date,
             &keys,
         );
-        // Preserve the legacy API contract: only a successful, non-empty
-        // stack advances the host frame counter.
         if rendered.is_ok() && !stages.is_empty() {
             self.frame_index = self.frame_index.wrapping_add(1);
         }
@@ -251,24 +298,28 @@ impl IsfGpuRuntime {
     fn apply_stack_at_frame_index(
         &mut self,
         frame: &VideoFrame,
-        stages: &[(&PreparedIsfShader, &[[f32; 4]])],
+        stages: &[IsfStageInputs<'_>],
         time_seconds: f32,
         time_delta_seconds: f32,
         frame_index: u32,
+        date: [f32; 4],
         keys: &[IsfInstanceKey],
     ) -> Result<VideoFrame, IsfRuntimeError> {
+        if !date::valid_isf_date(date) {
+            return Err(runtime_error("ISF DATE contains an invalid date or time"));
+        }
         self.render_pass_stack(
             frame,
             stages,
             time_seconds,
             time_delta_seconds,
             frame_index,
+            date,
             keys,
         )
     }
 
-    /// Applies every stage independently so a runtime failure bypasses only
-    /// that stage and later stages still receive the last valid frame.
+    /// Runtime failure bypasses only that stage; every stage shares the frame clock.
     pub fn apply_stack_stage_local(
         &mut self,
         frame: &VideoFrame,
@@ -296,6 +347,33 @@ impl IsfGpuRuntime {
         time_delta_seconds: f32,
         keys: &[IsfInstanceKey],
     ) -> (VideoFrame, Vec<(usize, IsfRuntimeError)>) {
+        let stages = stages
+            .iter()
+            .map(|(shader, controls)| IsfStageInputs {
+                shader,
+                controls,
+                images: &[],
+            })
+            .collect::<Vec<_>>();
+        self.apply_stack_stage_local_with_inputs_and_keys(
+            frame,
+            &stages,
+            time_seconds,
+            time_delta_seconds,
+            isf_date_now(),
+            keys,
+        )
+    }
+
+    pub(crate) fn apply_stack_stage_local_with_inputs_and_keys(
+        &mut self,
+        frame: &VideoFrame,
+        stages: &[IsfStageInputs<'_>],
+        time_seconds: f32,
+        time_delta_seconds: f32,
+        date: [f32; 4],
+        keys: &[IsfInstanceKey],
+    ) -> (VideoFrame, Vec<(usize, IsfRuntimeError)>) {
         let started = std::time::Instant::now();
         let frame_index = self.frame_index;
         let mut current = frame.clone();
@@ -311,15 +389,13 @@ impl IsfGpuRuntime {
                 time_seconds,
                 time_delta_seconds,
                 frame_index,
+                date,
                 std::slice::from_ref(key),
             ) {
                 Ok(frame) => current = frame,
                 Err(error) => failures.push((index, error)),
             }
         }
-        // One stage-local chain invocation is one host frame. Advance once for
-        // every non-empty chain, including all-fail calls, so failure topology
-        // cannot change FRAMEINDEX. Empty chains are pure no-ops.
         if !stages.is_empty() {
             self.frame_index = self.frame_index.wrapping_add(1);
         }
@@ -437,6 +513,7 @@ pub fn isf_effect_from_prepared(
                 tempo_sync: None,
             })
             .collect(),
+        image_bindings: Vec::new(),
         stack: Vec::new(),
     }
 }
@@ -556,6 +633,15 @@ pub fn prepare_isf_shader_with_path(
     source: &str,
     source_path: Option<&Path>,
 ) -> Result<PreparedIsfShader, IsfPrepareError> {
+    prepare_isf_shader_with_image_bindings(source, source_path, &[])
+}
+
+pub fn prepare_isf_shader_with_image_bindings(
+    source: &str,
+    source_path: Option<&Path>,
+    bindings: &[protocol::VideoIsfImageBinding],
+) -> Result<PreparedIsfShader, IsfPrepareError> {
+    protocol::validate_video_isf_image_bindings(bindings).map_err(error)?;
     if source.len() > ISF_MAX_SOURCE_BYTES {
         return Err(error(format!(
             "ISF source exceeds the {} byte safety limit",
@@ -617,11 +703,28 @@ pub fn prepare_isf_shader_with_path(
             kind => return Err(error(format!("Unsupported ISF input type '{kind}'"))),
         }
     }
-    if image_inputs.len() != 1 {
+    if image_inputs.len() > ISF_MAX_IMAGE_INPUTS {
         return Err(error(format!(
-            "ISF filter must declare exactly one image input; found {}",
-            image_inputs.len()
+            "ISF declares too many image inputs; the safety limit is {ISF_MAX_IMAGE_INPUTS}"
         )));
+    }
+    if let Some(primary) = image_inputs.iter().position(|name| name == "inputImage") {
+        image_inputs.swap(0, primary);
+    }
+    let mut binding_names = HashSet::new();
+    for binding in bindings {
+        if !image_inputs.contains(&binding.name) {
+            return Err(error(format!(
+                "ISF image binding '{}' has no declared image input",
+                binding.name
+            )));
+        }
+        if !binding_names.insert(&binding.name) {
+            return Err(error(format!(
+                "ISF image binding '{}' is duplicated",
+                binding.name
+            )));
+        }
     }
     if controls.len() > ISF_MAX_CONTROL_INPUTS {
         return Err(error(format!(
@@ -630,8 +733,8 @@ pub fn prepare_isf_shader_with_path(
             ISF_MAX_CONTROL_INPUTS
         )));
     }
-    let image_input_name = image_inputs.remove(0);
-    let mut image_names = vec![image_input_name.clone()];
+    let image_input_name = image_inputs.first().cloned().unwrap_or_default();
+    let mut image_names = image_inputs.clone();
     for pass in &passes {
         if let Some(target) = &pass.target {
             validate_identifier(target)?;
@@ -656,14 +759,32 @@ pub fn prepare_isf_shader_with_path(
             "ISF declares too many textures; the safety limit is {ISF_MAX_TEXTURES}"
         )));
     }
-    let imported_images = resources::load_imported_images(&metadata.imported, source_path)?;
+    // Decode the union in one call so T23 file/count/64MiB budgets cannot be
+    // bypassed by splitting resources between IMPORTED and input bindings.
+    let mut imported_declarations = metadata.imported;
+    for binding in bindings {
+        if let protocol::VideoIsfImageSource::Imported { path } = &binding.source {
+            if imported_declarations.contains_key(&binding.name) {
+                return Err(error(format!(
+                    "ISF image binding '{}' collides with IMPORTED",
+                    binding.name
+                )));
+            }
+            imported_declarations.insert(binding.name.clone(), serde_json::json!({ "PATH": path }));
+        }
+    }
+    let decoded = resources::load_imported_images(&imported_declarations, source_path)?;
+    let (bound_images, imported_images): (Vec<_>, Vec<_>) = decoded
+        .into_iter()
+        .partition(|image| image_inputs.contains(&image.name));
     image_names.extend(imported_images.iter().map(|image| image.name.clone()));
     image_names.extend(audio_inputs.iter().map(|input| input.name.clone()));
     let glsl = build_glsl_wrapper(body, &image_names, &controls);
     let wgsl = glsl_to_wgsl(&glsl)?;
     let mut fingerprint = DefaultHasher::new();
     source.hash(&mut fingerprint);
-    for image in &imported_images {
+    bindings.hash(&mut fingerprint);
+    for image in imported_images.iter().chain(&bound_images) {
         image.name.hash(&mut fingerprint);
         image.width.hash(&mut fingerprint);
         image.height.hash(&mut fingerprint);
@@ -682,10 +803,26 @@ pub fn prepare_isf_shader_with_path(
             .take(16)
             .collect(),
         image_input_name,
+        image_input_names: image_inputs,
+        image_binding_names: bindings
+            .iter()
+            .map(|binding| binding.name.clone())
+            .collect(),
+        required_layer_images: bindings
+            .iter()
+            .filter_map(|binding| {
+                if let protocol::VideoIsfImageSource::Layer { layer_id } = &binding.source {
+                    Some((binding.name.clone(), *layer_id))
+                } else {
+                    None
+                }
+            })
+            .collect(),
         controls,
         wgsl,
         passes,
         imported_images,
+        bound_images,
         audio_inputs,
         fingerprint: fingerprint.finish(),
     })
@@ -913,6 +1050,7 @@ layout(set=0,binding=1) uniform sampler syndocal_input_sampler;
 layout(set=0,binding=2,std140) uniform SyndocalUniforms {{
     vec4 render_time;
     ivec4 frame_pass;
+    vec4 date;
     vec4 controls[{ISF_MAX_CONTROL_INPUTS}];
 }} syndocal;
 #define gl_FragColor syndocal_FragColor
@@ -921,6 +1059,7 @@ layout(set=0,binding=2,std140) uniform SyndocalUniforms {{
 #define TIMEDELTA syndocal.render_time.w
 #define FRAMEINDEX syndocal.frame_pass.x
 #define PASSINDEX syndocal.frame_pass.y
+#define DATE syndocal.date
 #define IMG_THIS_PIXEL(image) texture(image, gl_FragCoord.xy / vec2(textureSize(image, 0)))
 #define IMG_THIS_NORM_PIXEL(image) texture(image, isf_FragNormCoord)
 #define IMG_NORM_PIXEL(image, coord) texture(image, coord)
@@ -995,9 +1134,10 @@ fn isf_uniform_data(
     time_delta_seconds: f32,
     frame_index: u32,
     pass_index: usize,
+    date: [f32; 4],
     controls: &[[f32; 4]],
 ) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(32 + ISF_MAX_CONTROL_INPUTS * 16);
+    let mut bytes = Vec::with_capacity(48 + ISF_MAX_CONTROL_INPUTS * 16);
     for value in [
         width as f32,
         height as f32,
@@ -1015,6 +1155,9 @@ fn isf_uniform_data(
         bytes.extend_from_slice(&value.to_le_bytes());
     }
     for value in [frame_index as i32, pass_index as i32, 0_i32, 0_i32] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    for value in date {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
     for index in 0..ISF_MAX_CONTROL_INPUTS {
@@ -1196,6 +1339,10 @@ mod tests {
 #[cfg(test)]
 #[path = "isf_completeness_tests.rs"]
 mod completeness_tests;
+
+#[cfg(test)]
+#[path = "isf_date_images_tests.rs"]
+mod date_images_tests;
 
 #[cfg(test)]
 #[path = "isf_audio_tests.rs"]

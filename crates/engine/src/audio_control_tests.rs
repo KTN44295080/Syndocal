@@ -225,6 +225,7 @@ fn audio_test_effect_stage(id: u64) -> VideoEffectStageSummary {
         source_path: None,
         description: None,
         categories: Vec::new(),
+        image_bindings: Vec::new(),
         controls: vec![protocol::VideoIsfControlSummary {
             name: "speed".to_string(),
             kind: VideoIsfControlKind::Float,
@@ -271,6 +272,7 @@ fn sync_audio_test_legacy_effect(runtime: &mut EngineRuntime) {
             source_path: effect.source_path.clone(),
             description: effect.description.clone(),
             categories: effect.categories.clone(),
+            image_bindings: effect.image_bindings.clone(),
             controls: effect.controls.clone(),
         })
         .collect();

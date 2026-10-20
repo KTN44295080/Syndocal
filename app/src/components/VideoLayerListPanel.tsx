@@ -290,7 +290,7 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
               />
               Solo layer
             </label>
-            <VideoIsfEffectPanel
+            <VideoIsfEffectPanel availableLayers={props.layers}
               layerId={layer.id}
               layerLabel={layer.label}
               compact={props.compact}

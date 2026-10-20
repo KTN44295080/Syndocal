@@ -10,6 +10,7 @@ const builtinLabel = (stage?: VideoIsfEffectStageSummary) => stage
 export function cloneFxStage(stage: VideoIsfEffectStageSummary): VideoIsfEffectStageSummary {
   return { enabled: stage.enabled, label: stage.label, source: stage.source,
     ...(stage.source_path !== undefined ? { source_path: stage.source_path } : {}),
+    ...(stage.image_bindings !== undefined ? { image_bindings: stage.image_bindings.map((binding) => ({ name: binding.name, source: { ...binding.source } })) } : {}),
     ...(stage.description !== undefined ? { description: stage.description } : {}),
     categories: [...(stage.categories ?? [])], controls: stage.controls.map((control) => ({ ...control,
       value: [...control.value] as FxValue, default: [...control.default] as FxValue,

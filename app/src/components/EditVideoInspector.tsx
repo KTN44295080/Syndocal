@@ -8,7 +8,7 @@ import { VideoLayerGroupsPanel } from "./VideoLayerGroupsPanel";
 import type { VideoControlPanelProps } from "./VideoControlPanel";
 
 type LayerFxProps = Pick<ComponentProps<typeof VideoLayerListPanel>,
-  "layers" | "bpm" | "isfRuntimeErrors" | "isfEventPulseBusy" | "onImportIsf" |
+  "layers" | "bpm" | "locale" | "projectEpoch" | "effectCatalog" | "isfRuntimeErrors" | "isfEventPulseBusy" | "onImportIsf" |
   "onApplyBuiltinIsf" | "onSetIsfEffect" | "onMoveIsfEffect" |
   "onRemoveIsfEffect" | "onSetIsfEffectEnabled" | "onResetIsfEffect" |
   "onSetIsfControl" | "onTriggerIsfEvent">;
@@ -56,6 +56,8 @@ export function EditVideoInspector(props: EditVideoInspectorProps) {
                 </label>
                 <Show when={selectedLayer()?.id} keyed>
                   {(layerId) => <VideoIsfEffectPanel
+                    availableLayers={props.layerFx.layers} locale={props.layerFx.locale}
+                    projectEpoch={props.layerFx.projectEpoch} effectCatalog={props.layerFx.effectCatalog}
                     layerId={layerId}
                     layerLabel={selectedLayer()?.label}
                     compact

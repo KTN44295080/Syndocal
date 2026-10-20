@@ -179,7 +179,7 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
         <div class="videoPerformQuickFxParameters" data-perform-fx-detail={activeStage()?.index ?? ""} aria-label="Selected stage parameters">
           <Show when={activeStage()}>
             {(stage) => (
-              <VideoFxParameterEditor stage={stage().stage} identity={stage().id} busy={busy()} locale={props.locale} bpm={props.bpm}
+              <VideoFxParameterEditor availableLayers={props.layerList.layers} stage={stage().stage} identity={stage().id} busy={busy()} locale={props.locale} bpm={props.bpm}
                 projectEpoch={props.projectEpoch} layerId={stage().layerId} liveSession={props.liveSession} history={history()}
                 auditioning={Boolean(audition())} stageId={stage().stageId}
                 effectCatalog={props.effectCatalog} onApplyEffectCatalog={props.onApplyEffectCatalog}

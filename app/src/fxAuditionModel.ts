@@ -20,7 +20,7 @@ export function fxChainFromStages(stages: readonly VideoIsfEffectStageSummary[])
 
 // Control values are f32 in the engine. A snapshot returns the shortest f32 decimal, so a
 // double typed or randomized in the browser only matches it after rounding to f32.
-const f32Image = (_key: string, value: unknown) => typeof value === "number" ? Math.fround(value) : value;
+const f32Image = (key: string, value: unknown) => typeof value === "number" && key !== "layer_id" ? Math.fround(value) : value;
 
 export const fxChainsEqual = (left: FxChain | undefined, right: FxChain | undefined): boolean =>
   JSON.stringify(fxChainStages(left), f32Image) === JSON.stringify(fxChainStages(right), f32Image);

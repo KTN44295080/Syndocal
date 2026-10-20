@@ -49,6 +49,66 @@ function headerLine(source: string, jsonLine: number): number | undefined {
 
 const rules: Rule[] = [
   {
+    test: (raw) => /ISF image input binding update (?:rejected|was not confirmed)/i.test(raw),
+    title: word("The image binding was not saved", "画像入力の割り当てが保存されませんでした"),
+    detail: () => word("The project did not confirm the image-input change. The previous binding remains in use.", "プロジェクトが画像入力の変更を確定できなかったため、以前の割り当てを使います。"),
+    action: word("Check the project status, then choose the image source again.", "プロジェクトの状態を確認してから、画像の入力元を選び直してください。"),
+  },
+  {
+    test: (raw) => /ISF image input (?:dependency (?:cycle|depth)|cycle detected)/i.test(raw),
+    title: word("The image inputs form an invalid dependency", "画像入力の参照関係を使用できません"),
+    detail: () => word("A layer would read its own output directly or indirectly, or the dependency chain exceeds the limit.", "レイヤーが自分の出力を直接・間接的に参照しているか、参照の段数が上限を超えています。"),
+    action: word("Choose an independent layer, an imported still, or None.", "依存していないレイヤーか、読み込み画像、「なし」を選んでください。"),
+  },
+  {
+    test: (raw) => /ISF image input (?:layer.*(?:missing|identity is duplicated)|references missing layer)/i.test(raw),
+    title: word("The input layer cannot be identified", "入力元のレイヤーを特定できません"),
+    detail: () => word("The saved layer ID is missing or duplicated. Layer order is not used to choose an input.", "保存されたレイヤーIDが存在しないか、重複しています。入力元はレイヤーの並び順では決まりません。"),
+    action: word("Choose an existing layer with a unique ID, an imported still, or None.", "IDが重複していないレイヤーか、読み込み画像、「なし」を選んでください。"),
+  },
+  {
+    test: (raw) => /ISF layer image bindings are unavailable for Timeline Follow/i.test(raw),
+    title: word("Layer images are unavailable for this transition", "このトランジションではレイヤー画像を利用できません"),
+    detail: () => word("Timeline Follow transitions do not have a project layer output context for image bindings.", "Timeline Followトランジションでは、画像入力に必要なプロジェクトのレイヤー出力を参照できません。"),
+    action: word("Choose an imported still or None for this image input.", "この画像入力には、読み込み画像か「なし」を選んでください。"),
+  },
+  {
+    test: (raw) => /ISF image input layer.*(?:unavailable in this render context|did not produce a frame|failed to render)/i.test(raw),
+    title: word("The input layer is unavailable", "入力元のレイヤーを利用できません"),
+    detail: () => word("This view has no usable output from the selected layer. The layer may have no frame or an effect may have failed.", "この表示には入力元のレイヤーの有効な出力がありません。映像がないか、エフェクトの処理に失敗している可能性があります。"),
+    action: word("Check the layer in project Output or Preview, or choose an imported still or None.", "プロジェクトの出力かプレビューで入力元を確認するか、読み込み画像または「なし」を選んでください。"),
+  },
+  {
+    test: (raw) => /ISF image inputs exceed the GPU buffer memory budget/i.test(raw),
+    title: word("The input images exceed the memory limit", "入力画像のメモリー使用量が上限を超えています"),
+    detail: () => word("The combined input textures need more GPU memory than this effect is allowed to allocate.", "入力テクスチャーの合計サイズが、このエフェクトで使えるGPUメモリーの上限を超えています。"),
+    action: word("Use smaller source images or lower the source layer resolution.", "入力画像を小さくするか、入力元のレイヤーの解像度を下げてください。"),
+  },
+  {
+    test: (raw) => /ISF image input byte length does not match its dimensions/i.test(raw),
+    title: word("The input image data is invalid", "入力画像のデータが正しくありません"),
+    detail: () => word("The image byte count does not match the declared width and height.", "画像のデータ量が、指定された幅と高さに一致していません。"),
+    action: word("Check or reload the source layer, or choose another input image.", "入力元のレイヤーを確認して読み込み直すか、別の入力画像を選んでください。"),
+  },
+  {
+    test: (raw) => /ISF DATE contains an invalid date or time/i.test(raw),
+    title: word("The render clock returned an invalid date", "描画用の時計が無効な日時を返しました"),
+    detail: () => word("DATE needs a valid year, month, day and seconds since midnight.", "DATEには、有効な年月日と、午前0時からの経過秒数が必要です。"),
+    action: word("Check the render clock in the technical details and restart the render with a valid date.", "技術的な詳細で描画用の時計を確認し、有効な日時で描画をやり直してください。"),
+  },
+  {
+    test: (raw) => /ISF declares too many image inputs|ISF image input.*(?:limit exceeded|at most|maximum|safety limit)|ISF shader.*image inputs.*limit/i.test(raw),
+    title: word("There are too many image inputs", "画像入力の数が上限を超えています"),
+    detail: () => word("An effect supports at most four image inputs in total. The layer supplies the primary image by default.", "1つのエフェクトで使える画像入力は合計4つまでです。元画像は通常、レイヤーから供給されます。"),
+    action: word("Reduce the image inputs or remove unused image bindings.", "画像入力を減らすか、使っていない割り当てを取り除いてください。"),
+  },
+  {
+    test: (raw) => /ISF image (?:input|binding).*(?:name is invalid|duplicated|unknown|undeclared|primary|not declared|not an additional|no declared|binding|already has an imported still)/i.test(raw),
+    title: word("An image input binding is invalid", "画像入力の割り当てが正しくありません"),
+    detail: () => word("Each binding must name a declared image input exactly once. The selected source must match that input.", "割り当てには、宣言済みの画像入力の名前を重複なく指定してください。選択した入力元はその画像入力に対応する必要があります。"),
+    action: word("Select the image input again and remove duplicate or obsolete bindings.", "画像入力を選び直し、重複した割り当てや不要な割り当てを取り除いてください。"),
+  },
+  {
     test: (raw) => /ISF audio texture MAX/i.test(raw),
     title: word("Audio texture width is invalid", "音声テクスチャーの幅が正しくありません"),
     detail: () => word("Audio and audioFFT inputs accept MAX values from 1 to 512.", "audioとaudioFFTの入力では、MAXに1から512までの整数を指定できます。"),
@@ -115,12 +175,6 @@ const rules: Rule[] = [
     action: word("Rewrite that part without loops or low-level declarations, or use another version of the shader.", "その部分をループや低レベルな宣言を使わない形に書き換えるか、別の版のシェーダーを使ってください。"),
   },
   {
-    test: (raw) => /exactly one image input/i.test(raw),
-    title: word("Exactly one image input is required", "画像の入力はちょうど1つ必要です"),
-    detail: (found) => word(`INPUTS must contain one input of TYPE image (found ${found.count ?? "a different number"}). Generators and transitions are not filters.`, `INPUTSにはTYPEがimageの入力がちょうど1つ必要です（見つかった数：${found.count ?? "不明"}）。ジェネレーターや切り替え用のシェーダーはフィルターとして使えません。`),
-    action: word("Add or keep a single image INPUT, then import again.", "TYPEがimageのINPUTを1つだけにして、もう一度読み込んでください。"),
-  },
-  {
     test: (raw) => /not a safe identifier/i.test(raw),
     title: word("An input name cannot be used", "使えない入力名があります"),
     detail: (found) => word(`The INPUT name${named(found).en}${at(found).en} is reserved or contains characters other than letters, digits and underscores.`, `入力名${named(found).ja}${at(found).ja}は予約語か、英数字と_以外の文字を含んでいます。`),
@@ -137,6 +191,12 @@ const rules: Rule[] = [
     title: word("An input has an invalid default or range", "入力の初期値や範囲の指定が正しくありません"),
     detail: (found) => word(`A DEFAULT, MIN or MAX value${named(found).en}${at(found).en} is not a finite number or a number list Syndocal understands.`, `DEFAULT・MIN・MAXの値${named(found).ja}${at(found).ja}が、有限の数値または対応する数値リストではありません。`),
     action: word("Use plain numbers in INPUTS (an [r, g, b, a] list for colours, [x, y] for points), then import again.", "INPUTSでは通常の数値を使ってください（色は[r, g, b, a]、点は[x, y]の配列）。修正して、もう一度読み込んでください。"),
+  },
+  {
+    test: (raw) => /ISF declares too many textures/i.test(raw),
+    title: word("The shader uses too many textures", "シェーダーのテクスチャー数が上限を超えています"),
+    detail: () => word("Image inputs, audio inputs, named pass targets and imported images share a limit of 16 sampled textures.", "画像入力・音声入力・名前付きの描画ターゲット・読み込み画像を合わせて、使えるテクスチャーは16個までです。"),
+    action: word("Remove unused inputs, targets or imported images, or split the effect into smaller shaders.", "使っていない入力・ターゲット・読み込み画像を取り除くか、エフェクトを小さなシェーダーに分けてください。"),
   },
   {
     test: (raw) => /safety limit|controls; the safety limit/i.test(raw),

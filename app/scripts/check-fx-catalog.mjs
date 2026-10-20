@@ -60,7 +60,21 @@ const cases = [
   { name: "missing PASS target reference", source: '/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"}]}*/\nvoid main(){\n gl_FragColor = IMG_THIS_PIXEL(bufferA);\n}', raw: 'ISF GLSL compile failed: ParseErrors { errors: [Error { kind: UnknownVariable("bufferA"), meta: Span { start: 1, end: 2 } }] }', title: /pass target is missing/, ja: /ターゲット/, line: 3, input: "bufferA" },
   { name: "forbidden loop", source: '/*{"INPUTS":[]}*/\nvoid main(){\n for (int i=0;i<9;i++){}\n}', raw: "ISF source uses forbidden or unsupported construct 'for ('", title: /not allowed/, ja: /使用できない記述/, line: 3 },
   { name: "invalid header JSON", source: '\n\n/*{\n"INPUTS":[,]}*/ void main(){}', raw: "ISF metadata JSON is invalid: expected value at line 2 column 11", title: /not valid JSON/, ja: /JSON/, line: 4 },
-  { name: "no image input", source: '/*{"INPUTS":[]}*/ void main(){}', raw: "ISF filter must declare exactly one image input; found 0", title: /one image input/, ja: /画像の入力/ },
+  { name: "shared texture budget", source: "", raw: "ISF declares too many textures; the safety limit is 16", title: /too many textures/, ja: /テクスチャー数/ },
+  { name: "image input limit", source: "", raw: "ISF declares too many image inputs; the safety limit is 4", title: /too many image inputs/, ja: /画像入力の数/ },
+  { name: "image binding cycle", source: "", raw: "ISF image input dependency cycle: 7 -> 42 -> 7", title: /invalid dependency/, ja: /参照関係/ },
+  { name: "runtime image cycle", source: "", raw: "ISF image input cycle detected at layer 7", title: /invalid dependency/, ja: /参照関係/ },
+  { name: "image dependency depth", source: "", raw: "ISF image input dependency depth exceeds 32 links", title: /invalid dependency/, ja: /参照関係/ },
+  { name: "missing input layer", source: "", raw: "ISF image input references missing layer 42", title: /cannot be identified/, ja: /特定できません/ },
+  { name: "unavailable input context", source: "", raw: "ISF image input layer 42 is unavailable in this render context", title: /input layer is unavailable/, ja: /利用できません/ },
+  { name: "input produced no frame", source: "", raw: "ISF image input layer 42 did not produce a frame", title: /input layer is unavailable/, ja: /利用できません/ },
+  { name: "input render failed", source: "", raw: "ISF image input layer 42 failed to render: GPU error", title: /input layer is unavailable/, ja: /利用できません/ },
+  { name: "unknown bound input", source: "", raw: "ISF image binding 'overlay' has no declared image input", title: /binding is invalid/, ja: /割り当て/ },
+  { name: "duplicate binding", source: "", raw: "ISF image binding 'overlay' is duplicated", title: /binding is invalid/, ja: /割り当て/ },
+  { name: "input memory bound", source: "", raw: "ISF image inputs exceed the GPU buffer memory budget", title: /exceed the memory limit/, ja: /メモリー/ },
+  { name: "input bytes", source: "", raw: "ISF image input byte length does not match its dimensions", title: /input image data is invalid/, ja: /データ/ },
+  { name: "date clock", source: "", raw: "ISF DATE contains an invalid date or time", title: /render clock/, ja: /時計/ },
+  { name: "follow layer scope", source: "", raw: "ISF layer image bindings are unavailable for Timeline Follow transitions; choose an imported still or none", title: /unavailable for this transition/, ja: /トランジション/ },
   // A typo in an ordinary filter that reads its declared image must not be blamed on pass targets.
   { name: "typo in a normal filter", source: '/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"}]}*/\nvoid main(){\n vec4 c = IMG_THIS_PIXEL(inputImage);\n gl_FragColor = c * foo;\n}', raw: 'ISF GLSL compile failed: ParseErrors { errors: [Error { kind: UnknownVariable("foo"), meta: Span { start: 1, end: 2 } }] }', title: /name that is not defined/, ja: /定義されていない名前/, line: 4, input: "foo" },
   { name: "typo in a PASSES shader", source: '/*{"PASSES":[{}],"INPUTS":[{"NAME":"inputImage","TYPE":"image"}]}*/\nvoid main(){ gl_FragColor = IMG_THIS_PIXEL(inputImage) * gian; }', raw: 'ISF GLSL compile failed: ParseErrors { errors: [Error { kind: UnknownVariable("gian"), meta: Span { start: 1, end: 2 } }] }', title: /name that is not defined/, ja: /定義されていない名前/, line: 2, input: "gian" },
@@ -74,7 +88,7 @@ for (const item of cases) {
   assert.equal(explained.line, item.line, `${item.name}: line`);
   if (item.input) assert.equal(explained.input, item.input, `${item.name}: input`);
   assert.equal(explained.raw, item.raw, `${item.name}: raw text is preserved`);
-  assert.doesNotMatch(explained.title + explained.detail + explained.action, /single-pass filters only|External images are not supported/, `${item.name}: current support boundaries`);
+  assert.doesNotMatch(explained.title + explained.detail + explained.action, /single-pass filters only|External images are not supported|Generators and transitions are not filters|Exactly one image input is required|Audio inputs are not supported|Syndocal cannot supply one/, `${item.name}: current support boundaries`);
   assert.ok(explained.detail.length > 20 && explained.action.length > 20, `${item.name}: detail and action`);
   const japanese = rejection.explainFxRejection(item.raw, "ja", item.source);
   assert.match(japanese.title, item.ja, `${item.name}: Japanese title`);

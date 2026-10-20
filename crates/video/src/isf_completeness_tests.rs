@@ -214,15 +214,15 @@ fn shader_cache_keeps_identical_sources_in_different_pack_directories_separate()
     let source = Arc::<str>::from(IMPORTED);
     let mut renderer = crate::VideoPreviewRenderer::new(crate::VideoRuntimeConfig::default());
     let a = renderer
-        .cached_isf_shader(&source, first_path.to_str())
+        .cached_isf_shader(&source, first_path.to_str(), &[])
         .unwrap();
     let b = renderer
-        .cached_isf_shader(&source, second_path.to_str())
+        .cached_isf_shader(&source, second_path.to_str(), &[])
         .unwrap();
     assert_ne!(a.fingerprint, b.fingerprint);
     assert_eq!(renderer.isf_shader_cache_count(), 2);
     let cached = renderer
-        .cached_isf_shader(&source, first_path.to_str())
+        .cached_isf_shader(&source, first_path.to_str(), &[])
         .unwrap();
     assert!(Arc::ptr_eq(&a, &cached));
 }

@@ -30105,9 +30105,25 @@ impl EngineRuntime {
                 });
             }
             EngineCommand::RemoveVideoLayer(layer_id) => {
-                self.video_layers.retain(|layer| layer.id != layer_id);
-                self.remove_video_layer_references(layer_id);
-                self.last_error = None;
+                let mut candidate = self.video_snapshot();
+                candidate.layers.retain(|layer| layer.id != layer_id);
+                candidate.effect_chains.retain(|chain| match &chain.scope {
+                    VideoEffectScope::Clip {
+                        layer_id: owner, ..
+                    }
+                    | VideoEffectScope::Layer { layer_id: owner }
+                    | VideoEffectScope::Transition {
+                        owner: protocol::VideoTransitionEffectOwner::ClipTake { layer_id: owner },
+                    } => *owner != layer_id,
+                    _ => true,
+                });
+                if let Err(error) = protocol::validate_video_isf_image_graph(&candidate) {
+                    self.last_error = Some(error);
+                } else {
+                    self.video_layers.retain(|layer| layer.id != layer_id);
+                    self.remove_video_layer_references(layer_id);
+                    self.last_error = None;
+                }
             }
             EngineCommand::SetVideoLayerOrder(layer_ids) => {
                 reorder_video_layers(&mut self.video_layers, layer_ids);
@@ -67587,6 +67603,7 @@ fn video_isf_effect_into_stages(
         description,
         categories,
         controls,
+        image_bindings,
         mut stack,
     } = effect;
     stack.insert(
@@ -67599,6 +67616,7 @@ fn video_isf_effect_into_stages(
             description,
             categories,
             controls,
+            image_bindings,
         },
     );
     stack
@@ -67619,6 +67637,7 @@ fn video_isf_effect_from_stages(
         description: first.description,
         categories: first.categories,
         controls: first.controls,
+        image_bindings: first.image_bindings,
         stack: stages,
     })
 }
@@ -67807,6 +67826,7 @@ fn project_legacy_isf_from_canonical_chain(
             description: effect.description,
             categories: effect.categories,
             controls: effect.controls,
+            image_bindings: effect.image_bindings,
         })
         .collect();
     Ok(Some(root))
@@ -67833,6 +67853,7 @@ fn canonical_stages_from_legacy_isf(
                 description: stage.description,
                 categories: stage.categories,
                 controls: stage.controls,
+                image_bindings: stage.image_bindings,
                 stack: Vec::new(),
             },
         )
@@ -77148,6 +77169,7 @@ mod tests {
 
     fn allocator_c1_effect() -> VideoIsfEffectSummary {
         VideoIsfEffectSummary {
+            image_bindings: Vec::new(),
             enabled: true,
             label: "Allocator C1 ISF".to_string(),
             source: Arc::<str>::from("void main() {}"),
@@ -79470,6 +79492,7 @@ mod tests {
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
             isf_effect: Some(VideoIsfEffectSummary {
+                image_bindings: Vec::new(),
                 enabled: true,
                 label: "Over budget".to_string(),
                 source: Arc::<str>::from(
@@ -89739,6 +89762,7 @@ mod tests {
             })
             .unwrap();
         let isf_effect = VideoIsfEffectSummary {
+            image_bindings: Vec::new(),
             enabled: true,
             label: "Threshold".to_string(),
             source: "/*{\"INPUTS\":[{\"NAME\":\"inputImage\",\"TYPE\":\"image\"}]}*/ void main(){ gl_FragColor = IMG_THIS_PIXEL(inputImage); }".into(),
@@ -89748,6 +89772,7 @@ mod tests {
             controls: Vec::new(),
             stack: vec![
                 VideoIsfEffectStageSummary {
+                    image_bindings: Vec::new(),
                     enabled: false,
                     label: "Invert".to_string(),
                     source: "/*{\"INPUTS\":[{\"NAME\":\"inputImage\",\"TYPE\":\"image\"}]}*/ void main(){ gl_FragColor = vec4(1.0) - IMG_THIS_PIXEL(inputImage); }".into(),
@@ -89767,6 +89792,7 @@ mod tests {
                     }],
                 },
                 VideoIsfEffectStageSummary {
+                    image_bindings: Vec::new(),
                     enabled: true,
                     label: "Posterize".to_string(),
                     source: "/*{\"INPUTS\":[{\"NAME\":\"inputImage\",\"TYPE\":\"image\"}]}*/ void main(){ gl_FragColor = IMG_THIS_PIXEL(inputImage); }".into(),
@@ -89882,6 +89908,7 @@ mod tests {
 
     fn source_budget_test_effect(source: Arc<str>) -> VideoIsfEffectSummary {
         VideoIsfEffectSummary {
+            image_bindings: Vec::new(),
             enabled: true,
             label: "Budget stage".to_string(),
             source,
@@ -89943,6 +89970,7 @@ mod tests {
 
     fn video_effect_chain_c1_event_effect() -> VideoIsfEffectSummary {
         VideoIsfEffectSummary {
+            image_bindings: Vec::new(),
             enabled: true,
             label: "C1 Event".to_string(),
             source: Arc::<str>::from("void main() {}"),
@@ -90426,6 +90454,7 @@ mod tests {
             tempo_sync: None,
         });
         incoming.stack.push(VideoIsfEffectStageSummary {
+            image_bindings: Vec::new(),
             enabled: true,
             label: "Ingress stack Event".to_string(),
             source: Arc::<str>::from("void main() { /* stack */ }"),
@@ -90456,6 +90485,7 @@ mod tests {
         runtime.apply_command(EngineCommand::MutateVideoLayerIsfStack {
             layer_id: 1,
             mutation: VideoIsfStackMutation::Add(VideoIsfEffectStageSummary {
+                image_bindings: Vec::new(),
                 enabled: true,
                 label: "Added Event".to_string(),
                 source: Arc::<str>::from("void main() { /* added */ }"),
@@ -90549,6 +90579,7 @@ mod tests {
             tempo_sync: None,
         });
         incoming.stack.push(VideoIsfEffectStageSummary {
+            image_bindings: Vec::new(),
             enabled: true,
             label: "Handle stack Event".to_string(),
             source: Arc::<str>::from("void main() { /* handle stack */ }"),
@@ -90582,6 +90613,7 @@ mod tests {
             .mutate_video_layer_isf_stack(
                 layer_id,
                 VideoIsfStackMutation::Add(VideoIsfEffectStageSummary {
+                    image_bindings: Vec::new(),
                     enabled: true,
                     label: "Handle added Event".to_string(),
                     source: Arc::<str>::from("void main() { /* handle add */ }"),
@@ -90659,6 +90691,7 @@ mod tests {
         let (engine, layer_id) = video_effect_chain_c1_handle_with_layer();
         let stage_source: Arc<str> = "x".repeat(video::ISF_MAX_SOURCE_BYTES).into();
         let effect = VideoIsfEffectSummary {
+            image_bindings: Vec::new(),
             enabled: true,
             label: "C1 source root".to_string(),
             source: Arc::clone(&stage_source),
@@ -90667,6 +90700,7 @@ mod tests {
             categories: Vec::new(),
             controls: Vec::new(),
             stack: vec![VideoIsfEffectStageSummary {
+                image_bindings: Vec::new(),
                 enabled: true,
                 label: "C1 source tail".to_string(),
                 source: stage_source,
@@ -90689,6 +90723,7 @@ mod tests {
         let (engine, layer_id) = video_effect_chain_c1_handle_with_layer();
         let mut effect = video_effect_chain_c1_event_effect();
         effect.stack.push(VideoIsfEffectStageSummary {
+            image_bindings: Vec::new(),
             enabled: true,
             label: "C1 duplicate tail".to_string(),
             source: Arc::<str>::from("void main() { }"),
@@ -91938,6 +91973,7 @@ mod tests {
         runtime.apply_command(EngineCommand::SetVideoLayerIsfEffect {
             layer_id: 1,
             effect: Some(VideoIsfEffectSummary {
+                image_bindings: Vec::new(),
                 enabled: true,
                 label: "Override root".to_string(),
                 source: Arc::<str>::from("root"),
@@ -91947,6 +91983,7 @@ mod tests {
                 controls: vec![test_isf_event_control(0.0)],
                 stack: vec![
                     VideoIsfEffectStageSummary {
+                        image_bindings: Vec::new(),
                         enabled: true,
                         label: "Override middle".to_string(),
                         source: Arc::<str>::from("middle"),
@@ -91956,6 +91993,7 @@ mod tests {
                         controls: vec![test_isf_event_control(0.0)],
                     },
                     VideoIsfEffectStageSummary {
+                        image_bindings: Vec::new(),
                         enabled: true,
                         label: "Override tail".to_string(),
                         source: Arc::<str>::from("tail"),
@@ -92073,6 +92111,7 @@ mod tests {
         runtime.apply_command(EngineCommand::SetVideoLayerIsfEffect {
             layer_id: 1,
             effect: Some(VideoIsfEffectSummary {
+                image_bindings: Vec::new(),
                 enabled: true,
                 label: "Catalog root".to_string(),
                 source: Arc::<str>::from("catalog-root"),
@@ -92082,6 +92121,7 @@ mod tests {
                 controls: vec![test_isf_event_control(0.0)],
                 stack: vec![
                     VideoIsfEffectStageSummary {
+                        image_bindings: Vec::new(),
                         enabled: true,
                         label: "Catalog middle".to_string(),
                         source: Arc::<str>::from("catalog-middle"),
@@ -92091,6 +92131,7 @@ mod tests {
                         controls: vec![test_isf_event_control(0.0)],
                     },
                     VideoIsfEffectStageSummary {
+                        image_bindings: Vec::new(),
                         enabled: true,
                         label: "Catalog tail".to_string(),
                         source: Arc::<str>::from("catalog-tail"),
@@ -92310,6 +92351,7 @@ mod tests {
                     engine.mutate_video_layer_isf_stack(
                         layer_id,
                         VideoIsfStackMutation::Add(VideoIsfEffectStageSummary {
+                            image_bindings: Vec::new(),
                             enabled: true,
                             label: "Unit stage".to_string(),
                             source: "x".into(),
@@ -92408,6 +92450,7 @@ mod tests {
             .unwrap();
         let stage = |label: &str| {
             VideoIsfEffectStageSummary {
+                image_bindings: Vec::new(),
             enabled: true,
             label: label.to_string(),
             source: format!(
@@ -92499,6 +92542,7 @@ mod tests {
         let effect = mutate_video_isf_effect_stack(
             None,
             VideoIsfStackMutation::Add(VideoIsfEffectStageSummary {
+                image_bindings: Vec::new(),
                 enabled: true,
                 label: "Reversed bounds".to_string(),
                 source: "test shader".into(),
@@ -92551,6 +92595,7 @@ mod tests {
     #[test]
     fn video_isf_raw_control_writes_and_reset_end_a_tempo_sync() {
         let synced = || VideoIsfEffectSummary {
+            image_bindings: Vec::new(),
             enabled: true,
             label: "Strobe".to_string(),
             source: "/* test */".into(),
@@ -92687,6 +92732,7 @@ mod tests {
         runtime.apply_command(EngineCommand::SetVideoLayerIsfEffect {
             layer_id: 1,
             effect: Some(VideoIsfEffectSummary {
+                image_bindings: Vec::new(),
                 enabled: true,
                 label: "Root".to_string(),
                 source: root_source,
@@ -92695,6 +92741,7 @@ mod tests {
                 categories: Vec::new(),
                 controls: vec![test_isf_event_control(1.0)],
                 stack: vec![VideoIsfEffectStageSummary {
+                    image_bindings: Vec::new(),
                     enabled: true,
                     label: "Target".to_string(),
                     source: target_source,
@@ -92728,6 +92775,7 @@ mod tests {
         runtime.apply_command(EngineCommand::SetVideoLayerIsfEffect {
             layer_id: 1,
             effect: Some(VideoIsfEffectSummary {
+                image_bindings: Vec::new(),
                 enabled: true,
                 label: "Duplicate root".to_string(),
                 source: Arc::clone(&shared_source),
@@ -92736,6 +92784,7 @@ mod tests {
                 categories: Vec::new(),
                 controls: vec![test_isf_event_control(1.0)],
                 stack: vec![VideoIsfEffectStageSummary {
+                    image_bindings: Vec::new(),
                     enabled: true,
                     label: "Duplicate target".to_string(),
                     source: shared_source,
@@ -98499,6 +98548,11 @@ mod tests {
         assert_eq!(snapshot.video.compositions.len(), 1);
         assert_eq!(snapshot.video.outputs[0].composition_id, 1);
         assert_eq!(snapshot.video.compositions[0].output_ids, vec![output_id]);
+    }
+
+    mod isf_image_binding_tests {
+        use super::*;
+        include!("isf_image_binding_tests.rs");
     }
 
     #[test]

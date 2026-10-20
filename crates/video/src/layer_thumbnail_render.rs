@@ -68,6 +68,9 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             &[layer_id],
             width,
             height,
+            None,
+            None,
+            None,
             cancellation,
         )?;
         self.record_effect_faults(faults, snapshot);

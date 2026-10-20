@@ -1,9 +1,11 @@
 import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import type { VideoEffectCatalog, VideoIsfControlSummary, VideoIsfEffectStageSummary, VideoIsfTempoSync, VideoIsfTempoSyncUnit } from "../types";
+import type { VideoEffectCatalog, VideoIsfControlSummary, VideoIsfEffectStageSummary, VideoIsfTempoSync, VideoIsfTempoSyncUnit, VideoLayerSummary } from "../types";
 import { boundedFxValue, builtinFxStagePresets, effectiveFxValue, FX_TEMPO_SYNC_COUNTS, fxControlLabel, fxControlValueText, fxDisplayScale, fxIsTimeControl, fxTempoSyncCountText, fxTempoSyncLabel, fxTempoSyncState, fxValidBpm, matchingFxStagePresets, randomizeFxStage, resyncFxStage, saveFxStagePreset, withFxTempoSync, type FxValue } from "../fxParameterModel";
 import "./VideoFxParameterEditor.css";
 import { VideoFxPointPad } from "./VideoFxPointPad";
+import { VideoFxImageInputs } from "./VideoFxImageInputs";
+import { fxImageInputs } from "../fxImageInputModel";
 import { translateUiText } from "../uiLocalization";
 import type { FxLiveSession } from "../createFxLiveSession";
 import { controlMappingTargetData, type ControlMappingTarget } from "../controlMappingLearn";
@@ -11,6 +13,7 @@ import { controlMappingTargetData, type ControlMappingTarget } from "../controlM
 interface VideoFxParameterEditorProps {
   projectEpoch?: number;
   layerId: number;
+  availableLayers?: readonly VideoLayerSummary[];
   /** Stable effect-stage id. With it, Float/Long/Bool/Event controls are MIDI-learnable
    * (never while auditioning, when the controls edit a Preview-only draft). */
   stageId?: number | null;
@@ -40,7 +43,7 @@ export function VideoFxParameterEditor(props: VideoFxParameterEditorProps) {
   const [presetId, setPresetId] = createSignal("");
   const [pending, setPending] = createSignal(false);
   const [error, setError] = createSignal(false);
-  const identity = createMemo(() => `${props.projectEpoch}:${props.identity}:${props.stage.source}`);
+  const identity = createMemo(() => [props.projectEpoch, props.identity, props.stageId ?? "", props.stage.source_path ?? "", props.stage.source].join(":"));
   createEffect(() => { identity(); setPresetId(""); setName(""); });
   createEffect(() => setControls(reconcile(props.stage.controls, { key: "name" })));
   const disabled = () => props.busy || pending();
@@ -55,6 +58,12 @@ export function VideoFxParameterEditor(props: VideoFxParameterEditorProps) {
     try { await action(); } catch { setError(true); } finally { setPending(false); }
   };
   const apply = (stage: VideoIsfEffectStageSummary) => run(() => props.onSetStage(stage));
+  const applyImageStage = async (stage: VideoIsfEffectStageSummary) => {
+    if (disabled()) return null;
+    setPending(true);
+    try { return await props.onSetStage(stage); }
+    finally { setPending(false); }
+  };
   // Range/color widgets commit on native change (gesture completion). Publishing
   // every pointer move would race the authoritative single-flight FX command.
   const setComponent = (control: VideoIsfControlSummary, component: number, value: number) => {
@@ -111,6 +120,9 @@ export function VideoFxParameterEditor(props: VideoFxParameterEditorProps) {
   };
   return (
     <div class="videoFxParameterEditor" data-fx-parameter-editor>
+      <VideoFxImageInputs identity={identity()} layerId={props.layerId} stage={props.stage}
+        layers={props.availableLayers} catalog={props.effectCatalog} locale={props.locale}
+        disabled={disabled()} onSetStage={applyImageStage} />
       <For each={controls}>{(control) => (
         <div class="videoFxParameter" data-perform-fx-control={control.name} data-perform-fx-kind={control.kind}
           data-video-isf-control-kind={control.kind} data-video-isf-control-name={control.name}>
@@ -197,7 +209,7 @@ export function VideoFxParameterEditor(props: VideoFxParameterEditorProps) {
         </div>
       </details>
       <Show when={error()}><p class="inlineError" role="alert">FX change failed. Check project status and try again.</p></Show>
-      <Show when={!controls.length}><p class="emptyHint">This shader has no operator controls.</p></Show>
+      <Show when={!controls.length && fxImageInputs(props.stage.source).length === 1}><p class="emptyHint">This shader has no operator controls.</p></Show>
     </div>
   );
 }

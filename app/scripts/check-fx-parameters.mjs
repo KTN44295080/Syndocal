@@ -88,6 +88,43 @@ try {
   assert.equal(model.fxControlValueText(angle, rotation), "30 °", "degrees are rounded to one decimal");
   assert.ok(Math.abs(model.fxDisplayScale(angle, rotation) - 180 / Math.PI) < 1e-9, "typed values for known angles are degrees");
   assert.equal(model.fxDisplayScale(angle, stage), 1, "unknown shaders never invent a unit scale");
+
+  const imageModel = await server.ssrLoadModule("/src/fxImageInputModel.ts");
+  const imageStage = { ...stage, source_path: "C:/pack/blend.fs", source: '/*{"INPUTS":[{"NAME":"overlay","LABEL":"Overlay picture","TYPE":"image"},{"NAME":"inputImage","TYPE":"image"},{"NAME":"mask","TYPE":"image"}]}*/void main(){}', controls: [] };
+  assert.deepEqual(imageModel.fxAdditionalImageInputs(imageStage.source), [{ name: "overlay", label: "Overlay picture" }, { name: "mask", label: "mask" }], "inputImage remains primary even when not first");
+  assert.deepEqual(imageModel.fxAdditionalImageInputs('/*{"INPUTS":[{"NAME":"from","TYPE":"image"},{"NAME":"to","TYPE":"image"}]}*/'), [{ name: "to", label: "to" }], "without inputImage the first image is primary");
+  assert.deepEqual(imageModel.fxImageInputs('/*{"INPUTS":[]}*/'), [], "zero-image generators expose no image bindings");
+  assert.deepEqual(imageModel.fxImageSource(imageStage, "overlay"), { kind: "none" }, "old stages default additional inputs to transparent");
+  const layerBound = imageModel.withFxImageSource(imageStage, "overlay", { kind: "layer", layer_id: 42 });
+  const stillBound = imageModel.withFxImageSource(layerBound, "mask", { kind: "imported", path: "textures/mask.png" });
+  assert.deepEqual(imageModel.fxImageSource(stillBound, "overlay"), { kind: "layer", layer_id: 42 }, "editing one binding preserves others");
+  assert.equal("image_bindings" in imageStage, false, "binding edits preserve the original undo image");
+  const clonedImages = model.cloneFxStage(stillBound);
+  clonedImages.image_bindings[0].source.layer_id = 99;
+  assert.equal(stillBound.image_bindings[0].source.layer_id, 42, "cloned binding source objects are independent");
+  assert.deepEqual(imageModel.fxImageSource(imageModel.withFxImageSource(stillBound, "overlay", { kind: "none" }), "overlay"), { kind: "none" });
+  for (const invalidPath of ["../mask.png", "C:/mask.png", "/mask.png", "https://host/mask.png", "textures/../mask.png", "mask.gif", ""]) assert.ok(imageModel.fxImportedImagePathError(invalidPath, imageStage.source_path), invalidPath);
+  assert.ok(imageModel.fxImportedImagePathError("mask.png", null), "imported stills need the shader directory");
+  assert.equal(imageModel.fxImportedImagePathError("textures\\mask.jpg", imageStage.source_path), null);
+  assert.throws(() => imageModel.withFxImageSource(imageStage, "inputImage", { kind: "none" }), /additional image input/, "the parameter editor leaves the primary host image alone");
+  assert.throws(() => imageModel.withFxImageSource(imageStage, "missing", { kind: "none" }), /declared additional/);
+  const imageSaved = model.saveFxStagePreset(catalog, stillBound, "Image blend");
+  const imageReopened = JSON.parse(JSON.stringify(imageSaved));
+  assert.deepEqual(imageReopened.effect_presets[0].payload.stages[0].effect.effect.image_bindings, stillBound.image_bindings, "project preset JSON round-trips stable IDs and still paths");
+  const edge = (to) => ({ ...imageStage, image_bindings: [{ name: "overlay", source: { kind: "layer", layer_id: to } }] });
+  const dependencyLayers = [{ id: 7, label: "Current", isf_effect: null }, { id: 42, label: "Source", isf_effect: edge(81) }, { id: 81, label: "Nested", isf_effect: edge(7) }, { id: 99, label: "Free", isf_effect: null }];
+  assert.equal(imageModel.fxImageLayerWouldCycle(7, 7, dependencyLayers), true, "self reference rejected");
+  assert.equal(imageModel.fxImageLayerWouldCycle(7, 42, dependencyLayers), true, "indirect cycle rejected");
+  assert.equal(imageModel.fxImageLayerWouldCycle(7, 99, dependencyLayers), false, "independent layer accepted");
+  assert.equal(imageModel.fxImageLayerWouldCycle(7, 42, [...dependencyLayers].reverse()), true, "reorder cannot alter stable-ID dependencies");
+  const clipEdges = { ...catalog, effect_chains: [{ id: 10, scope: { scope: "clip", layer_id: 99, slot_id: 12 }, bypassed: true, stages: [{ id: 11, enabled: false, label: "Dormant", effect: { id: 12, kind: { kind: "isf", effect: edge(7) } } }] }] };
+  assert.equal(imageModel.fxImageLayerWouldCycle(7, 99, dependencyLayers, clipEdges), true, "disabled Clip FX dependencies are checked too");
+  const auditionModel = await server.ssrLoadModule("/src/fxAuditionModel.ts");
+  const idA = { ...imageStage, image_bindings: [{ name: "overlay", source: { kind: "layer", layer_id: 16777216 } }] };
+  const idB = { ...imageStage, image_bindings: [{ name: "overlay", source: { kind: "layer", layer_id: 16777217 } }] };
+  assert.equal(auditionModel.fxChainsEqual(idA, idB), false, "stable layer IDs must not be rounded to f32 by audition equality");
+  assert.deepEqual(auditionModel.cloneFxChain(stillBound).image_bindings, stillBound.image_bindings, "audition clone preserves image bindings");
+
   // ---- Tempo sync: beat and bar units derived from the global clock ----
   const strobeEntry = builtinFxEntries.find((entry) => entry.builtinId === "strobe");
   const glitchEntry = builtinFxEntries.find((entry) => entry.builtinId === "glitch-shift");
