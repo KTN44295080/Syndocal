@@ -383,7 +383,55 @@
   background-color: var(--theme-error);
   background-image: var(--theme-pattern-error, none);
 }
-.videoPerformMatrix .videoPerformPreviewBadge { text-decoration: underline; }
+.videoPerformMatrix .videoPerformPreviewBadge {
+  position: absolute;
+  inset: auto 1px 1px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 1px;
+  background: var(--theme-preview);
+  color: var(--theme-on-preview);
+  font-family: var(--theme-font-label);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.preview:not(.live):not(.queued):not(.error) .videoPerformClipState {
+  padding-inline: 1px;
+  letter-spacing: 0;
+}
+
+/* The portal keeps clip actions outside the scrolling matrix. */
+.videoPerformClipMenu {
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  min-width: 208px;
+  max-width: calc(100vw - 16px);
+  padding: 4px;
+  border: 1px solid var(--theme-line-strong);
+  background: var(--theme-panel);
+  color: var(--theme-text);
+  font-family: var(--theme-font-ui);
+}
+.videoPerformClipMenu button {
+  min-height: 44px;
+  margin: 0;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font-family: inherit;
+  font-size: 14px;
+}
+.videoPerformClipMenu button:hover:not(:disabled) { background: var(--theme-raised); }
+.videoPerformClipMenu button:focus-visible { outline: 3px solid var(--theme-focus); outline-offset: -3px; }
+.videoPerformClipMenu button:disabled { color: var(--theme-muted); }
 
 /* Group policy is a single 44px strip above its unchanged child controls. */
 .videoPerformGroupRow { width: 3536px; min-width: 100%; height: 44px; border-bottom: 1px solid var(--theme-line-strong); background: var(--theme-raised); }

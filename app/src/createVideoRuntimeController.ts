@@ -736,11 +736,15 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     slotId: VideoClipSlotId | null = null,
     transitionKind: VideoClipTakeKind = "Cut",
     transitionDuration: VideoClipTakeDuration = { unit: "Milliseconds", value_milliunits: 0 },
+    previewGeneration?: number,
   ) => {
     try {
       const result = await runVideoClipSlotRuntime("launch_video_clip_slot_authoritative", {
         layer_id: layerId,
         slot_id: slotId,
+        // The native commit validates this exact Preview session; a refused
+        // audition must never fall through to the queued/default clip.
+        ...(previewGeneration === undefined ? {} : { preview_generation: previewGeneration }),
         transition_kind: transitionKind,
         transition_duration_ms: 0,
         transition_duration: transitionKind === "Cut"

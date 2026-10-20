@@ -70,7 +70,7 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
   const keyboardEnabled = () => props.performContext?.keyboardEnabled !== false;
   const shortcut = (event: KeyboardEvent) => {
     if (!keyboardEnabled() || event.repeat || event.isComposing || event.defaultPrevented ||
-      document.querySelector("dialog[open]") || (event.target instanceof Element &&
+      document.querySelector("dialog[open], [data-video-perform-context-menu]") || (event.target instanceof Element &&
         event.target.closest("input,select,textarea,[contenteditable=true]"))) return;
     if (event.ctrlKey && event.shiftKey && event.code === "KeyB" && !event.altKey && !event.metaKey) {
       event.preventDefault(); event.stopImmediatePropagation(); blackout.click();
@@ -161,6 +161,7 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
           effectEntries={props.performContext?.effectEntries} onAddEffect={props.performContext?.onAddEffect}
           runtimes={props.performContext?.runtimes ?? (props.clipSlotBank.runtime ? [props.clipSlotBank.runtime] : [])}
           availabilityById={props.mediaLibrary.availabilityById} previewLayerId={props.clipGrid.previewLayerId}
+          previewSlotId={props.liveMonitors.previewTransport.slot_id ?? null}
           thumbnailsAuthorized={props.clipGrid.thumbnailsAuthorized} keyboardEnabled={keyboardEnabled()}
           onStop={layerId => props.clipGrid.onStop(layerId, props.clipGrid.fadeMs)} onTake={() => { if (props.clipSlotTake.enabled) return props.clipSlotTake.onTake(); }} />
       </div>
@@ -325,11 +326,12 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
       <dl><dt data-no-localize>F1 / F2 / F3</dt><dd>Setup / Edit / Control</dd>
         <dt data-no-localize>Alt + 1 / 2 / 3</dt><dd>Lighting / Video / Both</dd>
         <dt>1–9, 0, Q–P, A–L, Z–C</dt><dd>Queue a clip in the selected layer</dd>
+        <dt data-no-localize>Shift + 1–0</dt><dd>Audition clip in Preview</dd>
         <dt>← → ↑ ↓ · Home / End</dt><dd>Move clip and layer selection</dd>
-        <dt>Space / Enter</dt><dd>Take the queued clip</dd>
+        <dt>Space / Enter</dt><dd>Take the auditioned or queued clip</dd>
         <dt data-no-localize>Ctrl + Shift + B</dt><dd>Blackout or recover, with confirmation</dd>
         <dt>?</dt><dd>Show keyboard shortcuts</dd></dl>
-      <p>Right-click or long-press a clip for its options. Inspect and Clip… in the matrix corner act on the selected clip; Inspect shows a thumbnail only.</p>
+      <p>Right-click a clip to audition it in Preview or open its options. Inspect auditions the selected clip; Clip… opens its options.</p>
       <p>The P button stages the current layer in Preview; the P key queues column 20.</p>
       <p>Shortcuts pause while editing a value, a dialog is open, or MIDI Learn is active.</p>
       <p>In MIDI, OSC or DMX Learn, select a pink control, then send or move its hardware input. Clips, Take, Stop, blend, transition type and time, effect stages and effect parameters are all learnable.</p>

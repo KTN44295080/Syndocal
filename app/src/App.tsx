@@ -1056,6 +1056,7 @@ const tauriBackendUnavailableMessage = "Syndocal desktop backend is not connecte
 
 const emptyVjPreviewTransport = (): VjPreviewTransportSummary => ({
   layer_id: null,
+  slot_id: null,
   playing: false,
   position_ms: 0,
   duration_ms: null,
@@ -21484,6 +21485,7 @@ export default function App() {
     layerId: number,
     expectedAuthority?: ProjectAuthorityToken,
     onFailure?: (reason: string) => void,
+    slotId?: VideoClipSlotId,
   ) => {
     const resultIsCurrent = expectedAuthority
       ? () => isProjectAuthorityIdentityCurrent(expectedAuthority)
@@ -21498,19 +21500,19 @@ export default function App() {
       : { layerId };
     const summary = await runVjPreviewTransportCommand(
       "stage_vj_preview_layer",
-      args,
+      { ...args, ...(slotId === undefined ? {} : { slotId }) },
       {
         resultIsCurrent,
         // Automatic Bootstrap staging reports through the first-run status;
         // never let a stale B request write a transient Preview error into C.
-        showError: expectedAuthority === undefined,
+        showError: expectedAuthority === undefined || slotId !== undefined,
         onError: onFailure,
       },
     );
     if (!summary) return false;
     if (resultIsCurrent && !resultIsCurrent()) return false;
-    if (summary.layer_id !== layerId) {
-      const mismatch = `Preview staged layer ${summary.layer_id ?? "none"}, expected ${layerId}.`;
+    if (summary.layer_id !== layerId || (summary.slot_id ?? null) !== (slotId ?? null)) {
+      const mismatch = translateUiText("Preview changed. Audition the clip again.", uiLocale());
       setVjPreviewTransportError(mismatch);
       onFailure?.(mismatch);
       return false;
@@ -21639,25 +21641,50 @@ export default function App() {
     />
   );
   const previewVideoClipSlot = async (slotId: VideoClipSlotId) => {
-    // B3 has no isolated clip-slot preview transport. Selecting the pad reveals
-    // its catalog thumbnail without staging or claiming the whole layer.
+    const layer = selectedVideoClipSlotLayer();
+    if (!layer?.clip_slots?.some((slot) => slot.id === slotId)) return false;
     authorizeVideoThumbnailAccess();
     setSelectedVideoClipSlotId(slotId);
+    // Capture both identities before dispatch; selecting or queueing another
+    // cell while staging is in flight cannot retarget this Preview session.
+    return stageVjPreviewLayer(layer.id, captureProjectAuthorityIdentity(), undefined, slotId);
   };
-  const takeSelectedVideoClipSlot = async () => {
-    const layer = selectedVideoClipSlotLayer();
-    if (!layer) return;
+  const videoClipSlotTakeEnabled = () => {
+    if (vjPreviewTransportBusy()) return false;
+    const preview = vjPreviewTransport();
+    if (preview.slot_id != null) {
+      const layer = snapshot().video.layers.find((candidate) => candidate.id === preview.layer_id);
+      const runtime = videoClipRuntime().layers.find((candidate) => candidate.layer_id === preview.layer_id);
+      return Number.isSafeInteger(preview.generation) && preview.generation > 0 &&
+        Boolean(layer?.clip_slots?.some((slot) => slot.id === preview.slot_id)) && !runtime?.transition;
+    }
     const runtime = selectedVideoClipSlotRuntime();
-    const activeTransition = runtime?.transition ?? null;
+    return runtime?.transition != null || runtime?.queued_slot_id != null;
+  };
+  const videoClipSlotTakeLabel = () => vjPreviewTransport().slot_id != null
+    ? "Take Preview"
+    : selectedVideoClipSlotRuntime()?.transition ? "Reverse" : "Take";
+  const takeSelectedVideoClipSlot = async () => {
+    if (!videoClipSlotTakeEnabled()) return;
+    const preview = vjPreviewTransport();
+    const auditioning = preview.slot_id != null;
+    const layer = auditioning
+      ? snapshot().video.layers.find((candidate) => candidate.id === preview.layer_id)
+      : selectedVideoClipSlotLayer();
+    if (!layer) return;
+    const runtime = videoClipRuntime().layers.find((candidate) => candidate.layer_id === layer.id);
+    const activeTransition = auditioning ? null : runtime?.transition ?? null;
     const result = await launchVideoClipSlot(
       layer.id,
-      activeTransition?.outgoing_slot_id ?? null,
+      auditioning ? preview.slot_id! : activeTransition?.outgoing_slot_id ?? null,
       activeTransition?.kind ?? videoClipTakeKind(),
       activeTransition?.duration ?? {
         unit: videoClipTakeDurationUnit(),
         value_milliunits: videoClipTakeDurationMilliunits(),
       },
+      auditioning ? preview.generation : undefined,
     );
+    if (auditioning) await readVjPreviewTransport();
     if (result && videoProgramAudioEnabled() && videoLayerHasMonitorableAudio(layer.id)) {
       await refreshVideoAudioMonitorStatus(true);
     }
@@ -21729,9 +21756,13 @@ export default function App() {
     outputHealth: liveVideoOutputHealth.outputs,
     outputHealthError: liveVideoOutputHealth.error,
   });
-  const liveVideoPreviewLabel = createMemo(() =>
-    snapshot().video.layers.find((layer) => layer.id === videoPreviewLayerId())?.label ?? null,
-  );
+  const liveVideoPreviewLabel = createMemo(() => {
+    const preview = vjPreviewTransport();
+    const layer = snapshot().video.layers.find((candidate) => candidate.id === preview.layer_id);
+    const slot = layer?.clip_slots?.find((candidate) => candidate.id === preview.slot_id);
+    const asset = slot && snapshot().video.media_assets.find((candidate) => candidate.id === slot.media_asset_id);
+    return slot ? `${layer?.label ?? ""} · ${asset?.label ?? preview.source_name ?? slot.id}` : layer?.label ?? null;
+  });
   const liveVideoProgramLabel = createMemo(() =>
     snapshot().video.outputs.find((output) => output.id === selectedVideoOutputId())?.label ?? null,
   );
@@ -22044,10 +22075,7 @@ export default function App() {
     inputSuspended: performInputSuspended,
     projectEpoch: () => captureProjectAuthorityIdentity().project_epoch,
     clipRuntime: (layerId) => videoClipRuntime().layers.find((runtime) => runtime.layer_id === layerId) ?? null,
-    takeEnabled: () => {
-      const runtime = selectedVideoClipSlotRuntime();
-      return runtime?.transition != null || runtime?.queued_slot_id != null;
-    },
+    takeEnabled: videoClipSlotTakeEnabled,
     selectLayer: selectVideoClipSlotLayer,
     selectSlot: selectVideoClipSlot,
     queueSlot: queueVideoClipSlot,
@@ -28016,11 +28044,8 @@ export default function App() {
             ),
           }}
           clipSlotTake={{
-            get enabled() {
-              const runtime = selectedVideoClipSlotRuntime();
-              return runtime?.transition != null || runtime?.queued_slot_id != null;
-            },
-            get label() { return selectedVideoClipSlotRuntime()?.transition ? "Reverse" : "Take"; },
+            get enabled() { return videoClipSlotTakeEnabled(); },
+            get label() { return videoClipSlotTakeLabel(); },
             onTake: takeSelectedVideoClipSlot,
           }}
           transitionBuses={{
@@ -28737,11 +28762,8 @@ export default function App() {
             ),
           }}
           clipSlotTake={{
-            get enabled() {
-              const runtime = selectedVideoClipSlotRuntime();
-              return runtime?.transition != null || runtime?.queued_slot_id != null;
-            },
-            get label() { return selectedVideoClipSlotRuntime()?.transition ? "Reverse" : "Take"; },
+            get enabled() { return videoClipSlotTakeEnabled(); },
+            get label() { return videoClipSlotTakeLabel(); },
             onTake: takeSelectedVideoClipSlot,
           }}
           mediaLibrary={mergeThumbnailViewProps(thumbnailController.assetThumbnailView, {
