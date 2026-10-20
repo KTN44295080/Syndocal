@@ -10,7 +10,7 @@ import type {
   TouchControlBinding,
   VideoParam,
 } from "./types";
-import { isPerformRoutedAction, isPerformTriggerAction, type PerformRoutedAction } from "./controlMappingPerform";
+import { isPerformTriggerAction, type PerformRoutedAction } from "./controlMappingPerform";
 
 export type ControlLearnMode = "midi" | "osc" | "dmx";
 
@@ -18,7 +18,7 @@ export type ControlLearnMode = "midi" | "osc" | "dmx";
 type SharedControlAction = MidiControlAction & OscControlAction;
 
 export interface ControlMappingTarget {
-  /** Perform actions are MIDI-only (see `midi_only`). */
+  /** Perform targets share renderer dispatch across MIDI, OSC and DMX. */
   action: SharedControlAction | PerformRoutedAction;
   label: string;
   /** MIDI behavior may differ from one-shot OSC actions, e.g. a scene pad. */
@@ -36,7 +36,7 @@ export interface ControlMappingTarget {
   clip_slot_id?: number | null;
   /** Stable effect-stage id (`VideoIsfStageEnabled` / `VideoIsfParam`). */
   isf_stage_id?: number | null;
-  /** The renderer owns this control's state, so OSC and DMX cannot drive it. */
+  /** Explicitly transport-specific targets may opt out of OSC/DMX. */
   midi_only?: boolean;
   low?: number;
   high?: number;
@@ -45,17 +45,17 @@ export interface ControlMappingTarget {
 /** A target OSC and DMX mappings can carry. */
 type SharedControlMappingTarget = ControlMappingTarget & { action: SharedControlAction };
 
-/** The targets a Learn transport can bind: Perform controls are MIDI-only. */
+/** Perform targets are available in every Learn mode. */
 export const controlMappingTargetsForMode = (
   mode: ControlLearnMode,
   targets: readonly ControlMappingTarget[],
 ): ControlMappingTarget[] => mode === "midi"
   ? [...targets]
-  : targets.filter((target) => !target.midi_only && !isPerformRoutedAction(target.action));
+  : targets.filter((target) => !target.midi_only);
 
 const sharedTargets = (targets: readonly ControlMappingTarget[]): SharedControlMappingTarget[] =>
   targets.filter((target): target is SharedControlMappingTarget =>
-    !target.midi_only && !isPerformRoutedAction(target.action));
+    !target.midi_only);
 
 type ControlMappingDataAttributes = {
   "data-control-map-target"?: string;
@@ -76,8 +76,6 @@ const normalizedTarget = <Target extends ControlMappingTarget>(target: Target): 
   return {
     ...target,
     label: target.label.trim() || target.action,
-    // The renderer owns Perform state, so only MIDI can bind it.
-    ...(isPerformRoutedAction(target.action) ? { midi_only: true } : {}),
     low: finiteOr(target.low, defaultLow),
     high: finiteOr(target.high, defaultHigh),
   };
@@ -146,6 +144,10 @@ const mappingFieldsForTarget = (target: SharedControlMappingTarget) => ({
   duration_ms: target.duration_ms ?? null,
   low: target.low ?? rangeForTarget(target)[0],
   high: target.high ?? rangeForTarget(target)[1],
+  ...(target.clip_slot_id !== null && target.clip_slot_id !== undefined
+    ? { clip_slot_id: target.clip_slot_id } : {}),
+  ...(target.isf_stage_id !== null && target.isf_stage_id !== undefined
+    ? { isf_stage_id: target.isf_stage_id } : {}),
 });
 
 /** The persisted fields of a MIDI mapping. Perform ids are written only when the

@@ -107,8 +107,8 @@ export interface PerformControlDispatcherDeps {
 }
 
 /** Minimum spacing between two authoritative ISF parameter commits. Every commit
- * is a project revision with its own history entry, so a controller's stream is
- * thinned to this rate (newest value wins). */
+ * remains a ticketed project revision; consecutive values share the native idle
+ * Undo window. The controller stream is thinned to this rate (newest value wins). */
 export const isfParamCommitSpacingMs = 200;
 
 const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
@@ -176,6 +176,8 @@ export function createPerformControlDispatcher(deps: PerformControlDispatcherDep
    * flight. A repeated or flipping input compares against this, not against the
    * rendered state that still shows the value from before the command. */
   const intents = new Map<string, unknown>();
+  const intentValidity = new Map<string, () => boolean>();
+  const hasCurrentIntent = (key: string) => intents.has(key) && intentValidity.get(key)?.() === true;
   /** Layers this dispatcher queued whose runtime poll has not caught up yet, with
    * the time and project of the queue. The window is short: it only bridges the
    * poll, it never keeps a stale queue alive. */
@@ -188,11 +190,6 @@ export function createPerformControlDispatcher(deps: PerformControlDispatcherDep
       if (now - entry.at > queuedWindowMs || entry.epoch !== epoch) justQueued.delete(layerId);
     }
     return justQueued.size > 0;
-  };
-  /** A task captured now runs only while the same project is open. */
-  const inThisProject = (task: Task): Task => {
-    const epoch = deps.projectEpoch();
-    return () => (deps.projectEpoch() === epoch ? task() : undefined);
   };
 
   const layerById = (layerId: number | null | undefined) =>
@@ -214,6 +211,10 @@ export function createPerformControlDispatcher(deps: PerformControlDispatcherDep
   const unchanged: PerformDispatchOutcome = { handled: false, reason: "unchanged" };
 
   const dispatch = (input: PerformRoutedInput): Promise<PerformDispatchOutcome> => {
+    const projectEpoch = deps.projectEpoch();
+    const stillCurrent = () => deps.projectEpoch() === projectEpoch && (input.sourceIsCurrent?.() ?? true);
+    const inThisProject = (task: Task): Task => () => stillCurrent() ? task() : undefined;
+    if (!stillCurrent()) return Promise.resolve({ handled: false, reason: "unsupported" });
     switch (input.action) {
       case "VideoClipSlotTrigger": {
         const layer = layerById(input.layer_id);
@@ -229,13 +230,12 @@ export function createPerformControlDispatcher(deps: PerformControlDispatcherDep
           deps.selectLayer(layer.id);
           deps.selectSlot(slotId);
           const result = await deps.queueSlot(layer.id, slotId);
-          if (result) justQueued.set(layer.id, { at: Date.now(), epoch });
+          if (result && stillCurrent()) justQueued.set(layer.id, { at: Date.now(), epoch });
         })).then(() => handled);
       }
       case "VideoTake": {
-        const epoch = deps.projectEpoch();
         return lanes.ordered<PerformDispatchOutcome>("launch", async () => {
-          if (deps.projectEpoch() !== epoch) return { handled: false, reason: "unsupported" };
+          if (!stillCurrent()) return { handled: false, reason: "unsupported" };
           if (!deps.takeEnabled() && !queuedRecently()) {
             // A beat fires every division; only a controller press deserves a message.
             if (input.source !== "beat") deps.report?.("Take ignored: no clip is queued.");
@@ -257,9 +257,10 @@ export function createPerformControlDispatcher(deps: PerformControlDispatcherDep
         if (!layer) return Promise.resolve({ handled: false, reason: "missing-layer" });
         const mode = performBlendModes[selectorIndex(input.value, performBlendModes.length)];
         const key = `blend:${layer.id}`;
-        if ((intents.has(key) ? intents.get(key) : layer.blend_mode) === mode) return Promise.resolve(unchanged);
+        if ((hasCurrentIntent(key) ? intents.get(key) : layer.blend_mode) === mode) return Promise.resolve(unchanged);
         intents.set(key, mode);
-        return lanes.latest(key, inThisProject(() => deps.setBlendMode(layer.id, mode)), { onIdle: () => intents.delete(key) })
+        intentValidity.set(key, stillCurrent);
+        return lanes.latest(key, inThisProject(() => deps.setBlendMode(layer.id, mode)), { onIdle: () => { intents.delete(key); intentValidity.delete(key); } })
           .then(() => handled);
       }
       case "VideoTransitionKind": {
@@ -285,20 +286,23 @@ export function createPerformControlDispatcher(deps: PerformControlDispatcherDep
         const key = `stage:${resolved.layer.id}:${stageId}`;
         // A press flips what the last press asked for, so two presses inside one
         // command round trip still alternate.
-        const base = intents.has(key) ? intents.get(key) === true : resolved.stage.enabled;
+        const base = hasCurrentIntent(key) ? intents.get(key) === true : resolved.stage.enabled;
         const enabled = input.toggle ? !base : input.active;
         if (base === enabled) return Promise.resolve(unchanged);
         intents.set(key, enabled);
+        intentValidity.set(key, stillCurrent);
         const layerId = resolved.layer.id;
         return lanes.latest(key, inThisProject(async () => {
-          if (!(await deps.fxIdle())) {
+          const idle = await deps.fxIdle();
+          if (!stillCurrent()) return;
+          if (!idle) {
             deps.report?.("Effect stage change skipped: another effect command is still running.");
             return;
           }
           // Resolve the index now, after any move or remove has settled.
           const fresh = resolveStage(input);
           if (fresh.ok) await deps.setIsfStageEnabled(layerId, fresh.index, enabled);
-        }), { onIdle: () => intents.delete(key) }).then(() => handled);
+        }), { onIdle: () => { intents.delete(key); intentValidity.delete(key); } }).then(() => handled);
       }
       case "VideoIsfParam": {
         const resolved = resolveStage(input);
@@ -312,7 +316,8 @@ export function createPerformControlDispatcher(deps: PerformControlDispatcherDep
           if (!input.active) return Promise.resolve(unchanged);
           // A pulse already running owns the next one; a fader's stream is one pulse.
           return lanes.pulse(`isf-event:${layerId}:${stageId}:${name}`, inThisProject(async () => {
-            if (!(await deps.fxIdle())) return;
+            const idle = await deps.fxIdle();
+            if (!stillCurrent() || !idle) return;
             const fresh = resolveStage(input);
             if (fresh.ok) await deps.triggerIsfEvent(layerId, fresh.index, name);
           })).then(() => handled);
@@ -320,11 +325,14 @@ export function createPerformControlDispatcher(deps: PerformControlDispatcherDep
         const next = isfControlValueAt(control, input.value);
         if (next === null) return Promise.resolve({ handled: false, reason: "unsupported" });
         const key = `isf:${layerId}:${stageId}:${name}`;
-        const base = intents.has(key) ? Number(intents.get(key)) : control.value[0];
+        const base = hasCurrentIntent(key) ? Number(intents.get(key)) : control.value[0];
         if (Math.abs(base - next) < 1e-6) return Promise.resolve(unchanged);
         intents.set(key, next);
+        intentValidity.set(key, stillCurrent);
         return lanes.latest(key, inThisProject(async () => {
-          if (!(await deps.fxIdle())) {
+          const idle = await deps.fxIdle();
+          if (!stillCurrent()) return;
+          if (!idle) {
             deps.report?.("Effect parameter change skipped: another effect command is still running.");
             return;
           }
@@ -332,7 +340,7 @@ export function createPerformControlDispatcher(deps: PerformControlDispatcherDep
           const current = fresh.ok ? fresh.stage.controls.find((candidate) => candidate.name === name) : undefined;
           if (!fresh.ok || !current) return;
           await deps.setIsfControl(layerId, fresh.index, name, [next, current.value[1], current.value[2], current.value[3]]);
-        }), { spacingMs: isfParamCommitSpacingMs, onIdle: () => intents.delete(key) }).then(() => handled);
+        }), { spacingMs: isfParamCommitSpacingMs, onIdle: () => { intents.delete(key); intentValidity.delete(key); } }).then(() => handled);
       }
     }
   };

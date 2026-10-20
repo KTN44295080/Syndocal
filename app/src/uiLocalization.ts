@@ -25,6 +25,15 @@ export const djLinkMachineBlockReasonText = (reason: string): string => ({
 }[reason] ?? "DJ Link is blocked until its machine authority can be verified.");
 
 const japaneseText: Record<string, string> = {
+  "MIDI input connection identity was invalid.": "MIDI入力の接続情報が無効です。",
+  "OSC input connection identity was invalid.": "OSC入力の接続情報が無効です。",
+  "DMX input connection identity was invalid.": "DMX入力の接続情報が無効です。",
+  "Relink media folder": "メディアフォルダーを再リンク",
+  "Reserved Undo group identities cannot be supplied by renderer transactions": "予約済みの「元に戻す」グループIDは、画面側のトランザクションから指定できません。",
+  "Undo group renderer session is no longer registered": "「元に戻す」のグループに対応する画面セッションが登録されていません。",
+  "Undo group renderer session is ambiguous": "「元に戻す」のグループに対応する画面セッションを特定できません。",
+  "Project changed during folder relink. Review the remaining files and try again.": "フォルダーの再リンク中にプロジェクトが変更されました。残りのファイルを確認して、もう一度お試しください。",
+  "Undo group ID must contain 1 to 128 ASCII letters, digits, '-' or '_'": "「元に戻す」のグループIDは、半角英数字・ハイフン・アンダースコアで1～128文字にしてください。",
   "Monitor quality": "モニター品質",
   "Balanced": "バランス",
   "Low CPU": "CPU負荷を抑える",
@@ -207,7 +216,7 @@ const japaneseText: Record<string, string> = {
   "Space / Enter": "Spaceキー／Enterキー",
   "Ctrl + Shift + B": "Ctrl＋Shift＋Bキー",
   "· Preview": "・プレビュー",
-  "In MIDI Learn, select a pink control, then move or press the hardware control. Clips, Take, Stop, blend, transition type and time, effect stages and effect parameters are all learnable.": "MIDI Learnでは、ピンクのコントロールを選んでからハードウェアを動かすか押します。クリップ、Take、Stop、ブレンド、トランジションの種類と時間、エフェクトステージ、エフェクトパラメーターをすべて割り当てられます。",
+  "In MIDI, OSC or DMX Learn, select a pink control, then send or move its hardware input. Clips, Take, Stop, blend, transition type and time, effect stages and effect parameters are all learnable.": "MIDI・OSC・DMX Learnでは、ピンクのコントロールを選んでから、対応する機器の入力を送信するか操作します。クリップ、Take、Stop、ブレンド、トランジションの種類と時間、エフェクトステージ、エフェクトパラメーターをすべて割り当てられます。",
   "In MIDI Learn, right-click a control to choose its source: MIDI Learn, or a beat division for triggers.": "MIDI Learn中にコントロールを右クリックすると、割り当て元としてMIDI Learnか、トリガー用のビート分割を選べます。",
   "Assign source": "割り当て元",
   "Beat division": "ビート分割",

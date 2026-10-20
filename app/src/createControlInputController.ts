@@ -63,6 +63,8 @@ interface ControlInputControllerOptions {
   isProjectAuthorityIdentityCurrent: (captured: ProjectAuthorityToken) => boolean;
   setMessage: (message: string) => unknown;
   onMidiControlConnection?: (connection: MidiFaderConnection) => void;
+  onOscControlConnection?: (connection: MidiFaderConnection) => void;
+  onOscControlStarting?: () => void;
   onMidiLearnBusy?: (busy: boolean) => void;
   listenMidiLearnReady?: (handler: (ready: { learn_request_id: string; project_epoch: number }) => void) => Promise<() => void>;
   selectedFixture: Accessor<PatchedFixtureSummary | undefined>;
@@ -881,13 +883,15 @@ export function createControlInputController(options: ControlInputControllerOpti
           authority = continued;
           const mappings = options.oscMappings();
           options.setOscRunning(false);
-          await options.invoke("start_osc_input", {
+          options.onOscControlStarting?.();
+          const connection = await options.invoke<unknown>("start_osc_input", {
             config,
             mappings,
             expectedEpoch: authority.project_epoch,
           });
           if (!learnAuthorityIsCurrent(authority)) return false;
           options.setOscRunning(true);
+          options.onOscControlConnection?.(midiFaderConnection(connection, "OSC"));
         }
         options.setMessage("OSC Learn timed out; the previous listener was restored.");
         return false;
@@ -905,13 +909,15 @@ export function createControlInputController(options: ControlInputControllerOpti
       if (continued === null) return false;
       authority = continued;
       options.setOscRunning(false);
-      await options.invoke("start_osc_input", {
+      options.onOscControlStarting?.();
+      const connection = await options.invoke<unknown>("start_osc_input", {
         config,
         mappings: options.oscMappings(),
         expectedEpoch: authority.project_epoch,
       });
       if (!learnAuthorityIsCurrent(authority)) return false;
       options.setOscRunning(true);
+      options.onOscControlConnection?.(midiFaderConnection(connection, "OSC"));
       options.setMessage(
         `OSC mapped ${learned.address} to ${targets[0].label}`
         + (targets.length > 1 ? ` and ${targets.length - 1} linked target(s)` : "")
@@ -927,13 +933,15 @@ export function createControlInputController(options: ControlInputControllerOpti
           if (continued === null) return false;
           authority = continued;
           options.setOscRunning(false);
-          await options.invoke("start_osc_input", {
+          options.onOscControlStarting?.();
+          const connection = await options.invoke<unknown>("start_osc_input", {
             config,
             mappings: options.oscMappings(),
             expectedEpoch: authority.project_epoch,
           });
           if (!learnAuthorityIsCurrent(authority)) return false;
           options.setOscRunning(true);
+          options.onOscControlConnection?.(midiFaderConnection(connection, "OSC"));
           restored = true;
         } catch {
           if (!options.isProjectAuthorityIdentityCurrent(authority)) return false;
@@ -956,13 +964,15 @@ export function createControlInputController(options: ControlInputControllerOpti
       const capturedAuthority = options.captureProjectAuthorityIdentity();
       authority = capturedAuthority;
       options.setOscRunning(false);
-      await options.invoke("start_osc_input", {
+      options.onOscControlStarting?.();
+      const connection = await options.invoke<unknown>("start_osc_input", {
         config,
         mappings: options.oscMappings(),
         expectedEpoch: capturedAuthority.project_epoch,
       });
       if (!options.isProjectAuthorityIdentityCurrent(capturedAuthority)) return;
       options.setOscRunning(true);
+      options.onOscControlConnection?.(midiFaderConnection(connection, "OSC"));
       options.setMessage(`OSC input listening on ${config.bind_ip}:${config.port} with ${options.oscMappings().length} mapping(s)`);
     } catch (error) {
       if (authority !== null && !options.isProjectAuthorityIdentityCurrent(authority)) return;

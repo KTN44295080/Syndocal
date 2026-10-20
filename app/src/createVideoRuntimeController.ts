@@ -1,3 +1,4 @@
+import { createProjectUndoGroup, type ProjectUndoGroup } from "./projectUndoGrouping";
 import { shouldReportVideoRuntimeReadError } from "./videoRuntimeReadErrorPolicy";
 import type { Accessor, Setter } from "solid-js";
 import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
@@ -1196,11 +1197,13 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     label: string,
     decisionAuthority?: ProjectAuthorityToken,
     onOperationAuthority?: (authority: ProjectAuthorityToken) => void,
+    undoGroup?: ProjectUndoGroup,
   ) => {
     if (decisionAuthority && !options.isProjectAuthorityCurrent(decisionAuthority)) {
       throw new Error("Project changed after replacement approval was requested; choose the replacement again.");
     }
     const expectedAuthority = decisionAuthority ?? options.getCurrentProjectAuthority();
+    undoGroup?.assertCurrent(expectedAuthority);
     if (!options.isProjectAuthorityCurrent(expectedAuthority)) {
       throw new Error("Project changed before replacement approval completed. Choose the replacement again.");
     }
@@ -1213,6 +1216,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     onOperationAuthority?.(operationAuthority);
     const mediaOperation = preparedStart.operation;
     try {
+      undoGroup?.assertCurrent(operationAuthority);
       // A RequireContentMatch decision is a one-shot decision for exact E/R/H.
       // Even a successful local mapping ACK during the confirmation window is
       // a different project image, so require a fresh confirmation rather than
@@ -1231,6 +1235,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
         expectedEpoch: operationAuthority.project_epoch,
         expectedAuthority: operationAuthority,
         ownerId: options.projectTransactionOwnerId,
+        undoGroupId: undoGroup?.id,
         signal: mediaOperation.signal,
         onPhase: mediaOperation.setPhase,
       });
@@ -1377,8 +1382,9 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   };
   /**
    * Applies reviewed folder-relink proposals one asset at a time through the
-   * same ticketed relink operation as the single-file Relink, so each asset
-   * keeps its own undo step and the project is marked changed exactly as before.
+   * same ticketed relink operation as the single-file Relink. Each publication
+   * keeps its exact ticket; the contiguous batch shares one undo entry. A failure
+   * keeps the successful prefix undoable; unrelated publication closes the batch.
    * The policy is always RequireContentMatch: a file whose hash differs is never
    * adopted in a batch; it is reported for an individual, explicitly confirmed
    * relink.
@@ -1389,86 +1395,98 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   ): Promise<{ result: MediaRelinkApplyResult; terminalAuthority: ProjectAuthorityToken } | null> => {
     const result: MediaRelinkApplyResult = { relinked: [], differentContent: [], failed: [], skipped: [] };
     // Asset IDs are only stable within one project epoch. A replaced project
-    // voids the whole review; an unrelated edit in the same project does not.
+    // voids the whole review; an unrelated edit stops the remaining batch.
     const startEpoch = options.getCurrentProjectAuthority().project_epoch;
     const inSameProject = () => options.getCurrentProjectAuthority().project_epoch === startEpoch;
     let terminalAuthority = options.getCurrentProjectAuthority();
-    let index = 0;
-    for (; index < requests.length; index += 1) {
-      if (!inSameProject()) return null;
-      const request = requests[index];
-      const asset = options.snapshot().video.media_assets.find((candidate) => candidate.id === request.assetId);
-      if (!asset || (asset.source.kind !== "File" && asset.source.kind !== "StillImage")) {
-        result.failed.push({
-          assetId: request.assetId,
-          label: request.label,
-          message: `Media asset ${request.assetId} is not a relinkable local file.`,
-        });
-        onProgress?.(index + 1, requests.length);
-        continue;
-      }
-      if ((asset.source.path ?? "") !== request.previousPath) {
-        // Asset IDs can be reused by a replacement project; only the asset the
-        // operator actually reviewed may be relinked.
-        result.failed.push({
-          assetId: request.assetId,
-          label: request.label,
-          message: "This asset changed after the folder was reviewed. Choose the folder again.",
-        });
-        onProgress?.(index + 1, requests.length);
-        continue;
-      }
-      try {
-        const staged = await runMediaAssetRelink(
-          request.assetId,
-          request.replacementPath,
-          "RequireContentMatch",
-          `Relink ${asset.label}`,
-        );
-        // A committed relink stands even if a later step fails, so record it
-        // before anything else can throw.
-        if (staged.committed) terminalAuthority = staged.terminalAuthority;
-        const outcome = staged.outcome;
-        if (outcome?.kind === "relinked") result.relinked.push(request.assetId);
-        else if (outcome?.kind === "needs_explicit_adoption" || outcome?.kind === "hash_mismatch") {
-          result.differentContent.push({ assetId: request.assetId, label: request.label });
-        } else {
+    const undoGroup = createProjectUndoGroup(terminalAuthority);
+    try {
+      let index = 0;
+      for (; index < requests.length; index += 1) {
+        if (!inSameProject()) return null;
+        if (!undoGroup.isCurrent(options.getCurrentProjectAuthority())) break;
+        const request = requests[index];
+        const asset = options.snapshot().video.media_assets.find((candidate) => candidate.id === request.assetId);
+        if (!asset || (asset.source.kind !== "File" && asset.source.kind !== "StillImage")) {
           result.failed.push({
             assetId: request.assetId,
             label: request.label,
-            message: outcome ? mediaAssetRelinkOutcomeMessage(outcome) : "The relink did not return a result.",
+            message: `Media asset ${request.assetId} is not a relinkable local file.`,
           });
+          onProgress?.(index + 1, requests.length);
+          continue;
         }
-        onProgress?.(index + 1, requests.length);
-        if (staged.committed) {
-          try {
-            await options.refreshSnapshot();
-          } catch {
-            // The relink is committed; the next snapshot refresh converges the view.
+        if ((asset.source.path ?? "") !== request.previousPath) {
+          // Asset IDs can be reused by a replacement project; only the asset the
+          // operator actually reviewed may be relinked.
+          result.failed.push({
+            assetId: request.assetId,
+            label: request.label,
+            message: "This asset changed after the folder was reviewed. Choose the folder again.",
+          });
+          onProgress?.(index + 1, requests.length);
+          continue;
+        }
+        try {
+          const staged = await runMediaAssetRelink(
+            request.assetId,
+            request.replacementPath,
+            "RequireContentMatch",
+            `Relink ${asset.label}`,
+            undefined,
+            undefined,
+            undoGroup,
+          );
+          // A committed relink stands even if a later step fails, so record it
+          // before anything else can throw.
+          if (staged.committed) terminalAuthority = staged.terminalAuthority;
+          const groupCurrent = staged.committed
+            ? undoGroup.acceptPublication(staged.terminalAuthority, options.getCurrentProjectAuthority())
+            : undoGroup.isCurrent(options.getCurrentProjectAuthority());
+          const outcome = staged.outcome;
+          if (outcome?.kind === "relinked") result.relinked.push(request.assetId);
+          else if (outcome?.kind === "needs_explicit_adoption" || outcome?.kind === "hash_mismatch") {
+            result.differentContent.push({ assetId: request.assetId, label: request.label });
+          } else {
+            result.failed.push({
+              assetId: request.assetId,
+              label: request.label,
+              message: outcome ? mediaAssetRelinkOutcomeMessage(outcome) : "The relink did not return a result.",
+            });
           }
-        }
-        if (!staged.applicationCurrent) {
-          // A later project image superseded this terminal result: stop issuing
-          // further relinks against it.
+          onProgress?.(index + 1, requests.length);
+          if (staged.committed) {
+            try {
+              await options.refreshSnapshot();
+            } catch {
+              // The relink is committed; the next snapshot refresh converges the view.
+            }
+          }
+          if (!staged.applicationCurrent || !groupCurrent) {
+            // A later project image superseded this terminal result: stop issuing
+            // further relinks against it.
+            index += 1;
+            break;
+          }
+        } catch (error) {
+          if (!inSameProject()) return null;
+          result.failed.push({
+            assetId: request.assetId,
+            label: request.label,
+            message: error instanceof DOMException && error.name === "AbortError"
+              ? "Folder relink canceled."
+              : String(error),
+          });
           index += 1;
           break;
         }
-      } catch (error) {
-        if (!inSameProject()) return null;
-        result.failed.push({
-          assetId: request.assetId,
-          label: request.label,
-          message: error instanceof DOMException && error.name === "AbortError"
-            ? "Folder relink canceled."
-            : String(error),
-        });
-        index += 1;
-        break;
       }
+      if (!inSameProject()) return null;
+      for (; index < requests.length; index += 1) result.skipped.push(requests[index].assetId);
+      return { result, terminalAuthority };
+    } finally {
+      undoGroup.close();
     }
-    if (!inSameProject()) return null;
-    for (; index < requests.length; index += 1) result.skipped.push(requests[index].assetId);
-    return { result, terminalAuthority };
   };
   const setVideoLayerIsfEffect = async (layerId: number, effect: VideoIsfEffectSummary | null, expectedAuthority?: ProjectAuthorityToken) => {
     if (!canMutateVideoIsf()) return;

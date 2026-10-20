@@ -4203,8 +4203,8 @@ async function runLiveDeskHeaderViewport(client, viewport) {
         if (command === 'learn_osc_control') {
           return { address: '/learn/cue', value: 1, argument_count: 1 };
         }
-        if (command === 'start_osc_input' || command === 'stop_osc_input') return null;
-        if (command === 'start_dmx_input' || command === 'stop_dmx_input') return null;
+        if (command === 'start_osc_input' || command === 'start_dmx_input') return { schema_version: 1, project_epoch: args.expectedEpoch, input_session: ++mock.nextMidiSession };
+        if (command === 'stop_osc_input' || command === 'stop_dmx_input') return null;
         if (command === 'dmx_input_status') {
           return { running: true, signal_present: true, packets_received: 1, invalid_packets: 0, last_packet_unix_ms: 1, source_address: '127.0.0.1:6454' };
         }
@@ -4853,6 +4853,7 @@ function installSetupIoInvokeMockInPage() {
     const mock = {
       calls: [],
       transactionId: 0,
+      inputSession: 0,
       serialPorts,
       djLinkWiredCandidates: [],
       djLinkWiredCandidatesDelayMs: 0,
@@ -4868,6 +4869,7 @@ function installSetupIoInvokeMockInPage() {
     window.__TAURI_INTERNALS__ = {
       invoke: async (command, args) => {
         mock.calls.push({ command, args: clone(args) });
+        if (command === "connect_midi_control" || command === "start_osc_input" || command === "start_dmx_input") return { schema_version: 1, project_epoch: args.expectedEpoch, input_session: ++mock.inputSession };
         if (command === "begin_project_transaction") return ++mock.transactionId;
         if (command === "commit_project_transaction") {
           capture.commitArgs = structuredClone(args);

@@ -7804,6 +7804,14 @@ pub enum OscControlAction {
     VideoMaster,
     VideoBlackout,
     ClearFixtureFlags,
+    VideoClipSlotTrigger,
+    VideoTake,
+    VideoLayerStop,
+    VideoLayerBlendMode,
+    VideoTransitionKind,
+    VideoTransitionTime,
+    VideoIsfStageEnabled,
+    VideoIsfParam,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -7817,6 +7825,11 @@ pub struct OscControlMapping {
     pub group_id: Option<String>,
     pub cue_id: Option<CueId>,
     pub layer_id: Option<VideoLayerId>,
+    /// Stable Perform identities; absent fields preserve legacy mappings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip_slot_id: Option<VideoClipSlotId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isf_stage_id: Option<VideoEffectStageId>,
     #[serde(default)]
     pub output_id: Option<VideoOutputId>,
     pub video_param: Option<VideoParam>,
@@ -7846,6 +7859,11 @@ pub struct DmxControlMapping {
     pub group_id: Option<String>,
     pub cue_id: Option<CueId>,
     pub layer_id: Option<VideoLayerId>,
+    /// Stable Perform identities; absent fields preserve legacy mappings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip_slot_id: Option<VideoClipSlotId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isf_stage_id: Option<VideoEffectStageId>,
     #[serde(default)]
     pub output_id: Option<VideoOutputId>,
     pub video_param: Option<VideoParam>,
@@ -8223,7 +8241,7 @@ pub struct RendererRoutedInput {
     pub active: bool,
     /// The input is a button press that flips the target instead of setting it
     /// to `active`. Only stage enable switches driven by a note, program or
-    /// beat trigger use it.
+    /// beat trigger, or a value-less OSC pulse use it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub toggle: bool,
 }

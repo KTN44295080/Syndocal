@@ -36,6 +36,7 @@ const protocolSource = readFileSync(resolve(here, "../../crates/protocol/src/lib
 const enumBody = (name) => protocolSource.match(new RegExp(`pub enum ${name} \\{([\\s\\S]*?)\\n\\}`))[1];
 const rustActions = [...enumBody("MidiControlAction").matchAll(/^\s{4}([A-Z]\w+),/gm)].map((match) => match[1]);
 for (const action of perform.performRoutedActions) assert.ok(rustActions.includes(action), `${action} is a Rust MidiControlAction`);
+for (const action of perform.performRoutedActions) assert.ok(enumBody("OscControlAction").includes(action), action + " is shared by OSC/DMX");
 const rustFnVariants = (fn) => [...protocolSource.match(new RegExp(`pub fn ${fn}\\(&self\\) -> bool \\{([\\s\\S]*?)\\n    \\}`))[1].matchAll(/Self::(\w+)/g)].map((match) => match[1]).sort();
 assert.deepEqual(rustFnVariants("is_renderer_routed"), [...perform.performRoutedActions].sort(), "Rust and TypeScript agree on the renderer-routed actions");
 assert.deepEqual(rustFnVariants("is_renderer_routed_trigger"), perform.performRoutedActions.filter(perform.isPerformTriggerAction).sort(), "Rust and TypeScript agree on which of them are triggers");
@@ -56,6 +57,8 @@ assert.match(appSource, /beatTriggers\.observe\(clock\)/);
 assert.match(appSource, /window\.setInterval\(\(\) => beatTriggers\.advance\(\), 25\)/);
 assert.match(appSource, /if \(paneWindow\) return;[\s\S]{0,260}untrack\(\(\) => beatTriggers\.observe\(clock\)\)/, "only the main window runs the beat clock, and it does not re-observe on mapping edits");
 assert.match(appSource, /const timer = window\.setInterval\(\(\) => beatTriggers\.advance\(\), 25\);/);
+for (const source of ["osc", "dmx"]) assert.ok(appSource.includes("syndocal://" + source + "-perform-control-v1"), source + " listens for its native Perform events");
+assert.match(appSource, /applyRouted: \(input, sourceIsCurrent\) => routePerformInput\(\{ \.\.\.input, source, sourceIsCurrent \}\)/);
 const mainSource = readFileSync(resolve(here, "../src-tauri/src/main.rs"), "utf8");
 assert.match(mainSource, /MidiControlEvent::RendererRouted\(input\) => \{[\s\S]*?midi_renderer_routed::EVENT[\s\S]*?return;\s*\}/, "the native worker forwards routed input and issues no engine command");
 
@@ -203,6 +206,107 @@ epoch = 5;
 const noRouting = faderInput.createMidiFaderInput({ projectEpoch: () => 5, apply: () => {} });
 noRouting.setConnection(fence);
 assert.equal(noRouting.acceptRouted({ ...fence, sequence: 1, input: payload }), false, "routing is opt-in");
+
+// OSC and DMX share the decoder but own independent connection/sequence fences.
+{
+  let transportEpoch = 5;
+  const routed = [];
+  const receivers = Object.fromEntries(["osc", "dmx"].map(source => [source, faderInput.createMidiFaderInput({ projectEpoch: () => transportEpoch, apply: () => assert.fail("Perform transport cannot apply fixture faders"), applyRouted: input => routed.push({ ...input, source }) })]));
+  const oscFence = { schema_version: 1, project_epoch: 5, input_session: 20 };
+  const dmxFence = { ...oscFence, input_session: 21 };
+  receivers.osc.setConnection(faderInput.midiFaderConnection(oscFence, "OSC"));
+  receivers.dmx.setConnection(faderInput.midiFaderConnection(dmxFence, "DMX"));
+  assert.ok(receivers.osc.acceptRouted({ ...oscFence, sequence: 1, input: payload }));
+  assert.ok(receivers.dmx.acceptRouted({ ...dmxFence, sequence: 1, input: payload }), "DMX does not consume OSC sequence numbers");
+  assert.deepEqual(routed.map(input => input.source), ["osc", "dmx"]);
+  assert.equal(receivers.osc.acceptRouted({ ...dmxFence, sequence: 2, input: payload }), false, "cross-transport session rejected");
+  assert.equal(receivers.osc.acceptRouted({ ...oscFence, sequence: 1, input: payload }), false, "OSC replay rejected");
+  assert.equal(receivers.dmx.acceptRouted({ ...dmxFence, sequence: 2, input: { ...payload, value: NaN } }), false);
+  assert.ok(receivers.dmx.acceptRouted({ ...dmxFence, sequence: 2, input: payload }), "malformed input does not consume DMX sequence");
+  receivers.osc.setConnection(oscFence);
+  assert.equal(receivers.osc.acceptRouted({ ...oscFence, sequence: 1, input: payload }), false, "same connection callback cannot reset sequence");
+  receivers.osc.setConnection(null);
+  receivers.osc.setConnection(oscFence);
+  assert.equal(receivers.osc.acceptRouted({ ...oscFence, sequence: 3, input: payload }), false, "stop or mapping edit retires connection");
+  const reconnected = { ...oscFence, input_session: 22 };
+  receivers.osc.setConnection(reconnected);
+  receivers.osc.setConnection(oscFence);
+  assert.equal(receivers.osc.acceptRouted({ ...oscFence, sequence: 99, input: payload }), false, "old session remains retired after restart");
+  assert.ok(receivers.osc.acceptRouted({ ...reconnected, sequence: 1, input: payload }));
+  transportEpoch = 6;
+  assert.equal(receivers.dmx.acceptRouted({ ...dmxFence, sequence: 3, input: payload }), false, "project replacement retires DMX");
+  assert.equal(receivers.osc.acceptRouted({ ...reconnected, sequence: 2, input: payload }), false, "project replacement retires OSC");
+  assert.throws(() => faderInput.midiFaderConnection({ ...oscFence, input_session: 0 }, "OSC"), /OSC input connection identity/);
+  assert.throws(() => faderInput.midiFaderConnection({ ...dmxFence, schema_version: 2 }, "DMX"), /DMX input connection identity/);
+}
+
+// OSC/DMX startup data has no effect until its exact native connection is acknowledged.
+{
+  let currentEpoch = 5;
+  const values = [];
+  const buffered = faderInput.createMidiFaderInput({ projectEpoch: () => currentEpoch, apply: () => assert.fail("routed buffer never applies fixture faders"), applyRouted: input => values.push(input.value), bufferRoutedUntilConnected: true });
+  const identity = { schema_version: 1, project_epoch: 5, input_session: 101 };
+  const event = (sequence, extra = {}) => ({ ...identity, sequence, input: { ...payload, value: sequence }, ...extra });
+  for (const sequence of [3, 1, 2]) assert.equal(buffered.acceptRouted(event(sequence)), false);
+  assert.deepEqual(values, [], "no side effects before acknowledgement");
+  buffered.acceptRouted(event(2, { input: { ...payload, value: 99 } }));
+  for (const malformed of [
+    event(4, { schema_version: 2, input_session: 999 }),
+    event(4, { project_epoch: 6, input_session: 999 }),
+    event(0, { input_session: 999 }),
+    event(4, { input_session: 999, input: { ...payload, value: NaN } }),
+    event(4, { input_session: 999, input: { ...payload, clip_slot_id: -1 } }),
+  ]) assert.equal(buffered.acceptRouted(malformed), false);
+  buffered.setConnection({ ...identity, project_epoch: 6 });
+  buffered.setConnection({ ...identity, input_session: 100 });
+  assert.deepEqual(values, [], "wrong project/session cannot drain queued data");
+  buffered.setConnection(identity);
+  assert.deepEqual(values, [1, 2, 3], "exact reply drains validated input once in sequence");
+  buffered.setConnection(identity);
+  assert.equal(buffered.acceptRouted(event(3)), false);
+  assert.equal(buffered.acceptRouted(event(4)), true);
+  buffered.acceptRouted(event(1, { input_session: 102 }));
+  buffered.setConnection(null);
+  buffered.setConnection(identity);
+  assert.equal(buffered.acceptRouted(event(5)), false);
+  buffered.setConnection({ ...identity, input_session: 102 });
+  assert.deepEqual(values, [1, 2, 3, 4], "stop clears unconfirmed startup data");
+  buffered.acceptRouted(event(1, { input_session: 103 }));
+  currentEpoch = 6;
+  buffered.setConnection({ ...identity, input_session: 103 });
+  buffered.setConnection({ ...identity, project_epoch: 6, input_session: 104 });
+  assert.deepEqual(values, [1, 2, 3, 4], "project replacement discards its predecessor's buffer");
+  assert.equal(buffered.acceptRouted(event(1, { project_epoch: 6, input_session: 104 })), true);
+}
+{
+  const values = [];
+  const buffered = faderInput.createMidiFaderInput({ projectEpoch: () => 5, apply: () => {}, applyRouted: input => values.push(input.value), bufferRoutedUntilConnected: true });
+  const identity = { schema_version: 1, project_epoch: 5, input_session: 201 };
+  const event = (input_session, sequence, value) => ({ ...identity, input_session, sequence, input: { ...payload, value } });
+  buffered.acceptRouted(event(201, 1, 11));
+  buffered.acceptRouted(event(202, 1, 22));
+  buffered.acceptRouted(event(201, 2, 12));
+  buffered.setConnection(identity);
+  assert.deepEqual(values, []);
+  assert.equal(buffered.acceptRouted(event(201, 3, 13)), true, "unconfirmed input cannot replace the active connection");
+  buffered.setConnection({ ...identity, input_session: 202 });
+  assert.deepEqual(values, [13, 22]);
+}
+{
+  const values = [];
+  const buffered = faderInput.createMidiFaderInput({ projectEpoch: () => 5, apply: () => {}, applyRouted: input => values.push(input.value), bufferRoutedUntilConnected: true });
+  const identity = { schema_version: 1, project_epoch: 5, input_session: 301 };
+  const limit = faderInput.routedInputStartupBufferLimit;
+  assert.equal(limit, 256);
+  for (let sequence = 1; sequence <= limit + 7; sequence++) buffered.acceptRouted({ ...identity, sequence, input: { ...payload, value: sequence } });
+  assert.deepEqual(values, []);
+  buffered.setConnection(identity);
+  assert.deepEqual(values, Array.from({ length: limit }, (_, index) => index + 8));
+  const unbuffered = faderInput.createMidiFaderInput({ projectEpoch: () => 5, apply: () => {}, applyRouted: input => values.push(input.value) });
+  unbuffered.acceptRouted({ ...identity, sequence: 1, input: payload });
+  unbuffered.setConnection(identity);
+  assert.equal(values.length, limit, "MIDI's default behavior remains unbuffered");
+}
 
 // ---------------------------------------------------------------- dispatcher
 const control = (name, kind, extra = {}) => ({ name, kind, value: [1, 0, 0, 0], default: [1, 0, 0, 0], minimum: [0, 0, 0, 0], maximum: [2, 0, 0, 0], labels: [], values: [], ...extra });
@@ -488,6 +592,64 @@ assert.equal(dispatcherModule.isfControlValueAt(tint, 0.5), null);
   assert.deepEqual(take(), [["report", "Take ignored: no clip is queued."]]);
 }
 
+
+// Source leases are checked after asynchronous waits, without fencing ordinary gesture revisions.
+{
+  const writes = [];
+  let currentEpoch = 30;
+  let releaseIdle;
+  let firstWait = true;
+  const leaseDispatcher = dispatcherModule.createPerformControlDispatcher({
+    ...deps,
+    layers: () => [layer(1, [101, 102])],
+    effectCatalog: () => ({ effect_chains: [{ id: 5, scope: { scope: "layer", layer_id: 1 }, bypassed: false, stages: [{ id: 900 }, { id: 901 }] }], effect_presets: [], layer_groups: [], transition_buses: [] }),
+    projectEpoch: () => currentEpoch,
+    fxIdle: () => firstWait ? (firstWait = false, new Promise(resolve => { releaseIdle = resolve; })) : Promise.resolve(true),
+    setIsfControl: async (...args) => writes.push(args),
+    setIsfStageEnabled: async (...args) => writes.push(args),
+    triggerIsfEvent: async (...args) => writes.push(args),
+  });
+  let current = true;
+  const old = leaseDispatcher.dispatch(act("VideoIsfParam", { layer_id: 1, isf_stage_id: 900, control: "gain", value: 0.8, sourceIsCurrent: () => current }));
+  await drain();
+  assert.equal(typeof releaseIdle, "function");
+  current = false;
+  const next = leaseDispatcher.dispatch(act("VideoIsfParam", { layer_id: 1, isf_stage_id: 900, control: "gain", value: 0.8, sourceIsCurrent: () => true }));
+  releaseIdle(true);
+  await Promise.all([old, next]);
+  assert.equal(writes.length, 1, "retired source cannot write; the new source's identical final value is retained");
+  assert.equal(writes[0][3][0], 1.6, "the new source applies the normalized 0.8 position within the control range");
+  for (const input of [
+    act("VideoIsfParam", { layer_id: 1, isf_stage_id: 900, control: "gain", value: 0.7 }),
+    act("VideoIsfParam", { layer_id: 1, isf_stage_id: 900, control: "flash", value: 1 }),
+    act("VideoIsfStageEnabled", { layer_id: 1, isf_stage_id: 901, active: true }),
+  ]) {
+    firstWait = true;
+    const work = leaseDispatcher.dispatch(input);
+    await drain();
+    currentEpoch++;
+    releaseIdle(true);
+    await work;
+  }
+  assert.equal(writes.length, 1, "project replacement during fxIdle rejects parameter, pulse and stage writes");
+}
+{
+  let currentEpoch = 5;
+  const leases = [];
+  const receiver = faderInput.createMidiFaderInput({ projectEpoch: () => currentEpoch, apply: () => {}, applyRouted: (_input, stillCurrent) => leases.push(stillCurrent) });
+  const identity = { schema_version: 1, project_epoch: 5, input_session: 601 };
+  receiver.setConnection(identity);
+  receiver.acceptRouted({ ...identity, sequence: 1, input: payload });
+  assert.equal(leases[0](), true);
+  receiver.setConnection(null);
+  assert.equal(leases[0](), false);
+  receiver.setConnection({ ...identity, input_session: 602 });
+  assert.equal(leases[0](), false);
+  receiver.acceptRouted({ ...identity, input_session: 602, sequence: 1, input: payload });
+  currentEpoch++;
+  assert.equal(leases[1](), false);
+}
+
 // ---------------------------------------------------------------- learn model
 const slotTarget = { action: "VideoClipSlotTrigger", label: "Layer 1 clip 2", layer_id: 1, clip_slot_id: 102 };
 const stageTarget = { action: "VideoIsfStageEnabled", label: "Layer 1 FX 1", layer_id: 1, isf_stage_id: 900 };
@@ -511,15 +673,26 @@ assert.ok(learn.midiMappingDrivesTarget(paramMapping, paramTarget));
 assert.ok(!learn.midiMappingDrivesTarget(paramMapping, { ...paramTarget, attribute: "pan" }));
 assert.ok(!learn.midiMappingDrivesTarget(paramMapping, { ...paramTarget, isf_stage_id: 901 }));
 assert.ok(!learn.midiMappingDrivesTarget(paramMapping, stageTarget));
-// OSC and DMX cannot bind renderer-owned controls.
-assert.deepEqual(learn.oscMappingsFromLearnedControl([slotTarget, blendTarget, { action: "LightingMaster", label: "Master" }], { address: "/a", value: 1, argument_count: 1 }).map((mapping) => mapping.action), ["LightingMaster"]);
-assert.deepEqual(learn.dmxMappingsFromLearnedControl([paramTarget], { universe: 0, channel: 1, value: 3 }), []);
-assert.deepEqual(learn.controlMappingTargetsForMode("osc", [slotTarget, { action: "VideoMaster", label: "Master" }]).map((target) => target.action), ["VideoMaster"]);
-assert.equal(learn.controlMappingTargetsForMode("midi", [slotTarget]).length, 1);
-// Perform targets advertise themselves as MIDI-only through the shared data attributes.
+// Every Learn transport preserves the same stable Perform target identities.
+const allPerformTargets = [slotTarget, { action: "VideoTake", label: "Take" }, { action: "VideoLayerStop", label: "Stop", layer_id: 1 }, blendTarget, { action: "VideoTransitionKind", label: "Transition" }, timeTarget, stageTarget, paramTarget];
+const oscLearned = { address: "/perform", value: 1, argument_count: 1 };
+const dmxLearned = { universe: 0, channel: 1, value: 255 };
+const oscPerform = learn.oscMappingsFromLearnedControl(allPerformTargets, oscLearned);
+const dmxPerform = learn.dmxMappingsFromLearnedControl(allPerformTargets, dmxLearned);
+for (const mappings of [oscPerform, dmxPerform]) {
+  assert.deepEqual(mappings.map(mapping => mapping.action), allPerformTargets.map(target => target.action));
+  assert.equal(mappings[0].clip_slot_id, 102);
+  assert.deepEqual([mappings[6].layer_id, mappings[6].isf_stage_id], [1, 900]);
+  assert.deepEqual([mappings[7].layer_id, mappings[7].isf_stage_id, mappings[7].attribute], [1, 900, "gain"]);
+  assert.deepEqual([mappings[5].low, mappings[5].high], [0.1, 10]);
+  assert.deepEqual(JSON.parse(JSON.stringify(mappings)), mappings, "project JSON retains stable Perform targets");
+}
+for (const mode of ["midi", "osc", "dmx"]) assert.equal(learn.controlMappingTargetsForMode(mode, allPerformTargets).length, 8);
+assert.deepEqual(learn.controlMappingTargetsForMode("osc", [{ ...slotTarget, midi_only: true }]), [], "explicit transport restrictions remain enforced");
+for (const mapping of [learn.oscMappingsFromLearnedControl([{ action: "LightingMaster", label: "Master" }], oscLearned)[0], learn.dmxMappingsFromLearnedControl([{ action: "LightingMaster", label: "Master" }], dmxLearned)[0]]) assert.ok(!("clip_slot_id" in mapping) && !("isf_stage_id" in mapping), "legacy mappings keep exact JSON shape");
 const data = learn.controlMappingTargetData(slotTarget);
 const encoded = JSON.parse(data["data-control-map-target"]);
-assert.equal(encoded[0].midi_only, true);
+assert.equal(encoded[0].midi_only, undefined, "Perform controls are available in all Learn modes");
 assert.equal(encoded[0].clip_slot_id, 102);
 assert.equal(JSON.parse(learn.controlMappingTargetData({ action: "VideoMaster", label: "Master" })["data-control-map-target"])[0].midi_only, undefined);
 // Beat division mappings exist for triggers only.
@@ -555,4 +728,4 @@ assert.match(editor, /action: "VideoIsfParam"[\s\S]{0,300}isf_stage_id: props\.s
 assert.equal((editor.match(/controlMappingTargetData\(mapTarget\(control\)\)/g) ?? []).length, 4, "event, bool, enumerated and scalar controls are targets");
 assert.match(editor, /props\.auditioning/, "a Preview-only audition draft is never a MIDI target");
 
-console.log("PASS: Perform MIDI targets use stable ids; renderer routing, selectors, parameters, beat division triggers and the Rust/TypeScript contract hold");
+console.log("PASS: Perform MIDI/OSC/DMX targets use stable ids; renderer routing, selectors, parameters, beat division triggers and the Rust/TypeScript contract hold");

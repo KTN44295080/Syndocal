@@ -325,7 +325,7 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
       <p>Right-click or long-press a clip for its options. Inspect and Clip… in the matrix corner act on the selected clip; Inspect shows a thumbnail only.</p>
       <p>The P button stages the current layer in Preview; the P key queues column 20.</p>
       <p>Shortcuts pause while editing a value, a dialog is open, or MIDI Learn is active.</p>
-      <p>In MIDI Learn, select a pink control, then move or press the hardware control. Clips, Take, Stop, blend, transition type and time, effect stages and effect parameters are all learnable.</p>
+      <p>In MIDI, OSC or DMX Learn, select a pink control, then send or move its hardware input. Clips, Take, Stop, blend, transition type and time, effect stages and effect parameters are all learnable.</p>
       <p>In MIDI Learn, right-click a control to choose its source: MIDI Learn, or a beat division for triggers.</p>
       <button onClick={() => legend.close()}>Close</button>
     </dialog>
