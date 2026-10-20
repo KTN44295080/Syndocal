@@ -80,6 +80,7 @@ export function VideoFxParameterEditor(props: VideoFxParameterEditorProps) {
         layer_id: props.layerId,
         isf_stage_id: props.stageId,
         attribute: control.name,
+        audio_disabled: control.kind === "Event",
       };
   const colorHex = (control: VideoIsfControlSummary) => `#${control.value.slice(0, 3).map((value) =>
     Math.round(Math.max(0, Math.min(1, value)) * 255).toString(16).padStart(2, "0")).join("")}`;

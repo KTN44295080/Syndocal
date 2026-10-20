@@ -14,8 +14,6 @@ import {
   normalizeDjTrackTriggerMappings,
   type DjTrackSelectorMode,
 } from "../djTrackMappingPolicy";
-import { confirmDialog } from "../inAppDialog";
-import { removeDjLinkMappingDialog } from "../inAppDialogCopy";
 
 interface RemoteControlPanelProps {
   /** Mount only the requested connection workbench when I/O owns the picker. */
@@ -234,7 +232,6 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
     resetMappingDraft();
   };
   const removeMapping = async (id: string) => {
-    if (!await confirmDialog(removeDjLinkMappingDialog())) return;
     props.onDjTrackTriggers(props.djTrackTriggers.filter((mapping) => mapping.id !== id));
     if (editingId() === id) resetMappingDraft();
   };

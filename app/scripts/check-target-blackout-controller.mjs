@@ -275,7 +275,7 @@ const standbyWiring = {
   desk: await readFile(new URL("../src/components/VideoPerformDesk.tsx", import.meta.url), "utf8"),
 };
 assert.match(standbyWiring.app, /checkOutputDrive: readOutputDrive/, "the one blackout controller receives the fresh output-authority check");
-assert.match(standbyWiring.app, /const drive = await readOutputDrive\(\);\s*if \(drive\.kind === "blocked"\)[\s\S]*?confirmDialog\(blackoutDialog\(enabled\)\)/, "the role is explained before the confirmation dialog opens");
+assert.match(standbyWiring.app, /const drive = await readOutputDrive\(\);\s*if \(drive\.kind === "blocked"\)[\s\S]*?return setVideoBlackout\(enabled\);/, "the role is explained in-app; otherwise Blackout acts at once");
 assert.match(standbyWiring.app, /blackoutBlockedReason=\{blackoutBlockedReason\(\)\}/, "top-bar DMX/VID/ALL keys receive the reason");
 assert.equal((standbyWiring.chrome.match(/aria-disabled=\{props\.blackoutBlockedReason \? "true" : undefined\}/g) ?? []).length, 3, "DMX, VID and ALL keys expose the reason without disappearing");
 assert.match(standbyWiring.desk, /aria-disabled=\{blackoutBlockedReason\(\) \? "true" : undefined\}/, "Perform desk Blackout exposes the reason");

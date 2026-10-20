@@ -56,10 +56,11 @@ const cases = [
   { name: "GLSL syntax error", source: '/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"}]}*/\nvoid main(){\n gl_FragColor = ;\n}', raw: nagaSyntax, title: /code has an error/, ja: /コードにエラー/ },
   { name: "explicit line", source: "", raw: "GLSL parse error: syntax error at line 7", title: /code has an error/, ja: /コードにエラー/, line: 7 },
   { name: "unsupported INPUT type", source: '/*{\n"INPUTS":[\n{"NAME":"inputImage","TYPE":"image"},\n{"NAME":"warp","TYPE":"color3"}]}*/ void main(){}', raw: "Unsupported ISF input type 'color3'", title: /input type is not supported/, ja: /入力タイプ/, line: 4, input: "color3" },
-  { name: "audio input", source: '/*{"INPUTS":[{"NAME":"music","TYPE":"audioFFT"}]}*/ void main(){}', raw: "ISF audio/audioFFT textures are not supported by this runtime; use Syndocal Audio FFT nodes", title: /Audio inputs/, ja: /音声/, line: 1 },
+  { name: "audio texture width", source: '/*{"INPUTS":[{"NAME":"music","TYPE":"audioFFT","MAX":513}]}*/ void main(){}', raw: "ISF audio texture MAX must be an integer from 1 to 512 for input 'music'", title: /Audio texture width/, ja: /音声/, line: 1 },
   { name: "missing PASS target reference", source: '/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"}]}*/\nvoid main(){\n gl_FragColor = IMG_THIS_PIXEL(bufferA);\n}', raw: 'ISF GLSL compile failed: ParseErrors { errors: [Error { kind: UnknownVariable("bufferA"), meta: Span { start: 1, end: 2 } }] }', title: /pass target is missing/, ja: /ターゲット/, line: 3, input: "bufferA" },
   { name: "forbidden loop", source: '/*{"INPUTS":[]}*/\nvoid main(){\n for (int i=0;i<9;i++){}\n}', raw: "ISF source uses forbidden or unsupported construct 'for ('", title: /not allowed/, ja: /使用できない記述/, line: 3 },
   { name: "invalid header JSON", source: '\n\n/*{\n"INPUTS":[,]}*/ void main(){}', raw: "ISF metadata JSON is invalid: expected value at line 2 column 11", title: /not valid JSON/, ja: /JSON/, line: 4 },
+  { name: "shared texture budget", source: "", raw: "ISF declares too many textures; the safety limit is 16", title: /too many textures/, ja: /テクスチャー数/ },
   { name: "image input limit", source: "", raw: "ISF declares too many image inputs; the safety limit is 4", title: /too many image inputs/, ja: /画像入力の数/ },
   { name: "image binding cycle", source: "", raw: "ISF image input dependency cycle: 7 -> 42 -> 7", title: /invalid dependency/, ja: /参照関係/ },
   { name: "runtime image cycle", source: "", raw: "ISF image input cycle detected at layer 7", title: /invalid dependency/, ja: /参照関係/ },
@@ -87,7 +88,7 @@ for (const item of cases) {
   assert.equal(explained.line, item.line, `${item.name}: line`);
   if (item.input) assert.equal(explained.input, item.input, `${item.name}: input`);
   assert.equal(explained.raw, item.raw, `${item.name}: raw text is preserved`);
-  assert.doesNotMatch(explained.title + explained.detail + explained.action, /single-pass filters only|External images are not supported|Generators and transitions are not filters|Exactly one image input is required/, `${item.name}: current support boundaries`);
+  assert.doesNotMatch(explained.title + explained.detail + explained.action, /single-pass filters only|External images are not supported|Generators and transitions are not filters|Exactly one image input is required|Audio inputs are not supported|Syndocal cannot supply one/, `${item.name}: current support boundaries`);
   assert.ok(explained.detail.length > 20 && explained.action.length > 20, `${item.name}: detail and action`);
   const japanese = rejection.explainFxRejection(item.raw, "ja", item.source);
   assert.match(japanese.title, item.ja, `${item.name}: Japanese title`);

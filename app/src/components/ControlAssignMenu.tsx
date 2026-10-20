@@ -1,11 +1,13 @@
 import { For, Show, onCleanup, onMount } from "solid-js";
 import { beatDivisions } from "../controlMappingPerform";
+import { AudioControlAssign } from "./AudioControlAssign";
+import type { AudioAssignmentSettings } from "../audioControlMapping";
 import "./ControlAssignMenu.css";
 
 export interface ControlAssignment {
   /** The stored mapping this row represents; removal is by identity. */
   mapping: unknown;
-  kind: "MIDI" | "Beat division";
+  kind: "MIDI" | "Beat division" | "Audio";
   /** A controller description (kept as typed) or a beat division label (translated). */
   detail: string;
   beat: boolean;
@@ -18,6 +20,11 @@ export interface ControlAssignMenuProps {
   label: string;
   /** Beat divisions fire triggers (clip, Take, Stop, effect stage); a continuous control only learns. */
   beatEligible: boolean;
+  audioEligible?: boolean;
+  audioTrigger?: boolean;
+  audioLow?: number;
+  audioHigh?: number;
+  onAudio?: (settings: AudioAssignmentSettings) => void;
   assignments: ControlAssignment[];
   onLearn: () => void;
   onBeat: (division: number) => void;
@@ -38,6 +45,7 @@ export function ControlAssignMenu(props: ControlAssignMenuProps) {
       const top = Math.max(8, Math.min(props.y, window.innerHeight - bounds.height - 8));
       menu.style.left = `${left}px`;
       menu.style.top = `${top}px`;
+      menu.style.maxHeight = `${window.innerHeight - top - 8}px`;
       menu.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
     }
     const outside = (event: PointerEvent) => {
@@ -52,6 +60,7 @@ export function ControlAssignMenu(props: ControlAssignMenuProps) {
       props.onDismiss(true);
     };
     const arrows = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea")) return;
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
       const items = [...(menu?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])];
       if (items.length === 0) return;
@@ -78,8 +87,12 @@ export function ControlAssignMenu(props: ControlAssignMenuProps) {
         <strong data-no-localize title={props.label}>{props.label}</strong>
       </header>
       <button type="button" role="menuitem" data-control-assign-learn onClick={() => props.onLearn()}>MIDI Learn</button>
+      <Show when={props.audioEligible && props.onAudio}>
+        <AudioControlAssign trigger={props.audioTrigger === true} low={props.audioLow} high={props.audioHigh}
+          onAssign={(settings) => props.onAudio?.(settings)} />
+      </Show>
       <Show when={props.beatEligible} fallback={
-        <p class="controlAssignMenuNote">Beat divisions fire triggers only. This control follows its MIDI input.</p>
+        <p class="controlAssignMenuNote">Beat divisions fire triggers only. Use MIDI or audio for continuous control.</p>
       }>
         <div class="controlAssignMenuGroup" role="group" aria-label="Beat division">
           <span class="controlAssignMenuGroupLabel">Beat division</span>
@@ -97,9 +110,9 @@ export function ControlAssignMenu(props: ControlAssignMenuProps) {
         <Show when={props.assignments.length > 0} fallback={<p class="controlAssignMenuNote">No assignment yet.</p>}>
           <ul class="controlAssignMenuList">
             <For each={props.assignments}>{(assignment) => (
-              <li data-control-assign-row={assignment.beat ? "beat" : "midi"}>
+              <li data-control-assign-row={assignment.kind === "Audio" ? "audio" : assignment.beat ? "beat" : "midi"}>
                 <span class="controlAssignMenuKind">{assignment.kind}</span>
-                <Show when={assignment.beat} fallback={<span data-no-localize>{assignment.detail}</span>}>
+                <Show when={assignment.beat || assignment.kind === "Audio"} fallback={<span data-no-localize>{assignment.detail}</span>}>
                   <span>{assignment.detail}</span>
                 </Show>
                 <button type="button" role="menuitem" data-control-assign-remove onClick={() => props.onRemove(assignment)}>Remove</button>

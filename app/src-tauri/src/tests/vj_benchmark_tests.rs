@@ -160,6 +160,7 @@ fn run(scenario: &str, snapshot: &mut VideoSnapshot, width: u32, height: u32) ->
                 black_box(snapshot),
                 video::VideoEffectRenderContext {
                     clip_runtime: &clip_runtime,
+                    audio_frame: None,
                     project_render_epoch: 1,
                 },
                 &transitions,

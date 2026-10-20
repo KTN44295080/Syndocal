@@ -3,83 +3,53 @@ import { readFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 
-const source = await readFile(new URL("../src/destructiveActions.ts", import.meta.url), "utf8");
-const transpiled = ts.transpileModule(source, {
-  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  fileName: "destructiveActions.ts",
-});
-const actions = await import(`data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString("base64")}`);
+// Owner policy (2026-10-20): removals that Undo restores, and live Perform
+// actions, act at once. Only irreversible data loss (discarding unsaved drafts,
+// deleting a backup, installing an update, rotating or revoking access, adopting
+// replacement media) may still ask.
+const read = (path) => readFile(new URL(`../src/${path}`, import.meta.url), "utf8");
+const appSource = await read("App.tsx");
 
-const undoLine = "You can undo this from the Project menu or with Ctrl/Cmd+Z.";
+const noConfirmation = {
+  "App.tsx": [
+    /confirmRemoval\(/, /confirmCueRemoval\(/, /removeFixturesDialog/, /newProjectDuringShowDialog/,
+    /disarmDjLinkDialog/, /returnDjControlDialog/, /blackoutDialog/,
+  ],
+  "components/EditableTouchSurface.tsx": [/confirmDialog\(/],
+  "components/RemoteControlPanel.tsx": [/confirmDialog\(/],
+  "components/TimelineBankPanel.tsx": [/confirmDialog\(/],
+  "components/TimelineSceneBlocksEditor.tsx": [/confirmTimelinePlacementRemoval|confirmDialog\(/],
+  "components/VideoClipSlotInspectorPanel.tsx": [/confirmDialog\(/],
+  "components/VideoEffectCatalogSetupPanel.tsx": [/confirmDialog\(/],
+  "components/VideoEffectScopePanel.tsx": [/confirmDialog\(/],
+  "components/VideoLayerGroupsPanel.tsx": [/confirmDialog\(/],
+  "components/VideoPerformMatrix.tsx": [/confirmDialog\(/],
+  "components/VideoTransitionBusPanel.tsx": [/confirmDialog\(/],
+};
+for (const [file, patterns] of Object.entries(noConfirmation)) {
+  const source = file === "App.tsx" ? appSource : await read(file);
+  for (const pattern of patterns) assert.doesNotMatch(source, pattern, `${file} must not ask before ${pattern}`);
+}
 
-// Each question is a dialog description (title, consequence, labels, tone); the
-// in-app dialog host renders it, so nothing here depends on a browser prompt.
-assert.deepEqual(actions.destructiveActionDialog("fixture", "Front Spot 1"), {
-  title: 'Remove fixture "Front Spot 1"?',
-  message: undoLine,
-  confirmLabel: "Remove",
-  tone: "danger",
-});
+// Custom removal dialogs only remain where the operator must choose where
+// contents go; an empty layer or a plain item is removed at once.
+const timelineEvents = await read("components/TimelineCueEventsPanel.tsx");
+assert.doesNotMatch(timelineEvents, /itemRemoveDialog|audioClipRemoveDialog/, "timeline items and audio clips are removed without a dialog");
+assert.match(timelineEvents, /pendingRemoveEventCount\(\) === 0 && pendingRemoveAudioClipCount\(\) === 0\) \{\s*confirmLayerRemoval\(\);/, "an empty timeline layer is removed without a dialog");
+assert.match(await read("components/TimelineLayerToolbar.tsx"), /pendingRemoveEventCount\(\) === 0\) \{\s*confirmRemoval\(\);/, "an empty toolbar layer is removed without a dialog");
+const mappingStrips = await read("components/MappingFilterStrips.tsx");
+assert.match(mappingStrips, /setContextMenu\(null\);\s*void props\.onDeleteGroup\(groupId\);/, "a mapping group is deleted without a dialog");
+assert.doesNotMatch(mappingStrips, /data-group-delete-dialog/, "the mapping-group delete dialog is gone");
+const sceneMatrix = await read("components/SceneMatrixPanel.tsx");
+assert.doesNotMatch(sceneMatrix, /data-scene-matrix-(scene-)?delete-dialog/, "the scene and Bank delete dialogs are gone");
+assert.match(sceneMatrix, /void props\.onRemoveCueList\(bank\.id, true\);/, "a Bank is deleted without a dialog");
+assert.match(sceneMatrix, /void props\.onRemoveCue\(cue\.id, true\);/, "a scene is deleted without a dialog");
 
-let asked = null;
-assert.equal(
-  await actions.confirmDestructiveAction("cue", "Opening", async (options) => {
-    asked = options;
-    return false;
-  }),
-  false,
-  "declining returns false",
-);
-assert.equal(asked.title, 'Remove cue "Opening"?');
-assert.equal(asked.tone, "danger", "a removal starts focused on Cancel");
-assert.equal(await actions.confirmDestructiveAction("cue", "Opening", () => true), true, "a synchronous answer is accepted");
-assert.equal(await actions.confirmDestructiveAction("cue", "Opening", () => undefined), false, "an unanswered question never confirms");
-
-const cueNone = actions.cueRemovalDialog("Opening", 0, 0);
-assert.equal(cueNone.title, 'Remove cue "Opening"?');
-assert.deepEqual(cueNone.message, [
-  "No timeline placements are linked to this Cue.",
-  "No incoming jumps will be changed.",
-  undoLine,
-]);
-const cueMany = actions.cueRemovalDialog("Scale Cue 001", 499, 2);
-assert.deepEqual(cueMany.message, [
-  "499 timeline placements will also be removed.",
-  "2 incoming jumps will be cleared.",
-  undoLine,
-]);
-let cueRemovalInvocations = 0;
-assert.equal(await actions.confirmCueRemoval("Opening", 3, 1, async () => false), false);
-assert.equal(await actions.confirmCueRemoval("Opening", 3, 1, async () => {
-  cueRemovalInvocations += 1;
-  return true;
-}), true);
-assert.equal(cueRemovalInvocations, 1);
-
-const placement = actions.timelinePlacementRemovalDialog(500, "500 · Scale Cue 500", 32_000);
-assert.equal(placement.title, "Remove Scene Block #500?");
-assert.match(placement.message[0], /Scale Cue 500/);
-assert.match(placement.message[0], /32000 ms span/);
-assert.equal(placement.message.at(-1), undoLine);
-assert.equal(actions.timelinePlacementRemovalDialog(7, "Cue", 0).title, "Remove timeline point #7?");
-let placementRemovalInvocations = 0;
-assert.equal(await actions.confirmTimelinePlacementRemoval(500, "Scale Cue 500", 32_000, async () => false), false);
-assert.equal(await actions.confirmTimelinePlacementRemoval(500, "Scale Cue 500", 32_000, async () => {
-  placementRemovalInvocations += 1;
-  return true;
-}), true);
-assert.equal(placementRemovalInvocations, 1);
-
-// Exercise the actual App entry point: a saved/clean show must still require
-// consent (the in-app dialog, never a browser prompt) before the existing
-// dirty-state check or any replacement work starts.
-const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+// New Project never asks about the running show, but unsaved changes are still protected.
 const appTree = ts.createSourceFile("App.tsx", appSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-let newProjectInitializer;
+let newProjectInitializer = null;
 const visit = (node) => {
-  if (ts.isVariableDeclaration(node) && node.name.getText(appTree) === "newProject") {
-    newProjectInitializer = node.initializer;
-  }
+  if (ts.isVariableDeclaration(node) && node.name.getText(appTree) === "newProject") newProjectInitializer = node.initializer;
   ts.forEachChild(node, visit);
 };
 visit(appTree);
@@ -87,41 +57,32 @@ assert.ok(newProjectInitializer, "canonical New Project entry point exists");
 const newProjectCode = ts.transpileModule(`const underTest = ${newProjectInitializer.getText(appTree)}; underTest;`, {
   compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
 }).outputText;
-for (const [workspace, mode, consent, expectedPrompts, expectedDiscardChecks] of [
-  ["touch", "perform", false, 1, 0],
-  ["touch", "perform", true, 1, 1],
-  ["control", "video", false, 0, 1],
-  ["setup", "perform", false, 0, 1],
-]) {
+for (const [workspace, mode] of [["touch", "perform"], ["control", "video"], ["setup", "perform"]]) {
   let prompts = 0;
   let discardChecks = 0;
-  asked = null;
   const sandbox = {
     newProjectInFlight: false,
     workspaceTab: () => workspace,
     controlMode: () => mode,
-    confirmDialog: async (options) => { prompts += 1; asked = options; return consent; },
-    newProjectDuringShowDialog: () => ({ title: "Create a new project and stop this show?", tone: "danger" }),
+    confirmDialog: async () => { prompts += 1; return true; },
     confirmDiscardProjectChanges: async () => { discardChecks += 1; return false; },
     setMessage: () => {},
     invoke: () => assert.fail("a canceled New request must never mutate the project"),
   };
   await runInNewContext(newProjectCode, sandbox)();
-  assert.equal(prompts, expectedPrompts, `${workspace}/${mode}: show confirmation is Perform-only`);
-  if (expectedPrompts > 0) assert.equal(asked.tone, "danger", "the show-stopping question starts focused on Cancel");
-  assert.equal(discardChecks, expectedDiscardChecks, `${workspace}/${mode}: declined show confirmation stops before project checks`);
-  assert.equal(sandbox.newProjectInFlight, false, "a declined request releases its in-flight guard");
+  assert.equal(prompts, 0, `${workspace}/${mode}: no show confirmation`);
+  assert.equal(discardChecks, 1, `${workspace}/${mode}: unsaved changes are still checked`);
+  assert.equal(sandbox.newProjectInFlight, false, "a canceled request releases its in-flight guard");
 }
 
-// Standby: a Blackout that this machine cannot apply must be explained before the
-// confirmation dialog, so nothing fails after the operator confirms.
+// Blackout acts at once; a machine that cannot drive outputs is still explained in-app.
 {
   const blackoutInitializer = appSource.match(/const requestPerformVideoBlackout = async \(enabled: boolean\) => \{([\s\S]*?)\n  \};/);
   assert.ok(blackoutInitializer, "guarded Perform blackout request exists");
   const body = blackoutInitializer[1];
-  assert.ok(body.indexOf("readOutputDrive()") >= 0 && body.indexOf("readOutputDrive()") < body.indexOf("confirmDialog(blackoutDialog(enabled))"), "output authority is read before the question is asked");
-  assert.match(body, /drive\.kind === "blocked"[\s\S]*?BLACKOUT_STATUS_KEY[\s\S]*?return;/, "a blocked machine gets a keyed in-app message and no dialog");
+  assert.doesNotMatch(body, /confirmDialog/, "Blackout does not ask");
+  assert.match(body, /drive\.kind === "blocked"[\s\S]*?BLACKOUT_STATUS_KEY[\s\S]*?return;/, "a blocked machine gets a keyed in-app message");
   assert.match(appSource, /const applyOutputDrive = [\s\S]*?clearStatusByKey\(BLACKOUT_STATUS_KEY\)/, "the refusal note retires when the output state changes");
 }
 
-console.log("destructive action helpers ok");
+console.log("removals and live actions act without confirmation; irreversible actions keep theirs");

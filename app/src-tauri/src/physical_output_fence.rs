@@ -837,6 +837,7 @@ pub(super) fn render_timeline_follow_output<P: video::VideoFrameProvider>(
 
     let context = video::VideoEffectRenderContext {
         clip_runtime: &engine_snapshot.video_clip_runtime,
+        audio_frame: engine_snapshot.live_audio_textures.as_deref(),
         project_render_epoch: follow.epoch,
     };
     let outgoing = renderer
@@ -947,6 +948,7 @@ pub(super) fn render_timeline_follow_output<P: video::VideoFrameProvider>(
             source_timeline_id: follow.source_timeline_id,
             transition_chain: transition_chain.as_ref(),
             last_valid: state.last_valid(key),
+            audio_frame: context.audio_frame,
         })
         .map_err(|error| format!("Timeline Follow output combine failed: {error:?}"))?;
     if combined.evidence.freshness != video::VideoOutputRenderFreshness::Fresh {

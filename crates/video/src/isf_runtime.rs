@@ -99,6 +99,13 @@ pub struct IsfControlDefinition {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub(crate) struct IsfAudioInputDefinition {
+    pub name: String,
+    pub fft: bool,
+    pub width: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct PreparedIsfShader {
     pub description: Option<String>,
     pub categories: Vec<String>,
@@ -111,6 +118,7 @@ pub struct PreparedIsfShader {
     pub(crate) passes: Vec<IsfPassDefinition>,
     pub(crate) imported_images: Vec<IsfImportedImage>,
     pub(crate) bound_images: Vec<IsfImportedImage>,
+    pub(crate) audio_inputs: Vec<IsfAudioInputDefinition>,
     pub(crate) fingerprint: u64,
 }
 
@@ -160,6 +168,7 @@ pub struct IsfGpuRuntime {
     vertex_shader: wgpu::ShaderModule,
     pipelines: HashMap<(u64, bool, usize), IsfGpuPipeline>,
     resources: pass_runtime::IsfResourcePool,
+    audio_frame: Option<protocol::LiveAudioTextureFrame>,
     frame_index: u32,
     last_stack_stage_count: usize,
     last_stack_render_us: u64,
@@ -196,10 +205,25 @@ impl IsfGpuRuntime {
             vertex_shader,
             pipelines: HashMap::new(),
             resources: pass_runtime::IsfResourcePool::default(),
+            audio_frame: None,
             frame_index: 0,
             last_stack_stage_count: 0,
             last_stack_render_us: 0,
         })
+    }
+
+    /// Copies only a new bounded publication. Invalid or absent data becomes
+    /// silence, including after capture stop, project replacement or expiry.
+    pub fn set_audio_frame(&mut self, frame: Option<&protocol::LiveAudioTextureFrame>) {
+        let frame = frame.filter(|frame| frame.is_valid());
+        let identity = frame.map(|frame| (frame.generation, frame.feature_sequence));
+        let current = self
+            .audio_frame
+            .as_ref()
+            .map(|frame| (frame.generation, frame.feature_sequence));
+        if identity != current {
+            self.audio_frame = frame.cloned();
+        }
     }
 
     pub fn apply(
@@ -642,6 +666,7 @@ pub fn prepare_isf_shader_with_image_bindings(
     validate_shader_body(body)?;
 
     let mut image_inputs = Vec::new();
+    let mut audio_inputs = Vec::new();
     let mut controls = Vec::new();
     let mut names = HashSet::new();
     for input in metadata.inputs {
@@ -655,7 +680,25 @@ pub fn prepare_isf_shader_with_image_bindings(
                 controls.push(control_definition(input)?)
             }
             "audio" | "audioFFT" => {
-                return Err(error("ISF audio/audioFFT textures are not supported by this runtime; use Syndocal Audio FFT nodes"));
+                let width = match input.maximum.as_ref() {
+                    None => protocol::LIVE_AUDIO_TEXTURE_SAMPLES as u64,
+                    Some(value) => value
+                        .as_u64()
+                        .filter(|width| {
+                            *width > 0 && *width <= protocol::LIVE_AUDIO_TEXTURE_SAMPLES as u64
+                        })
+                        .ok_or_else(|| {
+                            error(format!(
+                                "ISF audio texture MAX must be an integer from 1 to 512 for input '{}'",
+                                input.name
+                            ))
+                        })?,
+                };
+                audio_inputs.push(IsfAudioInputDefinition {
+                    fft: input.kind == "audioFFT",
+                    name: input.name,
+                    width: width as u32,
+                });
             }
             kind => return Err(error(format!("Unsupported ISF input type '{kind}'"))),
         }
@@ -711,7 +754,7 @@ pub fn prepare_isf_shader_with_image_bindings(
             )));
         }
     }
-    if image_names.len() + metadata.imported.len() > ISF_MAX_TEXTURES {
+    if image_names.len() + metadata.imported.len() + audio_inputs.len() > ISF_MAX_TEXTURES {
         return Err(error(format!(
             "ISF declares too many textures; the safety limit is {ISF_MAX_TEXTURES}"
         )));
@@ -735,6 +778,7 @@ pub fn prepare_isf_shader_with_image_bindings(
         .into_iter()
         .partition(|image| image_inputs.contains(&image.name));
     image_names.extend(imported_images.iter().map(|image| image.name.clone()));
+    image_names.extend(audio_inputs.iter().map(|input| input.name.clone()));
     let glsl = build_glsl_wrapper(body, &image_names, &controls);
     let wgsl = glsl_to_wgsl(&glsl)?;
     let mut fingerprint = DefaultHasher::new();
@@ -779,6 +823,7 @@ pub fn prepare_isf_shader_with_image_bindings(
         passes,
         imported_images,
         bound_images,
+        audio_inputs,
         fingerprint: fingerprint.finish(),
     })
 }
@@ -1157,21 +1202,13 @@ mod tests {
     }
 
     #[test]
-    fn accepts_target_passes_and_rejects_audio_loops_and_unsafe_identifiers() {
+    fn accepts_target_passes_and_rejects_loops_and_unsafe_identifiers() {
         let multipass = FLOAT_FILTER.replace(
             "\"INPUTS\"",
             "\"PASSES\":[{\"TARGET\":\"buffer\"}],\"INPUTS\"",
         );
         let prepared = prepare_isf_shader(&multipass).unwrap();
         assert_eq!(prepared.passes[0].target.as_deref(), Some("buffer"));
-        let audio = FLOAT_FILTER.replace(
-            "{\"NAME\":\"level\",\"TYPE\":\"float\",\"DEFAULT\":0.5,\"MIN\":0.0,\"MAX\":1.0}",
-            "{\"NAME\":\"audio\",\"TYPE\":\"audioFFT\"}",
-        );
-        assert!(prepare_isf_shader(&audio)
-            .unwrap_err()
-            .message
-            .contains("Audio FFT"));
         assert!(prepare_isf_shader(
             &FLOAT_FILTER.replace("void main()", "void main(){ for(;;){} } void unused()")
         )
@@ -1306,3 +1343,7 @@ mod completeness_tests;
 #[cfg(test)]
 #[path = "isf_date_images_tests.rs"]
 mod date_images_tests;
+
+#[cfg(test)]
+#[path = "isf_audio_tests.rs"]
+mod audio_tests;

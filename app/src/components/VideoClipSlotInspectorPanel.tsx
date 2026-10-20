@@ -9,8 +9,6 @@ import type {
   VideoLayerSummary,
 } from "../types";
 import { VideoEffectScopePanel } from "./VideoEffectScopePanel";
-import { confirmDialog } from "../inAppDialog";
-import { removeClipSlotDialog } from "../inAppDialogCopy";
 
 export interface VideoClipSlotInspectorPanelProps {
   /** Rendered inside a workspace pane (the Perform Inspector's Clip tab): an
@@ -133,7 +131,6 @@ export function VideoClipSlotInspectorPanel(props: VideoClipSlotInspectorPanelPr
   };
   const remove = async (slotId: VideoClipSlotId) => {
     if (props.removeDisabledReason) return;
-    if (!await confirmDialog(removeClipSlotDialog(slotId))) return;
     void props.onRemove(slotId);
   };
 

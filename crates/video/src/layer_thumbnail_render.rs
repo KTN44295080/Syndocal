@@ -15,6 +15,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         height: u32,
         cancellation: &dyn VideoRenderCancellation,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        self.set_isf_audio_frame(None);
         self.render_layer_thumbnail(snapshot, layer_id, width, height, Some(cancellation))
     }
 

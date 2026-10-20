@@ -181,7 +181,9 @@ export type MidiControlMessage =
   | "RelativeControlChange"
   /** A tempo trigger, not a controller message: the number picks an entry of
    * `beatDivisionBeats`. Only Perform trigger targets accept it. */
-  | "BeatDivision";
+  | "BeatDivision"
+  /** Persisted live-audio source; never a hardware MIDI message. */
+  | "Audio";
 
 export interface MidiFeedbackMessage {
   message: MidiControlMessage;
@@ -265,6 +267,7 @@ export type MidiControlAction =
   | "VideoGroupEnabled";
 
 export interface MidiControlMapping {
+  audio?: import("./audioControlMapping").AudioMappingSettings | null;
   channel?: number | null;
   message: MidiControlMessage;
   number: number;
@@ -1902,6 +1905,7 @@ export interface VideoRecordingStatus {
 }
 
 export interface LiveAudioInputStatus {
+  generation?: number;
   running: boolean;
   stale: boolean;
   safety_clear_pending: boolean;

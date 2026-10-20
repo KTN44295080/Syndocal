@@ -18,6 +18,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "recording_audio_textures.rs"]
+mod recording_audio_textures;
+
 const WORKER_ARGUMENT: &str = "--syndocal-recording-renderer-worker";
 const MAX_WORKER_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 const MAX_FRAME_BYTES: usize = 4096 * 4096 * 4;
@@ -31,6 +34,8 @@ const REQUEST_MAGIC: &[u8; 4] = b"SRF1";
 pub(crate) struct RecordingRenderRequest {
     pub(crate) video: protocol::VideoSnapshot,
     pub(crate) clip_runtime: protocol::VideoClipRuntimeSnapshot,
+    #[serde(skip, default)]
+    pub(crate) live_audio_textures: Option<Arc<protocol::LiveAudioTextureFrame>>,
     pub(crate) transition_runtime: protocol::VideoLayerTransitionRuntimeSnapshot,
     pub(crate) project_render_epoch: u64,
     pub(crate) bpm: f32,
@@ -51,6 +56,7 @@ pub(crate) struct RecordingRenderRequest {
 struct RecordingRenderRequestHeader<'a> {
     video: &'a protocol::VideoSnapshot,
     clip_runtime: &'a protocol::VideoClipRuntimeSnapshot,
+    live_audio_textures: Option<recording_audio_textures::Header>,
     transition_runtime: &'a protocol::VideoLayerTransitionRuntimeSnapshot,
     project_render_epoch: u64,
     bpm: f32,
@@ -66,6 +72,8 @@ struct RecordingRenderRequestHeader<'a> {
 struct RecordingRenderRequestHeaderOwned {
     video: protocol::VideoSnapshot,
     clip_runtime: protocol::VideoClipRuntimeSnapshot,
+    #[serde(default)]
+    live_audio_textures: Option<recording_audio_textures::Header>,
     transition_runtime: protocol::VideoLayerTransitionRuntimeSnapshot,
     project_render_epoch: u64,
     bpm: f32,
@@ -292,6 +300,7 @@ pub(crate) fn run_worker() -> Result<(), String> {
             &request.video,
             video::VideoEffectRenderContext {
                 clip_runtime: &request.clip_runtime,
+                audio_frame: request.live_audio_textures.as_deref(),
                 project_render_epoch: request.project_render_epoch,
             },
             &request.transition_runtime,
@@ -362,6 +371,7 @@ fn encode_render_request(request: &RecordingRenderRequest) -> Result<Vec<u8>, St
     let header = serde_json::to_vec(&RecordingRenderRequestHeader {
         video: &request.video,
         clip_runtime: &request.clip_runtime,
+        live_audio_textures: recording_audio_textures::header(request.live_audio_textures.as_deref())?,
         transition_runtime: &request.transition_runtime,
         project_render_epoch: request.project_render_epoch,
         bpm: request.bpm,
@@ -377,6 +387,7 @@ fn encode_render_request(request: &RecordingRenderRequest) -> Result<Vec<u8>, St
         .checked_add(4)
         .and_then(|length| length.checked_add(header.len()))
         .and_then(|length| length.checked_add(frame_bytes))
+        .and_then(|length| length.checked_add(if request.live_audio_textures.is_some() { recording_audio_textures::PAYLOAD_BYTES } else { 0 }))
         .ok_or_else(|| "Recording renderer request length overflow".to_string())?;
     if total > MAX_WORKER_REQUEST_BYTES {
         return Err("Recording renderer request exceeded 128 MiB".to_string());
@@ -387,6 +398,7 @@ fn encode_render_request(request: &RecordingRenderRequest) -> Result<Vec<u8>, St
     payload.extend_from_slice(REQUEST_MAGIC);
     payload.extend_from_slice(&header_len.to_le_bytes());
     payload.extend_from_slice(&header);
+    recording_audio_textures::append(request.live_audio_textures.as_deref(), &mut payload);
     for frame in &request.injected_frames {
         payload.extend_from_slice(&frame.data);
     }
@@ -412,6 +424,7 @@ fn decode_render_request(payload: &[u8]) -> Result<RecordingRenderRequest, Strin
     let header: RecordingRenderRequestHeaderOwned = serde_json::from_slice(header)
         .map_err(|error| format!("Recording renderer request header is invalid: {error}"))?;
     let mut offset = header_end;
+    let live_audio_textures = recording_audio_textures::decode(header.live_audio_textures, payload, &mut offset)?;
     let mut injected_frames = Vec::with_capacity(header.injected_frames.len());
     for frame in header.injected_frames {
         let data_end = offset
@@ -438,6 +451,7 @@ fn decode_render_request(payload: &[u8]) -> Result<RecordingRenderRequest, Strin
     Ok(RecordingRenderRequest {
         video: header.video,
         clip_runtime: header.clip_runtime,
+        live_audio_textures,
         transition_runtime: header.transition_runtime,
         project_render_epoch: header.project_render_epoch,
         bpm: header.bpm,
@@ -608,6 +622,13 @@ mod tests {
         let request = RecordingRenderRequest {
             video: protocol::VideoSnapshot::default(),
             clip_runtime: protocol::VideoClipRuntimeSnapshot::default(),
+            live_audio_textures: Some(std::sync::Arc::new(protocol::LiveAudioTextureFrame {
+                generation: 27,
+                feature_sequence: 9,
+                sample_rate: 48_000,
+                waveform: [0.25; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+                fft: [0.75; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+            })),
             transition_runtime: protocol::VideoLayerTransitionRuntimeSnapshot::default(),
             project_render_epoch: 4,
             bpm: 120.0,
@@ -626,20 +647,18 @@ mod tests {
             }],
         };
         let encoded = encode_render_request(&request).unwrap();
-        assert_eq!(
-            decode_render_request(&encoded).unwrap().isf_date,
-            request.isf_date
-        );
-        let mut legacy = serde_json::to_value(&request).unwrap();
-        legacy.as_object_mut().unwrap().remove("isf_date");
-        let legacy: RecordingRenderRequest = serde_json::from_value(legacy).unwrap();
+        let decoded = decode_render_request(&encoded).unwrap();
+        assert_eq!(decoded.isf_date, request.isf_date);
+        assert_eq!(decoded.live_audio_textures, request.live_audio_textures);
+        assert_eq!(decoded.injected_frames, request.injected_frames);
+
+        let mut project_json = serde_json::to_value(&request).unwrap();
+        assert!(project_json.get("live_audio_textures").is_none());
+        project_json.as_object_mut().unwrap().remove("isf_date");
+        let legacy: RecordingRenderRequest = serde_json::from_value(project_json).unwrap();
         assert_eq!(legacy.isf_date, default_recording_isf_date());
-        assert!(encoded.windows(4).any(|window| window == [0, 17, 255, 255]));
-        assert!(!encoded.windows(4).any(|window| window == [48, 49, 55, 44]));
-        assert_eq!(
-            decode_render_request(&encoded).unwrap().injected_frames,
-            request.injected_frames
-        );
+        assert!(legacy.live_audio_textures.is_none());
+
         let header_start = REQUEST_MAGIC.len() + 4;
         let header_len = u32::from_le_bytes(
             encoded[REQUEST_MAGIC.len()..header_start]
@@ -647,22 +666,92 @@ mod tests {
                 .unwrap(),
         ) as usize;
         let header_end = header_start + header_len;
-        let mut legacy_header: serde_json::Value =
+        let header: serde_json::Value =
             serde_json::from_slice(&encoded[header_start..header_end]).unwrap();
-        legacy_header.as_object_mut().unwrap().remove("isf_date");
-        let with_header = |header: &serde_json::Value| {
+        let audio_and_frames = &encoded[header_end..];
+        let frames = &audio_and_frames[recording_audio_textures::PAYLOAD_BYTES..];
+        assert_eq!(
+            encoded.len(),
+            header_end
+                + recording_audio_textures::PAYLOAD_BYTES
+                + request.injected_frames[0].data.len()
+        );
+        assert_eq!(&audio_and_frames[..4], &0.25_f32.to_le_bytes());
+        let fft_offset = protocol::LIVE_AUDIO_TEXTURE_SAMPLES * 4;
+        assert_eq!(
+            &audio_and_frames[fft_offset..fft_offset + 4],
+            &0.75_f32.to_le_bytes()
+        );
+        assert_eq!(frames, request.injected_frames[0].data.as_slice());
+        let with_header = |header: &serde_json::Value, trailer: &[u8]| {
             let json = serde_json::to_vec(header).unwrap();
             let mut payload = Vec::new();
             payload.extend_from_slice(REQUEST_MAGIC);
             payload.extend_from_slice(&(json.len() as u32).to_le_bytes());
             payload.extend_from_slice(&json);
-            payload.extend_from_slice(&encoded[header_end..]);
+            payload.extend_from_slice(trailer);
             payload
         };
-        let legacy_request = decode_render_request(&with_header(&legacy_header)).unwrap();
-        assert_eq!(legacy_request.isf_date, default_recording_isf_date());
-        assert_eq!(legacy_request.injected_frames, request.injected_frames);
-        legacy_header["unexpected"] = serde_json::json!(true);
-        assert!(decode_render_request(&with_header(&legacy_header)).is_err());
+        for (has_date, has_audio) in [(false, true), (true, false), (false, false)] {
+            let mut legacy_header = header.clone();
+            if !has_date {
+                legacy_header.as_object_mut().unwrap().remove("isf_date");
+            }
+            if !has_audio {
+                legacy_header
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("live_audio_textures");
+            }
+            let trailer = if has_audio { audio_and_frames } else { frames };
+            let legacy = decode_render_request(&with_header(&legacy_header, trailer)).unwrap();
+            assert_eq!(
+                legacy.isf_date,
+                if has_date {
+                    request.isf_date
+                } else {
+                    default_recording_isf_date()
+                }
+            );
+            assert_eq!(
+                legacy.live_audio_textures,
+                if has_audio {
+                    request.live_audio_textures.clone()
+                } else {
+                    None
+                }
+            );
+            assert_eq!(legacy.injected_frames, request.injected_frames);
+        }
+
+        let mut silent = request.clone();
+        silent.live_audio_textures = None;
+        let silent = decode_render_request(&encode_render_request(&silent).unwrap()).unwrap();
+        assert!(silent.live_audio_textures.is_none());
+        assert_eq!(silent.isf_date, request.isf_date);
+        assert_eq!(silent.injected_frames, request.injected_frames);
+
+        let mut malformed_header = header.clone();
+        malformed_header["unexpected"] = serde_json::json!(true);
+        assert!(decode_render_request(&with_header(&malformed_header, audio_and_frames)).is_err());
+        let mut malformed_header = header.clone();
+        malformed_header["live_audio_textures"]["unexpected"] = serde_json::json!(true);
+        assert!(decode_render_request(&with_header(&malformed_header, audio_and_frames)).is_err());
+        let mut malformed_header = header;
+        malformed_header
+            .as_object_mut()
+            .unwrap()
+            .remove("live_audio_textures");
+        assert!(decode_render_request(&with_header(&malformed_header, audio_and_frames)).is_err());
+        assert!(decode_render_request(
+            &encoded[..header_end + recording_audio_textures::PAYLOAD_BYTES - 1]
+        )
+        .is_err());
+        let mut malformed_audio = encoded.clone();
+        malformed_audio[header_end..header_end + 4].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(decode_render_request(&malformed_audio).is_err());
+        let oversized_length = (MAX_WORKER_REQUEST_BYTES as u32 + 1).to_le_bytes();
+        assert!(read_payload(&mut &oversized_length[..]).is_err());
     }
+
 }

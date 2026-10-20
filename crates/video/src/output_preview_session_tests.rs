@@ -71,6 +71,7 @@ fn render<D: VideoFrameDecoder>(
         .render_output_preview_with_effects_and_transitions(
             snapshot,
             VideoEffectRenderContext {
+                audio_frame: None,
                 clip_runtime: &VideoClipRuntimeSnapshot::default(),
                 project_render_epoch: 1,
             },

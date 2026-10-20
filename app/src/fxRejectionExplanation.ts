@@ -109,16 +109,16 @@ const rules: Rule[] = [
     action: word("Select the image input again and remove duplicate or obsolete bindings.", "画像入力を選び直し、重複した割り当てや不要な割り当てを取り除いてください。"),
   },
   {
-    test: (raw) => /audio\/audioFFT|audioFFT|"audio"/.test(raw) && /not supported|unsupported/i.test(raw),
-    title: word("Audio inputs are not supported", "音声の入力には対応していません"),
-    detail: (found) => word(`The shader asks for an audio texture${named(found, found.input ?? "audio").en}. Syndocal cannot supply one.`, `シェーダーが音声テクスチャー${named(found, found.input ?? "audio").ja}を要求していますが、Syndocalでは扱えません。`),
-    action: word("Remove the audio input, or drive the shader's controls from Syndocal's Audio FFT nodes instead.", "音声の入力を取り除くか、Syndocalの音声ノード（Audio FFT）でパラメーターを動かしてください。"),
+    test: (raw) => /ISF audio texture MAX/i.test(raw),
+    title: word("Audio texture width is invalid", "音声テクスチャーの幅が正しくありません"),
+    detail: () => word("Audio and audioFFT inputs accept MAX values from 1 to 512.", "audioとaudioFFTの入力では、MAXに1から512までの整数を指定できます。"),
+    action: word("Use an integer MAX from 1 to 512, or omit MAX to use 512 samples.", "MAXに1から512までの整数を指定するか、省略して512サンプルを使ってください。"),
   },
   {
     test: (raw) => /unsupported isf input type/i.test(raw),
     title: word("This input type is not supported", "この入力タイプには対応していません"),
     detail: (found) => word(`INPUTS contains a TYPE${named(found).en}${at(found).en} that Syndocal cannot supply.`, `INPUTSに、Syndocalで扱えないTYPE${named(found).ja}があります${at(found).ja}。`),
-    action: word("Use only image, float, bool, long, point2D, color and event inputs, remove the unsupported INPUT, then import again.", "使えるのは image・float・bool・long・point2D・color・event です。対応していないINPUTを取り除いて、もう一度読み込んでください。"),
+    action: word("Use image, audio, audioFFT, float, bool, long, point2D, color and event inputs, remove the unsupported INPUT, then import again.", "使えるのは image・audio・audioFFT・float・bool・long・point2D・color・event です。対応していないINPUTを取り除いて、もう一度読み込んでください。"),
   },
   {
     test: (raw) => /ISF pass size/i.test(raw),
@@ -191,6 +191,12 @@ const rules: Rule[] = [
     title: word("An input has an invalid default or range", "入力の初期値や範囲の指定が正しくありません"),
     detail: (found) => word(`A DEFAULT, MIN or MAX value${named(found).en}${at(found).en} is not a finite number or a number list Syndocal understands.`, `DEFAULT・MIN・MAXの値${named(found).ja}${at(found).ja}が、有限の数値または対応する数値リストではありません。`),
     action: word("Use plain numbers in INPUTS (an [r, g, b, a] list for colours, [x, y] for points), then import again.", "INPUTSでは通常の数値を使ってください（色は[r, g, b, a]、点は[x, y]の配列）。修正して、もう一度読み込んでください。"),
+  },
+  {
+    test: (raw) => /ISF declares too many textures/i.test(raw),
+    title: word("The shader uses too many textures", "シェーダーのテクスチャー数が上限を超えています"),
+    detail: () => word("Image inputs, audio inputs, named pass targets and imported images share a limit of 16 sampled textures.", "画像入力・音声入力・名前付きの描画ターゲット・読み込み画像を合わせて、使えるテクスチャーは16個までです。"),
+    action: word("Remove unused inputs, targets or imported images, or split the effect into smaller shaders.", "使っていない入力・ターゲット・読み込み画像を取り除くか、エフェクトを小さなシェーダーに分けてください。"),
   },
   {
     test: (raw) => /safety limit|controls; the safety limit/i.test(raw),

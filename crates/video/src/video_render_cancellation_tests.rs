@@ -5,6 +5,7 @@ fn cancellable_output_preview_fails_closed_before_starting_render_work() {
     let mut renderer = VideoPreviewRenderer::new(VideoRuntimeConfig::default());
     let clip_runtime = VideoClipRuntimeSnapshot::default();
     let context = VideoEffectRenderContext {
+        audio_frame: None,
         clip_runtime: &clip_runtime,
         project_render_epoch: 1,
     };

@@ -88,9 +88,9 @@ const audition = createFxAuditionSession({
   describeBuiltin: async (id) => { const make = stages[id]; return make ? fxChainFromStages([make()]) : null; },
   commit: async (layerId, effect) => { log.commits.push({ layerId, labels: effect ? fxChainStages(effect).map((stage) => stage.label) : [] }); updateLayer(layerId, () => effect); },
 });
-const badSource = '/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"},{"NAME":"music","TYPE":"audioFFT"}]}*/ void main(){}';
+const badSource = '/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"},{"NAME":"music","TYPE":"audioFFT","MAX":513}]}*/ void main(){}';
 const rejections = [
-  { label: "Rejected ISF", source: badSource, message: "ISF audio/audioFFT textures are not supported by this runtime; use Syndocal Audio FFT nodes" },
+  { label: "Rejected ISF", source: badSource, message: "ISF audio texture MAX must be an integer from 1 to 512 for input 'music'" },
   { label: "Rejected ISF", source: '/*{"INPUTS":[]}*/\nvoid main(){\n for (int i=0;i<9;i++){}\n}', message: "ISF source uses forbidden or unsupported construct 'for ('" },
 ];
 const [imported, setImported] = createSignal([]);
@@ -262,7 +262,7 @@ try {
     assert.equal(rejectionCards, 2, "rejected imports appear as cards");
     await evaluate("document.querySelector('[data-fx-card-state=rejected]').scrollIntoView({block:'start'})"); await settle();
     const explained = await text("[data-fx-card-state=rejected] [data-fx-rejection]");
-    assert.match(explained, locale === "ja" ? /音声/ : /Audio inputs/, `${locale}: reason is plain language`);
+    assert.match(explained, locale === "ja" ? /音声テクスチャーの幅が正しくありません/ : /Audio texture width is invalid/, `${locale}: reason is plain language`);
     assert.ok(!/ParseErrors|Span \{/.test(explained.split("\n").slice(0, 3).join("\n")), "stack text is not the headline");
     assert.equal(await evaluate("document.querySelector('[data-fx-card-state=rejected] [data-fx-catalog-add]').disabled"), true, "rejected cards cannot be added");
     assert.equal(await evaluate("document.querySelector('[data-fx-card-state=rejected] [data-fx-catalog-audition]').disabled"), true, "rejected cards cannot be auditioned");
@@ -274,7 +274,7 @@ try {
   assert.equal(await evaluate("document.querySelectorAll('[data-fx-problem]').length"), 2);
   assert.equal(await evaluate("document.querySelector('[data-fx-problem] details').open"), false, "raw text starts collapsed");
   await evaluate("document.querySelector('[data-fx-problem] details').open=true"); await settle();
-  assert.match(await text("[data-fx-problem] pre"), /audioFFT/, "raw engine text is available to experts");
+  assert.equal(await text("[data-fx-problem] pre"), "ISF audio texture MAX must be an integer from 1 to 512 for input 'music'", "raw engine text is available to experts");
   await shot("problems-ja-tally-1366x768");
   await evaluate("document.querySelector('[data-fx-problems-dialog]').close()");
   await ux("u.setRejectionsOn(false)");

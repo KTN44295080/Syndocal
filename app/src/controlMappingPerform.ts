@@ -112,7 +112,8 @@ export interface PerformRoutedInput {
   /** A press that flips the target instead of setting it to `active`. */
   toggle?: boolean;
   /** Identifies the transport; MIDI preserves the existing omitted source. */
-  source?: "beat" | "osc" | "dmx";
+  source?: "beat" | "osc" | "dmx" | "audio";
+  audioMappingId?: string;
   /** Renderer-only source lease; never decoded from a native payload. */
   sourceIsCurrent?: () => boolean;
 }
@@ -260,6 +261,7 @@ export function createBeatTriggerScheduler(options: {
  * message or the beat division. */
 export const midiSourceDescription = (mapping: Pick<MidiControlMapping, "message" | "number" | "channel">): string => {
   if (mapping.message === "BeatDivision") return beatDivisionLabel(mapping.number);
+  if (mapping.message === "Audio") return "Audio";
   const kind = mapping.message === "ControlChange" ? "CC"
     : mapping.message === "RelativeControlChange" ? "Encoder CC"
       : mapping.message === "NoteOn" ? "Note"

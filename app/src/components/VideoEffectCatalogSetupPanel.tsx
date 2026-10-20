@@ -1,8 +1,6 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { CompositionSummary, VideoEffectCatalog } from "../types";
-import { confirmDialog } from "../inAppDialog";
 import { defaultVideoGroupMix, removeVideoGroup } from "../videoLayerGroups";
-import { removeFxPresetDialog, removeLayerGroupDialog } from "../inAppDialogCopy";
 
 interface VideoEffectCatalogSetupPanelProps {
   catalog: VideoEffectCatalog;
@@ -63,14 +61,12 @@ export function VideoEffectCatalogSetupPanel(props: VideoEffectCatalogSetupPanel
     });
   };
   const removePreset = async (presetId: number, label: string) => {
-    if (!await confirmDialog(removeFxPresetDialog(label))) return;
     return props.onApply({
       ...props.catalog,
       effect_presets: props.catalog.effect_presets.filter((entry) => entry.id !== presetId),
     });
   };
   const removeGroup = async (groupId: number, label: string) => {
-    if (!await confirmDialog(removeLayerGroupDialog(label))) return;
     return props.onApply(removeVideoGroup(props.catalog, groupId));
   };
 

@@ -94,10 +94,58 @@ struct StageResources {
     targets: Vec<TargetBuffer>,
     imports: Vec<GpuImage>,
     bound_images: Vec<GpuImage>,
+    audio: Vec<GpuImage>,
+    audio_identity: Option<(u64, u64)>,
+    audio_initialized: bool,
     bytes: u64,
     transient_bytes: u64,
     last_used: u64,
     has_history: bool,
+}
+
+/// The live input is the configured mono mix: one row, bounded columns.
+/// Waveform zero is 0.5; FFT is a normalized linear magnitude, silence is 0.
+/// Downsampled FFT columns keep peaks, and waveform columns interpolate.
+fn audio_texture_rgba(
+    input: &super::IsfAudioInputDefinition,
+    frame: Option<&protocol::LiveAudioTextureFrame>,
+) -> [u8; protocol::LIVE_AUDIO_TEXTURE_SAMPLES * 4] {
+    let mut rgba = [0; protocol::LIVE_AUDIO_TEXTURE_SAMPLES * 4];
+    let width = input.width as usize;
+    for x in 0..width {
+        let value = match frame {
+            None => {
+                if input.fft {
+                    0.0
+                } else {
+                    0.5
+                }
+            }
+            Some(frame) if input.fft => {
+                let start = x * protocol::LIVE_AUDIO_TEXTURE_SAMPLES / width;
+                let end = ((x + 1) * protocol::LIVE_AUDIO_TEXTURE_SAMPLES / width).max(start + 1);
+                frame.fft[start..end].iter().copied().fold(0.0_f32, f32::max)
+            }
+            Some(frame) if width == 1 => {
+                let rms = (frame.waveform.iter().map(|value| value * value).sum::<f32>()
+                    / protocol::LIVE_AUDIO_TEXTURE_SAMPLES as f32)
+                    .sqrt();
+                rms * 0.5 + 0.5
+            }
+            Some(frame) => {
+                let position =
+                    x as f32 * (protocol::LIVE_AUDIO_TEXTURE_SAMPLES - 1) as f32 / (width - 1) as f32;
+                let left = position.floor() as usize;
+                let right = (left + 1).min(protocol::LIVE_AUDIO_TEXTURE_SAMPLES - 1);
+                let value = frame.waveform[left]
+                    + (frame.waveform[right] - frame.waveform[left]) * (position - left as f32);
+                value * 0.5 + 0.5
+            }
+        };
+        let byte = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+        rgba[x * 4..x * 4 + 4].copy_from_slice(&[byte, byte, byte, 255]);
+    }
+    rgba
 }
 
 fn target_format(float: bool) -> wgpu::TextureFormat {
@@ -265,7 +313,8 @@ impl IsfGpuRuntime {
                     .iter()
                     .filter(|pass| pass.target.is_some())
                     .count()
-                + shader.imported_images.len();
+                + shader.imported_images.len()
+                + shader.audio_inputs.len();
             let formats = [false, true]
                 .into_iter()
                 .filter(|float| shader.passes.iter().any(|pass| pass.float == *float))
@@ -346,6 +395,18 @@ impl IsfGpuRuntime {
                 image.upload_rgba(&self.queue, &[0, 0, 0, 0]);
                 image
             });
+            let audio_identity = self
+                .audio_frame
+                .as_ref()
+                .map(|frame| (frame.generation, frame.feature_sequence));
+            if !state.audio_initialized || state.audio_identity != audio_identity {
+                for (input, image) in shader.audio_inputs.iter().zip(&state.audio) {
+                    let pixels = audio_texture_rgba(input, self.audio_frame.as_ref());
+                    image.upload_rgba(&self.queue, &pixels[..input.width as usize * 4]);
+                }
+                state.audio_identity = audio_identity;
+                state.audio_initialized = true;
+            }
             for target in &state.targets {
                 if !target.persistent || !state.has_history {
                     clear_image(&mut encoder, &target.images[target.front]);
@@ -400,6 +461,7 @@ impl IsfGpuRuntime {
                     sampled.push(&target.images[target.front].view);
                 }
                 sampled.extend(state.imports.iter().map(|image| &image.view));
+                sampled.extend(state.audio.iter().map(|image| &image.view));
                 let uniforms = self.pass_uniforms(
                     width,
                     height,
@@ -667,6 +729,11 @@ impl IsfGpuRuntime {
             self.validate_pass_size(image.width, image.height)?;
             bytes += u64::from(image.width) * u64::from(image.height) * 4;
         }
+        bytes += shader
+            .audio_inputs
+            .iter()
+            .map(|input| u64::from(input.width) * 4)
+            .sum::<u64>();
         if bytes + transient_bytes > MAX_STAGE_RESOURCE_BYTES
             || bytes + transient_bytes + pending_bytes > MAX_CACHED_RESOURCE_BYTES
         {
@@ -746,12 +813,22 @@ impl IsfGpuRuntime {
                 gpu
             })
             .collect();
+        let audio = shader
+            .audio_inputs
+            .iter()
+            .map(|input| {
+                GpuImage::new(&self.device, input.width, 1, false, "Syndocal ISF live audio")
+            })
+            .collect();
         Ok(StageResources {
             fingerprint: shader.fingerprint,
             sizes,
             targets,
             imports,
             bound_images,
+            audio,
+            audio_identity: None,
+            audio_initialized: false,
             bytes,
             transient_bytes,
             last_used,

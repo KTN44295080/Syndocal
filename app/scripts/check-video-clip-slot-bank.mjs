@@ -84,7 +84,7 @@ assert.match(bank, /onSelectLayer/, "both mounts expose explicit layer selection
 assert.match(bank, /onCancelQueue/, "Control exposes queue cancellation");
 assert.match(bank, /value="Crossfade"[\s\S]*value="Dip"[\s\S]*value="Wipe"[\s\S]*value="Luma"[\s\S]*value="Displacement"[\s\S]*value="Blur"[\s\S]*value="Glitch"[\s\S]*value="Custom"[\s\S]*value="Milliseconds"[\s\S]*value="Beats"[\s\S]*value="Bars"/, "Control exposes every typed Clip Take mode and deterministic duration unit");
 assert.match(bank, /progress_millis \/ 10/, "Control reports authoritative Clip Take progress rather than inferring it from layer state");
-assert.match(bank, /Preview thumbnail for slot/, "Preview labels the supported asset-thumbnail behavior honestly");
+assert.match(bank, /Audition slot \$\{slot\(\)\.id\} in Preview/, "Preview names the clip audition it starts (T29)");
 assert.match(inspector, /onReorder/, "inspector preserves authored reorder through full IDs");
 assert.match(inspector, /window\.requestAnimationFrame\(\(\) => props\.returnFocus\?\.focus\(\)\)/, "inspector restores focus on close");
 assert.match(inspector, /role=\{props\.embedded \? undefined : "dialog"\}[\s\S]*aria-modal=\{props\.embedded \? undefined : "true"\}/, "inspector uses dialog semantics");
@@ -92,7 +92,7 @@ assert.match(inspector, /focusableSelector[\s\S]*event\.key !== "Tab"/, "inspect
 for (const field of ["in_point_ms", "out_point_ms", "loop_mode", "speed", "launch_quantization", "cue_points", "effect_overrides"]) {
   assert.ok(inspector.includes(field), `inspector authors ${field}`);
 }
-assert.match(inspector, /if \(!await confirmDialog\(removeClipSlotDialog\(slotId\)\)\) return;[\s\S]*props\.onRemove/, "remove is explicitly confirmed before the authored command");
+assert.doesNotMatch(inspector, /confirmDialog/, "remove acts at once; Undo restores it");
 
 assert.ok(
   app.includes('controlMode() === "perform" ? "control" as const : "edit" as const') && app.includes('mode: "control"'),

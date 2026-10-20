@@ -1,6 +1,5 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { TimelineEventDraft } from "../editorDrafts";
-import { confirmTimelinePlacementRemoval } from "../destructiveActions";
 import { cueIdentityCss, type CueIdentitySource } from "../identityColor";
 import {
   reconcileTimelineSceneBlockJumpTarget,
@@ -15,7 +14,6 @@ import type { TimelineCueEventSummary, TimelineTrackKind } from "../types";
 import type { SceneCueKind } from "../sceneCueKind";
 import { formatTimelineTimeInput, parseTimelineTimeInput } from "../timelineTimeInput";
 import { bankAuthorityIssueMessage, type FullBankAuthoritySnapshot } from "../bankAuthority";
-import { confirmDialog } from "../inAppDialog";
 
 export interface TimelineSceneBlockCueOption {
   id: number;
@@ -1035,17 +1033,7 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                       </button>
                       <button
                         type="button"
-                        onClick={async () => {
-                          const target = row();
-                          if (await confirmTimelinePlacementRemoval(
-                            target.id,
-                            `${target.cue_number} · ${target.cue_label}`,
-                            totalDurationMs(target),
-                            confirmDialog,
-                          )) {
-                            void props.onRemoveEvent(target);
-                          }
-                        }}
+                        onClick={() => void props.onRemoveEvent(row())}
                       >
                         Remove
                       </button>
@@ -1397,16 +1385,7 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                     </button>
                     <button
                       type="button"
-                      onClick={async () => {
-                        if (await confirmTimelinePlacementRemoval(
-                          event.id,
-                          `${event.cue_number} · ${event.cue_label}`,
-                          totalDurationMs(event),
-                          confirmDialog,
-                        )) {
-                          void props.onRemoveEvent(event);
-                        }
-                      }}
+                      onClick={() => void props.onRemoveEvent(event)}
                     >
                       Remove
                     </button>

@@ -1,8 +1,6 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import type { VideoEffectCatalogUpdate, VideoLayerSummary } from "../types";
 import type { VideoControlPanelProps } from "./VideoControlPanel";
-import { confirmDialog } from "../inAppDialog";
-import { removeLayerGroupDialog } from "../inAppDialogCopy";
 import { assignVideoGroupLayer, defaultVideoGroupMix, moveVideoGroup, patchVideoGroup, removeVideoGroup } from "../videoLayerGroups";
 import { VideoGroupInspector } from "./VideoGroupInspector";
 import "./VideoLayerGroups.css";
@@ -26,7 +24,7 @@ export function VideoLayerGroupsPanel(props: { effects: VideoControlPanelProps["
   const label = (id: number) => props.layers.find(layer => layer.id === id)?.label ?? `#${id}`;
   const remove = async (id: number) => {
     const group = groups().find(item => item.id === id);
-    if (!group || !await confirmDialog(removeLayerGroupDialog(group.label))) return;
+    if (!group) return;
     if (!props.effects.catalog.layer_groups.some(item => item.id === id)) return;
     await apply(removeVideoGroup(props.effects.catalog, id));
   };
@@ -38,7 +36,6 @@ export function VideoLayerGroupsPanel(props: { effects: VideoControlPanelProps["
     const source = groups().find(group => group.layer_ids.includes(layerId));
     const compositionBefore = composition();
     if (!compositionBefore || source?.id === groupId) return;
-    if (source?.layer_ids.length === 1 && !await confirmDialog(removeLayerGroupDialog(source.label))) return;
     // A modal may overlap an authority refresh; never apply a stale composition.
     const current = composition();
     if (!current || current.id !== compositionBefore.id) return;

@@ -10,27 +10,6 @@ import type { ConfirmDialogOptions } from "./inAppDialog";
 const undoFromMenu = "You can undo this from the Project menu or with Ctrl/Cmd+Z.";
 const undoFromHistory = "This can be undone from Project History.";
 
-export const blackoutDialog = (enabled: boolean): ConfirmDialogOptions => enabled
-  ? {
-    title: "Blackout video output?",
-    message: "Program goes black immediately.",
-    confirmLabel: "Blackout",
-    tone: "danger",
-  }
-  : {
-    title: "Recover video from blackout?",
-    message: "Program returns to the live picture immediately.",
-    confirmLabel: "Recover video",
-    tone: "danger",
-  };
-
-export const newProjectDuringShowDialog = (): ConfirmDialogOptions => ({
-  title: "Create a new project and stop this show?",
-  message: "The running show stops and the current project is replaced.",
-  confirmLabel: "Create new project",
-  tone: "danger",
-});
-
 export const discardTimelineEditsDialog = (): ConfirmDialogOptions => ({
   title: "Discard unsaved Timeline edits?",
   message: "Your unsaved changes to this Timeline are lost.",
@@ -56,13 +35,6 @@ export const installUpdateDialog = (version: string): ConfirmDialogOptions => ({
   confirmLabel: "Install",
 });
 
-export const removeFixturesDialog = (count: number, label: string): ConfirmDialogOptions => ({
-  title: count === 1 ? `Remove fixture "${label}"?` : `Remove ${count} selected fixtures?`,
-  message: undoFromMenu,
-  confirmLabel: "Remove",
-  tone: "danger",
-});
-
 export const abandonPublicationDialog = (description: string): ConfirmDialogOptions => ({
   title: `Abandon the unfinished ${description} request?`,
   message: [
@@ -80,24 +52,11 @@ export const deleteBackupDialog = (createdAt: string): ConfirmDialogOptions => (
   tone: "danger",
 });
 
-export const disarmDjLinkDialog = (): ConfirmDialogOptions => ({
-  title: "Disarm DJ Link?",
-  message: "The machine credential is removed and automatic start is disabled.",
-  confirmLabel: "Disarm",
-  tone: "danger",
-});
-
 export const rotateDjLinkTokenDialog = (): ConfirmDialogOptions => ({
   title: "Rotate the DJ Link token?",
   message: "The current token stops working. The new token is shown only once, so copy it right away.",
   confirmLabel: "Rotate token",
   tone: "danger",
-});
-
-export const returnDjControlDialog = (): ConfirmDialogOptions => ({
-  title: "Return DJ control authority?",
-  message: "The current Timeline keeps running while the Agent announces a fresh track candidate.",
-  confirmLabel: "Return control",
 });
 
 export const adoptMediaReplacementDialog = (assetId: number | string, replacementPath: string): ConfirmDialogOptions => ({
@@ -116,80 +75,4 @@ export const revokeAllExternalAccessDialog = (): ConfirmDialogOptions => ({
   message: "Every external principal is revoked and all authority grants are closed.",
   confirmLabel: "Revoke all",
   tone: "danger",
-});
-
-export const removeTimelineDialog = (label: string): ConfirmDialogOptions => ({
-  title: `Remove Timeline "${label}"?`,
-  message: undoFromHistory,
-  confirmLabel: "Remove",
-  tone: "danger",
-});
-
-export const deleteTouchPageDialog = (label: string): ConfirmDialogOptions => ({
-  title: `Delete Touch page "${label}"?`,
-  message: "The page and every control on it are removed from the Touch surface.",
-  confirmLabel: "Delete page",
-  tone: "danger",
-});
-
-export const removeTouchControlDialog = (label: string): ConfirmDialogOptions => ({
-  title: `Remove Touch control "${label}"?`,
-  message: "The control is removed from this page.",
-  confirmLabel: "Remove",
-  tone: "danger",
-});
-
-export const removeDjLinkMappingDialog = (): ConfirmDialogOptions => ({
-  title: "Remove this DJ Link mapping?",
-  message: "The track it matches no longer starts its Timeline.",
-  confirmLabel: "Remove",
-  tone: "danger",
-});
-
-export const removeClipSlotDialog = (slotId: number | string): ConfirmDialogOptions => ({
-  title: `Remove Clip Slot ${slotId}?`,
-  message: undoFromHistory,
-  confirmLabel: "Remove",
-  tone: "danger",
-});
-
-export const removeFxPresetDialog = (label: string): ConfirmDialogOptions => ({
-  title: `Remove FX preset "${label}"?`,
-  message: "The preset is removed from the catalog. Layers that already use it keep their effects.",
-  confirmLabel: "Remove",
-  tone: "danger",
-});
-
-export const removeLayerGroupDialog = (label: string): ConfirmDialogOptions => ({
-  title: `Remove layer group "${label}"?`,
-  message: "The group, its FX and transitions that require it are removed. Its layers remain in the composition.",
-  confirmLabel: "Remove",
-  tone: "danger",
-});
-
-export const removeFxStageDialog = (label: string): ConfirmDialogOptions => ({
-  title: `Remove FX "${label}"?`,
-  message: "The effect and its settings are removed from the chain.",
-  confirmLabel: "Remove",
-  tone: "danger",
-});
-
-export const removeFxChainDialog = (scopeLabel: string): ConfirmDialogOptions => ({
-  title: `Remove the ${scopeLabel} effect chain?`,
-  message: "Every effect in the chain and its settings are removed.",
-  confirmLabel: "Remove chain",
-  tone: "danger",
-});
-
-export const removeTransitionBusDialog = (label: string): ConfirmDialogOptions => ({
-  title: `Remove transition bus "${label}"?`,
-  message: "The bus and its Bus FX chain are removed.",
-  confirmLabel: "Remove",
-  tone: "danger",
-});
-
-export const addEffectToLiveLayerDialog = (layerTarget: string, effectLabel: string): ConfirmDialogOptions => ({
-  title: `Add effect to Layer ${layerTarget}?`,
-  message: [effectLabel, "LIVE: this changes Program right away."],
-  confirmLabel: "Add effect",
 });

@@ -124,6 +124,7 @@ fn isf_layer_images_propagate_dependency_stage_faults() {
     let mut renderer = image_binding_renderer();
     let clip_runtime = VideoClipRuntimeSnapshot::default();
     let context = VideoEffectRenderContext {
+        audio_frame: None,
         clip_runtime: &clip_runtime,
         project_render_epoch: 32,
     };
@@ -232,6 +233,7 @@ fn isf_scope_layer_images_match_preview_output_and_keep_thumbnails_layer_only() 
         ));
         let clip_runtime = VideoClipRuntimeSnapshot::default();
         let context = VideoEffectRenderContext {
+            audio_frame: None,
             clip_runtime: &clip_runtime,
             project_render_epoch: 32,
         };
@@ -371,4 +373,88 @@ fn isf_scope_image_dependencies_only_include_active_visible_layer_buses() {
     .unwrap();
     assert!(order.is_empty());
     assert!(sampled.is_empty());
+}
+
+#[test]
+fn isf_follow_audio_request_is_explicit_and_silence_does_not_inherit_previous_render() {
+    const SOURCE: &str = r#"/*{"INPUTS":[
+      {"NAME":"audioWave","TYPE":"audio","MAX":2},
+      {"NAME":"audioSpectrum","TYPE":"audioFFT","MAX":2}
+    ]}*/
+    void main() {
+      gl_FragColor = vec4(
+        IMG_NORM_PIXEL(audioWave, vec2(0.0, 0.5)).r,
+        IMG_NORM_PIXEL(audioSpectrum, vec2(0.0, 0.5)).r,
+        DATE.w / 1024.0, 1.0);
+    }"#;
+    let prepared = prepare_isf_shader(SOURCE).unwrap();
+    let effect = isf_effect_from_prepared("T32b Follow audio".into(), SOURCE, None, &prepared);
+    let source_timeline_id = TimelineId(732);
+    let chain = resolved_chain_from_canonical(&c1_chain(
+        732,
+        VideoEffectScope::Transition {
+            owner: VideoTransitionEffectOwner::TimelineFollow { source_timeline_id },
+        },
+        false,
+        vec![effect],
+    ))
+    .unwrap();
+    let outgoing = VideoFrame {
+        layer_id: 1,
+        width: 1,
+        height: 1,
+        pts_ms: 0,
+        duration_ms: 16,
+        format: VideoPixelFormat::Rgba8,
+        data: vec![255, 0, 0, 255],
+    };
+    let incoming = VideoFrame {
+        layer_id: 2,
+        data: vec![0, 0, 255, 255],
+        ..outgoing.clone()
+    };
+    let audio = protocol::LiveAudioTextureFrame {
+        generation: 1,
+        feature_sequence: 1,
+        sample_rate: 48_000,
+        waveform: [-0.5; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+        fft: [0.75; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+    };
+    let mut renderer = VideoPreviewRenderer::with_frame_provider(
+        VideoRuntimeConfig::default(),
+        C1SolidFrameProvider::default(),
+    );
+    renderer.set_isf_date_override(Some([2026.0, 10.0, 20.0, 512.0]));
+    let render = |renderer: &mut VideoPreviewRenderer<C1SolidFrameProvider>, audio_frame| {
+        renderer
+            .render_follow_output_transition_rgba8(VideoFollowOutputTransitionRequest {
+                outgoing: &outgoing,
+                incoming: &incoming,
+                kind: protocol::VideoClipTakeKind::Custom,
+                curve: VideoLayerTransitionCurve::Linear,
+                progress_millis: 500,
+                source_timeline_id,
+                transition_chain: Some(&chain),
+                last_valid: None,
+                audio_frame,
+            })
+            .unwrap()
+    };
+    let live = render(&mut renderer, Some(&audio));
+    assert_eq!(live.evidence.freshness, VideoOutputRenderFreshness::Fresh);
+    assert_eq!(live.frame.data, [64, 191, 128, 255]);
+    let silent = render(&mut renderer, None);
+    assert_eq!(silent.evidence.freshness, VideoOutputRenderFreshness::Fresh);
+    assert_eq!(silent.frame.data, [128, 0, 128, 255]);
+    assert_eq!(
+        render(&mut renderer, Some(&audio)).frame.data,
+        live.frame.data
+    );
+    let mut invalid = audio.clone();
+    invalid.feature_sequence = 2;
+    invalid.waveform[0] = f32::NAN;
+    assert_eq!(
+        render(&mut renderer, Some(&invalid)).frame.data,
+        silent.frame.data
+    );
 }

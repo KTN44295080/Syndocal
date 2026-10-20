@@ -5,8 +5,6 @@ import type {
   VideoEffectPresetId,
   VideoEffectScope,
 } from "../types";
-import { confirmDialog } from "../inAppDialog";
-import { removeFxChainDialog, removeFxStageDialog } from "../inAppDialogCopy";
 
 interface VideoEffectScopePanelProps {
   scopeLabel: string;
@@ -106,7 +104,7 @@ export function VideoEffectScopePanel(props: VideoEffectScopePanelProps) {
   const removeStage = async (stageId: number) => {
     const before = chain();
     const stage = before?.stages.find((entry) => entry.id === stageId);
-    if (!before || !stage || !await confirmDialog(removeFxStageDialog(stage.label))) return;
+    if (!before || !stage) return;
     // The question is modal, but re-read the chain: it is the authority for what is removed.
     const current = chain();
     if (!current || !current.stages.some((entry) => entry.id === stageId)) return;
@@ -222,7 +220,7 @@ export function VideoEffectScopePanel(props: VideoEffectScopePanelProps) {
             <button
               class="danger"
               disabled={props.busy}
-              onClick={async () => { if (await confirmDialog(removeFxChainDialog(props.scopeLabel))) void props.onRemoveChain(props.scope); }}
+              onClick={() => void props.onRemoveChain(props.scope)}
             >
               Remove chain
             </button>

@@ -311,9 +311,6 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
             }}
             onSetControl={(name, value) => props.onSetControl(props.layerId, selectedStageIndex(), name, value)}
             onTriggerEvent={(name) => props.onTriggerEvent(props.layerId, selectedStageIndex(), name)} />
-          <Show when={stage().controls.length === 0}>
-            <p class="emptyHint">This shader has no operator controls.</p>
-          </Show>
         </div>
       )}
     </Show>

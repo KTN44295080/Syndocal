@@ -229,6 +229,7 @@ fn live_video_monitor_benchmark_raw_vs_jpeg_two_real_outputs() {
                         black_box(&snapshot),
                         video::VideoEffectRenderContext {
                             clip_runtime: &runtime,
+                            audio_frame: None,
                             project_render_epoch: 1,
                         },
                         &transitions,

@@ -1,4 +1,4 @@
-# ISF support matrix — T23 / T32 — 2026-10-20
+# ISF support matrix — T23 / T27 / T32 — 2026-10-20
 
 ## Scope and conclusion
 
@@ -6,7 +6,11 @@ This audit covers the ISF filter path in `crates/video`, its native import/valid
 
 T23 adds ordered multi-pass rendering, named targets, persistent feedback, RGBA32Float targets, bounded per-frame dimension expressions, and shader-relative PNG/JPEG imports. Point2D, color and event controls already existed; their actual rendered output is now covered by small fixtures. Image helpers now use each sampled texture's dimensions.
 
-T32 extends this baseline on branch `task32-isf-date-images` in `wt-task32`, based on `7fe67b00`. T23 evidence below is historical; T32 validation is recorded separately at the end of this document. No application, native harness, release build, push or merge is part of the T32 worktree evidence.
+The historical T23 work was isolated to branch `task23-isf` in `wt-task23`, based on `036a268c01e7a6dcf8b41830e99e4593f2922817`.
+
+T27 adds bounded mono `audio` / `audioFFT` textures using the live input selected in Setup. Its original work was isolated to `task27-audio-mapping` in `wt-task27`, based on `e1d72e2306620d9c64454abf426ded50c1261f4d`. The audio contract supersedes T23's unsupported-audio finding. See [T27 acceptance](T27_AUDIO_CONTROL_ISF_ACCEPTANCE_2026-10-20.md) and [T27 main integration](T27B_MAIN_INTEGRATION_2026-10-20.md) for mapping safety and the remaining native acceptance boundary.
+
+T32 adds DATE, zero-image generators and named image bindings on `task32-isf-date-images` in `wt-task32`, originally based on `7fe67b00`. T32b integrates main `cbae80d3` into accepted T32 `27dbf145` on that task branch. The current contracts below include both image and audio inputs. Original T23, T27 and T32 validation counts are historical; combined T32b evidence is recorded separately at the end. No application, native harness, release build, push or merge into main is part of the T32b worktree validation.
 
 ### Official comparison sources
 
@@ -35,15 +39,15 @@ Sources were inspected on 2026-10-19/20 UTC. The status column describes the res
 | IMPORTED path forms | Partially supported | Accepts child paths using either separator. Absolute paths, URLs, parent traversal, alternate streams and canonical paths escaping the shader folder are rejected. The ISF reference permits parent-relative paths; this host intentionally requires resources to remain in the shader folder. | S1; `isf_resources.rs:465`; path rejection tests. |
 | Resource identity and reload | Partially supported | Prepared-cache identity includes source text and source path, so identical shaders in different pack directories load their own images. GPU history fingerprints include decoded image contents. Existing cached assets are not watched for file changes; a source/path change or a fresh renderer/reload is needed to guarantee re-decoding. Imported bytes are not embedded into project files. | `lib.rs:6311`; `isf_runtime.rs:506`; distinct-pack cache test at `isf_completeness_tests.rs:207`. |
 
-All short Rust paths in this document are relative to `crates/video/src/` unless an `app/` prefix is present. T23 line references are historical baseline locations; the T32 section names current source files and regression entry points.
+All short Rust paths in this document are relative to `crates/video/src/` unless an `app/` prefix is present. T23 line references are historical baseline locations; the T27/T32/T32b sections name current source files and regression entry points.
 
 ### Resource bounds
 
-- Maximum 16 passes, 16 total sampled textures (dynamic images plus targets/imports), four dynamic image declarations and 16 scalar/vector controls. Additional layer dependencies are limited to 32 links (33 layers).
+- Maximum 16 passes, 16 total sampled textures (declared image slots, audio inputs, named targets and metadata imports), four image declarations and 16 scalar/vector controls. A bound still occupies its declared image slot. Additional layer dependencies are limited to 32 links (33 layers).
 - Dimension expressions: at most 1,024 ASCII bytes, 256 AST nodes and 32 nested parse levels.
 - Imported images: at most 15, at most 16 MiB per encoded file, at most 8,192 pixels per axis, and at most 64 MiB of combined decoded RGBA per prepared shader. The total-texture limit can reduce the available import count.
-- Metadata imports and bound stills share the decoded-byte and import-count limits. The prepared-shader cache and pipeline cache each retain at most 64 entries. Pipeline identity includes WGSL hash, target format and texture count. Persistent/import GPU instance resources are retained in a 64-entry LRU pool.
-- Stage-owned texture accounting is capped at 256 MiB per stage: both target textures, imports, additional dynamic images and every separately allocated unnamed intermediate. The 512 MiB global limit additionally covers the shared host upload/ping/pong textures and padded readback across the resource pool and current encoder. Anonymous allocations accumulate until submission completes; a cache hit recalculates their cost for the current host size. Driver overhead and small pipeline/uniform allocations are outside this texture/readback estimate.
+- Metadata imports and bound stills share the decoded-byte and import-count limits. The prepared-shader cache and pipeline cache each retain at most 64 entries. Pipeline identity includes WGSL hash, target format and texture count. Persistent/import/bound-still/audio GPU instance resources are retained in a 64-entry LRU pool.
+- Stage-owned texture accounting is capped at 256 MiB per stage: both target textures, imports, bound stills, audio textures, additional dynamic images, transparent defaults and every separately allocated unnamed intermediate. The 512 MiB global limit additionally covers the shared host upload/ping/pong textures and padded readback across the resource pool and current encoder. Anonymous allocations accumulate until submission completes; a cache hit recalculates their cost for the current host size. Driver overhead and small pipeline/uniform allocations are outside this texture/readback estimate.
 - LRU eviction, a failed stage that loses its resource state, changed target dimensions, changed shader/resource fingerprint, a new renderer, or a new project namespace can reset feedback. A failed submitted stack cannot publish new history. This is bounded live-renderer state, not project-persisted feedback.
 
 The main checks and allocation ownership are in `isf_pass_runtime.rs:128`, `:163`, `:430`, and `:464`. Resource decode bounds are in `isf_resources.rs:9` and `:465`.
@@ -61,14 +65,18 @@ ISF defines nine input kinds (S1). T32 accepts zero through four dynamic image d
 | `point2D` | Supported | Two components, default and overridden coordinates. This was already implemented; T23 adds a rendered fixture. | `isf_completeness_tests.rs:251`; `point2d.fs`. |
 | `color` | Supported | Four components including alpha, with existing defaults/ranges. This was already implemented; T23 pins all four rendered channels. | `isf_completeness_tests.rs:270`; `color.fs`. |
 | `event` | Partially supported | Existing host pulse value is shared by all passes and stops affecting pixels once the host resets it. The renderer does not consume/reset the event itself after exactly one frame; existing host pulse timing is preserved. Preview audition keeps its existing event restrictions. | `isf_completeness_tests.rs:283`; `event.fs`; FX audition/UX checks. |
-| `audio` | Unsupported | Clear prepare-time rejection with a suggestion to drive ordinary controls through Syndocal Audio FFT nodes. No placeholder waveform texture. | `isf_runtime.rs:506`; `app/src/fxRejectionExplanation.ts:53`; bilingual rejection fixture. |
-| `audioFFT` | Unsupported | Same explicit rejection. Existing reactive-band values are not exposed as though they were ISF's channel/sample texture contract. | Same runtime/UI evidence; audio data-flow assessment below. |
+| `audio` | Partially supported, T27 | One channel row from the selected live-input mix. Default width 512; integer MAX from 1 to 512. Signed waveform samples map to grayscale around 0.5, with alpha 1. Smaller widths use linear resampling. MAX=1 uses RMS of the published 512-sample window, mapped to 0.5–1; this is an explicit host policy, not a prescribed RMS formula in S1. RGBA8 precision. | S1; `isf_runtime.rs`; `isf_pass_runtime.rs`; `isf_audio_tests.rs`; `audio.fs`. |
+| `audioFFT` | Partially supported, T27 | One channel row of normalized FFT magnitudes on a linear frequency axis. Default width 512; integer MAX 1–512. Smaller widths preserve the peak in each bin group. Uses the analyzer's existing FFT, with no second transform. RGBA8 precision; no stereo rows, custom FFT size or arbitrary texture widths. | Same fixture and tests; `crates/audio/src/live_features.rs`. |
 
-### Why audio textures remain unsupported
+### T27 publication, ownership and cost
 
-The existing live publication exposes an `AudioSpectrumPoint`, up to 16 reactive bands, level/onset/beat features and generation/sequence identifiers. Its protocol structures contain no per-channel waveform or full FFT texture payload: `crates/protocol/src/lib.rs:358`, `:369`, `:420`.
+The analyzer publishes two fixed 512-element float arrays: waveform and FFT. The sample payload is 4 KiB plus generation, sequence and sample-rate metadata, shared by Arc with engine/render consumers. It is excluded from project JSON and UI snapshot serialization. The recording worker carries the same 4 KiB in its bounded binary request, with generation, sequence, sample rate and captured DATE in the request header. The combined SRF1 envelope stores audio before injected image bytes. Older headers without DATE use the deterministic epoch fallback, and headers without audio select silence. Program, live Preview, display, Spout, NDI and recording contexts capture the publication; ordinary thumbnails explicitly select silence.
 
-Native publication converts analyzer output into those reactive features in `app/src-tauri/src/main.rs:48376` and `:48416`. The video effect context at `lib.rs:188` carries clip runtime and project epoch, not an audio texture feed. ISF's audio contract has channel rows and sample/FFT columns (S1). A faithful implementation therefore needs a new publication and renderer ownership path with explicit generation, channel and lifetime semantics. There is no clean existing texture hook in these inspected seams. T23 preserves the explicit unsupported result and the existing Audio FFT control alternative.
+Each renderer retains only a changed generation/sequence. Each ISF instance allocates one width-by-one RGBA8 texture per declared audio input and uploads only a new publication or a transition to silence. Waveform silence is byte 128 (the nearest 8-bit representation of 0.5); FFT silence is zero. Stop, stale input, generation retirement, project replacement and invalid samples clear the publication. Reusing a static decoded image still evaluates its ISF stages, so audio changes do not depend on a media PTS change.
+
+At width 512 each input costs 2 KiB of texture storage. Audio inputs count toward the existing 16 sampled-texture limit and the 256 MiB per-stage / 512 MiB pool accounting. No capture thread, extra FFT or unbounded waveform queue is introduced. The runtime uses the existing GPU ISF stage and readback boundary, including when a CPU compositor consumes its result. There is **no pure CPU ISF evaluator**: an unavailable adapter retains the existing explicit effect failure behavior. C1 compositor eligibility, mapping, pacing and marked last-valid fallback remain in place.
+
+The original five-test T27 suite includes three actual GPU pixel tests without an adapter-skip branch and two metadata tests, covering: initial silence; new and duplicate identities; generation replacement; stop/invalid-frame clearing; width 2 endpoint/FFT-peak resampling; width 1 RMS; invalid MAX values; and texture-count bounds. These are bounded-host acceptance tests, not full ISF conformance or real-device acceptance.
 
 ## T32 image binding and generator behavior
 
@@ -78,7 +86,7 @@ A sampled layer is its current Clip/transition/Layer-FX result before group/comp
 
 A zero-image generator runs as an ordinary layer effect that ignores the incoming frame. Its RENDERSIZE comes from the actual host frame supplied at that effect scope (or a declared pass size); output/Preview requests use their requested host dimensions. This work does not add a new native ISF source kind: use an existing generator/source layer as its host. Imported stills retain the T23 shader-folder containment and decode limits; projects store relative paths, not embedded image bytes. Assets are not watched continuously for content changes.
 
-Layer bindings are resolved on snapshot-backed output, Preview and layer-thumbnail paths. Scheduling follows the actual composition/output scope; groups must be enabled and visible, and LayerBus dependencies are included only for active runtime buses with visible members. A shared layer does not pull in unrelated compositions. Thumbnails resolve layer/clip dependencies only. The older keyed-input mix API has no authored layer-output context and gives a specific unavailable-context error. Timeline Follow layer bindings are rejected at authored/engine-ready admission because its standalone combine API has no unambiguous layer context. None and imported stills remain usable in those APIs. Custom vertex stages stay explicitly rejected: the fixed fullscreen vertex path has no custom varying or vertex-init contract, and adding one would exceed this bounded fragment-host change. ISF audio/audioFFT work is owned by T27 and is unchanged here.
+Layer bindings are resolved on snapshot-backed output, Preview and layer-thumbnail paths. Scheduling follows the actual composition/output scope; groups must be enabled and visible, and LayerBus dependencies are included only for active runtime buses with visible members. A shared layer does not pull in unrelated compositions. Thumbnails resolve layer/clip dependencies only. The older keyed-input mix API has no authored layer-output context and gives a specific unavailable-context error. Timeline Follow layer bindings are rejected at authored/engine-ready admission because its standalone combine API has no unambiguous layer context. None and imported stills remain usable in those APIs. Custom vertex stages stay explicitly rejected: the fixed fullscreen vertex path has no custom varying or vertex-init contract, and adding one would exceed this bounded fragment-host change. The integrated runtime also supplies T27 audio/audioFFT textures; audio and image inputs share the sampled-texture and memory limits above.
 
 ## Sampling helpers and standard variables
 
@@ -108,7 +116,7 @@ Layer bindings are resolved on snapshot-backed output, Preview and layer-thumbna
 | JSON `ISFVSN` | Partially supported | v2-shaped metadata is consumed, but ISFVSN is not negotiated or validated. Missing/other version tags do not select a different language/runtime. | S1/S6; metadata parsing at `isf_runtime.rs:506`. |
 | CPU/GPU parity and output pacing | Preserved | The existing C1 artistic eligibility, compositor parity, output mapping, last-valid evidence and pacing logic are not redesigned. Passes stay on the GPU until the existing readback boundary. No native frame-rate claim is made. | 26 C1/parity regression tests; changes centered at `lib.rs:6311` and `:6360`. |
 | Preview audition and thumbnails | Preserved, histories isolated | Strong scope/stage/input identity plus output/preview/project namespace prevents feedback from crossing instances. Legacy Preview/output and thumbnail entry points also select explicit namespaces. Existing audition commit/reset restrictions remain. Complex frontend thumbnails keep their existing fallback behavior. | `lib.rs:4565`, `:4685`, `:6404`; `layer_thumbnail_render.rs:29`; two renderer integration regressions and FX audition/UX checks. |
-| Rejection explanations | Updated, EN/JA | Removes obsolete “single-pass only” / “external images unsupported” guidance. Distinguishes pass sizes, flags/target configuration, FLOAT adapter support, vertex companions and image resource errors; preserves raw diagnostic text. | `app/src/fxRejectionExplanation.ts:65`; 20 new dictionary pairs in `app/src/uiLocalization.ts:28`; 24 bilingual catalog cases. |
+| Rejection explanations | Updated, EN/JA | Covers image bindings, DATE, audio MAX and the shared texture limit alongside pass/format/import errors. Removes obsolete unsupported-image/audio guidance and preserves raw diagnostic text. | `app/src/fxRejectionExplanation.ts`; `app/src/uiLocalization.ts`; 38 bilingual catalog cases and the T32b browser gate. |
 
 ## Rendered fixtures and regression evidence
 
@@ -116,6 +124,7 @@ Fixture directory: `crates/video/src/isf_fixtures/`. Image assets are generated 
 
 | Fixture / regression | Known result or invariant |
 | --- | --- |
+| `audio.fs` (T27) | Silent waveform/FFT gives [128,0,255,255]; waveform -0.5 / FFT 0.75 gives [64,191,255,255]. The original five tests check lifecycle, publication identity, MAX bounds and resampling; T32b adds combined image/audio coverage below. |
 | `multipass.fs` | An 8×4 host with a half-size target yields RGBA [128,128,255,255], checking current pass size, actual IMG_SIZE, target sampling and PASSINDEX. |
 | `persistent.fs` | Red advances 1,2,3 across frames. A different preview/stage/input/project namespace starts at 1. Changed target dimensions start at 1. Nonpersistent form stays at 1. |
 | `float.fs` | Stores 2049, -2 and 2 in a FLOAT target; final RGBA [255,128,128,255] distinguishes full 32-bit storage from half precision and proves unclamped intermediates. |
@@ -129,7 +138,9 @@ Fixture directory: `crates/video/src/isf_fixtures/`. Image assets are generated 
 | Fixed pass dimensions / host resize | Host 16→8→16 with fixed 16×16 targets preserves red history 1→2→3 and recalculates transient bytes 0→1024→0. |
 | Public renderer isolation | Composition/output scopes, Preview/output namespaces, legacy output/Preview/thumbnails and epoch changes are exercised through public render methods. |
 
-## T23 baseline validation and review
+## Historical T23 validation and review
+
+The following counts and ports are the recorded T23 checkpoint. Original T27 evidence is in the linked acceptance note; T32 and T32b evidence have separate sections below.
 
 The final Rust acceptance runs used the debug profile through `pcargo-here.cmd`, with the worktree as CWD and **CARGO_TARGET_DIR removed**, following the corrected handoff. Earlier shared-target output is not acceptance evidence.
 
@@ -148,7 +159,7 @@ An independent read-only agent reviewed supplied scheduler and renderer identity
 
 No `syndocal.exe`, native/real-app harness, release build, push or merge was run. Live output pacing, physical display/Spout delivery, native file-dialog interaction, real-world pack benchmarking and complete ISF conformance are outside this validation.
 
-## T32 rendered fixtures and validation
+## Historical T32 rendered fixtures and validation
 
 T32 adds these deterministic checks on top of the historical T23 baseline:
 
@@ -184,3 +195,56 @@ Independent read-only reviews covered low-level GPU resource ownership, binding 
 - All seven final Rust commands above completed with **zero warnings**. Changed Rust files use UTF-8 without BOM and LF. New files and owned hunks were formatted; final staged `git diff --check` passed.
 
 The native tests ran only the filtered Rust test runner. No Syndocal application session, native/real-app harness, native-gate, build-nobundle, release build, push or merge was run. Physical output/Spout, live pacing and native file-dialog acceptance remain outside this worktree's validation.
+
+## T32b integration and validation
+
+T32b integrates the handoff's main commit `cbae80d3` (T27 and T34) into accepted T32 `27dbf145` on `task32-isf-date-images`. The seven conflicts retain DATE, zero-image generators and named image bindings together with live waveform/FFT textures, silence clearing and the recording audio payload.
+
+- Image slots, audio inputs, named targets and metadata imports share the 16 sampled-texture limit. Both branches' allocations remain within the same 256 MiB stage and 512 MiB aggregate accounting, including bound stills and transient image uploads.
+- The recording SRF1 request carries captured DATE in its header, optional waveform/FFT bytes before injected image bytes, and both historical defaults. Waveform/FFT sample arrays remain outside project and request JSON; the request header carries their publication metadata.
+- Follow requests now explicitly carry the current optional audio publication. Both native callers forward the same publication used for their two side renders; None clears audio before the Follow chain. DATE and image-frame isolation remain intact.
+- The image-input editor and Audio assignment behavior coexist. Audio MAX and the shared texture limit have accurate EN/JA explanations; browser fixtures no longer describe audio as unsupported. The duplicated parent no-controls hint is removed. T34's tested immediate removal/live-action behavior is preserved.
+
+### Combined regressions
+
+| Regression | Verified invariant |
+| --- | --- |
+| `isf_audio_combines_named_images_date_and_multipass_without_stale_uploads` | One shader uses an authored Layer 2 image binding, waveform, FFT, fixed DATE and a named two-pass target. Live pixels are `[128,64,191,128]`; changing only the image under the same audio identity yields `[48,64,191,128]`; stopping audio yields `[48,128,0,128]`. Missing required images fail, then a genuinely unbound image renders transparently. The same runtime also renders an audio-only generator. |
+| `isf_audio_counts_against_shared_texture_budget_and_accepts_generators` | Four images plus twelve audio inputs are accepted; four images plus thirteen audio inputs are rejected. Zero-image audio generators are accepted. |
+| `isf_follow_audio_request_is_explicit_and_silence_does_not_inherit_previous_render` | Fixed DATE stays visible while a Follow shader changes from live `[64,191,128,255]` to explicit silence `[128,0,128,255]`, back to the same publication, and then to silence for invalid audio. |
+| `render_request_keeps_external_frame_bytes_binary` | DATE, audio and RGBA round-trip in one real SRF1 envelope. Pre-DATE, pre-audio and both-missing headers retain their intended defaults and binary frames. Outer/nested unknown fields, truncated or nonfinite audio, an audio-header/body mismatch and an oversized request length are rejected. |
+
+### Required debug gates
+
+All Cargo commands used `pcargo-here.cmd` from this worktree, with `CARGO_TARGET_DIR` removed, the pinned MSVC 14.44.35207 linker, worktree-local TEMP/TMP and existing FFmpeg DLLs. `check --workspace --all-targets` passed with zero warnings. Every test command below also completed with zero warnings.
+
+| Test command passed to the wrapper | Passed | Failed | Ignored |
+| --- | ---: | ---: | ---: |
+| `test -p video isf -- --test-threads=1 --nocapture` | 66 | 0 | 0 |
+| `test -p video c1_ -- --test-threads=1` | 27 | 0 | 0 |
+| `test -p protocol -- --test-threads=1` | 307 | 0 | 0 |
+| `test -p engine isf -- --test-threads=1` | 21 | 0 | 0 |
+| `test -p engine audio_control -- --test-threads=1` | 7 | 0 | 0 |
+| `test -p syndocal --bin syndocal -- --test-threads=4` | 2209 | 0 | 23 |
+| `test -p io --lib -- --test-threads=1` | 255 | 0 | 4 |
+
+The protocol total comprises 295 unit tests, 8 integration tests and 4 doctests. All 66 selected video ISF tests ran without ignored cases, including the new mixed GPU and Follow regressions; the FLOAT test reported `FLOAT32_FILTERABLE=true`.
+
+### Frontend and browser gates
+
+| Gate | Result |
+| --- | --- |
+| `check-ai0-source-coverage.mjs` | Passed: Tauri 588, Engine 286, Remote 116, MIDI/OSC/DMX 240, Frontend 508, Keyboard 33, UI literal invokes 348 and 6 authority gates. |
+| `check-fx-catalog.mjs` | Passed: 14 built-ins and 38 bilingual rejection fixtures, including the combined texture budget and current audio MAX guidance. |
+| `check-fx-parameters.mjs` | Passed. |
+| `check-audio-control-mapping.mjs` | Passed: 19 checks. |
+| `check-destructive-actions.mjs` | Passed; T34 confirmation removals remain effective. |
+| `check-localization.mjs` | Passed: 4148/4148 static Japanese labels, zero unprotected user-data labels. |
+| `pnpm exec tsc --noEmit` | Passed. |
+| `check-fx-ux-browser.mjs` | Passed on Vite 5480 / CDP 9480: existing FX flows plus image bindings, generators, current audio rejection, EN/JA and two themes. |
+
+Validation logs and the command-result manifests are under `target/t32b-validation/`. Seventeen browser screenshots are under `target/qa/t32b-fx-ux/`; the English image-input editor and Japanese audio-MAX rejection screenshots were also inspected visually. These ignored artifacts remain local worktree evidence.
+
+Independent read-only reviews covered GPU binding order and resource ownership, audio identity/silence, DATE and native context propagation, recording compatibility and bounds, image UI and T34 behavior. No blocking finding remains in those reviewed areas. The all-targets check also exposed missing cross-branch fields in old test fixtures; their explicit silent audio contexts and image-binding projections were updated before the passing gates above. New or changed test functions were formatted independently; no module/import reorder was applied to unrelated code.
+
+Ignored counts are the top-level runner statuses. Some native subprocess helpers are registered as ignored for direct discovery and are exercised by parent tests. Optional device/environment cases were not enabled. No product application session, native/real-app harness, release build, push or merge into main was run. Physical output, live device behavior and native file-dialog acceptance remain outside this validation. Main independently advanced to `7d15227d` (T33) after this merge began; this evidence is for the handoff-selected `cbae80d3` integration.

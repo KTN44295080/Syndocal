@@ -18,32 +18,59 @@ const name = '.assign-menu-proof-' + process.pid + '.tsx';
 const fixture = resolve(root, name);
 const artifacts = resolve(process.env.SYNDOCAL_ASSIGN_MENU_ARTIFACT_DIR ?? resolve(root, '../target/qa/assign-menu'));
 await mkdir(artifacts, { recursive: true });
-let server, browser;
+let server, browser, page;
 try {
   await writeFile(fixture, `
 import { createSignal } from 'solid-js';
 import { render } from 'solid-js/web';
 import { ControlAssignMenu } from '/src/components/ControlAssignMenu';
+import { VideoGroupInspector } from '/src/components/VideoGroupInspector';
+import { installControlLearnCapture } from '/src/createControlLearnCapture';
+import { controlMappingTargetsFromElement, controlMappingTargetsForMode } from '/src/controlMappingLearn';
+import { audioTargetIsEligible } from '/src/audioControlMapping';
+import { installUiLocalization } from '/src/uiLocalization';
 import '/src/theme.css';
 import '/src/styles.css';
 const calls = [];
 window.proof = { calls, windowEscapes: 0 };
 window.addEventListener('keydown', (event) => { if (event.key === 'Escape') window.proof.windowEscapes++; });
 const query = new URLSearchParams(location.search);
-const [state, setState] = createSignal({ x: Number(query.get('x') ?? 300), y: Number(query.get('y') ?? 200), eligible: true, assignments: [
+const [state, setState] = createSignal({ x: Number(query.get('x') ?? 300), y: Number(query.get('y') ?? 200), label: 'Layer 1 clip 2', eligible: true, audioEligible: false, audioTrigger: false, assignments: [
   { mapping: { id: 'cc' }, kind: 'MIDI', detail: 'CC 21 · ch 3', beat: false },
   { mapping: { id: 'beat' }, kind: 'Beat division', detail: '1 bar', beat: true },
 ] });
 window.proof.set = (next) => setState({ ...state(), ...next });
-render(() => <div style="min-height:100vh"><button id="outside" type="button">Outside</button><ControlAssignMenu x={state().x} y={state().y} label="Layer 1 clip 2" beatEligible={state().eligible} assignments={state().assignments}
-  onLearn={() => calls.push('learn')} onBeat={(division) => calls.push('beat:' + division)} onRemove={(assignment) => calls.push('remove:' + assignment.mapping.id)} onDismiss={() => calls.push('dismiss')} /></div>, document.body);
+const group = { id: 57, label: 'Group 57', composition_id: 1, layer_ids: [], enabled: true,
+  opacity: 0.75, blend_mode: 'Normal', solo: false, bypassed: false, transform: null };
+const effects = { catalog: { effect_chains: [], effect_presets: [], layer_groups: [group], transition_buses: [] },
+  compositions: [], outputs: [], busy: false, onApplyCatalog: () => calls.push('ordinary-group-edit'),
+  onImportIsf: () => {}, onApplyPreset: () => {}, onRemoveChain: () => {} };
+window.proof.groupMenu = () => {
+  const targets = controlMappingTargetsFromElement(document.querySelector('[data-video-group-opacity="57"]'));
+  setState({ ...state(), label: targets[0].label, eligible: false,
+    audioEligible: targets.length > 0 && targets.every(audioTargetIsEligible), audioTrigger: false, assignments: [] });
+  return targets;
+};
+let groupMode = null, groupBusy = false;
+window.proof.groupMode = value => { groupMode = value; };
+installControlLearnCapture({
+  mode: () => groupMode, busy: () => groupBusy, setBusy: value => { groupBusy = value; },
+  targets: element => controlMappingTargetsForMode(groupMode ?? 'midi', controlMappingTargetsFromElement(element)),
+  select: () => {}, message: message => calls.push({ message }),
+  learn: async (mode, targets) => { calls.push({ groupLearn: mode, targets }); },
+});
+render(() => <div style="min-height:100vh"><button id="outside" type="button">Outside</button><VideoGroupInspector group={group} effects={effects} /><ControlAssignMenu x={state().x} y={state().y} label={state().label} beatEligible={state().eligible} audioEligible={state().audioEligible} audioTrigger={state().audioTrigger} assignments={state().assignments}
+  onAudio={(settings) => calls.push({ audio: settings })} onLearn={() => calls.push('learn')} onBeat={(division) => calls.push('beat:' + division)} onRemove={(assignment) => calls.push('remove:' + assignment.mapping.id)} onDismiss={() => calls.push('dismiss')} /></div>, document.body);
+let locale = 'en';
+const localization = installUiLocalization(document.body, () => locale);
+window.proof.locale = (value) => { locale = value; localization.refresh(); };
 `);
   const reservation = createTcpServer();
-  await new Promise((done, reject) => { reservation.once('error', reject); reservation.listen(0, '127.0.0.1', done); });
+  await new Promise((done, reject) => { reservation.once('error', reject); reservation.listen(Number(process.env.SYNDOCAL_VITE_PORT ?? 0), '127.0.0.1', done); });
   const reservedPort = reservation.address().port;
   await new Promise((done, reject) => reservation.close((error) => error ? reject(error) : done()));
   server = await createServer({
-    root, server: { host: '127.0.0.1', port: reservedPort, strictPort: true }, logLevel: 'error',
+    root, optimizeDeps: { entries: [fixture] }, server: { host: '127.0.0.1', port: reservedPort, strictPort: true }, logLevel: 'error',
     plugins: [{ name: 'assign-menu-proof', configureServer(s) { s.middlewares.use((request, response, next) => {
       if (!request.url?.startsWith('/assign-proof')) return next();
       response.setHeader('Content-Type', 'text/html');
@@ -53,8 +80,8 @@ render(() => <div style="min-height:100vh"><button id="outside" type="button">Ou
   await server.listen();
   const port = server.httpServer.address().port;
   const executablePath = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
-  browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
-  const page = await browser.newPage();
+  browser = await chromium.launch({ headless: true, args: process.env.SYNDOCAL_CDP_PORT ? ['--remote-debugging-port=' + process.env.SYNDOCAL_CDP_PORT] : [], ...(executablePath ? { executablePath } : {}) });
+  page = await browser.newPage();
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
   page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
@@ -109,6 +136,41 @@ render(() => <div style="min-height:100vh"><button id="outside" type="button">Ou
     assert.ok((await menu.innerText()).includes('Beat divisions fire triggers only'));
     await page.evaluate(() => window.proof.set({ eligible: true }));
     await page.screenshot({ path: resolve(artifacts, 'assign-menu-' + width + '.png') });
+    // Audio form: bounded settings, native field keys, inner scrolling, EN/JA.
+    await page.evaluate(() => window.proof.set({ eligible: false, audioEligible: true }));
+    await menu.locator('[data-control-assign-audio]').click();
+    await menu.getByLabel('Audio source', { exact: true }).selectOption('Low');
+    const gain = menu.getByLabel('Audio gain', { exact: true });
+    await gain.fill('2');
+    await gain.focus();
+    await page.keyboard.press('ArrowUp');
+    assert.equal(await gain.evaluate(element => document.activeElement === element), true, 'field arrows do not navigate menu');
+    await gain.fill('2');
+    await menu.getByLabel('Attack (ms)', { exact: true }).fill('30');
+    await menu.getByLabel('Release (ms)', { exact: true }).fill('200');
+    await menu.getByLabel('Output minimum', { exact: true }).fill('0.2');
+    await menu.getByLabel('Output maximum', { exact: true }).fill('0.8');
+    await gain.fill('17');
+    assert.equal(await menu.locator('[data-control-assign-audio-save]').isDisabled(), true);
+    await gain.fill('2');
+    await menu.locator('[data-control-assign-audio-save]').click();
+    assert.deepEqual(await calls(), [{ audio: { source: 'Low', gain: 2, attack_ms: 30, release_ms: 200, threshold: 0.5, mode: 'Continuous', low: 0.2, high: 0.8 } }]);
+    const expanded = await menu.boundingBox();
+    assert.ok(expanded.y + expanded.height <= height + 0.5, 'expanded audio form fits viewport');
+    assert.ok(await menu.locator('.controlAssignAudioFields input').first().evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 14));
+    await page.evaluate(() => window.proof.locale('ja'));
+    assert.ok((await menu.innerText()).includes('音声ソース'));
+    assert.ok((await menu.innerText()).includes('音声を割り当て'));
+    await page.screenshot({ path: resolve(artifacts, 'assign-audio-ja-' + width + '.png') });
+    await page.evaluate(() => window.proof.locale('en'));
+    assert.ok((await menu.innerText()).includes('Audio source'));
+    await page.screenshot({ path: resolve(artifacts, 'assign-audio-en-' + width + '.png') });
+    await page.evaluate(() => window.proof.set({ audioTrigger: true }));
+    await menu.getByLabel('Trigger mode', { exact: true }).selectOption('Onset');
+    assert.equal(await menu.getByLabel('Audio gain', { exact: true }).count(), 0, 'onset pulse has no ignored gain control');
+    await menu.locator('[data-control-assign-audio-save]').click();
+    const onset = (await calls())[0].audio;
+    assert.equal(onset.mode, 'Onset'); assert.equal(onset.source, 'Onset');
     // Legible in every theme.
     const themes = ['tally', 'graphite', 'ice', 'cobalt', 'forest', 'ember', 'neon', 'safe'];
     const contrasts = {};
@@ -128,9 +190,43 @@ render(() => <div style="min-height:100vh"><button id="outside" type="button">Ou
     await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
     results.push({ width, height, divisions: divisions.length, contrasts });
   }
+  // The production group range supplies one canonical target to all source paths.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('http://127.0.0.1:' + port + '/assign-proof');
+  await page.locator('[data-video-group-opacity="57"]').waitFor();
+  const groupTargets = await page.evaluate(() => window.proof.groupMenu());
+  assert.equal(groupTargets.length, 1);
+  assert.equal(groupTargets[0].action, 'VideoGroupOpacity');
+  assert.equal(groupTargets[0].video_group_id, 57);
+  assert.equal(groupTargets[0].group_id ?? null, null);
+  assert.equal(Object.hasOwn(groupTargets[0], 'audio_only'), false);
+  const groupMenu = page.locator('[data-control-assign-menu]');
+  assert.equal(await groupMenu.locator('[data-control-assign-learn]').isVisible(), true);
+  assert.equal(await groupMenu.locator('[data-control-assign-audio]').isVisible(), true);
+  assert.equal(await groupMenu.locator('[data-control-assign-beat]').count(), 0);
+  assert.equal(await page.locator('[data-video-group-inspector] [data-control-map-unsupported]').count(), 0);
+  for (const mode of ['midi', 'osc', 'dmx']) {
+    await page.evaluate(value => window.proof.groupMode(value), mode);
+    await page.locator('[data-video-group-opacity="57"]').dispatchEvent('pointerdown', { button: 0, bubbles: true });
+    await page.waitForFunction(value => window.proof.calls.some(call => call?.groupLearn === value), mode);
+    const learned = (await calls()).filter(call => call?.groupLearn);
+    assert.equal(learned.length, 1);
+    assert.equal(learned[0].groupLearn, mode);
+    assert.equal(learned[0].targets.length, 1);
+    assert.equal(learned[0].targets[0].action, 'VideoGroupOpacity');
+    assert.equal(learned[0].targets[0].video_group_id, 57);
+  }
+  await page.evaluate(() => window.proof.groupMode(null));
+  results.push({ canonicalGroup: 57, sources: ['MIDI', 'OSC', 'DMX', 'Audio'] });
   assert.deepEqual(errors, []);
   await writeFile(resolve(artifacts, 'report.json'), JSON.stringify({ passed: true, results, errors, physicalMidi: false, nativeWindow: false }, null, 2));
-  console.log('PASS: Learn source menu at 1280x720 and 375x640; eight beat divisions, stable callbacks, keyboard, Escape/outside dismissal, viewport clamp, 8-theme contrast; ' + artifacts);
+  console.log('PASS: Learn source menu at 1280x720 and 375x640; eight beat divisions, stable callbacks, keyboard, Escape/outside dismissal, viewport clamp, Audio settings/EN-JA/form keys, canonical group MIDI/OSC/DMX/Audio, 8-theme contrast; ' + artifacts);
+} catch (error) {
+  if (page && !page.isClosed()) {
+    await page.screenshot({ path: resolve(artifacts, 'failure.png') }).catch(() => {});
+    await writeFile(resolve(artifacts, 'failure.html'), await page.content()).catch(() => {});
+  }
+  throw error;
 } finally {
   await browser?.close();
   await server?.close();

@@ -1,5 +1,5 @@
 import { midiFaderConnection, type MidiFaderConnection } from "./midiFaderInput";
-import { batch, createEffect, createSignal, onCleanup, type Accessor, type Setter } from "solid-js";
+import { batch, createEffect, createSignal, onCleanup, untrack, type Accessor, type Setter } from "solid-js";
 import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import {
   isFixtureFlagMappingAction,
@@ -33,6 +33,7 @@ import {
   midiContinuousActions,
 } from "./controlMappingLearn";
 import { beatDivisionLabel } from "./controlMappingPerform";
+import { audioMappingsFromTargets, audioTargetIsEligible, isAudioMapping, maxAudioMappings, type AudioAssignmentSettings } from "./audioControlMapping";
 import {
   projectAuthorityLearnContinuation,
   runAfterProjectAuthorityFlush,
@@ -539,20 +540,54 @@ export function createControlInputController(options: ControlInputControllerOpti
     edit: (current: MidiControlMapping[]) => MidiControlMapping[],
     message: string,
   ): Promise<boolean> => {
-    // One edit at a time: each re-seat flushes and reconnects against the list it saw.
+    // Serialize assign/remove, persist once, then re-seat against that exact ACK.
+    const entryEpoch = options.captureProjectAuthorityIdentity().project_epoch;
+    const canceled = () => {
+      reportMessage("Project changed while editing control assignments; the edit was canceled.");
+      return false;
+    };
     const run = async (): Promise<boolean> => {
       if (midiLearnInFlight) return false;
+      const authority = options.captureProjectAuthorityIdentity();
+      if (authority.project_epoch !== entryEpoch) return canceled();
       const wasConnected = options.midiControlConnected();
-      options.setMidiMappings(edit);
-      let reseated = true;
-      if (wasConnected) {
-        reseated = options.midiMappings().length > 0
-          ? await connectMidiControl()
-          : await disconnectMidiControl();
+      try {
+        options.setMidiMappings((current) => {
+          if (options.captureProjectAuthorityIdentity().project_epoch !== entryEpoch) {
+            throw new Error("Project changed while editing control assignments; the edit was canceled.");
+          }
+          return edit(current);
+        });
+        const flushed = await flushProjectControlMappingsAuthority();
+        if (!flushed.trusted) {
+          reportMessage("Control assignments could not be saved.");
+          return false;
+        }
+        const continued = projectAuthorityLearnContinuation(
+          authority, options.captureProjectAuthorityIdentity(), flushed,
+        );
+        if (continued === null || continued.project_epoch !== entryEpoch) return canceled();
+        if (wasConnected) {
+          if (midiLearnInFlight) return false;
+          const mappings = options.midiMappings();
+          options.setMidiControlConnected(false);
+          if (mappings.length === 0) {
+            await options.invoke("disconnect_midi_control", { expectedEpoch: continued.project_epoch });
+          } else {
+            const inputIndex = options.selectedMidiInput();
+            if (inputIndex === null) { reportMessage("No MIDI input selected."); return false; }
+            await connectInput({ inputIndex, mappings, expectedEpoch: continued.project_epoch });
+          }
+          if (!options.isProjectAuthorityIdentityCurrent(continued)) return canceled();
+          options.setMidiControlConnected(mappings.length > 0);
+        }
+        reportMessage(message);
+        return true;
+      } catch (error) {
+        if (options.captureProjectAuthorityIdentity().project_epoch !== entryEpoch) return canceled();
+        reportMessage(String(error));
+        return false;
       }
-      // A failed re-seat has already said why; do not overwrite it with success.
-      if (reseated) options.setMessage(message);
-      return reseated;
     };
     const next = midiMappingEditQueue.then(run, run);
     midiMappingEditQueue = next.catch(() => false);
@@ -575,6 +610,25 @@ export function createControlInputController(options: ControlInputControllerOpti
       ],
       `Assigned ${targets[0].label} to every ${beatDivisionLabel(divisionNumber)}.`,
     );
+  };
+
+  /** Audio settings share the mapping edit queue and its durable authority barrier. */
+  const assignAudioForTargets = async (targets: readonly ControlMappingTarget[], settings: AudioAssignmentSettings) => {
+    const eligible = targets.filter(audioTargetIsEligible);
+    const assigned = audioMappingsFromTargets(eligible, settings);
+    if (assigned.length === 0) return false;
+    return editMidiMappingsAndReseat((current) => {
+      const replaced = current.filter(mapping => isAudioMapping(mapping)
+        && targets.some(target => midiMappingDrivesTarget(mapping, target)));
+      const retained = current.filter(mapping => !replaced.includes(mapping));
+      if (retained.filter(isAudioMapping).length + assigned.length > maxAudioMappings) {
+        throw new Error("Audio assignment limit reached.");
+      }
+      return [...retained, ...assigned.map((mapping, index) => {
+        const previous = replaced.find(candidate => midiMappingDrivesTarget(candidate, eligible[index]));
+        return previous?.audio ? { ...mapping, audio: { ...mapping.audio, id: previous.audio.id } } : mapping;
+      })];
+    }, "Audio mapping assigned.");
   };
 
   /** Remove stored assignments (a MIDI controller or a beat division) by identity. */
@@ -724,15 +778,30 @@ export function createControlInputController(options: ControlInputControllerOpti
       return;
     }
     const generation = ++midiFeedbackConfigurationGeneration;
+    const requestedEpoch = untrack(() => options.captureProjectAuthorityIdentity().project_epoch);
     midiFeedbackConfigurationQueue = midiFeedbackConfigurationQueue.then(async () => {
-      if (generation !== midiFeedbackConfigurationGeneration) return;
-      const authority = options.captureProjectAuthorityIdentity();
+      const isCurrent = () => generation === midiFeedbackConfigurationGeneration
+        && options.midiFeedbackConnected()
+        && options.captureProjectAuthorityIdentity().project_epoch === requestedEpoch;
+      if (!isCurrent()) return;
+      let authority = options.captureProjectAuthorityIdentity();
       try {
-        await configureFeedback(enabled, mappings, authority);
-        if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
+        // Audio shares this list. Configure feedback only after the exact
+        // persisted mapping ACK, including edits made while a flush was pending.
+        const flushed = await flushProjectControlMappingsAuthority();
+        if (!isCurrent()) return;
+        const continued = projectAuthorityLearnContinuation(
+          authority, options.captureProjectAuthorityIdentity(), flushed,
+        );
+        if (continued === null) {
+          if (!flushed.trusted) reportMessage("Control assignments could not be saved.");
+          return;
+        }
+        authority = continued;
+        await configureFeedback(options.midiFeedbackEnabled(), options.midiMappings(), authority);
+        if (!isCurrent() || !options.isProjectAuthorityIdentityCurrent(authority)) return;
       } catch (error) {
-        if (generation !== midiFeedbackConfigurationGeneration) return;
-        if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
+        if (!isCurrent() || !options.isProjectAuthorityIdentityCurrent(authority)) return;
         options.setMidiFeedbackEnabled(false);
         options.setMessage(String(error));
       }
@@ -1004,6 +1073,7 @@ export function createControlInputController(options: ControlInputControllerOpti
     learnMidiControl,
     learnMidiControlForTargets,
     assignBeatDivisionForTargets,
+    assignAudioForTargets,
     removeMidiAssignments,
     saveMidiMappings,
     loadMidiMappings,
