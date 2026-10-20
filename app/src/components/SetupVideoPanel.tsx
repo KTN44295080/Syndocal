@@ -28,6 +28,7 @@ type SetupVideoPanelProps = {
   compositionLayerIds: number[];
   outputLabel: string;
   outputKind: VideoOutputKind;
+  syphonAvailable: boolean;
   outputWidth: number;
   outputHeight: number;
   outputFadeMs: number;
@@ -123,6 +124,7 @@ export function SetupVideoPanel(props: SetupVideoPanelProps) {
                 <VideoOutputCreatePanel
                   label={props.outputLabel}
                   kind={props.outputKind}
+                  syphonAvailable={props.syphonAvailable}
                   width={props.outputWidth}
                   height={props.outputHeight}
                   fadeMs={props.outputFadeMs}

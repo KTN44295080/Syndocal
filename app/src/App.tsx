@@ -23482,6 +23482,12 @@ export default function App() {
     void setVideoCompositionLayers(compositionId, nextLayerIds);
   };
 
+  // Native build availability is needed before the operator opens Setup.
+  // This read never initializes a sender or requires output ownership.
+  onMount(() => {
+    if (isTauriRuntime()) void refreshVideoRuntimeStatus(true);
+  });
+
   const addDisplayVideoOutput = async (monitor: VideoDisplayMonitorDescriptor) => {
     if (!isTauriRuntime()) {
       throw new Error(tauriBackendUnavailableMessage);
@@ -28464,6 +28470,9 @@ export default function App() {
           outputMonitorId={videoOutputMonitorId()}
           outputFullscreen={videoOutputFullscreen()}
           outputEndpoint={videoOutputEndpoint()}
+          syphonAvailable={videoRuntimeStatus()?.backends.some(
+            (backend) => backend.id === "syphon" && backend.state === "Available",
+          ) ?? false}
           mappingPresetLabel={videoOutputMappingPresetLabel()}
           selectedMappingPresetLabel={selectedVideoOutputMappingPresetLabel()}
           selectedOutputId={selectedVideoOutputId()}

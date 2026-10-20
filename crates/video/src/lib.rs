@@ -3289,7 +3289,7 @@ pub fn video_runtime_status_with_binaries(
             ),
             platform_external_backend_status(
                 "syphon",
-                "Syphon input/output",
+                "Syphon output",
                 "Syphon",
                 PlatformSupport::MacosOnly,
             ),
@@ -3325,6 +3325,14 @@ fn external_backend_status(id: &str, label: &str, sdk_name: &str) -> VideoBacken
             label: label.to_string(),
             state: VideoBackendState::Available,
             detail: "Spout2 2.007.017 DirectX 11 CPU-pixel transport is built in; routes initialize senders and receivers on demand".to_string(),
+        };
+    }
+    if id == "syphon" && cfg!(all(feature = "syphon", target_os = "macos")) {
+        return VideoBackendStatus {
+            id: id.to_string(),
+            label: label.to_string(),
+            state: VideoBackendState::Available,
+            detail: "Syphon Metal output is built in; servers initialize on demand. Syphon input is not implemented.".to_string(),
         };
     }
     VideoBackendStatus {
@@ -8128,7 +8136,7 @@ pub fn build_external_video_io_route_plans(
         inputs: build_external_video_input_plans(snapshot)
             .into_iter()
             .map(|plan| {
-                let backend = external_video_backend_route_state(status, &plan.backend_id);
+                let backend = external_video_input_backend_route_state(status, &plan.backend_id);
                 let ready = backend.ready;
                 ExternalVideoInputRoutePlan {
                     layer_id: plan.layer_id,
@@ -8174,6 +8182,23 @@ pub fn build_external_video_io_route_plans(
             })
             .collect(),
     }
+}
+
+// Backend availability covers the implemented direction only. Saved Syphon
+// inputs remain readable, but an output-capable build must never activate them.
+fn external_video_input_backend_route_state(
+    status: &VideoRuntimeStatus,
+    backend_id: &str,
+) -> ExternalVideoBackendRouteState {
+    let mut backend = external_video_backend_route_state(status, backend_id);
+    if backend_id == "syphon" {
+        let detail = "Syphon input is not implemented";
+        backend.ready = false;
+        backend.state = Some(VideoBackendState::NotBuilt);
+        backend.detail = Some(detail.to_string());
+        backend.issue = Some(detail.to_string());
+    }
+    backend
 }
 
 fn external_video_backend_route_state(
@@ -12370,12 +12395,39 @@ mod tests {
             .iter()
             .find(|backend| backend.id == "syphon")
             .unwrap();
-        assert_eq!(syphon.state, VideoBackendState::NotBuilt);
-        if cfg!(target_os = "macos") {
+        if cfg!(all(feature = "syphon", target_os = "macos")) {
+            assert_eq!(syphon.state, VideoBackendState::Available);
+            assert!(syphon.detail.contains("Syphon Metal output is built in"));
+            assert!(syphon.detail.contains("Syphon input is not implemented"));
+        } else if cfg!(target_os = "macos") {
+            assert_eq!(syphon.state, VideoBackendState::NotBuilt);
             assert!(syphon.detail.contains("not linked"));
         } else {
+            assert_eq!(syphon.state, VideoBackendState::NotBuilt);
             assert!(syphon.detail.contains("macOS-only"));
         }
+    }
+
+    #[test]
+    fn syphon_output_availability_does_not_enable_unsupported_input() {
+        let status = VideoRuntimeStatus {
+            backends: vec![VideoBackendStatus {
+                id: "syphon".to_string(),
+                label: "Syphon output".to_string(),
+                state: VideoBackendState::Available,
+                detail: "Output bridge is built in".to_string(),
+            }],
+        };
+        let output = external_video_backend_route_state(&status, "syphon");
+        assert!(output.ready);
+        assert!(output.issue.is_none());
+        let input = external_video_input_backend_route_state(&status, "syphon");
+        assert!(!input.ready);
+        assert_eq!(input.state, Some(VideoBackendState::NotBuilt));
+        assert!(input
+            .issue
+            .unwrap()
+            .contains("Syphon input is not implemented"));
     }
 
     #[test]

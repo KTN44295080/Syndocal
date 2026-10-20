@@ -10,12 +10,13 @@ license.workspace = true
 # is absent the UI fails closed instead of silently falling back or guessing a
 # device.  This makes ASIO a normal selectable backend without bundling the
 # SDK-derived bridge into the approved default package.
-default = ["libav", "spout", "asio"]
+default = ["libav", "spout", "asio", "syphon"]
 asio = ["dep:libloading"]
 show-asio = ["asio"]
 libav = ["video/libav"]
 ndi = ["io/ndi", "video/ndi"]
 spout = ["dep:spout2-rs", "video/spout"]
+syphon = ["video/syphon"]
 
 [build-dependencies]
 tauri-build.workspace = true
