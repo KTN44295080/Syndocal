@@ -5819,10 +5819,13 @@ progress {
   white-space: nowrap;
   color: var(--theme-text);
 }
-.liveVideoOutputHealthItem { display: inline-flex; align-items: center; gap: 4px; }
+.liveVideoOutputHealthItem { display: inline-flex; flex: 0 0 auto; flex-direction: column; align-items: flex-start; gap: 0; }
+.liveVideoOutputHealthCadence, .liveVideoPerformanceRow { display: inline-flex; align-items: center; gap: 4px; }
 .liveVideoOutputHealthItem.stale, .liveVideoOutputHealthWarning { color: var(--theme-error); }
 .liveVideoOutputHealthMissed.idle { opacity: 0.6; }
 .liveVideoOutputHealthMissed.warning { color: var(--theme-queued); font-weight: 700; }
+.liveVideoPerformanceBudget { display: inline-flex; align-items: center; gap: 4px; }
+.liveVideoPerformanceBudget.warning, .liveVideoPerformanceWarning { color: var(--theme-queued); }
 .videoPerformPaneOutput .workspacePaneTools { min-width: 0; overflow: hidden; }
 
 .liveVideoMonitor > header,

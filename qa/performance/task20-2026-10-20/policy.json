@@ -1,0 +1,18 @@
+{
+  "declaredBeforeBenchmark": true,
+  "targetOutputFps": 60,
+  "cadenceMinimumTargetRatio": 0.99,
+  "missedFractionMaximum": 0.01,
+  "cadenceP99MaximumTargetIntervals": 2,
+  "nativeBudgetRequired": true,
+  "logicalProcessors": 32,
+  "warmupSeconds": 10,
+  "nominalObservationSeconds": 20,
+  "interpretation": "Short steady-state 60 fps screening. Output submission/send cadence, not unique source images or physical scanout. Native 600-frame work-time validation is separate. No success claim for unmeasured/unsupported cases.",
+  "nativeBudget": {
+    "frames": 600,
+    "averageMaxUs": 16666,
+    "singleWorkMaxUs": 33333,
+    "deadlineMissFractionMax": 0.05
+  }
+}

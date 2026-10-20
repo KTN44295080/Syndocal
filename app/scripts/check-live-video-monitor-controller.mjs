@@ -225,6 +225,38 @@ const count = (fixture, kind, since) => fixture.requests.filter(request => reque
   dispose(); assert.equal(timers.size, 0);
 }
 {
+  let controller, dispose;
+  const pending = [];
+  const fresh = { outputId: 1, kind: "display", droppedFrames: 0, lastFrameAgeMs: 2,
+    renderSampleCount: 60, renderTimeP95Ms: 4 };
+  createRoot(cleanup => {
+    dispose = cleanup;
+    controller = createLiveVideoOutputHealthController({ backendAvailable: () => true, invoke() {
+      return new Promise(resolve => pending.push(resolve));
+    } });
+  });
+  await advance(0); pending[0]([fresh]); await flush();
+  assert.equal(controller.outputs()[0].renderTimeP95Ms, 4);
+  await advance(1_000); assert.equal(pending.length, 2);
+  await advance(999); assert.equal(controller.outputs().length, 1, "normal polling latency retains evidence");
+  await advance(1);
+  assert.deepEqual(controller.outputs(), [], "hung telemetry cannot advertise stale preparation headroom");
+  assert.equal(controller.error(), "Output health unavailable");
+  await advance(10_000); assert.equal(pending.length, 2, "expiry never starts overlapping IPC or retries");
+  pending[1]([fresh]); await flush();
+  assert.deepEqual(controller.outputs(), [], "an expired response cannot restore stale preparation headroom");
+  assert.equal(controller.error(), "Output health unavailable");
+  await advance(0); assert.equal(pending.length, 3, "settlement permits one immediate fresh query");
+  pending[2]([fresh]); await flush();
+  assert.equal(controller.error(), null, "only a fresh query can recover telemetry");
+  assert.equal(controller.outputs()[0].renderTimeP95Ms, 4);
+  await advance(1_000); assert.equal(pending.length, 4);
+  dispose(); assert.equal(timers.size, 0, "disposal clears polling and evidence expiry timers");
+  pending[3]([]); await flush();
+  assert.equal(controller.outputs().length, 1, "a disposed response cannot mutate telemetry");
+  assert.equal(timers.size, 0);
+}
+{
   const track = createRecentMissedTracker();
   const out = (droppedFrames, outputId = 1) => ({ outputId, kind: "display", deliveredFps: 60, frameTimeP50Ms: 16, frameTimeP95Ms: 17, frameTimeP99Ms: 18, droppedFrames, targetFps: 60, deliveredFrames: 100, sampleCount: 60, measurementBoundary: "present", lastFrameAgeMs: 2 });
   assert.equal(track(0, [out(69)])[0].recentMissedFrames, 0, "deficit present at first sight (startup) is the baseline, not a recent miss");

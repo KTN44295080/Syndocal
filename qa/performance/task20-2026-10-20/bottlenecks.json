@@ -1,0 +1,4388 @@
+{
+  "schema_version": 2,
+  "generated_utc": "2026-10-20T09:46:54.428294+00:00",
+  "csv_sha256": "c465b39b6ad220bed34e5bb4377daf48a6e2646eea355de50cd9c52dac20cb00",
+  "interim": false,
+  "counts": {
+    "after_cases": 69,
+    "supported_cases": 63,
+    "attempted_supported_cases": 63,
+    "established_cases": 63,
+    "established_pass_cases": 22,
+    "established_miss_cases": 41,
+    "not_established_cases": 0,
+    "miss_output_rows": 46,
+    "missing_supported_cases": 0,
+    "pending_cases": 0,
+    "unsupported_cases": 6,
+    "failed_workload_cases": 0
+  },
+  "coverage_complete": true,
+  "case_result_counts": {
+    "established_pass": 22,
+    "established_miss": 41,
+    "not_established": 0,
+    "unsupported": 6,
+    "missing_supported": 0
+  },
+  "cases": [
+    {
+      "tag": "h264-1080p30-1l-display-0fx-normal",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-2160p30-1l-display-0fx-normal",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "hap-1080p30-1l-display-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "dxv-1080p30-1l-display-0fx-normal",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-3l-display-0fx-normal",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-2160p30-3l-display-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "hap-1080p30-3l-display-0fx-normal",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "dxv-1080p30-3l-display-0fx-normal",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-6l-display-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-2160p30-6l-display-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "hap-1080p30-6l-display-0fx-normal",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "dxv-1080p30-6l-display-0fx-normal",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-8l-display-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-2160p30-8l-display-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "hap-1080p30-8l-display-0fx-normal",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "dxv-1080p30-8l-display-0fx-normal",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-12l-display-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-2160p30-12l-display-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "hap-1080p30-12l-display-0fx-normal",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "dxv-1080p30-12l-display-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-16l-display-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-2160p30-16l-display-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "hap-1080p30-16l-display-0fx-normal",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "dxv-1080p30-16l-display-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-1l-display4k-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-1l-spout-0fx-normal",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1",
+        "spout 2"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-1l-ndi-0fx-normal",
+      "case_result": "unsupported",
+      "outputs": [
+        "display ",
+        "ndi "
+      ]
+    },
+    {
+      "tag": "h264-1080p30-3l-display4k-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-3l-spout-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1",
+        "spout 2"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-3l-ndi-0fx-normal",
+      "case_result": "unsupported",
+      "outputs": [
+        "display ",
+        "ndi "
+      ]
+    },
+    {
+      "tag": "h264-1080p30-6l-display4k-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-6l-spout-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1",
+        "spout 2"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-6l-ndi-0fx-normal",
+      "case_result": "unsupported",
+      "outputs": [
+        "display ",
+        "ndi "
+      ]
+    },
+    {
+      "tag": "h264-1080p30-8l-display4k-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-8l-spout-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1",
+        "spout 2"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-8l-ndi-0fx-normal",
+      "case_result": "unsupported",
+      "outputs": [
+        "display ",
+        "ndi "
+      ]
+    },
+    {
+      "tag": "h264-1080p30-12l-display4k-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-12l-spout-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1",
+        "spout 2"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-12l-ndi-0fx-normal",
+      "case_result": "unsupported",
+      "outputs": [
+        "display ",
+        "ndi "
+      ]
+    },
+    {
+      "tag": "h264-1080p30-16l-display4k-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-16l-spout-0fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1",
+        "spout 2"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-16l-ndi-0fx-normal",
+      "case_result": "unsupported",
+      "outputs": [
+        "display ",
+        "ndi "
+      ]
+    },
+    {
+      "tag": "h264-1080p30-1l-display-1fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-1l-display-3fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-3l-display-1fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-3l-display-3fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-6l-display-1fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-6l-display-3fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-8l-display-1fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-8l-display-3fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-12l-display-1fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-12l-display-3fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-16l-display-1fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-16l-display-3fx-normal",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-3l-display-0fx-add",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-3l-display-0fx-multiply",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-3l-display-0fx-screen",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-3l-display-0fx-overlay",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-3l-display-0fx-subtract",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-3l-display-0fx-difference",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-3l-display-0fx-lighten",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-3l-display-0fx-darken",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-3l-display-0fx-softlight",
+      "case_result": "established_pass",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-3l-display-0fx-normal-cpu",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-8l-display-0fx-normal-cpu",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-16l-display-0fx-normal-cpu",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-3l-display-groups",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-8l-display-groups",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    },
+    {
+      "tag": "h264-1080p30-16l-display-groups",
+      "case_result": "established_miss",
+      "outputs": [
+        "display 1"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "identity": "hap-1080p30-1l-display-0fx-normal · display 1",
+      "tag": "hap-1080p30-1l-display-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Native work window fails despite preparation p95 within budget",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "59.913044 fps; cadence pass, missed 0.1709%, interval p99 22.5428 ms. Prepare p50/p95/p99 9.0041/12.0242/13.1858 ms, n=600. Native failed, n=600; validation mean/max 12.292/36.712 ms; work misses 6.3333%.",
+      "approach": "Inspect matched preparation tails and final composition/present timings, including possible present/vsync waits. Preparation p95 does not clear p99 or maxima; native work does not isolate GPU execution. Profile the deliberate single-layer CPU path. HAP multi-layer cases use a different observed composition path and are not a pure layer-count comparison.",
+      "composition_path": "CPU composition: single-layer eligibility rule",
+      "limitations": [],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "pass",
+        "native_status": "fail",
+        "envelope_status": "miss",
+        "native_validation_state": "failed",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.49492,
+        "delivered_frames_delta": 1168.0,
+        "delivered_fps": 59.913044,
+        "missed_fraction": 0.001709,
+        "cadence_p99_ms": 22.5428,
+        "cadence_sample_count": 599.0,
+        "cadence_window_span_seconds_derived": 10.024752,
+        "prepare_p50_ms": 9.0041,
+        "prepare_p95_ms": 12.0242,
+        "prepare_p99_ms": 13.1858,
+        "prepare_sample_count": 600.0,
+        "native_validation_frame_count": 600.0,
+        "native_validation_average_ms": 12.292,
+        "native_validation_max_ms": 36.712,
+        "native_validation_deadline_miss_fraction": 0.063333,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 11.721359,
+        "native_work_observation_frame_delta": 1169.0,
+        "decode_demand_mean_wall_ms": 0.322118,
+        "decode_demand_call_count_delta": 1169.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 0.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 0.0,
+        "decoder_last_sessions": 0.0,
+        "cpu_percent_of_32_logical_mean": 9.319138,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 1309036544.0,
+        "working_set_bytes_peak": 1000652800.0,
+        "gpu_3d_percent_mean": 8.090909,
+        "gpu_video_codec_percent_mean": 0.0,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 1198.0,
+        "presentmon_fps": 59.951258,
+        "program_monitor_fps": 27.909193015890583,
+        "preview_monitor_fps": 27.763326153438193
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [],
+        "native_reasons": [
+          "native_validation_failed"
+        ]
+      }
+    },
+    {
+      "identity": "h264-2160p30-3l-display-0fx-normal · display 1",
+      "tag": "h264-2160p30-3l-display-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Preparation tail exceeds the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "58.713924 fps; cadence fail, missed 2.2356%, interval p99 38.7155 ms. Prepare p50/p95/p99 4.7827/23.5989/31.732 ms, n=600. Native failed, n=600; validation mean/max 9.643/38.934 ms; work misses 22%.",
+      "approach": "Correlate per-frame demand, conversion/transfer and remaining preparation timings. A low demand mean cannot exclude demand-tail stalls; do not estimate other preparation by subtracting it from p95.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "fail",
+        "envelope_status": "miss",
+        "native_validation_state": "failed",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.365083,
+        "delivered_frames_delta": 1137.0,
+        "delivered_fps": 58.713924,
+        "missed_fraction": 0.022356,
+        "cadence_p99_ms": 38.7155,
+        "cadence_sample_count": 599.0,
+        "cadence_window_span_seconds_derived": 10.174868,
+        "prepare_p50_ms": 4.7827,
+        "prepare_p95_ms": 23.5989,
+        "prepare_p99_ms": 31.732,
+        "prepare_sample_count": 600.0,
+        "native_validation_frame_count": 600.0,
+        "native_validation_average_ms": 9.643,
+        "native_validation_max_ms": 38.934,
+        "native_validation_deadline_miss_fraction": 0.22,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 9.135849,
+        "native_work_observation_frame_delta": 1136.0,
+        "decode_demand_mean_wall_ms": 0.301237,
+        "decode_demand_call_count_delta": 1136.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 3.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 3.0,
+        "decoder_last_sessions": 3.0,
+        "cpu_percent_of_32_logical_mean": 5.578947,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 3313901568.0,
+        "working_set_bytes_peak": 1980870656.0,
+        "gpu_3d_percent_mean": 12.363636,
+        "gpu_video_codec_percent_mean": 153.0,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 1164.0,
+        "presentmon_fps": 58.301403,
+        "program_monitor_fps": 3.1843389312369452,
+        "preview_monitor_fps": 2.8414101232575817
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_failed"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-6l-display-0fx-normal · display 1",
+      "tag": "h264-1080p30-6l-display-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Preparation tail exceeds the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "31.269977 fps; cadence fail, missed 48.0308%, interval p99 418.251 ms. Prepare p50/p95/p99 0.7864/100.7547/373.1191 ms, n=600. Native failed, n=600; validation mean/max 22.177/701.104 ms; work misses 15%.",
+      "approach": "Correlate per-frame demand, conversion/transfer and remaining preparation timings. A low demand mean cannot exclude demand-tail stalls; do not estimate other preparation by subtracting it from p95.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "fail",
+        "envelope_status": "miss",
+        "native_validation_state": "failed",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.411591,
+        "delivered_frames_delta": 607.0,
+        "delivered_fps": 31.269977,
+        "missed_fraction": 0.480308,
+        "cadence_p99_ms": 418.251,
+        "cadence_sample_count": 599.0,
+        "cadence_window_span_seconds_derived": 19.171465,
+        "prepare_p50_ms": 0.7864,
+        "prepare_p95_ms": 100.7547,
+        "prepare_p99_ms": 373.1191,
+        "prepare_sample_count": 600.0,
+        "native_validation_frame_count": 600.0,
+        "native_validation_average_ms": 22.177,
+        "native_validation_max_ms": 701.104,
+        "native_validation_deadline_miss_fraction": 0.15,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 22.396471,
+        "native_work_observation_frame_delta": 607.0,
+        "decode_demand_mean_wall_ms": 6.619929,
+        "decode_demand_call_count_delta": 607.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 12.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 6.0,
+        "decoder_last_sessions": 6.0,
+        "cpu_percent_of_32_logical_mean": 5.807177,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 3177074688.0,
+        "working_set_bytes_peak": 2232373248.0,
+        "gpu_3d_percent_mean": 14.636364,
+        "gpu_video_codec_percent_mean": 97.727273,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 642.0,
+        "presentmon_fps": 32.230894,
+        "program_monitor_fps": 0.9287047989594448,
+        "preview_monitor_fps": 0.0
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_failed"
+        ]
+      }
+    },
+    {
+      "identity": "h264-2160p30-6l-display-0fx-normal · display 1",
+      "tag": "h264-2160p30-6l-display-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "0.828501 fps; cadence fail, missed 98.722%, interval p99 5645.1336 ms. Prepare p50/p95/p99 230.8599/5623.6518/5623.6518 ms, n=19. Native pending, n=0; validation mean/max unavailable/unavailable ms; work misses unavailable.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [
+        "Partial evidence: partial_display_1_native_work_pending_warmup",
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "pending",
+        "native_work_status": "pending_warmup",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.311998,
+        "delivered_frames_delta": 16.0,
+        "delivered_fps": 0.828501,
+        "missed_fraction": 0.98722,
+        "cadence_p99_ms": 5645.1336,
+        "cadence_sample_count": 19.0,
+        "cadence_window_span_seconds_derived": 31.372136,
+        "prepare_p50_ms": 230.8599,
+        "prepare_p95_ms": 5623.6518,
+        "prepare_p99_ms": 5623.6518,
+        "prepare_sample_count": 19.0,
+        "native_validation_frame_count": 0.0,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": 42.0,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": 0.0,
+        "decode_demand_mean_wall_ms": 1273.242375,
+        "decode_demand_call_count_delta": 16.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 42.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 6.0,
+        "decoder_last_sessions": 6.0,
+        "cpu_percent_of_32_logical_mean": 2.648342,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 5008531456.0,
+        "working_set_bytes_peak": 3349647360.0,
+        "gpu_3d_percent_mean": 0.545455,
+        "gpu_video_codec_percent_mean": 186.090909,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 15.0,
+        "presentmon_fps": 0.801987,
+        "program_monitor_fps": 0.39286556140482976,
+        "preview_monitor_fps": 0.0
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "partial_display_1_native_work_pending_warmup"
+        ],
+        "partial_evidence": [
+          "partial_display_1_native_work_pending_warmup"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-8l-display-0fx-normal · display 1",
+      "tag": "h264-1080p30-8l-display-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Preparation tail exceeds the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "27.932947 fps; cadence fail, missed 53.4247%, interval p99 503.4139 ms. Prepare p50/p95/p99 2.9593/113.2115/439.2437 ms, n=600. Native failed, n=600; validation mean/max 27.932/892.263 ms; work misses 18%.",
+      "approach": "Correlate per-frame demand, conversion/transfer and remaining preparation timings. A low demand mean cannot exclude demand-tail stalls; do not estimate other preparation by subtracting it from p95.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "fail",
+        "envelope_status": "miss",
+        "native_validation_state": "failed",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.47521,
+        "delivered_frames_delta": 544.0,
+        "delivered_fps": 27.932947,
+        "missed_fraction": 0.534247,
+        "cadence_p99_ms": 503.4139,
+        "cadence_sample_count": 599.0,
+        "cadence_window_span_seconds_derived": 21.352204,
+        "prepare_p50_ms": 2.9593,
+        "prepare_p95_ms": 113.2115,
+        "prepare_p99_ms": 439.2437,
+        "prepare_sample_count": 600.0,
+        "native_validation_frame_count": 600.0,
+        "native_validation_average_ms": 27.932,
+        "native_validation_max_ms": 892.263,
+        "native_validation_deadline_miss_fraction": 0.18,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 28.2175,
+        "native_work_observation_frame_delta": 542.0,
+        "decode_demand_mean_wall_ms": 7.000945,
+        "decode_demand_call_count_delta": 542.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 16.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 8.0,
+        "decoder_last_sessions": 8.0,
+        "cpu_percent_of_32_logical_mean": 7.504774,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 3941224448.0,
+        "working_set_bytes_peak": 2663153664.0,
+        "gpu_3d_percent_mean": 12.545455,
+        "gpu_video_codec_percent_mean": 115.0,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 570.0,
+        "presentmon_fps": 28.541195,
+        "program_monitor_fps": 0.8271781547116294,
+        "preview_monitor_fps": 0.0
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_failed"
+        ]
+      }
+    },
+    {
+      "identity": "h264-2160p30-8l-display-0fx-normal · display 1",
+      "tag": "h264-2160p30-8l-display-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "0.615351 fps; cadence fail, missed 98.6857%, interval p99 7102.0731 ms. Prepare p50/p95/p99 209.6756/4505.2913/7094.8499 ms, n=31. Native pending, n=0; validation mean/max unavailable/unavailable ms; work misses unavailable.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [
+        "Partial evidence: instrumentation_partial_presentmon_insufficient_samples, partial_display_1_native_work_pending_warmup, presentmon_insufficient_samples",
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "pending",
+        "native_work_status": "pending_warmup",
+        "decode_status": "measured",
+        "presentmon_status": "insufficient_samples",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.501067,
+        "delivered_frames_delta": 12.0,
+        "delivered_fps": 0.615351,
+        "missed_fraction": 0.986857,
+        "cadence_p99_ms": 7102.0731,
+        "cadence_sample_count": 31.0,
+        "cadence_window_span_seconds_derived": 31.560647,
+        "prepare_p50_ms": 209.6756,
+        "prepare_p95_ms": 4505.2913,
+        "prepare_p99_ms": 7094.8499,
+        "prepare_sample_count": 31.0,
+        "native_validation_frame_count": 0.0,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": 30.0,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": 0.0,
+        "decode_demand_mean_wall_ms": 1225.1605,
+        "decode_demand_call_count_delta": 12.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 16.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 8.0,
+        "decoder_last_sessions": 8.0,
+        "cpu_percent_of_32_logical_mean": 2.594984,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 6627205120.0,
+        "working_set_bytes_peak": 5061111808.0,
+        "gpu_3d_percent_mean": 0.454545,
+        "gpu_video_codec_percent_mean": 199.090909,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 9.0,
+        "presentmon_fps": null,
+        "program_monitor_fps": 0.1947381745242955,
+        "preview_monitor_fps": 0.0
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "partial_evidence": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-12l-display-0fx-normal · display 1",
+      "tag": "h264-1080p30-12l-display-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "2.760827 fps; cadence fail, missed 95.4774%, interval p99 2993.128 ms. Prepare p50/p95/p99 50.4387/2132.6192/2946.9708 ms, n=118. Native sampling, n=57; validation mean/max 363.961/3596.608 ms; work misses 96.4912%.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "sampling",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.559357,
+        "delivered_frames_delta": 54.0,
+        "delivered_fps": 2.760827,
+        "missed_fraction": 0.954774,
+        "cadence_p99_ms": 2993.128,
+        "cadence_sample_count": 118.0,
+        "cadence_window_span_seconds_derived": 31.823735,
+        "prepare_p50_ms": 50.4387,
+        "prepare_p95_ms": 2132.6192,
+        "prepare_p99_ms": 2946.9708,
+        "prepare_sample_count": 118.0,
+        "native_validation_frame_count": 57.0,
+        "native_validation_average_ms": 363.961,
+        "native_validation_max_ms": 3596.608,
+        "native_validation_deadline_miss_fraction": 0.964912,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 368.320833,
+        "native_work_observation_frame_delta": 54.0,
+        "decode_demand_mean_wall_ms": 299.312685,
+        "decode_demand_call_count_delta": 54.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 60.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 12.0,
+        "decoder_last_sessions": 12.0,
+        "cpu_percent_of_32_logical_mean": 4.836661,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 5827485696.0,
+        "working_set_bytes_peak": 3863183360.0,
+        "gpu_3d_percent_mean": 2.181818,
+        "gpu_video_codec_percent_mean": 178.454545,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 59.0,
+        "presentmon_fps": 3.040877,
+        "program_monitor_fps": 0.43600848763164074,
+        "preview_monitor_fps": 0.04844538751462675
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-2160p30-12l-display-0fx-normal · display 1",
+      "tag": "h264-2160p30-12l-display-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "0.153916 fps; cadence fail, missed 99.7329%, interval p99 8363.0491 ms. Prepare p50/p95/p99 4926.6051/8315.6084/8315.6084 ms, n=5. Native pending, n=0; validation mean/max unavailable/unavailable ms; work misses unavailable.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [
+        "Partial evidence: instrumentation_partial_presentmon_insufficient_samples, partial_display_1_native_work_pending_warmup, presentmon_insufficient_samples",
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "pending",
+        "native_work_status": "pending_warmup",
+        "decode_status": "measured",
+        "presentmon_status": "insufficient_samples",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.491173,
+        "delivered_frames_delta": 3.0,
+        "delivered_fps": 0.153916,
+        "missed_fraction": 0.997329,
+        "cadence_p99_ms": 8363.0491,
+        "cadence_sample_count": 5.0,
+        "cadence_window_span_seconds_derived": 31.753353,
+        "prepare_p50_ms": 4926.6051,
+        "prepare_p95_ms": 8315.6084,
+        "prepare_p99_ms": 8315.6084,
+        "prepare_sample_count": 5.0,
+        "native_validation_frame_count": 0.0,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": 56.0,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": 0.0,
+        "decode_demand_mean_wall_ms": 6155.591333,
+        "decode_demand_call_count_delta": 3.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 36.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 12.0,
+        "decoder_last_sessions": 12.0,
+        "cpu_percent_of_32_logical_mean": 3.149751,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 9120456704.0,
+        "working_set_bytes_peak": 6932922368.0,
+        "gpu_3d_percent_mean": 0.454545,
+        "gpu_video_codec_percent_mean": 198.818182,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 1.0,
+        "presentmon_fps": null,
+        "program_monitor_fps": 0.14611551892924426,
+        "preview_monitor_fps": 0.0
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "partial_evidence": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "dxv-1080p30-12l-display-0fx-normal · display 1",
+      "tag": "dxv-1080p30-12l-display-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Native work window fails despite preparation p95 within budget",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "57.604622 fps; cadence fail, missed 4.1192%, interval p99 39.6092 ms. Prepare p50/p95/p99 0.6394/12.0885/24.8614 ms, n=600. Native failed, n=600; validation mean/max 12.856/50.717 ms; work misses 51.1667%.",
+      "approach": "Inspect matched preparation tails and final composition/present timings, including possible present/vsync waits. Preparation p95 does not clear p99 or maxima; native work does not isolate GPU execution.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "fail",
+        "envelope_status": "miss",
+        "native_validation_state": "failed",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 18.991532,
+        "delivered_frames_delta": 1094.0,
+        "delivered_fps": 57.604622,
+        "missed_fraction": 0.041192,
+        "cadence_p99_ms": 39.6092,
+        "cadence_sample_count": 599.0,
+        "cadence_window_span_seconds_derived": 10.452635,
+        "prepare_p50_ms": 0.6394,
+        "prepare_p95_ms": 12.0885,
+        "prepare_p99_ms": 24.8614,
+        "prepare_sample_count": 600.0,
+        "native_validation_frame_count": 600.0,
+        "native_validation_average_ms": 12.856,
+        "native_validation_max_ms": 50.717,
+        "native_validation_deadline_miss_fraction": 0.511667,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 12.835367,
+        "native_work_observation_frame_delta": 1090.0,
+        "decode_demand_mean_wall_ms": 0.497544,
+        "decode_demand_call_count_delta": 1090.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 12.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 0.0,
+        "decoder_last_sessions": 12.0,
+        "cpu_percent_of_32_logical_mean": 22.001327,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 3220213760.0,
+        "working_set_bytes_peak": 2873794560.0,
+        "gpu_3d_percent_mean": 34.4,
+        "gpu_video_codec_percent_mean": 0.0,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 1146.0,
+        "presentmon_fps": 57.541577,
+        "program_monitor_fps": 5.303409547127693,
+        "preview_monitor_fps": 6.146007325643308
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_failed"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-16l-display-0fx-normal · display 1",
+      "tag": "h264-1080p30-16l-display-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "0.364513 fps; cadence fail, missed 99.2813%, interval p99 4284.6857 ms. Prepare p50/p95/p99 2130.7084/4188.3582/4188.3582 ms, n=12. Native pending, n=0; validation mean/max unavailable/unavailable ms; work misses unavailable.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [
+        "Partial evidence: instrumentation_partial_presentmon_insufficient_samples, partial_display_1_native_work_pending_warmup, presentmon_insufficient_samples",
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "pending",
+        "native_work_status": "pending_warmup",
+        "decode_status": "measured",
+        "presentmon_status": "insufficient_samples",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.20371,
+        "delivered_frames_delta": 7.0,
+        "delivered_fps": 0.364513,
+        "missed_fraction": 0.992813,
+        "cadence_p99_ms": 4284.6857,
+        "cadence_sample_count": 12.0,
+        "cadence_window_span_seconds_derived": 31.441365,
+        "prepare_p50_ms": 2130.7084,
+        "prepare_p95_ms": 4188.3582,
+        "prepare_p99_ms": 4188.3582,
+        "prepare_sample_count": 12.0,
+        "native_validation_frame_count": 0.0,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": 49.0,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": 0.0,
+        "decode_demand_mean_wall_ms": 2267.443429,
+        "decode_demand_call_count_delta": 7.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 112.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 16.0,
+        "decoder_last_sessions": 16.0,
+        "cpu_percent_of_32_logical_mean": 4.732395,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 7180111872.0,
+        "working_set_bytes_peak": 4735959040.0,
+        "gpu_3d_percent_mean": 0.545455,
+        "gpu_video_codec_percent_mean": 197.272727,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 5.0,
+        "presentmon_fps": null,
+        "program_monitor_fps": 0.4444444444444444,
+        "preview_monitor_fps": 0.04938271604938271
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "partial_evidence": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-2160p30-16l-display-0fx-normal · display 1",
+      "tag": "h264-2160p30-16l-display-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "0.203882 fps; cadence fail, missed 99.7039%, interval p99 9723.8426 ms. Prepare p50/p95/p99 3629.7495/9713.3402/9713.3402 ms, n=6. Native pending, n=0; validation mean/max unavailable/unavailable ms; work misses unavailable.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [
+        "Partial evidence: instrumentation_partial_presentmon_insufficient_samples, partial_display_1_native_work_pending_warmup, presentmon_insufficient_samples",
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "pending",
+        "native_work_status": "pending_warmup",
+        "decode_status": "measured",
+        "presentmon_status": "insufficient_samples",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.619153,
+        "delivered_frames_delta": 4.0,
+        "delivered_fps": 0.203882,
+        "missed_fraction": 0.997039,
+        "cadence_p99_ms": 9723.8426,
+        "cadence_sample_count": 6.0,
+        "cadence_window_span_seconds_derived": 32.064679,
+        "prepare_p50_ms": 3629.7495,
+        "prepare_p95_ms": 9713.3402,
+        "prepare_p99_ms": 9713.3402,
+        "prepare_sample_count": 6.0,
+        "native_validation_frame_count": 0.0,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": 55.0,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": 0.0,
+        "decode_demand_mean_wall_ms": 5495.35125,
+        "decode_demand_call_count_delta": 4.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 64.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 16.0,
+        "decoder_last_sessions": 16.0,
+        "cpu_percent_of_32_logical_mean": 3.775557,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 12029497344.0,
+        "working_set_bytes_peak": 9918988288.0,
+        "gpu_3d_percent_mean": 0.428571,
+        "gpu_video_codec_percent_mean": 199.142857,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 2.0,
+        "presentmon_fps": null,
+        "program_monitor_fps": 0.0965586497237867,
+        "preview_monitor_fps": 0.0965586497237867
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "partial_evidence": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "dxv-1080p30-16l-display-0fx-normal · display 1",
+      "tag": "dxv-1080p30-16l-display-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Native work window fails despite preparation p95 within budget",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "46.335025 fps; cadence fail, missed 22.8307%, interval p99 55.0101 ms. Prepare p50/p95/p99 0.7251/2.2631/32.5792 ms, n=600. Native failed, n=600; validation mean/max 17.486/75.204 ms; work misses 62.3333%.",
+      "approach": "Inspect matched preparation tails and final composition/present timings, including possible present/vsync waits. Preparation p95 does not clear p99 or maxima; native work does not isolate GPU execution.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "fail",
+        "envelope_status": "miss",
+        "native_validation_state": "failed",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.769062,
+        "delivered_frames_delta": 916.0,
+        "delivered_fps": 46.335025,
+        "missed_fraction": 0.228307,
+        "cadence_p99_ms": 55.0101,
+        "cadence_sample_count": 599.0,
+        "cadence_window_span_seconds_derived": 12.563948,
+        "prepare_p50_ms": 0.7251,
+        "prepare_p95_ms": 2.2631,
+        "prepare_p99_ms": 32.5792,
+        "prepare_sample_count": 600.0,
+        "native_validation_frame_count": 600.0,
+        "native_validation_average_ms": 17.486,
+        "native_validation_max_ms": 75.204,
+        "native_validation_deadline_miss_fraction": 0.623333,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 18.145272,
+        "native_work_observation_frame_delta": 913.0,
+        "decode_demand_mean_wall_ms": 1.047945,
+        "decode_demand_call_count_delta": 913.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 32.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 0.0,
+        "decoder_last_sessions": 16.0,
+        "cpu_percent_of_32_logical_mean": 22.115584,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 3720777728.0,
+        "working_set_bytes_peak": 3332636672.0,
+        "gpu_3d_percent_mean": 38.0,
+        "gpu_video_codec_percent_mean": 0.0,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 924.0,
+        "presentmon_fps": 46.39322,
+        "program_monitor_fps": 1.2910938433950987,
+        "preview_monitor_fps": 1.2910938433950987
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_failed"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-1l-display4k-0fx-normal · display 1",
+      "tag": "h264-1080p30-1l-display4k-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Preparation tail exceeds the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "43.939327 fps; cadence fail, missed 26.7581%, interval p99 42.1532 ms. Prepare p50/p95/p99 20.2852/23.9483/37.947 ms, n=600. Native failed, n=600; validation mean/max 22.787/44.079 ms; work misses 81.1667%.",
+      "approach": "Correlate per-frame demand, conversion/transfer and remaining preparation timings. A low demand mean cannot exclude demand-tail stalls; do not estimate other preparation by subtracting it from p95.",
+      "composition_path": "CPU composition: single-layer eligibility rule",
+      "limitations": [],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "fail",
+        "envelope_status": "miss",
+        "native_validation_state": "failed",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.435892,
+        "delivered_frames_delta": 854.0,
+        "delivered_fps": 43.939327,
+        "missed_fraction": 0.267581,
+        "cadence_p99_ms": 42.1532,
+        "cadence_sample_count": 599.0,
+        "cadence_window_span_seconds_derived": 13.673625,
+        "prepare_p50_ms": 20.2852,
+        "prepare_p95_ms": 23.9483,
+        "prepare_p99_ms": 37.947,
+        "prepare_sample_count": 600.0,
+        "native_validation_frame_count": 600.0,
+        "native_validation_average_ms": 22.787,
+        "native_validation_max_ms": 44.079,
+        "native_validation_deadline_miss_fraction": 0.811667,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 22.741557,
+        "native_work_observation_frame_delta": 854.0,
+        "decode_demand_mean_wall_ms": 0.618256,
+        "decode_demand_call_count_delta": 854.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 1.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 1.0,
+        "decoder_last_sessions": 1.0,
+        "cpu_percent_of_32_logical_mean": 10.988535,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 1816403968.0,
+        "working_set_bytes_peak": 1459109888.0,
+        "gpu_3d_percent_mean": 17.636364,
+        "gpu_video_codec_percent_mean": 14.636364,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 878.0,
+        "presentmon_fps": 43.989904,
+        "program_monitor_fps": 7.027852746961093,
+        "preview_monitor_fps": 7.027852746961093
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_failed"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-3l-display4k-0fx-normal · display 1",
+      "tag": "h264-1080p30-3l-display4k-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Preparation tail exceeds the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "23.640514 fps; cadence fail, missed 60.5354%, interval p99 374.0371 ms. Prepare p50/p95/p99 21.0164/78.9165/342.5573 ms, n=600. Native failed, n=600; validation mean/max 41.613/518.479 ms; work misses 80.3333%.",
+      "approach": "Correlate per-frame demand, conversion/transfer and remaining preparation timings. A low demand mean cannot exclude demand-tail stalls; do not estimate other preparation by subtracting it from p95.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "fail",
+        "envelope_status": "miss",
+        "native_validation_state": "failed",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.331221,
+        "delivered_frames_delta": 457.0,
+        "delivered_fps": 23.640514,
+        "missed_fraction": 0.605354,
+        "cadence_p99_ms": 374.0371,
+        "cadence_sample_count": 599.0,
+        "cadence_window_span_seconds_derived": 25.156576,
+        "prepare_p50_ms": 21.0164,
+        "prepare_p95_ms": 78.9165,
+        "prepare_p99_ms": 342.5573,
+        "prepare_sample_count": 600.0,
+        "native_validation_frame_count": 600.0,
+        "native_validation_average_ms": 41.613,
+        "native_validation_max_ms": 518.479,
+        "native_validation_deadline_miss_fraction": 0.803333,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 42.001446,
+        "native_work_observation_frame_delta": 457.0,
+        "decode_demand_mean_wall_ms": 8.66551,
+        "decode_demand_call_count_delta": 457.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 3.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 3.0,
+        "decoder_last_sessions": 3.0,
+        "cpu_percent_of_32_logical_mean": 8.07164,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 3184467968.0,
+        "working_set_bytes_peak": 2425430016.0,
+        "gpu_3d_percent_mean": 20.727273,
+        "gpu_video_codec_percent_mean": 50.272727,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 462.0,
+        "presentmon_fps": 23.55822,
+        "program_monitor_fps": 1.0303714243658308,
+        "preview_monitor_fps": 0.049065305922182424
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_failed"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-3l-spout-0fx-normal · display 1",
+      "tag": "h264-1080p30-3l-spout-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Delivered cadence fails; finer localization is not established",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "57.834489 fps; cadence fail, missed 3.5714%, interval p99 21.4322 ms. Prepare p50/p95/p99 0.3726/1.3197/2.7179 ms, n=600. Native passed, n=600; validation mean/max 3.348/30.075 ms; work misses 0.3333%.",
+      "approach": "Correlate health responses with native work and the exact PresentMon stream; measure response latency, scheduling and the relevant send/present boundary.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "pass",
+        "envelope_status": "miss",
+        "native_validation_state": "passed",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.607677,
+        "delivered_frames_delta": 1134.0,
+        "delivered_fps": 57.834489,
+        "missed_fraction": 0.035714,
+        "cadence_p99_ms": 21.4322,
+        "cadence_sample_count": 599.0,
+        "cadence_window_span_seconds_derived": 9.997497,
+        "prepare_p50_ms": 0.3726,
+        "prepare_p95_ms": 1.3197,
+        "prepare_p99_ms": 2.7179,
+        "prepare_sample_count": 600.0,
+        "native_validation_frame_count": 600.0,
+        "native_validation_average_ms": 3.348,
+        "native_validation_max_ms": 30.075,
+        "native_validation_deadline_miss_fraction": 0.003333,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 4.300837,
+        "native_work_observation_frame_delta": 1136.0,
+        "decode_demand_mean_wall_ms": 0.643623,
+        "decode_demand_call_count_delta": 1136.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 6.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 3.0,
+        "decoder_last_sessions": 3.0,
+        "cpu_percent_of_32_logical_mean": 15.337872,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 3312005120.0,
+        "working_set_bytes_peak": 2466283520.0,
+        "gpu_3d_percent_mean": 11.181818,
+        "gpu_video_codec_percent_mean": 47.818182,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 1157.0,
+        "presentmon_fps": 57.966059,
+        "program_monitor_fps": 10.39576433044025,
+        "preview_monitor_fps": 10.347411938205642
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": []
+      }
+    },
+    {
+      "identity": "h264-1080p30-3l-spout-0fx-normal · spout 2",
+      "tag": "h264-1080p30-3l-spout-0fx-normal",
+      "output_kind": "spout",
+      "output_id": "2",
+      "boundary": "Delivered cadence fails; finer localization is not established",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "57.681488 fps; cadence fail, missed 3.9082%, interval p99 21.2517 ms. Prepare p50/p95/p99 6.9775/9.2392/10.959 ms, n=600. Native gate not_applicable.",
+      "approach": "Correlate health responses with native work and the exact PresentMon stream; measure response latency, scheduling and the relevant send/present boundary. Respect the sender preparation/readback boundary and time SDK send separately.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "not_applicable",
+        "envelope_status": "miss",
+        "native_validation_state": null,
+        "native_work_status": null,
+        "decode_status": null,
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.607677,
+        "delivered_frames_delta": 1131.0,
+        "delivered_fps": 57.681488,
+        "missed_fraction": 0.039082,
+        "cadence_p99_ms": 21.2517,
+        "cadence_sample_count": 599.0,
+        "cadence_window_span_seconds_derived": 10.001508,
+        "prepare_p50_ms": 6.9775,
+        "prepare_p95_ms": 9.2392,
+        "prepare_p99_ms": 10.959,
+        "prepare_sample_count": 600.0,
+        "native_validation_frame_count": null,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": null,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": null,
+        "decode_demand_mean_wall_ms": null,
+        "decode_demand_call_count_delta": null,
+        "decoder_session_opens_delta": null,
+        "decoder_working_set_evictions_delta": null,
+        "decoder_session_resets_delta": null,
+        "decoder_failures_delta": null,
+        "decoder_last_hardware_sessions": null,
+        "decoder_last_sessions": null,
+        "cpu_percent_of_32_logical_mean": 15.337872,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 3312005120.0,
+        "working_set_bytes_peak": 2466283520.0,
+        "gpu_3d_percent_mean": 11.181818,
+        "gpu_video_codec_percent_mean": 47.818182,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 1157.0,
+        "presentmon_fps": 57.966059,
+        "program_monitor_fps": 10.39576433044025,
+        "preview_monitor_fps": 10.347411938205642
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": []
+      }
+    },
+    {
+      "identity": "h264-1080p30-6l-display4k-0fx-normal · display 1",
+      "tag": "h264-1080p30-6l-display4k-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "6.344281 fps; cadence fail, missed 89.2734%, interval p99 1140.1104 ms. Prepare p50/p95/p99 67.6981/533.3585/1053.2389 ms, n=207. Native sampling, n=123; validation mean/max 154.961/839.945 ms; work misses 100%.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "sampling",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.545163,
+        "delivered_frames_delta": 124.0,
+        "delivered_fps": 6.344281,
+        "missed_fraction": 0.892734,
+        "cadence_p99_ms": 1140.1104,
+        "cadence_sample_count": 207.0,
+        "cadence_window_span_seconds_derived": 31.840906,
+        "prepare_p50_ms": 67.6981,
+        "prepare_p95_ms": 533.3585,
+        "prepare_p99_ms": 1053.2389,
+        "prepare_sample_count": 207.0,
+        "native_validation_frame_count": 123.0,
+        "native_validation_average_ms": 154.961,
+        "native_validation_max_ms": 839.945,
+        "native_validation_deadline_miss_fraction": 1.0,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 154.961,
+        "native_work_observation_frame_delta": 123.0,
+        "decode_demand_mean_wall_ms": 101.317056,
+        "decode_demand_call_count_delta": 124.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 6.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 6.0,
+        "decoder_last_sessions": 6.0,
+        "cpu_percent_of_32_logical_mean": 10.133722,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 5348241408.0,
+        "working_set_bytes_peak": 4028436480.0,
+        "gpu_3d_percent_mean": 9.0,
+        "gpu_video_codec_percent_mean": 116.909091,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 121.0,
+        "presentmon_fps": 6.408502,
+        "program_monitor_fps": 0.9222360827296973,
+        "preview_monitor_fps": 0.0
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-6l-spout-0fx-normal · display 1",
+      "tag": "h264-1080p30-6l-spout-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "18.890204 fps; cadence fail, missed 68.5154%, interval p99 670.4765 ms. Prepare p50/p95/p99 10.6462/190.8517/663.1202 ms, n=597. Native sampling, n=534; validation mean/max 42.735/1695.786 ms; work misses 40.0749%.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "sampling",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.533934,
+        "delivered_frames_delta": 369.0,
+        "delivered_fps": 18.890204,
+        "missed_fraction": 0.685154,
+        "cadence_p99_ms": 670.4765,
+        "cadence_sample_count": 597.0,
+        "cadence_window_span_seconds_derived": 31.8499,
+        "prepare_p50_ms": 10.6462,
+        "prepare_p95_ms": 190.8517,
+        "prepare_p99_ms": 663.1202,
+        "prepare_sample_count": 597.0,
+        "native_validation_frame_count": 534.0,
+        "native_validation_average_ms": 42.735,
+        "native_validation_max_ms": 1695.786,
+        "native_validation_deadline_miss_fraction": 0.400749,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 49.138535,
+        "native_work_observation_frame_delta": 370.0,
+        "decode_demand_mean_wall_ms": 27.160624,
+        "decode_demand_call_count_delta": 370.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 18.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 6.0,
+        "decoder_last_sessions": 6.0,
+        "cpu_percent_of_32_logical_mean": 12.876596,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 4896989184.0,
+        "working_set_bytes_peak": 3543953408.0,
+        "gpu_3d_percent_mean": 5.818182,
+        "gpu_video_codec_percent_mean": 137.272727,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 396.0,
+        "presentmon_fps": 19.806428,
+        "program_monitor_fps": 0.9222674187195165,
+        "preview_monitor_fps": 0.0
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-6l-spout-0fx-normal · spout 2",
+      "tag": "h264-1080p30-6l-spout-0fx-normal",
+      "output_kind": "spout",
+      "output_id": "2",
+      "boundary": "Preparation tail exceeds the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "18.634239 fps; cadence fail, missed 68.9155%, interval p99 719.7417 ms. Prepare p50/p95/p99 16.7482/210.0407/611.0026 ms, n=600. Native gate not_applicable.",
+      "approach": "Correlate per-frame demand, conversion/transfer and remaining preparation timings. A low demand mean cannot exclude demand-tail stalls; do not estimate other preparation by subtracting it from p95. Respect the sender preparation/readback boundary and time SDK send separately.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "not_applicable",
+        "envelope_status": "miss",
+        "native_validation_state": null,
+        "native_work_status": null,
+        "decode_status": null,
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.533934,
+        "delivered_frames_delta": 364.0,
+        "delivered_fps": 18.634239,
+        "missed_fraction": 0.689155,
+        "cadence_p99_ms": 719.7417,
+        "cadence_sample_count": 599.0,
+        "cadence_window_span_seconds_derived": 30.822429,
+        "prepare_p50_ms": 16.7482,
+        "prepare_p95_ms": 210.0407,
+        "prepare_p99_ms": 611.0026,
+        "prepare_sample_count": 600.0,
+        "native_validation_frame_count": null,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": null,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": null,
+        "decode_demand_mean_wall_ms": null,
+        "decode_demand_call_count_delta": null,
+        "decoder_session_opens_delta": null,
+        "decoder_working_set_evictions_delta": null,
+        "decoder_session_resets_delta": null,
+        "decoder_failures_delta": null,
+        "decoder_last_hardware_sessions": null,
+        "decoder_last_sessions": null,
+        "cpu_percent_of_32_logical_mean": 12.876596,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 4896989184.0,
+        "working_set_bytes_peak": 3543953408.0,
+        "gpu_3d_percent_mean": 5.818182,
+        "gpu_video_codec_percent_mean": 137.272727,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 396.0,
+        "presentmon_fps": 19.806428,
+        "program_monitor_fps": 0.9222674187195165,
+        "preview_monitor_fps": 0.0
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": []
+      }
+    },
+    {
+      "identity": "h264-1080p30-8l-display4k-0fx-normal · display 1",
+      "tag": "h264-1080p30-8l-display4k-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "3.860333 fps; cadence fail, missed 93.5919%, interval p99 2075.9988 ms. Prepare p50/p95/p99 84.9776/1165.5467/2058.1959 ms, n=119. Native sampling, n=51; validation mean/max 286.633/2376.136 ms; work misses 100%.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "sampling",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.687421,
+        "delivered_frames_delta": 76.0,
+        "delivered_fps": 3.860333,
+        "missed_fraction": 0.935919,
+        "cadence_p99_ms": 2075.9988,
+        "cadence_sample_count": 119.0,
+        "cadence_window_span_seconds_derived": 32.010163,
+        "prepare_p50_ms": 84.9776,
+        "prepare_p95_ms": 1165.5467,
+        "prepare_p99_ms": 2058.1959,
+        "prepare_sample_count": 119.0,
+        "native_validation_frame_count": 51.0,
+        "native_validation_average_ms": 286.633,
+        "native_validation_max_ms": 2376.136,
+        "native_validation_deadline_miss_fraction": 1.0,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 286.633,
+        "native_work_observation_frame_delta": 51.0,
+        "decode_demand_mean_wall_ms": 199.285816,
+        "decode_demand_call_count_delta": 76.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 24.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 8.0,
+        "decoder_last_sessions": 8.0,
+        "cpu_percent_of_32_logical_mean": 9.834463,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 6786191360.0,
+        "working_set_bytes_peak": 4944584704.0,
+        "gpu_3d_percent_mean": 6.363636,
+        "gpu_video_codec_percent_mean": 146.818182,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 74.0,
+        "presentmon_fps": 3.803861,
+        "program_monitor_fps": 0.7692529592203081,
+        "preview_monitor_fps": 0.04807830995126926
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-8l-spout-0fx-normal · display 1",
+      "tag": "h264-1080p30-8l-spout-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "4.260474 fps; cadence fail, missed 92.5225%, interval p99 2347.6598 ms. Prepare p50/p95/p99 52.489/822.9501/2342.497 ms, n=171. Native sampling, n=110; validation mean/max 188.772/3037.458 ms; work misses 90%.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "sampling",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.4814,
+        "delivered_frames_delta": 83.0,
+        "delivered_fps": 4.260474,
+        "missed_fraction": 0.925225,
+        "cadence_p99_ms": 2347.6598,
+        "cadence_sample_count": 171.0,
+        "cadence_window_span_seconds_derived": 31.84912,
+        "prepare_p50_ms": 52.489,
+        "prepare_p95_ms": 822.9501,
+        "prepare_p99_ms": 2342.497,
+        "prepare_sample_count": 171.0,
+        "native_validation_frame_count": 110.0,
+        "native_validation_average_ms": 188.772,
+        "native_validation_max_ms": 3037.458,
+        "native_validation_deadline_miss_fraction": 0.9,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 222.635205,
+        "native_work_observation_frame_delta": 83.0,
+        "decode_demand_mean_wall_ms": 175.886506,
+        "decode_demand_call_count_delta": 83.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 32.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 8.0,
+        "decoder_last_sessions": 8.0,
+        "cpu_percent_of_32_logical_mean": 7.599227,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 6152982528.0,
+        "working_set_bytes_peak": 4269490176.0,
+        "gpu_3d_percent_mean": 2.727273,
+        "gpu_video_codec_percent_mean": 165.727273,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 86.0,
+        "presentmon_fps": 4.407506,
+        "program_monitor_fps": 0.5360153592765545,
+        "preview_monitor_fps": 0.04872866902514132
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-8l-spout-0fx-normal · spout 2",
+      "tag": "h264-1080p30-8l-spout-0fx-normal",
+      "output_kind": "spout",
+      "output_id": "2",
+      "boundary": "Preparation tail exceeds the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "4.106481 fps; cadence fail, missed 91.3514%, interval p99 2302.046 ms. Prepare p50/p95/p99 58.4364/863.919/2290.2117 ms, n=165. Native gate not_applicable.",
+      "approach": "Correlate per-frame demand, conversion/transfer and remaining preparation timings. A low demand mean cannot exclude demand-tail stalls; do not estimate other preparation by subtracting it from p95. Respect the sender preparation/readback boundary and time SDK send separately.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [
+        "Short rolling history; percentiles are descriptive and may include warmup"
+      ],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "not_applicable",
+        "envelope_status": "miss",
+        "native_validation_state": null,
+        "native_work_status": null,
+        "decode_status": null,
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.4814,
+        "delivered_frames_delta": 80.0,
+        "delivered_fps": 4.106481,
+        "missed_fraction": 0.913514,
+        "cadence_p99_ms": 2302.046,
+        "cadence_sample_count": 164.0,
+        "cadence_window_span_seconds_derived": 32.84833,
+        "prepare_p50_ms": 58.4364,
+        "prepare_p95_ms": 863.919,
+        "prepare_p99_ms": 2290.2117,
+        "prepare_sample_count": 165.0,
+        "native_validation_frame_count": null,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": null,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": null,
+        "decode_demand_mean_wall_ms": null,
+        "decode_demand_call_count_delta": null,
+        "decoder_session_opens_delta": null,
+        "decoder_working_set_evictions_delta": null,
+        "decoder_session_resets_delta": null,
+        "decoder_failures_delta": null,
+        "decoder_last_hardware_sessions": null,
+        "decoder_last_sessions": null,
+        "cpu_percent_of_32_logical_mean": 7.599227,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 6152982528.0,
+        "working_set_bytes_peak": 4269490176.0,
+        "gpu_3d_percent_mean": 2.727273,
+        "gpu_video_codec_percent_mean": 165.727273,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 86.0,
+        "presentmon_fps": 4.407506,
+        "program_monitor_fps": 0.5360153592765545,
+        "preview_monitor_fps": 0.04872866902514132
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": []
+      }
+    },
+    {
+      "identity": "h264-1080p30-12l-display4k-0fx-normal · display 1",
+      "tag": "h264-1080p30-12l-display4k-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "0.965405 fps; cadence fail, missed 98.3898%, interval p99 3317.3245 ms. Prepare p50/p95/p99 426.2298/2924.3278/3156.6886 ms, n=35. Native pending, n=0; validation mean/max unavailable/unavailable ms; work misses unavailable.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [
+        "Partial evidence: partial_display_1_native_work_pending_warmup",
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "pending",
+        "native_work_status": "pending_warmup",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.680861,
+        "delivered_frames_delta": 19.0,
+        "delivered_fps": 0.965405,
+        "missed_fraction": 0.983898,
+        "cadence_p99_ms": 3317.3245,
+        "cadence_sample_count": 35.0,
+        "cadence_window_span_seconds_derived": 31.921359,
+        "prepare_p50_ms": 426.2298,
+        "prepare_p95_ms": 2924.3278,
+        "prepare_p99_ms": 3156.6886,
+        "prepare_sample_count": 35.0,
+        "native_validation_frame_count": 0.0,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": 26.0,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": 0.0,
+        "decode_demand_mean_wall_ms": 944.997053,
+        "decode_demand_call_count_delta": 19.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 96.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 12.0,
+        "decoder_last_sessions": 12.0,
+        "cpu_percent_of_32_logical_mean": 5.834623,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 9765998592.0,
+        "working_set_bytes_peak": 7584505856.0,
+        "gpu_3d_percent_mean": 6.181818,
+        "gpu_video_codec_percent_mean": 165.090909,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 19.0,
+        "presentmon_fps": 1.006195,
+        "program_monitor_fps": 0.5297911178109437,
+        "preview_monitor_fps": 0.1926513155676159
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "partial_display_1_native_work_pending_warmup"
+        ],
+        "partial_evidence": [
+          "partial_display_1_native_work_pending_warmup"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-12l-spout-0fx-normal · display 1",
+      "tag": "h264-1080p30-12l-spout-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "0.308274 fps; cadence fail, missed 99.4%, interval p99 5001.619 ms. Prepare p50/p95/p99 2679.0059/4948.4499/4948.4499 ms, n=10. Native pending, n=0; validation mean/max unavailable/unavailable ms; work misses unavailable.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [
+        "Partial evidence: instrumentation_partial_presentmon_insufficient_samples, partial_display_1_native_work_pending_warmup, presentmon_insufficient_samples",
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "pending",
+        "native_work_status": "pending_warmup",
+        "decode_status": "measured",
+        "presentmon_status": "insufficient_samples",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.463195,
+        "delivered_frames_delta": 6.0,
+        "delivered_fps": 0.308274,
+        "missed_fraction": 0.994,
+        "cadence_p99_ms": 5001.619,
+        "cadence_sample_count": 10.0,
+        "cadence_window_span_seconds_derived": 31.680219,
+        "prepare_p50_ms": 2679.0059,
+        "prepare_p95_ms": 4948.4499,
+        "prepare_p99_ms": 4948.4499,
+        "prepare_sample_count": 10.0,
+        "native_validation_frame_count": 0.0,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": 51.0,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": 0.0,
+        "decode_demand_mean_wall_ms": 2722.256833,
+        "decode_demand_call_count_delta": 6.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 72.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 12.0,
+        "decoder_last_sessions": 12.0,
+        "cpu_percent_of_32_logical_mean": 3.654182,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 8246009856.0,
+        "working_set_bytes_peak": 5563682816.0,
+        "gpu_3d_percent_mean": 1.0,
+        "gpu_video_codec_percent_mean": 187.272727,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 4.0,
+        "presentmon_fps": null,
+        "program_monitor_fps": 0.2924589460754022,
+        "preview_monitor_fps": 0.0487431576792337
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "partial_evidence": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-12l-spout-0fx-normal · spout 2",
+      "tag": "h264-1080p30-12l-spout-0fx-normal",
+      "output_kind": "spout",
+      "output_id": "2",
+      "boundary": "Preparation tail exceeds the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "0.308274 fps; cadence fail, missed 99.4%, interval p99 4993.3368 ms. Prepare p50/p95/p99 2150.078/4958.2396/4958.2396 ms, n=12. Native gate not_applicable.",
+      "approach": "Correlate per-frame demand, conversion/transfer and remaining preparation timings. A low demand mean cannot exclude demand-tail stalls; do not estimate other preparation by subtracting it from p95. Respect the sender preparation/readback boundary and time SDK send separately.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [
+        "Partial evidence: instrumentation_partial_presentmon_insufficient_samples, partial_display_1_native_work_pending_warmup, presentmon_insufficient_samples",
+        "Short rolling history; percentiles are descriptive and may include warmup"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_applicable",
+        "envelope_status": "miss",
+        "native_validation_state": null,
+        "native_work_status": null,
+        "decode_status": null,
+        "presentmon_status": "insufficient_samples",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.463195,
+        "delivered_frames_delta": 6.0,
+        "delivered_fps": 0.308274,
+        "missed_fraction": 0.994,
+        "cadence_p99_ms": 4993.3368,
+        "cadence_sample_count": 11.0,
+        "cadence_window_span_seconds_derived": 33.227655,
+        "prepare_p50_ms": 2150.078,
+        "prepare_p95_ms": 4958.2396,
+        "prepare_p99_ms": 4958.2396,
+        "prepare_sample_count": 12.0,
+        "native_validation_frame_count": null,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": null,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": null,
+        "decode_demand_mean_wall_ms": null,
+        "decode_demand_call_count_delta": null,
+        "decoder_session_opens_delta": null,
+        "decoder_working_set_evictions_delta": null,
+        "decoder_session_resets_delta": null,
+        "decoder_failures_delta": null,
+        "decoder_last_hardware_sessions": null,
+        "decoder_last_sessions": null,
+        "cpu_percent_of_32_logical_mean": 3.654182,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 8246009856.0,
+        "working_set_bytes_peak": 5563682816.0,
+        "gpu_3d_percent_mean": 1.0,
+        "gpu_video_codec_percent_mean": 187.272727,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 4.0,
+        "presentmon_fps": null,
+        "program_monitor_fps": 0.2924589460754022,
+        "preview_monitor_fps": 0.0487431576792337
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "partial_evidence": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": []
+      }
+    },
+    {
+      "identity": "h264-1080p30-16l-display4k-0fx-normal · display 1",
+      "tag": "h264-1080p30-16l-display4k-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "0.355659 fps; cadence fail, missed 99.3966%, interval p99 4316.6784 ms. Prepare p50/p95/p99 1628.1741/4197.931/4197.931 ms, n=15. Native pending, n=0; validation mean/max unavailable/unavailable ms; work misses unavailable.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [
+        "Partial evidence: instrumentation_partial_presentmon_insufficient_samples, partial_display_1_native_work_pending_warmup, presentmon_insufficient_samples",
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "pending",
+        "native_work_status": "pending_warmup",
+        "decode_status": "measured",
+        "presentmon_status": "insufficient_samples",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.681766,
+        "delivered_frames_delta": 7.0,
+        "delivered_fps": 0.355659,
+        "missed_fraction": 0.993966,
+        "cadence_p99_ms": 4316.6784,
+        "cadence_sample_count": 15.0,
+        "cadence_window_span_seconds_derived": 31.975815,
+        "prepare_p50_ms": 1628.1741,
+        "prepare_p95_ms": 4197.931,
+        "prepare_p99_ms": 4197.931,
+        "prepare_sample_count": 15.0,
+        "native_validation_frame_count": 0.0,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": 46.0,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": 0.0,
+        "decode_demand_mean_wall_ms": 2617.887857,
+        "decode_demand_call_count_delta": 7.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 112.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 16.0,
+        "decoder_last_sessions": 16.0,
+        "cpu_percent_of_32_logical_mean": 4.655771,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 11977420800.0,
+        "working_set_bytes_peak": 9626181632.0,
+        "gpu_3d_percent_mean": 0.714286,
+        "gpu_video_codec_percent_mean": 194.714286,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 5.0,
+        "presentmon_fps": null,
+        "program_monitor_fps": 0.4337077677061819,
+        "preview_monitor_fps": 0.14456925590206063
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "partial_evidence": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-16l-spout-0fx-normal · display 1",
+      "tag": "h264-1080p30-16l-spout-0fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "0.202906 fps; cadence fail, missed 99.6546%, interval p99 6362.9318 ms. Prepare p50/p95/p99 4226.0284/6351.6373/6351.6373 ms, n=7. Native pending, n=0; validation mean/max unavailable/unavailable ms; work misses unavailable.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [
+        "Partial evidence: instrumentation_partial_presentmon_insufficient_samples, partial_display_1_native_work_pending_warmup, presentmon_insufficient_samples",
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "pending",
+        "native_work_status": "pending_warmup",
+        "decode_status": "measured",
+        "presentmon_status": "insufficient_samples",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.713517,
+        "delivered_frames_delta": 4.0,
+        "delivered_fps": 0.202906,
+        "missed_fraction": 0.996546,
+        "cadence_p99_ms": 6362.9318,
+        "cadence_sample_count": 7.0,
+        "cadence_window_span_seconds_derived": 31.927113,
+        "prepare_p50_ms": 4226.0284,
+        "prepare_p95_ms": 6351.6373,
+        "prepare_p99_ms": 6351.6373,
+        "prepare_sample_count": 7.0,
+        "native_validation_frame_count": 0.0,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": 54.0,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": 0.0,
+        "decode_demand_mean_wall_ms": 4760.7105,
+        "decode_demand_call_count_delta": 4.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 64.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 16.0,
+        "decoder_last_sessions": 16.0,
+        "cpu_percent_of_32_logical_mean": 4.192449,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 10207481856.0,
+        "working_set_bytes_peak": 7306944512.0,
+        "gpu_3d_percent_mean": 1.090909,
+        "gpu_video_codec_percent_mean": 188.272727,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 2.0,
+        "presentmon_fps": null,
+        "program_monitor_fps": 0.28893661693750594,
+        "preview_monitor_fps": 0.14446830846875297
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "partial_evidence": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-16l-spout-0fx-normal · spout 2",
+      "tag": "h264-1080p30-16l-spout-0fx-normal",
+      "output_kind": "spout",
+      "output_id": "2",
+      "boundary": "Preparation tail exceeds the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "0.202906 fps; cadence fail, missed 99.6558%, interval p99 7738.224 ms. Prepare p50/p95/p99 3413.141/7733.5065/7733.5065 ms, n=9. Native gate not_applicable.",
+      "approach": "Correlate per-frame demand, conversion/transfer and remaining preparation timings. A low demand mean cannot exclude demand-tail stalls; do not estimate other preparation by subtracting it from p95. Respect the sender preparation/readback boundary and time SDK send separately.",
+      "composition_path": "GPU composition buffers observed",
+      "limitations": [
+        "Partial evidence: instrumentation_partial_presentmon_insufficient_samples, partial_display_1_native_work_pending_warmup, presentmon_insufficient_samples",
+        "Short rolling history; percentiles are descriptive and may include warmup"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_applicable",
+        "envelope_status": "miss",
+        "native_validation_state": null,
+        "native_work_status": null,
+        "decode_status": null,
+        "presentmon_status": "insufficient_samples",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.713517,
+        "delivered_frames_delta": 4.0,
+        "delivered_fps": 0.202906,
+        "missed_fraction": 0.996558,
+        "cadence_p99_ms": 7738.224,
+        "cadence_sample_count": 8.0,
+        "cadence_window_span_seconds_derived": 34.504378,
+        "prepare_p50_ms": 3413.141,
+        "prepare_p95_ms": 7733.5065,
+        "prepare_p99_ms": 7733.5065,
+        "prepare_sample_count": 9.0,
+        "native_validation_frame_count": null,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": null,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": null,
+        "decode_demand_mean_wall_ms": null,
+        "decode_demand_call_count_delta": null,
+        "decoder_session_opens_delta": null,
+        "decoder_working_set_evictions_delta": null,
+        "decoder_session_resets_delta": null,
+        "decoder_failures_delta": null,
+        "decoder_last_hardware_sessions": null,
+        "decoder_last_sessions": null,
+        "cpu_percent_of_32_logical_mean": 4.192449,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 10207481856.0,
+        "working_set_bytes_peak": 7306944512.0,
+        "gpu_3d_percent_mean": 1.090909,
+        "gpu_video_codec_percent_mean": 188.272727,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 2.0,
+        "presentmon_fps": null,
+        "program_monitor_fps": 0.28893661693750594,
+        "preview_monitor_fps": 0.14446830846875297
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "partial_evidence": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": []
+      }
+    },
+    {
+      "identity": "h264-1080p30-1l-display-1fx-normal · display 1",
+      "tag": "h264-1080p30-1l-display-1fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Preparation tail exceeds the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "50.934489 fps; cadence fail, missed 15.1724%, interval p99 25.6593 ms. Prepare p50/p95/p99 17.3582/20.6657/23.4565 ms, n=600. Native failed, n=600; validation mean/max 19.602/35.431 ms; work misses 99.6667%.",
+      "approach": "Correlate per-frame demand, conversion/transfer and remaining preparation timings. A low demand mean cannot exclude demand-tail stalls; do not estimate other preparation by subtracting it from p95. Verify actual ISF execution, then compare the matched FX0 case; the configured effect count alone does not isolate shader or copy cost.",
+      "composition_path": "CPU composition: single-layer eligibility rule",
+      "limitations": [],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "fail",
+        "envelope_status": "miss",
+        "native_validation_state": "failed",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.318933,
+        "delivered_frames_delta": 984.0,
+        "delivered_fps": 50.934489,
+        "missed_fraction": 0.151724,
+        "cadence_p99_ms": 25.6593,
+        "cadence_sample_count": 599.0,
+        "cadence_window_span_seconds_derived": 11.753037,
+        "prepare_p50_ms": 17.3582,
+        "prepare_p95_ms": 20.6657,
+        "prepare_p99_ms": 23.4565,
+        "prepare_sample_count": 600.0,
+        "native_validation_frame_count": 600.0,
+        "native_validation_average_ms": 19.602,
+        "native_validation_max_ms": 35.431,
+        "native_validation_deadline_miss_fraction": 0.996667,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 19.635622,
+        "native_work_observation_frame_delta": 984.0,
+        "decode_demand_mean_wall_ms": 0.392676,
+        "decode_demand_call_count_delta": 984.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 1.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 1.0,
+        "decoder_last_sessions": 1.0,
+        "cpu_percent_of_32_logical_mean": 5.917121,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 2400546816.0,
+        "working_set_bytes_peak": 1768235008.0,
+        "gpu_3d_percent_mean": 6.363636,
+        "gpu_video_codec_percent_mean": 14.090909,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 1018.0,
+        "presentmon_fps": 50.984373,
+        "program_monitor_fps": 7.024024127276253,
+        "preview_monitor_fps": 7.024024127276253
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_failed"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-1l-display-3fx-normal · display 1",
+      "tag": "h264-1080p30-1l-display-3fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Preparation tail exceeds the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "20.678472 fps; cadence fail, missed 65.5469%, interval p99 61.2844 ms. Prepare p50/p95/p99 45.004/56.0151/58.4545 ms, n=600. Native sampling, n=579; validation mean/max 47.675/99.355 ms; work misses 100%.",
+      "approach": "Correlate per-frame demand, conversion/transfer and remaining preparation timings. A low demand mean cannot exclude demand-tail stalls; do not estimate other preparation by subtracting it from p95. Verify actual ISF execution, then compare the matched FX0 case; the configured effect count alone does not isolate shader or copy cost.",
+      "composition_path": "CPU composition: single-layer eligibility rule",
+      "limitations": [
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "sampling",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.343789,
+        "delivered_frames_delta": 400.0,
+        "delivered_fps": 20.678472,
+        "missed_fraction": 0.655469,
+        "cadence_p99_ms": 61.2844,
+        "cadence_sample_count": 599.0,
+        "cadence_window_span_seconds_derived": 28.547462,
+        "prepare_p50_ms": 45.004,
+        "prepare_p95_ms": 56.0151,
+        "prepare_p99_ms": 58.4545,
+        "prepare_sample_count": 600.0,
+        "native_validation_frame_count": 579.0,
+        "native_validation_average_ms": 47.675,
+        "native_validation_max_ms": 99.355,
+        "native_validation_deadline_miss_fraction": 1.0,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 48.34625,
+        "native_work_observation_frame_delta": 400.0,
+        "decode_demand_mean_wall_ms": 4.708308,
+        "decode_demand_call_count_delta": 400.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 1.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 1.0,
+        "decoder_last_sessions": 1.0,
+        "cpu_percent_of_32_logical_mean": 3.873066,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 2026303488.0,
+        "working_set_bytes_peak": 1548140544.0,
+        "gpu_3d_percent_mean": 4.636364,
+        "gpu_video_codec_percent_mean": 17.727273,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 412.0,
+        "presentmon_fps": 20.718223,
+        "program_monitor_fps": 1.0304017585527867,
+        "preview_monitor_fps": 0.0
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-3l-display-1fx-normal · display 1",
+      "tag": "h264-1080p30-3l-display-1fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "11.032462 fps; cadence fail, missed 81.7094%, interval p99 436.0414 ms. Prepare p50/p95/p99 65.5839/255.9686/433.8739 ms, n=354. Native sampling, n=288; validation mean/max 87.069/502.562 ms; work misses 100%.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work. Verify actual ISF execution, then compare the matched FX0 case; the configured effect count alone does not isolate shader or copy cost.",
+      "composition_path": "CPU composition; no GPU composition layers retained",
+      "limitations": [
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "sampling",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.397303,
+        "delivered_frames_delta": 214.0,
+        "delivered_fps": 11.032462,
+        "missed_fraction": 0.817094,
+        "cadence_p99_ms": 436.0414,
+        "cadence_sample_count": 354.0,
+        "cadence_window_span_seconds_derived": 31.65385,
+        "prepare_p50_ms": 65.5839,
+        "prepare_p95_ms": 255.9686,
+        "prepare_p99_ms": 433.8739,
+        "prepare_sample_count": 354.0,
+        "native_validation_frame_count": 288.0,
+        "native_validation_average_ms": 87.069,
+        "native_validation_max_ms": 502.562,
+        "native_validation_deadline_miss_fraction": 1.0,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 91.100271,
+        "native_work_observation_frame_delta": 214.0,
+        "decode_demand_mean_wall_ms": 31.967682,
+        "decode_demand_call_count_delta": 214.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 3.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 3.0,
+        "decoder_last_sessions": 3.0,
+        "cpu_percent_of_32_logical_mean": 5.198513,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 2740625408.0,
+        "working_set_bytes_peak": 1989488640.0,
+        "gpu_3d_percent_mean": 3.363636,
+        "gpu_video_codec_percent_mean": 53.272727,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 216.0,
+        "presentmon_fps": 10.926486,
+        "program_monitor_fps": 0.9786220023581936,
+        "preview_monitor_fps": 0.0
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-3l-display-3fx-normal · display 1",
+      "tag": "h264-1080p30-3l-display-3fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "5.282777 fps; cadence fail, missed 91.115%, interval p99 579.8536 ms. Prepare p50/p95/p99 151.3896/416.1994/577.9683 ms, n=165. Native sampling, n=102; validation mean/max 187.648/579.687 ms; work misses 100%.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work. Verify actual ISF execution, then compare the matched FX0 case; the configured effect count alone does not isolate shader or copy cost.",
+      "composition_path": "CPU composition; no GPU composition layers retained",
+      "limitations": [
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "sampling",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.308028,
+        "delivered_frames_delta": 102.0,
+        "delivered_fps": 5.282777,
+        "missed_fraction": 0.91115,
+        "cadence_p99_ms": 579.8536,
+        "cadence_sample_count": 165.0,
+        "cadence_window_span_seconds_derived": 31.413169,
+        "prepare_p50_ms": 151.3896,
+        "prepare_p95_ms": 416.1994,
+        "prepare_p99_ms": 577.9683,
+        "prepare_sample_count": 165.0,
+        "native_validation_frame_count": 102.0,
+        "native_validation_average_ms": 187.648,
+        "native_validation_max_ms": 579.687,
+        "native_validation_deadline_miss_fraction": 1.0,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 187.648,
+        "native_work_observation_frame_delta": 102.0,
+        "decode_demand_mean_wall_ms": 57.321451,
+        "decode_demand_call_count_delta": 102.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 3.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 3.0,
+        "decoder_last_sessions": 3.0,
+        "cpu_percent_of_32_logical_mean": 3.818846,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 2730729472.0,
+        "working_set_bytes_peak": 1984516096.0,
+        "gpu_3d_percent_mean": 3.333333,
+        "gpu_video_codec_percent_mean": 56.916667,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 103.0,
+        "presentmon_fps": 5.260645,
+        "program_monitor_fps": 0.9831198324760925,
+        "preview_monitor_fps": 0.0
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-6l-display-1fx-normal · display 1",
+      "tag": "h264-1080p30-6l-display-1fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "4.365994 fps; cadence fail, missed 92.7101%, interval p99 1156.307 ms. Prepare p50/p95/p99 130.5469/724.2947/1154.5461 ms, n=134. Native sampling, n=73; validation mean/max 225.913/1156.348 ms; work misses 100%.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work. Verify actual ISF execution, then compare the matched FX0 case; the configured effect count alone does not isolate shader or copy cost.",
+      "composition_path": "CPU composition; no GPU composition layers retained",
+      "limitations": [
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "sampling",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.468649,
+        "delivered_frames_delta": 85.0,
+        "delivered_fps": 4.365994,
+        "missed_fraction": 0.927101,
+        "cadence_p99_ms": 1156.307,
+        "cadence_sample_count": 134.0,
+        "cadence_window_span_seconds_derived": 31.687752,
+        "prepare_p50_ms": 130.5469,
+        "prepare_p95_ms": 724.2947,
+        "prepare_p99_ms": 1154.5461,
+        "prepare_sample_count": 134.0,
+        "native_validation_frame_count": 73.0,
+        "native_validation_average_ms": 225.913,
+        "native_validation_max_ms": 1156.348,
+        "native_validation_deadline_miss_fraction": 1.0,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 225.913,
+        "native_work_observation_frame_delta": 73.0,
+        "decode_demand_mean_wall_ms": 121.183294,
+        "decode_demand_call_count_delta": 85.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 12.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 6.0,
+        "decoder_last_sessions": 6.0,
+        "cpu_percent_of_32_logical_mean": 4.646164,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 3608952832.0,
+        "working_set_bytes_peak": 2617827328.0,
+        "gpu_3d_percent_mean": 2.636364,
+        "gpu_video_codec_percent_mean": 106.363636,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 87.0,
+        "presentmon_fps": 4.423223,
+        "program_monitor_fps": 0.8771032204309124,
+        "preview_monitor_fps": 0.0
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-6l-display-3fx-normal · display 1",
+      "tag": "h264-1080p30-6l-display-3fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "2.424335 fps; cadence fail, missed 95.9343%, interval p99 1777.8766 ms. Prepare p50/p95/p99 327.3153/1143.521/1775.9407 ms, n=67. Native sampling, n=6; validation mean/max 401.235/691.056 ms; work misses 100%.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work. Verify actual ISF execution, then compare the matched FX0 case; the configured effect count alone does not isolate shader or copy cost.",
+      "composition_path": "CPU composition; no GPU composition layers retained",
+      "limitations": [
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "sampling",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.386757,
+        "delivered_frames_delta": 47.0,
+        "delivered_fps": 2.424335,
+        "missed_fraction": 0.959343,
+        "cadence_p99_ms": 1777.8766,
+        "cadence_sample_count": 67.0,
+        "cadence_window_span_seconds_derived": 31.567783,
+        "prepare_p50_ms": 327.3153,
+        "prepare_p95_ms": 1143.521,
+        "prepare_p99_ms": 1775.9407,
+        "prepare_sample_count": 67.0,
+        "native_validation_frame_count": 6.0,
+        "native_validation_average_ms": 401.235,
+        "native_validation_max_ms": 691.056,
+        "native_validation_deadline_miss_fraction": 1.0,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 401.235,
+        "native_work_observation_frame_delta": 6.0,
+        "decode_demand_mean_wall_ms": 165.292298,
+        "decode_demand_call_count_delta": 47.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 6.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 6.0,
+        "decoder_last_sessions": 6.0,
+        "cpu_percent_of_32_logical_mean": 3.901628,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 3732369408.0,
+        "working_set_bytes_peak": 2592448512.0,
+        "gpu_3d_percent_mean": 2.545455,
+        "gpu_video_codec_percent_mean": 122.272727,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 47.0,
+        "presentmon_fps": 2.441059,
+        "program_monitor_fps": 0.831060139422681,
+        "preview_monitor_fps": 0.0
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-8l-display-1fx-normal · display 1",
+      "tag": "h264-1080p30-8l-display-1fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "2.627543 fps; cadence fail, missed 95.6148%, interval p99 2370.443 ms. Prepare p50/p95/p99 197.539/1916.8378/2368.434 ms, n=75. Native sampling, n=14; validation mean/max 596.005/2370.327 ms; work misses 100%.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work. Verify actual ISF execution, then compare the matched FX0 case; the configured effect count alone does not isolate shader or copy cost.",
+      "composition_path": "CPU composition; no GPU composition layers retained",
+      "limitations": [
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "sampling",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.40977,
+        "delivered_frames_delta": 51.0,
+        "delivered_fps": 2.627543,
+        "missed_fraction": 0.956148,
+        "cadence_p99_ms": 2370.443,
+        "cadence_sample_count": 75.0,
+        "cadence_window_span_seconds_derived": 31.628996,
+        "prepare_p50_ms": 197.539,
+        "prepare_p95_ms": 1916.8378,
+        "prepare_p99_ms": 2368.434,
+        "prepare_sample_count": 75.0,
+        "native_validation_frame_count": 14.0,
+        "native_validation_average_ms": 596.005,
+        "native_validation_max_ms": 2370.327,
+        "native_validation_deadline_miss_fraction": 1.0,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 596.005,
+        "native_work_observation_frame_delta": 14.0,
+        "decode_demand_mean_wall_ms": 243.291706,
+        "decode_demand_call_count_delta": 51.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 24.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 8.0,
+        "decoder_last_sessions": 8.0,
+        "cpu_percent_of_32_logical_mean": 4.830336,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 4525506560.0,
+        "working_set_bytes_peak": 3065028608.0,
+        "gpu_3d_percent_mean": 2.363636,
+        "gpu_video_codec_percent_mean": 139.545455,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 52.0,
+        "presentmon_fps": 2.721676,
+        "program_monitor_fps": 0.7334927457564238,
+        "preview_monitor_fps": 0.0
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-8l-display-3fx-normal · display 1",
+      "tag": "h264-1080p30-8l-display-3fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "1.180019 fps; cadence fail, missed 97.8383%, interval p99 2498.195 ms. Prepare p50/p95/p99 492.1898/2148.3216/2496.4168 ms, n=35. Native pending, n=0; validation mean/max unavailable/unavailable ms; work misses unavailable.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work. Verify actual ISF execution, then compare the matched FX0 case; the configured effect count alone does not isolate shader or copy cost.",
+      "composition_path": "CPU composition; no GPU composition layers retained",
+      "limitations": [
+        "Partial evidence: partial_display_1_native_work_pending_warmup",
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "pending",
+        "native_work_status": "pending_warmup",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.491218,
+        "delivered_frames_delta": 23.0,
+        "delivered_fps": 1.180019,
+        "missed_fraction": 0.978383,
+        "cadence_p99_ms": 2498.195,
+        "cadence_sample_count": 35.0,
+        "cadence_window_span_seconds_derived": 31.682254,
+        "prepare_p50_ms": 492.1898,
+        "prepare_p95_ms": 2148.3216,
+        "prepare_p99_ms": 2496.4168,
+        "prepare_sample_count": 35.0,
+        "native_validation_frame_count": 0.0,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": 26.0,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": 0.0,
+        "decode_demand_mean_wall_ms": 454.711304,
+        "decode_demand_call_count_delta": 23.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 32.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 8.0,
+        "decoder_last_sessions": 8.0,
+        "cpu_percent_of_32_logical_mean": 3.76335,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 4491677696.0,
+        "working_set_bytes_peak": 3039207424.0,
+        "gpu_3d_percent_mean": 2.0,
+        "gpu_video_codec_percent_mean": 143.181818,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 22.0,
+        "presentmon_fps": 1.320744,
+        "program_monitor_fps": 0.6331765003850522,
+        "preview_monitor_fps": 0.0
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "partial_display_1_native_work_pending_warmup"
+        ],
+        "partial_evidence": [
+          "partial_display_1_native_work_pending_warmup"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-12l-display-1fx-normal · display 1",
+      "tag": "h264-1080p30-12l-display-1fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "0.717941 fps; cadence fail, missed 98.6577%, interval p99 3583.75 ms. Prepare p50/p95/p99 942.1258/3433.9818/3566.1786 ms, n=20. Native pending, n=0; validation mean/max unavailable/unavailable ms; work misses unavailable.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work. Verify actual ISF execution, then compare the matched FX0 case; the configured effect count alone does not isolate shader or copy cost.",
+      "composition_path": "CPU composition; no GPU composition layers retained",
+      "limitations": [
+        "Partial evidence: partial_display_1_native_work_pending_warmup",
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "pending",
+        "native_work_status": "pending_warmup",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.5002,
+        "delivered_frames_delta": 14.0,
+        "delivered_fps": 0.717941,
+        "missed_fraction": 0.986577,
+        "cadence_p99_ms": 3583.75,
+        "cadence_sample_count": 20.0,
+        "cadence_window_span_seconds_derived": 31.672625,
+        "prepare_p50_ms": 942.1258,
+        "prepare_p95_ms": 3433.9818,
+        "prepare_p99_ms": 3566.1786,
+        "prepare_sample_count": 20.0,
+        "native_validation_frame_count": 0.0,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": 41.0,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": 0.0,
+        "decode_demand_mean_wall_ms": 1029.428643,
+        "decode_demand_call_count_delta": 14.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 72.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 12.0,
+        "decoder_last_sessions": 12.0,
+        "cpu_percent_of_32_logical_mean": 4.425287,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 5866532864.0,
+        "working_set_bytes_peak": 3878830080.0,
+        "gpu_3d_percent_mean": 1.272727,
+        "gpu_video_codec_percent_mean": 172.636364,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 13.0,
+        "presentmon_fps": 0.84445,
+        "program_monitor_fps": 0.5356603718455354,
+        "preview_monitor_fps": 0.0
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "partial_display_1_native_work_pending_warmup"
+        ],
+        "partial_evidence": [
+          "partial_display_1_native_work_pending_warmup"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-12l-display-3fx-normal · display 1",
+      "tag": "h264-1080p30-12l-display-3fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "0.563049 fps; cadence fail, missed 99.0969%, interval p99 4726.1363 ms. Prepare p50/p95/p99 1752.3511/4708.3674/4708.3674 ms, n=15. Native pending, n=0; validation mean/max unavailable/unavailable ms; work misses unavailable.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work. Verify actual ISF execution, then compare the matched FX0 case; the configured effect count alone does not isolate shader or copy cost.",
+      "composition_path": "CPU composition; no GPU composition layers retained",
+      "limitations": [
+        "Partial evidence: instrumentation_partial_presentmon_insufficient_samples, partial_display_1_native_work_pending_warmup, presentmon_insufficient_samples",
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "pending",
+        "native_work_status": "pending_warmup",
+        "decode_status": "measured",
+        "presentmon_status": "insufficient_samples",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.536471,
+        "delivered_frames_delta": 11.0,
+        "delivered_fps": 0.563049,
+        "missed_fraction": 0.990969,
+        "cadence_p99_ms": 4726.1363,
+        "cadence_sample_count": 15.0,
+        "cadence_window_span_seconds_derived": 31.740968,
+        "prepare_p50_ms": 1752.3511,
+        "prepare_p95_ms": 4708.3674,
+        "prepare_p99_ms": 4708.3674,
+        "prepare_sample_count": 15.0,
+        "native_validation_frame_count": 0.0,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": 46.0,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": 0.0,
+        "decode_demand_mean_wall_ms": 1360.323364,
+        "decode_demand_call_count_delta": 11.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 84.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 12.0,
+        "decoder_last_sessions": 12.0,
+        "cpu_percent_of_32_logical_mean": 4.141551,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 6394064896.0,
+        "working_set_bytes_peak": 4241965056.0,
+        "gpu_3d_percent_mean": 2.0,
+        "gpu_video_codec_percent_mean": 136.818182,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 9.0,
+        "presentmon_fps": null,
+        "program_monitor_fps": 0.5341646878295323,
+        "preview_monitor_fps": 0.04856042616632112
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "partial_evidence": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-16l-display-1fx-normal · display 1",
+      "tag": "h264-1080p30-16l-display-1fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "0.306684 fps; cadence fail, missed 99.4036%, interval p99 4675.0399 ms. Prepare p50/p95/p99 2249.6466/4672.9997/4672.9997 ms, n=10. Native pending, n=0; validation mean/max unavailable/unavailable ms; work misses unavailable.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work. Verify actual ISF execution, then compare the matched FX0 case; the configured effect count alone does not isolate shader or copy cost.",
+      "composition_path": "CPU composition; no GPU composition layers retained",
+      "limitations": [
+        "Partial evidence: instrumentation_partial_presentmon_insufficient_samples, partial_display_1_native_work_pending_warmup, presentmon_insufficient_samples",
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "pending",
+        "native_work_status": "pending_warmup",
+        "decode_status": "measured",
+        "presentmon_status": "insufficient_samples",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.564115,
+        "delivered_frames_delta": 6.0,
+        "delivered_fps": 0.306684,
+        "missed_fraction": 0.994036,
+        "cadence_p99_ms": 4675.0399,
+        "cadence_sample_count": 10.0,
+        "cadence_window_span_seconds_derived": 31.938795,
+        "prepare_p50_ms": 2249.6466,
+        "prepare_p95_ms": 4672.9997,
+        "prepare_p99_ms": 4672.9997,
+        "prepare_sample_count": 10.0,
+        "native_validation_frame_count": 0.0,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": 51.0,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": 0.0,
+        "decode_demand_mean_wall_ms": 2525.0235,
+        "decode_demand_call_count_delta": 6.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 96.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 16.0,
+        "decoder_last_sessions": 16.0,
+        "cpu_percent_of_32_logical_mean": 3.915079,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 7624421376.0,
+        "working_set_bytes_peak": 5014786048.0,
+        "gpu_3d_percent_mean": 1.090909,
+        "gpu_video_codec_percent_mean": 182.818182,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 5.0,
+        "presentmon_fps": null,
+        "program_monitor_fps": 0.3876851802494345,
+        "preview_monitor_fps": 0.04846064753117931
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "partial_evidence": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-16l-display-3fx-normal · display 1",
+      "tag": "h264-1080p30-16l-display-3fx-normal",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "0.358893 fps; cadence fail, missed 99.3986%, interval p99 6815.3212 ms. Prepare p50/p95/p99 2737.0042/6796.9705/6796.9705 ms, n=10. Native pending, n=0; validation mean/max unavailable/unavailable ms; work misses unavailable.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work. Verify actual ISF execution, then compare the matched FX0 case; the configured effect count alone does not isolate shader or copy cost.",
+      "composition_path": "CPU composition; no GPU composition layers retained",
+      "limitations": [
+        "Partial evidence: instrumentation_partial_presentmon_insufficient_samples, partial_display_1_native_work_pending_warmup, presentmon_insufficient_samples",
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "pending",
+        "native_work_status": "pending_warmup",
+        "decode_status": "measured",
+        "presentmon_status": "insufficient_samples",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.504395,
+        "delivered_frames_delta": 7.0,
+        "delivered_fps": 0.358893,
+        "missed_fraction": 0.993986,
+        "cadence_p99_ms": 6815.3212,
+        "cadence_sample_count": 10.0,
+        "cadence_window_span_seconds_derived": 31.735364,
+        "prepare_p50_ms": 2737.0042,
+        "prepare_p95_ms": 6796.9705,
+        "prepare_p99_ms": 6796.9705,
+        "prepare_sample_count": 10.0,
+        "native_validation_frame_count": 0.0,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": 51.0,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": 0.0,
+        "decode_demand_mean_wall_ms": 2172.219286,
+        "decode_demand_call_count_delta": 7.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 96.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 16.0,
+        "decoder_last_sessions": 16.0,
+        "cpu_percent_of_32_logical_mean": 4.404477,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 7494324224.0,
+        "working_set_bytes_peak": 5018476544.0,
+        "gpu_3d_percent_mean": 1.909091,
+        "gpu_video_codec_percent_mean": 154.454545,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 5.0,
+        "presentmon_fps": null,
+        "program_monitor_fps": 0.3892830379649412,
+        "preview_monitor_fps": 0.0973207594912353
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "partial_evidence": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-3l-display-0fx-normal-cpu · display 1",
+      "tag": "h264-1080p30-3l-display-0fx-normal-cpu",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "10.9996 fps; cadence fail, missed 81.725%, interval p99 383.1678 ms. Prepare p50/p95/p99 71.275/243.5961/381.208 ms, n=344. Native sampling, n=279; validation mean/max 88.526/437.84 ms; work misses 100%.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work.",
+      "composition_path": "CPU composition; no GPU composition layers retained",
+      "limitations": [
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "sampling",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.455253,
+        "delivered_frames_delta": 214.0,
+        "delivered_fps": 10.9996,
+        "missed_fraction": 0.81725,
+        "cadence_p99_ms": 383.1678,
+        "cadence_sample_count": 344.0,
+        "cadence_window_span_seconds_derived": 31.866937,
+        "prepare_p50_ms": 71.275,
+        "prepare_p95_ms": 243.5961,
+        "prepare_p99_ms": 381.208,
+        "prepare_sample_count": 344.0,
+        "native_validation_frame_count": 279.0,
+        "native_validation_average_ms": 88.526,
+        "native_validation_max_ms": 437.84,
+        "native_validation_deadline_miss_fraction": 1.0,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 91.292423,
+        "native_work_observation_frame_delta": 213.0,
+        "decode_demand_mean_wall_ms": 32.640178,
+        "decode_demand_call_count_delta": 213.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 3.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 3.0,
+        "decoder_last_sessions": 3.0,
+        "cpu_percent_of_32_logical_mean": 15.669656,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 1965629440.0,
+        "working_set_bytes_peak": 1549131776.0,
+        "gpu_3d_percent_mean": 1.272727,
+        "gpu_video_codec_percent_mean": 76.909091,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 213.0,
+        "presentmon_fps": 10.948447,
+        "program_monitor_fps": 1.0239856446960394,
+        "preview_monitor_fps": 0.0
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-8l-display-0fx-normal-cpu · display 1",
+      "tag": "h264-1080p30-8l-display-0fx-normal-cpu",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "2.486072 fps; cadence fail, missed 95.8789%, interval p99 2434.8176 ms. Prepare p50/p95/p99 212.2065/1883.9291/2432.2281 ms, n=70. Native sampling, n=9; validation mean/max 310.702/1215.508 ms; work misses 100%.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work.",
+      "composition_path": "CPU composition; no GPU composition layers retained",
+      "limitations": [
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "sampling",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.709805,
+        "delivered_frames_delta": 49.0,
+        "delivered_fps": 2.486072,
+        "missed_fraction": 0.958789,
+        "cadence_p99_ms": 2434.8176,
+        "cadence_sample_count": 70.0,
+        "cadence_window_span_seconds_derived": 31.958794,
+        "prepare_p50_ms": 212.2065,
+        "prepare_p95_ms": 1883.9291,
+        "prepare_p99_ms": 2432.2281,
+        "prepare_sample_count": 70.0,
+        "native_validation_frame_count": 9.0,
+        "native_validation_average_ms": 310.702,
+        "native_validation_max_ms": 1215.508,
+        "native_validation_deadline_miss_fraction": 1.0,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 310.702,
+        "native_work_observation_frame_delta": 9.0,
+        "decode_demand_mean_wall_ms": 253.060449,
+        "decode_demand_call_count_delta": 49.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 32.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 8.0,
+        "decoder_last_sessions": 8.0,
+        "cpu_percent_of_32_logical_mean": 11.860341,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 3801354240.0,
+        "working_set_bytes_peak": 2603020288.0,
+        "gpu_3d_percent_mean": 0.636364,
+        "gpu_video_codec_percent_mean": 151.818182,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 48.0,
+        "presentmon_fps": 2.525429,
+        "program_monitor_fps": 0.7219903830878901,
+        "preview_monitor_fps": 0.09626538441171868
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-16l-display-0fx-normal-cpu · display 1",
+      "tag": "h264-1080p30-16l-display-0fx-normal-cpu",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "0.551833 fps; cadence fail, missed 99.0871%, interval p99 4185.2215 ms. Prepare p50/p95/p99 1245.9028/4183.0231/4183.0231 ms, n=16. Native pending, n=0; validation mean/max unavailable/unavailable ms; work misses unavailable.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work.",
+      "composition_path": "CPU composition; no GPU composition layers retained",
+      "limitations": [
+        "Partial evidence: instrumentation_partial_presentmon_insufficient_samples, partial_display_1_native_work_pending_warmup, presentmon_insufficient_samples",
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "pending",
+        "native_work_status": "pending_warmup",
+        "decode_status": "measured",
+        "presentmon_status": "insufficient_samples",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.933584,
+        "delivered_frames_delta": 11.0,
+        "delivered_fps": 0.551833,
+        "missed_fraction": 0.990871,
+        "cadence_p99_ms": 4185.2215,
+        "cadence_sample_count": 16.0,
+        "cadence_window_span_seconds_derived": 32.156935,
+        "prepare_p50_ms": 1245.9028,
+        "prepare_p95_ms": 4183.0231,
+        "prepare_p99_ms": 4183.0231,
+        "prepare_sample_count": 16.0,
+        "native_validation_frame_count": 0.0,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": 45.0,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": 0.0,
+        "decode_demand_mean_wall_ms": 1519.182909,
+        "decode_demand_call_count_delta": 11.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 112.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 16.0,
+        "decoder_last_sessions": 16.0,
+        "cpu_percent_of_32_logical_mean": 8.14081,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 6737068032.0,
+        "working_set_bytes_peak": 4457979904.0,
+        "gpu_3d_percent_mean": 0.363636,
+        "gpu_video_codec_percent_mean": 134.909091,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 9.0,
+        "presentmon_fps": null,
+        "program_monitor_fps": 0.4756242568370987,
+        "preview_monitor_fps": 0.1426872770511296
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "partial_evidence": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-3l-display-groups · display 1",
+      "tag": "h264-1080p30-3l-display-groups",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Native work window fails despite preparation p95 within budget",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "57.509883 fps; cadence fail, missed 4.0886%, interval p99 20.3451 ms. Prepare p50/p95/p99 11.9816/14.3226/14.9637 ms, n=600. Native failed, n=600; validation mean/max 14.538/18.459 ms; work misses 6.5%.",
+      "approach": "Inspect matched preparation tails and final composition/present timings, including possible present/vsync waits. Preparation p95 does not clear p99 or maxima; native work does not isolate GPU execution. Time group isolation and outer composition separately; a group variant can change execution paths and semantics.",
+      "composition_path": "CPU group isolation with GPU outer composition",
+      "limitations": [],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "fail",
+        "envelope_status": "miss",
+        "native_validation_state": "failed",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.579243,
+        "delivered_frames_delta": 1126.0,
+        "delivered_fps": 57.509883,
+        "missed_fraction": 0.040886,
+        "cadence_p99_ms": 20.3451,
+        "cadence_sample_count": 599.0,
+        "cadence_window_span_seconds_derived": 9.998916,
+        "prepare_p50_ms": 11.9816,
+        "prepare_p95_ms": 14.3226,
+        "prepare_p99_ms": 14.9637,
+        "prepare_sample_count": 600.0,
+        "native_validation_frame_count": 600.0,
+        "native_validation_average_ms": 14.538,
+        "native_validation_max_ms": 18.459,
+        "native_validation_deadline_miss_fraction": 0.065,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 15.090457,
+        "native_work_observation_frame_delta": 1127.0,
+        "decode_demand_mean_wall_ms": 0.42142,
+        "decode_demand_call_count_delta": 1127.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 3.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 3.0,
+        "decoder_last_sessions": 3.0,
+        "cpu_percent_of_32_logical_mean": 12.89857,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 2214682624.0,
+        "working_set_bytes_peak": 1606373376.0,
+        "gpu_3d_percent_mean": 9.909091,
+        "gpu_video_codec_percent_mean": 35.818182,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 1151.0,
+        "presentmon_fps": 57.607411,
+        "program_monitor_fps": 10.168014332058297,
+        "preview_monitor_fps": 9.974337868590519
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_failed"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-8l-display-groups · display 1",
+      "tag": "h264-1080p30-8l-display-groups",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Preparation tail exceeds the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "19.95334 fps; cadence fail, missed 64.6057%, interval p99 892.8237 ms. Prepare p50/p95/p99 17.6886/168.0107/890.3303 ms, n=568. Native sampling, n=507; validation mean/max 43.261/922.139 ms; work misses 70.4142%.",
+      "approach": "Correlate per-frame demand, conversion/transfer and remaining preparation timings. A low demand mean cannot exclude demand-tail stalls; do not estimate other preparation by subtracting it from p95. Time group isolation and outer composition separately; a group variant can change execution paths and semantics.",
+      "composition_path": "CPU group isolation with GPU outer composition",
+      "limitations": [
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "complete",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "sampling",
+        "native_work_status": "measured",
+        "decode_status": "measured",
+        "presentmon_status": "measured",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.796184,
+        "delivered_frames_delta": 395.0,
+        "delivered_fps": 19.95334,
+        "missed_fraction": 0.646057,
+        "cadence_p99_ms": 892.8237,
+        "cadence_sample_count": 568.0,
+        "cadence_window_span_seconds_derived": 32.020306,
+        "prepare_p50_ms": 17.6886,
+        "prepare_p95_ms": 168.0107,
+        "prepare_p99_ms": 890.3303,
+        "prepare_sample_count": 568.0,
+        "native_validation_frame_count": 507.0,
+        "native_validation_average_ms": 43.261,
+        "native_validation_max_ms": 922.139,
+        "native_validation_deadline_miss_fraction": 0.704142,
+        "native_warmup_remaining": 0.0,
+        "native_work_observation_mean_ms_approx": 47.01541,
+        "native_work_observation_frame_delta": 395.0,
+        "decode_demand_mean_wall_ms": 11.908122,
+        "decode_demand_call_count_delta": 395.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 8.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 8.0,
+        "decoder_last_sessions": 8.0,
+        "cpu_percent_of_32_logical_mean": 12.165404,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 3849244672.0,
+        "working_set_bytes_peak": 2565754880.0,
+        "gpu_3d_percent_mean": 4.181818,
+        "gpu_video_codec_percent_mean": 136.454545,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 391.0,
+        "presentmon_fps": 21.149505,
+        "program_monitor_fps": 0.7678943377390173,
+        "preview_monitor_fps": 0.04799339610868858
+      },
+      "reason_codes": {
+        "measurement_issues": [],
+        "partial_evidence": [],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    },
+    {
+      "identity": "h264-1080p30-16l-display-groups · display 1",
+      "tag": "h264-1080p30-16l-display-groups",
+      "output_kind": "display",
+      "output_id": "1",
+      "boundary": "Synchronous decoder-demand latency and preparation exceed the frame interval",
+      "confidence": "observed boundary; isolated component cause unestablished",
+      "evidence": "0.40705 fps; cadence fail, missed 99.2467%, interval p99 4417.9954 ms. Prepare p50/p95/p99 1956.098/4414.8806/4414.8806 ms, n=12. Native pending, n=0; validation mean/max unavailable/unavailable ms; work misses unavailable.",
+      "approach": "Record matched demand/preparation timings, demand waits and lookahead availability; inspect bounded reset-reason/target-gap summaries. The demand timer includes waiting and does not measure background work. Time group isolation and outer composition separately; a group variant can change execution paths and semantics.",
+      "composition_path": "CPU group isolation with GPU outer composition",
+      "limitations": [
+        "Partial evidence: instrumentation_partial_presentmon_insufficient_samples, partial_display_1_native_work_pending_warmup, presentmon_insufficient_samples",
+        "Short rolling history; percentiles are descriptive and may include warmup",
+        "Native acceptance not established"
+      ],
+      "statuses": {
+        "measurement_status": "partial",
+        "cadence_status": "fail",
+        "native_status": "not_established",
+        "envelope_status": "miss",
+        "native_validation_state": "pending",
+        "native_work_status": "pending_warmup",
+        "decode_status": "measured",
+        "presentmon_status": "insufficient_samples",
+        "cpu_status": "measured",
+        "gpu_provider_status": "measured"
+      },
+      "numeric_evidence": {
+        "target_fps": 60.0,
+        "elapsed_seconds": 19.653599,
+        "delivered_frames_delta": 8.0,
+        "delivered_fps": 0.40705,
+        "missed_fraction": 0.992467,
+        "cadence_p99_ms": 4417.9954,
+        "cadence_sample_count": 12.0,
+        "cadence_window_span_seconds_derived": 31.969274,
+        "prepare_p50_ms": 1956.098,
+        "prepare_p95_ms": 4414.8806,
+        "prepare_p99_ms": 4414.8806,
+        "prepare_sample_count": 12.0,
+        "native_validation_frame_count": 0.0,
+        "native_validation_average_ms": null,
+        "native_validation_max_ms": null,
+        "native_validation_deadline_miss_fraction": null,
+        "native_warmup_remaining": 49.0,
+        "native_work_observation_mean_ms_approx": null,
+        "native_work_observation_frame_delta": 0.0,
+        "decode_demand_mean_wall_ms": 2168.728625,
+        "decode_demand_call_count_delta": 8.0,
+        "decoder_session_opens_delta": 0.0,
+        "decoder_working_set_evictions_delta": 0.0,
+        "decoder_session_resets_delta": 112.0,
+        "decoder_failures_delta": 0.0,
+        "decoder_last_hardware_sessions": 16.0,
+        "decoder_last_sessions": 16.0,
+        "cpu_percent_of_32_logical_mean": 4.236451,
+        "cpu_interval_coverage": 1.0,
+        "private_bytes_peak": 6711623680.0,
+        "working_set_bytes_peak": 4374700032.0,
+        "gpu_3d_percent_mean": 0.454545,
+        "gpu_video_codec_percent_mean": 186.090909,
+        "gpu_video_codec_count_mean": 2.0,
+        "gpu_video_codec_coverage": 1.0,
+        "presentmon_matching_rows": 6.0,
+        "presentmon_fps": null,
+        "program_monitor_fps": 0.38574852089540435,
+        "preview_monitor_fps": 0.09643713022385109
+      },
+      "reason_codes": {
+        "measurement_issues": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "partial_evidence": [
+          "instrumentation_partial_presentmon_insufficient_samples",
+          "partial_display_1_native_work_pending_warmup",
+          "presentmon_insufficient_samples"
+        ],
+        "cadence_reasons": [
+          "cadence_p99_above_policy",
+          "delivered_rate_below_policy",
+          "missed_interval_fraction_above_policy"
+        ],
+        "native_reasons": [
+          "native_validation_not_complete"
+        ]
+      }
+    }
+  ],
+  "not_established": [
+    {
+      "tag": "h264-1080p30-1l-ndi-0fx-normal",
+      "outputs": [
+        "display ",
+        "ndi "
+      ],
+      "case_result": "unsupported",
+      "measurement_statuses": [
+        "unsupported"
+      ],
+      "reason_codes": [
+        "ndi_not_built"
+      ],
+      "envelope_status": "not_established",
+      "action": "NotBuilt; no cadence or throughput conclusion"
+    },
+    {
+      "tag": "h264-1080p30-3l-ndi-0fx-normal",
+      "outputs": [
+        "display ",
+        "ndi "
+      ],
+      "case_result": "unsupported",
+      "measurement_statuses": [
+        "unsupported"
+      ],
+      "reason_codes": [
+        "ndi_not_built"
+      ],
+      "envelope_status": "not_established",
+      "action": "NotBuilt; no cadence or throughput conclusion"
+    },
+    {
+      "tag": "h264-1080p30-6l-ndi-0fx-normal",
+      "outputs": [
+        "display ",
+        "ndi "
+      ],
+      "case_result": "unsupported",
+      "measurement_statuses": [
+        "unsupported"
+      ],
+      "reason_codes": [
+        "ndi_not_built"
+      ],
+      "envelope_status": "not_established",
+      "action": "NotBuilt; no cadence or throughput conclusion"
+    },
+    {
+      "tag": "h264-1080p30-8l-ndi-0fx-normal",
+      "outputs": [
+        "display ",
+        "ndi "
+      ],
+      "case_result": "unsupported",
+      "measurement_statuses": [
+        "unsupported"
+      ],
+      "reason_codes": [
+        "ndi_not_built"
+      ],
+      "envelope_status": "not_established",
+      "action": "NotBuilt; no cadence or throughput conclusion"
+    },
+    {
+      "tag": "h264-1080p30-12l-ndi-0fx-normal",
+      "outputs": [
+        "display ",
+        "ndi "
+      ],
+      "case_result": "unsupported",
+      "measurement_statuses": [
+        "unsupported"
+      ],
+      "reason_codes": [
+        "ndi_not_built"
+      ],
+      "envelope_status": "not_established",
+      "action": "NotBuilt; no cadence or throughput conclusion"
+    },
+    {
+      "tag": "h264-1080p30-16l-ndi-0fx-normal",
+      "outputs": [
+        "display ",
+        "ndi "
+      ],
+      "case_result": "unsupported",
+      "measurement_statuses": [
+        "unsupported"
+      ],
+      "reason_codes": [
+        "ndi_not_built"
+      ],
+      "envelope_status": "not_established",
+      "action": "NotBuilt; no cadence or throughput conclusion"
+    }
+  ]
+}

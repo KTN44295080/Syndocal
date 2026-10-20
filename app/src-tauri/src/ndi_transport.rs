@@ -1143,6 +1143,7 @@ impl NdiOutputWorker {
             let mut worker_error = startup_error;
             let mut failure_lease = None;
             while startup_ready && !worker_stop.load(Ordering::Acquire) {
+                let render_started = Instant::now();
                 let presentation_sample = engine.video_presentation_sample();
                 let snapshot = &presentation_sample.snapshot;
                 let ownership = engine.output_ownership_status();
@@ -1255,6 +1256,9 @@ impl NdiOutputWorker {
                         None => Err(error),
                     },
                 };
+                // Include preparation / materialization, not admission waits,
+                // the SDK send or cadence sleep.
+                let render_time = render_started.elapsed();
                 let result = match rendered {
                     Ok((TimelineFollowOutputRenderDecision::NotApplicable { key, reason }, _)) => {
                         // This transport cannot prove an atomic engine video
@@ -1378,7 +1382,7 @@ impl NdiOutputWorker {
                                                 rgba: frame.data,
                                             })
                                             .map_err(|error| error.to_string())?;
-                                        output_health.delivered();
+                                        output_health.delivered_with_render_time(render_time);
                                         Ok(())
                                     },
                                 );
@@ -1845,7 +1849,17 @@ mod capture_decoder_tests {
             .collect::<Vec<_>>();
         assert!(expected.iter().all(Result::is_err));
         assert_eq!(together.decode_input_frames(&inputs), expected);
-        assert_eq!(together.diagnostics(), one_by_one.diagnostics());
+        let mut batch = together.diagnostics();
+        let mut serial = one_by_one.diagnostics();
+        assert_eq!(batch.decode_call_count, 1);
+        assert_eq!(serial.decode_call_count, 3);
+        // Compare all deterministic counters; wall time and demand-call count
+        // are intentionally different between batch and serial execution.
+        batch.decode_wall_us = 0;
+        serial.decode_wall_us = 0;
+        batch.decode_call_count = 0;
+        serial.decode_call_count = 0;
+        assert_eq!(batch, serial);
         assert_eq!(together.diagnostics().libav_requests, 3);
     }
 
@@ -1878,7 +1892,13 @@ mod capture_decoder_tests {
                 .map(|frame| frame.map(Arc::unwrap_or_clone));
             assert_eq!(actual, expected, "{:?}", input.request.source.kind);
         }
-        assert_eq!(shared.diagnostics(), owned.diagnostics());
+        let mut shared_diagnostics = shared.diagnostics();
+        let mut owned_diagnostics = owned.diagnostics();
+        assert_eq!(shared_diagnostics.decode_call_count, 1);
+        assert_eq!(owned_diagnostics.decode_call_count, 1);
+        shared_diagnostics.decode_wall_us = 0;
+        owned_diagnostics.decode_wall_us = 0;
+        assert_eq!(shared_diagnostics, owned_diagnostics);
     }
 
     #[test]

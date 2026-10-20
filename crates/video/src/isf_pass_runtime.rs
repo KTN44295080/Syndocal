@@ -256,6 +256,7 @@ impl IsfGpuRuntime {
         }
         self.evict_resources_for(baseline_bytes);
         let expected_len = frame.width as usize * frame.height as usize * 4;
+        // Upload borrows RGBA bytes; only format conversion owns a temporary.
         let rgba = if frame.format == VideoPixelFormat::Rgba8 {
             Cow::Borrowed(frame)
         } else {

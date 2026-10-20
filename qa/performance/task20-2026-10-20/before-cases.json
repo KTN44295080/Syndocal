@@ -1,0 +1,18 @@
+[
+  "h264-1080p30-1l-display-0fx-normal",
+  "h264-2160p30-1l-display-0fx-normal",
+  "h264-1080p30-3l-display-0fx-normal",
+  "h264-1080p30-6l-display-0fx-normal",
+  "h264-1080p30-8l-display-0fx-normal",
+  "h264-2160p30-8l-display-0fx-normal",
+  "h264-1080p30-12l-display-0fx-normal",
+  "h264-1080p30-16l-display-0fx-normal",
+  "h264-2160p30-16l-display-0fx-normal",
+  "h264-1080p30-3l-display4k-0fx-normal",
+  "h264-1080p30-3l-spout-0fx-normal",
+  "h264-1080p30-1l-display-3fx-normal",
+  "h264-1080p30-3l-display-3fx-normal",
+  "h264-1080p30-8l-display-3fx-normal",
+  "h264-1080p30-8l-display-0fx-normal-cpu",
+  "h264-1080p30-8l-display-groups"
+]

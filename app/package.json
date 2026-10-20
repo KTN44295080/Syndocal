@@ -109,6 +109,7 @@
     "check:fullscreen-vj": "node scripts/check-viewport-containment.mjs --fullscreen-vj",
     "check:vj-operator": "node scripts/check-viewport-containment.mjs --operator-vj-only",
     "check:perform-layout": "node scripts/check-perform-layout.mjs",
+    "check:live-video-performance-budget": "node scripts/check-live-video-performance-budget.mjs",
     "check:auto-vj-viewport": "node scripts/check-viewport-containment.mjs --auto-vj-only",
     "check:audio-reactive-viewport": "node scripts/check-viewport-containment.mjs --audio-reactive-only",
     "check:live-audio": "node scripts/check-live-audio-input.mjs",

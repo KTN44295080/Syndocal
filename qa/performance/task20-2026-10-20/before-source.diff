@@ -1,0 +1,33 @@
+diff --git a/crates/video/src/isf_pass_runtime.rs b/crates/video/src/isf_pass_runtime.rs
+index 705e34cb..80d11643 100644
+--- a/crates/video/src/isf_pass_runtime.rs
++++ b/crates/video/src/isf_pass_runtime.rs
+@@ -187,13 +187,10 @@ impl IsfGpuRuntime {
+         }
+         self.evict_resources_for(baseline_bytes);
+         let expected_len = frame.width as usize * frame.height as usize * 4;
+-        // Upload borrows RGBA bytes; only format conversion owns a temporary.
+-        let converted;
+         let rgba = if frame.format == VideoPixelFormat::Rgba8 {
+-            frame
++            frame.clone()
+         } else {
+-            converted = convert_frame_to_rgba8(frame).map_err(runtime_from_composite_error)?;
+-            &converted
++            convert_frame_to_rgba8(frame).map_err(runtime_from_composite_error)?
+         };
+         if rgba.data.len() != expected_len {
+             return Err(runtime_error(
+diff --git a/crates/video/src/libav_decoder.rs b/crates/video/src/libav_decoder.rs
+index b23346f8..075fb9a0 100644
+--- a/crates/video/src/libav_decoder.rs
++++ b/crates/video/src/libav_decoder.rs
+@@ -44,7 +44,7 @@ const LIBAV_SEQUENTIAL_REQUEST_GAP_MS: u64 = 1_000;
+ #[cfg(any(feature = "libav", test))]
+ // Retain the 16-input performance envelope without reopening every tick.
+ // Retention is independent from the bounded eight-worker decode pool below.
+-const LIBAV_WORKING_SET_CAPACITY: usize = 16;
++const LIBAV_WORKING_SET_CAPACITY: usize = 8;
+ #[cfg(feature = "libav")]
+ const LIBAV_DECODE_WORKERS: usize = 8;
+ 

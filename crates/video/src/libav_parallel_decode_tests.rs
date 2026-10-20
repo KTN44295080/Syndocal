@@ -127,10 +127,10 @@ fn a_batch_with_other_owners_in_the_working_set_keeps_its_order() {
     let path = fixture("lru", 1);
     let mut one_by_one = LibavFrameDecoder::software_for_tests();
     let mut together = LibavFrameDecoder::software_for_tests();
-    // Four owners from earlier ticks, then a batch of four new ones: the
-    // working set is exactly full, so the batch decodes in parallel.
+    // Fill all but four retained owners, then decode four new ones in parallel.
+    // This must exercise the exact retention boundary even when it changes.
     for decoder in [&mut one_by_one, &mut together] {
-        for layer in 40..44 {
+        for layer in 40..40 + (LIBAV_WORKING_SET_CAPACITY as u64 - 4) {
             decoder.decode_input_frame(&input(layer, &path, 0)).unwrap();
         }
     }
@@ -145,7 +145,7 @@ fn a_batch_with_other_owners_in_the_working_set_keeps_its_order() {
     assert_same_state(&together, &one_by_one, "after the batch");
     // A new owner now evicts the least recently used one in both.
     for decoder in [&mut one_by_one, &mut together] {
-        decoder.decode_input_frame(&input(50, &path, 0)).unwrap();
+        decoder.decode_input_frame(&input(100, &path, 0)).unwrap();
         decoder.decode_input_frame(&input(40, &path, 33)).unwrap();
     }
     assert_same_state(&together, &one_by_one, "after eviction");
@@ -197,7 +197,17 @@ fn the_preferred_decoder_batches_file_inputs_with_the_same_fallbacks() {
         assert!(matches!(expected[0], Ok(Some(_))));
         assert!(expected[1].is_err());
         assert_eq!(together.decode_input_frames(&inputs), expected);
-        assert_eq!(together.diagnostics(), one_by_one.diagnostics());
+        let mut batch = together.diagnostics();
+        let mut serial = one_by_one.diagnostics();
+        assert_eq!(batch.decode_call_count, position / 33 + 1);
+        assert_eq!(serial.decode_call_count, 3 * (position / 33 + 1));
+        // Wall latency and call count deliberately differ with batching;
+        // every decode/fallback/error/session counter must still agree.
+        batch.decode_wall_us = 0;
+        serial.decode_wall_us = 0;
+        batch.decode_call_count = 0;
+        serial.decode_call_count = 0;
+        assert_eq!(batch, serial);
     }
     assert!(together.diagnostics().cli_fallback_failures > 0);
     let _ = std::fs::remove_file(&corrupt);
@@ -433,4 +443,152 @@ fn the_end_of_a_clip_reopens_no_more_often_than_on_demand() {
         ahead_counters.opens <= on_demand_counters.opens,
         "{ahead_counters:?} vs {on_demand_counters:?}"
     );
+}
+
+#[test]
+fn sixteen_playing_inputs_retain_their_sessions_across_ticks() {
+    let path = fixture("sixteen-retained", 2);
+    let mut decoder = LibavFrameDecoder::software_for_tests();
+    for position_ms in [0, 33, 66, 100] {
+        let inputs = (1..=16)
+            .map(|layer| input(layer, &path, position_ms))
+            .collect::<Vec<_>>();
+        let frames = decoder.decode_input_frames(&inputs);
+        assert_eq!(frames.len(), 16);
+        assert!(frames.iter().all(|frame| matches!(frame, Ok(Some(_)))));
+        let counters = decoder.session_diagnostics();
+        assert_eq!(counters.opens, 16, "sessions must not churn at {position_ms}ms");
+        assert_eq!(counters.evictions, 0);
+        assert_eq!(counters.active_sessions, 16);
+    }
+    for layer in 1..=16 {
+        decoder.release_input(&input(layer, &path, 100));
+    }
+    assert_eq!(decoder.session_diagnostics().active_sessions, 0);
+    assert_eq!(decoder.cache_len(), 0);
+}
+
+#[test]
+fn sixteen_live_shared_inputs_keep_lookahead_owners_until_release() {
+    let path = fixture("sixteen-shared-retained", 2);
+    let mut decoder = LibavFrameDecoder::software_for_tests();
+    for position_ms in [0, 33, 66, 100] {
+        let inputs = (1..=16)
+            .map(|layer| input(layer, &path, position_ms))
+            .collect::<Vec<_>>();
+        let frames = decoder.decode_input_frames_shared(&inputs);
+        assert_eq!(frames.len(), 16);
+        assert!(frames.iter().all(|frame| matches!(frame, Ok(Some(_)))));
+        let counters = decoder.session_diagnostics();
+        assert_eq!(counters.opens, 16, "live sessions must not churn at {position_ms}ms");
+        assert_eq!(counters.evictions, 0);
+        assert_eq!(counters.active_sessions, 16);
+    }
+    let counters = decoder.session_diagnostics();
+    assert!(counters.lookahead_decodes >= 16);
+    assert!(counters.lookahead_hits > 0);
+    for layer in 1..=16 {
+        decoder.release_input(&input(layer, &path, 100));
+    }
+    assert_eq!(decoder.session_diagnostics().active_sessions, 0);
+    assert!(decoder.lookaheads.is_empty(), "release must reap every live owner");
+    assert_eq!(decoder.cache_len(), 0);
+}
+
+#[test]
+fn decode_timing_counts_one_demand_call_for_a_mixed_batch() {
+    let path = fixture("timed-mixed", 1);
+    let mut decoder = PreferredVideoFrameDecoder::with_software_libav_for_tests(
+        FfmpegCliFrameDecoder::new("missing-timing-test-ffmpeg.exe"),
+    );
+    let mut deferred = input(2, &path, 0);
+    deferred.request.source.kind = VideoSourceKind::Camera;
+    let frames = decoder.decode_input_frames(&[input(1, &path, 0), deferred]);
+    assert!(matches!(frames[0], Ok(Some(_))));
+    assert!(matches!(frames[1], Ok(None)));
+    let diagnostics = decoder.diagnostics();
+    assert_eq!(diagnostics.decode_call_count, 1, "mixed batches must not double count nested calls");
+    assert_eq!(diagnostics.total_requests, 2);
+    assert!(diagnostics.decode_wall_us > 0);
+    let _ = decoder.decode_input_frame(&input(1, &path, 33)).unwrap();
+    assert_eq!(decoder.diagnostics().decode_call_count, 2);
+    assert!(decoder.diagnostics().decode_wall_us >= diagnostics.decode_wall_us);
+}
+
+/// Component demand latency only: no output, compositor, monitor, or real-time
+/// pacing. Run explicitly in release; never interpret these numbers as fps.
+#[test]
+#[ignore = "explicit release QA benchmark; requires SYNDOCAL_PERF_MEDIA_DIR and SYNDOCAL_PERF_RESULT"]
+fn task20_decode_demand_benchmark() {
+    let media = PathBuf::from(std::env::var_os("SYNDOCAL_PERF_MEDIA_DIR").expect("media directory"));
+    let result = PathBuf::from(std::env::var_os("SYNDOCAL_PERF_RESULT").expect("result JSON path"));
+    let expected_capacity: usize = std::env::var("SYNDOCAL_PERF_EXPECT_CAPACITY")
+        .expect("expected source capacity")
+        .parse()
+        .expect("integer source capacity");
+    assert_eq!(LIBAV_WORKING_SET_CAPACITY, expected_capacity, "stale benchmark executable");
+    // The supervising QA process opens this gate after builds and browser
+    // checks settle, keeping their resource contention out of the samples.
+    let gate = result.with_extension("ready");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+    while !gate.is_file() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(gate.is_file(), "QA start gate was not opened: {}", gate.display());
+    let mut rows = Vec::new();
+    for source in ["h264_1080p30.mp4", "h264_2160p30.mp4"] {
+        let path = media.join(source);
+        assert!(path.is_file(), "missing QA media: {}", path.display());
+        for layers in [1_u64, 3, 6, 8, 12, 16] {
+            let mut decoder = PreferredVideoFrameDecoder::new(FfmpegCliFrameDecoder::default());
+            let mut times_ms = Vec::new();
+            let mut errors = Vec::new();
+            let mut baseline = None;
+            for tick in 0..20 {
+                let inputs = (1..=layers)
+                    .map(|layer| {
+                        let mut request = input(layer, &path, tick * 17);
+                        request.request.width = 1920;
+                        request.request.height = 1080;
+                        request.request.source.codec = Some("h264".into());
+                        request
+                    })
+                    .collect::<Vec<_>>();
+                let started = std::time::Instant::now();
+                let frames = decoder.decode_input_frames_shared(&inputs);
+                let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+                for frame in frames {
+                    if !matches!(frame, Ok(Some(_))) && errors.len() < 3 {
+                        errors.push(format!("{frame:?}"));
+                    }
+                }
+                if tick == 3 {
+                    baseline = Some(decoder.diagnostics());
+                }
+                if tick >= 4 {
+                    times_ms.push(elapsed);
+                }
+            }
+            times_ms.sort_by(f64::total_cmp);
+            let percentile = |p: usize| times_ms[(times_ms.len() * p).div_ceil(100) - 1];
+            let diagnostics = decoder.diagnostics();
+            let baseline = baseline.unwrap();
+            let row = serde_json::json!({
+                "source": source, "layers": layers, "samples": times_ms.len(),
+                "workingSetCapacity": LIBAV_WORKING_SET_CAPACITY,
+                "decodeDemandP50Ms": percentile(50), "decodeDemandP95Ms": percentile(95),
+                "decodeDemandP99Ms": percentile(99), "errors": errors,
+                "measuredOpens": diagnostics.libav_session_open_count - baseline.libav_session_open_count,
+                "measuredEvictions": diagnostics.libav_working_set_eviction_count - baseline.libav_working_set_eviction_count,
+                "diagnostics": diagnostics,
+            });
+            println!("TASK20_DECODE {row}");
+            rows.push(row);
+            // Explicit retirement joins every lookahead before the next case;
+            // dropping receivers alone does not wait for queued pool work.
+            decoder.retain_layers(&[]);
+            assert_eq!(decoder.diagnostics().libav_session_count, 0);
+        }
+    }
+    std::fs::write(result, serde_json::to_vec_pretty(&rows).unwrap()).unwrap();
 }

@@ -27,6 +27,11 @@ export interface LiveVideoOutputHealth {
   frameTimeP50Ms: number;
   frameTimeP95Ms: number;
   frameTimeP99Ms: number;
+  /** Native preparation wall time, including decode; separate from present/send cadence. */
+  renderTimeP50Ms?: number;
+  renderTimeP95Ms?: number;
+  renderTimeP99Ms?: number;
+  renderSampleCount?: number;
   droppedFrames: number;
   targetFps: number;
   deliveredFrames: number;

@@ -1,0 +1,261 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-20T09:46:55.274740+00:00",
+  "productSourceHead": "c204074d3e2d8b2c54134cc295df6ea3a37ae2f1",
+  "checks": [
+    {
+      "id": "workspace_all_targets",
+      "observedResult": "passed; zero warnings",
+      "evidence": {
+        "file": "validation/cargo-check.log",
+        "bytes": 1087,
+        "sha256": "76737c60b0719fc414d81b8a3b49685e2f63a5bdf248a3822d30b82f10064aeb"
+      }
+    },
+    {
+      "id": "full_app_tests",
+      "observedResult": "2205 passed; 1 failed; 23 ignored; 2229 total",
+      "evidence": {
+        "file": "validation/cargo-test-syndocal.log",
+        "bytes": 229630,
+        "sha256": "12f5583182b291fc1c3662aa236d55a7500d667a91270ef4b7eb76c41c7be9f6"
+      }
+    },
+    {
+      "id": "backup_listing_isolated",
+      "observedResult": "1 passed; 2228 filtered; single thread",
+      "evidence": {
+        "file": "validation/cargo-backup-listing-isolated.log",
+        "bytes": 526,
+        "sha256": "f030d2ea665bcfe2db48b74ab0ce02199a91a3415e42718447e800a30346a99f"
+      }
+    },
+    {
+      "id": "video_libav_filter",
+      "observedResult": "34 passed; 6 ignored; 265 filtered",
+      "evidence": {
+        "file": "validation/video-libav-tests.log",
+        "bytes": 6461,
+        "sha256": "e724ce5f34773583149547abaff7cc499f202bdd57179b4d265be94b1a0a4b10"
+      }
+    },
+    {
+      "id": "video_isf_filter",
+      "observedResult": "38 passed; 0 ignored; 267 filtered",
+      "evidence": {
+        "file": "validation/video-isf-tests.log",
+        "bytes": 4175,
+        "sha256": "ee5838073678a3391160afe7931b7dfb20ccbb38bb9b55981743b54fe1fc6be0"
+      }
+    },
+    {
+      "id": "before_release",
+      "observedResult": "passed",
+      "evidence": {
+        "file": "validation/release-before.log",
+        "bytes": 70333,
+        "sha256": "898578edd8fbb32aa504789ab20df868fd9806a287f4caae3feb7792df36dac7"
+      }
+    },
+    {
+      "id": "before_native_launch_gate",
+      "observedResult": "passed; responsive visible window; exited zero",
+      "evidence": {
+        "file": "validation/native-gate-before.log",
+        "bytes": 372,
+        "sha256": "82fb9363325e486c0648be17a2f91bc4be93f3fd684596384c184de395856091"
+      }
+    },
+    {
+      "id": "after_release",
+      "observedResult": "passed; 7 minutes 54 seconds",
+      "evidence": {
+        "file": "validation/release-after.log",
+        "bytes": 69780,
+        "sha256": "9b32e84a2db35fb7e1dce768826eb30037cc8f0b1c8c4e7ca4c98c2483b682f8"
+      }
+    },
+    {
+      "id": "after_native_launch_gate",
+      "observedResult": "passed; responsive visible window; exited zero",
+      "evidence": {
+        "file": "validation/native-gate-after.log",
+        "bytes": 372,
+        "sha256": "82fb9363325e486c0648be17a2f91bc4be93f3fd684596384c184de395856091"
+      }
+    },
+    {
+      "id": "frontend_build",
+      "observedResult": "passed; existing large-chunk notice retained",
+      "evidence": {
+        "file": "frontend/build.log",
+        "bytes": 68302,
+        "sha256": "db4da7ecc53d7dbb32acfa4f63cf46bb7a6e06815f430158a5a653c3d11e1de1"
+      }
+    },
+    {
+      "id": "localization",
+      "observedResult": "passed",
+      "evidence": {
+        "file": "frontend/localization.log",
+        "bytes": 151,
+        "sha256": "b09f54f39ec02429bbc82442db3f9026aa5052fe4647a79cfbcc064ebe910b50"
+      }
+    },
+    {
+      "id": "perform_layout",
+      "observedResult": "passed",
+      "evidence": {
+        "file": "frontend/perform-layout.log",
+        "bytes": 684,
+        "sha256": "b1fc20723404d7526bb3dbe017eb77128599deca60075a160f2d883591c2dea5"
+      }
+    },
+    {
+      "id": "monitor_controller",
+      "observedResult": "passed",
+      "evidence": {
+        "file": "frontend/monitor-controller.log",
+        "bytes": 236,
+        "sha256": "57b6a6b1545f11f378682a028940d66078d2101ba1709368c890cc1989870793"
+      }
+    },
+    {
+      "id": "themes",
+      "observedResult": "8 themes; 96 type roles; 96 contrast checks; 11 interactions; zero errors, warnings or failures",
+      "evidence": {
+        "file": "frontend/themes.log",
+        "bytes": 4300,
+        "sha256": "d87ced14743c3619839141f0c3aaeec454fa641d0b5fe3ff897c12ebbd2773d7"
+      }
+    },
+    {
+      "id": "viewport_current",
+      "observedResult": "five viewports passed",
+      "evidence": {
+        "file": "frontend/viewport-current-warm.log",
+        "bytes": 54345,
+        "sha256": "503040758f31e77d2ec537d385cb45317c506bb66e000703a6f8416b6a78217c"
+      }
+    },
+    {
+      "id": "viewport_baseline",
+      "observedResult": "five viewports passed; zero new failures",
+      "evidence": {
+        "file": "frontend/viewport-baseline-ready.log",
+        "bytes": 54345,
+        "sha256": "c71c7f23ffcf1fed46d0591cac275e965804842018fcfee4d4a0180c56659b9e"
+      }
+    },
+    {
+      "id": "final_restore",
+      "observedResult": "clean relaunch: Standby; live/test windows off; Recent/localStorage exact",
+      "evidence": {
+        "file": "verify-restored.log",
+        "bytes": 97,
+        "sha256": "744f01a4d5115d39e4ecc23da31212b9ffb6bcd7415cc877954d1db9b020bb08"
+      }
+    }
+  ],
+  "finalState": {
+    "at": "2026-10-20T09:41:24.587Z",
+    "role": "Standby",
+    "allLiveAndTestPatternWindowsOff": true,
+    "localStorageExact": true,
+    "recentExact": true,
+    "ownedReleaseProcesses": 0,
+    "ownedBenchmarkHelpers": 0,
+    "cargoTargetDirSet": false,
+    "evidence": {
+      "file": "restore-proof.json",
+      "bytes": 740,
+      "sha256": "f77980793fbdadd245fec721b0f558c152c17c20b2703e8045ee2b391893e1eb"
+    },
+    "processEvidence": {
+      "file": "validation/final-process-state.json",
+      "bytes": 374,
+      "sha256": "c256d2a4b81e4a341ee6fadd6c46dc7f98736409f047f626ef2801bd163ff535"
+    }
+  },
+  "afterNativeLeaseDenial": {
+    "executableSha256": "a1e0ae6519bb3558d2b473fc9d68b9a2487ab6ac55ec8e5bbacf1bb375ef869d",
+    "result": "rejected",
+    "windowsOff": true,
+    "healthEmpty": true,
+    "evidence": {
+      "file": "denial-h264-1080p30-1l-display-0fx-normal.json",
+      "bytes": 43791,
+      "sha256": "e77d4d3ebbe5b4cf794e2229ee55cb5381f01f3a7477b06a41fc8c9d57ab3424"
+    }
+  },
+  "canonicalShutdownRecoveries": [
+    {
+      "phase": "after",
+      "tag": "h264-2160p30-12l-display-0fx-normal",
+      "recoveryAt": "2026-10-20T09:31:57.058Z",
+      "twoCleanLaunchesVerified": true,
+      "originalShutdownWarningRetainedPrivately": true
+    },
+    {
+      "phase": "after",
+      "tag": "h264-2160p30-16l-display-0fx-normal",
+      "recoveryAt": "2026-10-20T09:34:59.055Z",
+      "twoCleanLaunchesVerified": true,
+      "originalShutdownWarningRetainedPrivately": true
+    },
+    {
+      "phase": "after",
+      "tag": "h264-1080p30-16l-display4k-0fx-normal",
+      "recoveryAt": "2026-10-20T09:01:57.198Z",
+      "twoCleanLaunchesVerified": true,
+      "originalShutdownWarningRetainedPrivately": true
+    },
+    {
+      "phase": "after",
+      "tag": "h264-1080p30-8l-display-groups",
+      "recoveryAt": "2026-10-20T09:26:22.304Z",
+      "twoCleanLaunchesVerified": true,
+      "originalShutdownWarningRetainedPrivately": true
+    }
+  ],
+  "postSampleHardware": {
+    "recordedAtUtc": "2026-10-20T09:40:56.9771223Z",
+    "recordedAfterPerformanceSamples": true,
+    "operatingSystem": {
+      "Caption": "Microsoft Windows 11 Home",
+      "Version": "10.0.26200",
+      "BuildNumber": "26200",
+      "TotalVisibleMemorySize": 58351428
+    },
+    "processors": [
+      {
+        "Name": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+        "NumberOfCores": 16,
+        "NumberOfLogicalProcessors": 32
+      }
+    ],
+    "graphics": [
+      {
+        "Name": "Parsec Virtual Display Adapter",
+        "DriverVersion": "0.45.0.0"
+      },
+      {
+        "Name": "AMD Radeon(TM) 8060S Graphics",
+        "DriverVersion": "32.0.31032.1003"
+      }
+    ],
+    "postSamplePowerPlanName": "Performance",
+    "powerPlanContinuouslyRecorded": false
+  },
+  "hardwareEvidence": {
+    "file": "validation/hardware.json",
+    "bytes": 1230,
+    "sha256": "340cacc1708cf948a47bc50630dc7ba36cf42ae33088ec73c913e28565174d6b"
+  },
+  "notes": [
+    "Test results are observed campaign results linked to retained logs; this curation step does not rerun tests.",
+    "The full test failure remains a failure despite the exact isolated rerun passing.",
+    "Archived failed/replaced attempts remain private; provenance identifies their manifests.",
+    "The successful lease diagnostic rerun does not identify the cause of the earlier opaque error."
+  ]
+}
