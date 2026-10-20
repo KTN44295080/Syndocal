@@ -78,8 +78,8 @@ for (const marker of [
   "No automatic retry was performed",
 ]) required(sidecar, marker, "sidecar crash/rate boundary");
 
-required(ai0, "invokeManifest.length, 508", "source coverage inventory");
-required(routing, "manifest.length, 508", "frontend routing inventory");
+required(ai0, "invokeManifest.length, 511", "source coverage inventory");
+required(routing, "manifest.length, 511", "frontend routing inventory");
 
 if (process.argv.includes("--self-test")) {
   assert.equal(["parity", "reply-loss", "authority", "gap", "rate", "saturation"].length, 6);

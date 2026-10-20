@@ -10,6 +10,7 @@ export const createSignal = (initial) => { let value = initial; return [() => va
 export const createMemo = (compute) => compute;
 export const createEffect = () => {};
 export const onMount = () => {};
+export const onCleanup = () => {};
 export const Show = (props) => props.when
   ? typeof props.children === "function" ? props.children(() => props.when) : props.children
   : props.fallback;
@@ -44,10 +45,16 @@ const moduleUrl = async (path, replacements = {}) => {
 };
 const localizationUrl = await moduleUrl("uiLocalization.ts");
 const policyUrl = await moduleUrl("liveVideoMonitorPolicy.ts");
-const { VideoOutputCreatePanel } = await import(await moduleUrl("components/VideoOutputCreatePanel.tsx", {
+const authoringUrl = await moduleUrl("videoOutputAuthoring.ts");
+const createPanelUrl = await moduleUrl("components/VideoOutputCreatePanel.tsx", {
   "../uiLocalization": localizationUrl,
+  "../videoOutputAuthoring": authoringUrl,
+});
+const { VideoOutputCreatePanel } = await import(createPanelUrl);
+const { VideoOutputConfigPanel } = await import(await moduleUrl("components/VideoOutputConfigPanel.tsx", {
+  "./VideoOutputCreatePanel": createPanelUrl,
+  "../videoOutputAuthoring": authoringUrl,
 }));
-const { VideoOutputConfigPanel } = await import(await moduleUrl("components/VideoOutputConfigPanel.tsx"));
 const { LiveVideoOutputHealthReadout } = await import(await moduleUrl("components/LiveVideoOutputHealthReadout.tsx", {
   "../liveVideoMonitorPolicy": policyUrl,
 }));
@@ -59,8 +66,10 @@ const text = (tree) => Array.isArray(tree) ? tree.map(text).join("")
     : tree === undefined || tree === null || typeof tree === "boolean" ? "" : String(tree);
 const syphonOptions = (tree) => nodes(tree).filter((node) => node.tag === "option" && node.props.value === "SyphonServer");
 const draft = { label: "Local video", kind: "Display", width: 1920, height: 1080, monitor_id: 0, fullscreen: true, endpoint_name: "Syndocal" };
-const create = (kind, syphonAvailable) => VideoOutputCreatePanel({
-  ...draft, kind, syphonAvailable, fadeMs: 0, monitorId: 0, endpoint: "Syndocal",
+const create = (kind, syphonAvailable, overrides = {}) => VideoOutputCreatePanel({
+  ...draft, kind, syphonAvailable, spoutAvailable: false, ndiAvailable: false,
+  fadeMs: 0, monitorId: 0, endpoint: "Syndocal",
+  compositions: [{ id: 1, label: "Main" }], ...overrides,
 });
 const config = (kind, syphonAvailable) => VideoOutputConfigPanel({
   output: { ...draft, id: 30, kind }, draft: { ...draft, kind }, syphonAvailable,
@@ -79,16 +88,44 @@ for (const render of [create, config]) {
   assert.equal(available.length, 1, "a native available Syphon backend offers the type");
   assert.notEqual(available[0].props.disabled, true);
 }
-for (const availability of [false, true]) {
-  const button = nodes(create("SyphonServer", availability)).find((node) => node.props["data-video-output-add"]);
+for (const availability of [false, undefined, true]) {
+  const added = [];
+  const button = nodes(create("SyphonServer", availability, {
+    onAddExternalOutput: async (compositionId) => { added.push(compositionId); },
+  })).find((node) => node.props["data-video-output-add"]);
   assert.ok(button);
-  assert.equal(button.props.disabled, true, "the retired external creation path stays disabled");
-  assert.equal(button.props.onClick, undefined, "type visibility must not bypass canonical output authority");
+  assert.equal(button.props.disabled, availability !== true,
+    "only a positively available backend and existing composition may create an output");
+  assert.equal(typeof button.props.onClick, "function");
+  button.props.onClick();
+  await Promise.resolve();
+  assert.deepEqual(added, availability === true ? [1] : [],
+    "the control dispatches exactly one canonical callback and no unavailable creation");
 }
+const withoutComposition = nodes(create("SyphonServer", true, { compositions: [] }))
+  .find((node) => node.props["data-video-output-add"]);
+assert.equal(withoutComposition.props.disabled, true);
 const unsupportedConfig = config("SyphonServer", false);
 assert.match(text(unsupportedConfig), /saved output is preserved/);
-assert.equal(nodes(unsupportedConfig).find((node) => node.tag === "button").props.disabled, true);
-assert.match(text(create("SyphonServer", true)), /Creating external outputs is not available yet/);
+assert.equal(nodes(unsupportedConfig).find((node) => node.props["data-video-output-apply"]).props.disabled, true);
+assert.match(text(create("SyphonServer", true)), /may start sending immediately/);
+const configCalls = [];
+const supportedConfig = VideoOutputConfigPanel({
+  output: { ...draft, id: 30, kind: "SyphonServer", enabled: true },
+  draft: { ...draft, kind: "SyphonServer" }, syphonAvailable: true,
+  onDraft: () => {},
+  onApply: async (output) => { configCalls.push(["configure", output.id]); },
+  onRemove: async (id) => { configCalls.push(["remove", id]); },
+});
+nodes(supportedConfig).find((node) => node.props["data-video-output-apply"]).props.onClick();
+await Promise.resolve(); await Promise.resolve();
+nodes(supportedConfig).find((node) => node.props["data-video-output-remove"]).props.onClick();
+await Promise.resolve();
+assert.deepEqual(configCalls, [["configure", 30], ["remove", 30]], "enabled outputs can be configured and removed directly");
+for (const file of ["components/VideoOutputCreatePanel.tsx", "components/VideoOutputConfigPanel.tsx"]) {
+  assert.doesNotMatch(await source(file), /window\.confirm|inAppConfirm|showConfirmDialog|confirmRemoval/,
+    "owner-authorized creation, configuration and removal must not add confirmation steps");
+}
 
 const health = LiveVideoOutputHealthReadout({ outputs: [{
   kind: "syphon", outputId: 30, measurementBoundary: "sender", sampleCount: 2,
@@ -106,8 +143,8 @@ for (const value of [
   "Syphon output",
   "Server name",
   "Syphon output is available on macOS only.",
-  "Syphon output is available for configured project outputs. Creating external outputs is not available yet.",
-  "Publishes video to Syphon clients on this Mac. Enable Output to start; Standby stops transmission.",
+  "New outputs follow the current output state and may start sending immediately.",
+  "Publishes video to Syphon clients on this Mac and follows the current output state.",
   "Syphon output is available on macOS only. This saved output is preserved; choose another type to use it on this computer.",
   "Syphon Metal output is built in; servers initialize on demand. Syphon input is not implemented.",
   "Syphon input is not implemented",
@@ -115,4 +152,4 @@ for (const value of [
   assert.equal(translateUiText(value, "en"), value);
   assert.match(translateUiText(value, "ja"), /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u, value);
 }
-console.log("Syphon output UI: PASS (native availability, saved selection, creation fence, health, JA/EN)");
+console.log("Syphon output UI: PASS (native availability, saved selection, canonical create/configure/remove callbacks, health, JA/EN)");

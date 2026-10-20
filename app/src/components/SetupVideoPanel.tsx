@@ -1,3 +1,4 @@
+import type { VideoOutputConfigDraft } from "../editorDrafts";
 import type {
   CompositionSummary,
   TimelineLayerSummary,
@@ -29,6 +30,12 @@ type SetupVideoPanelProps = {
   outputLabel: string;
   outputKind: VideoOutputKind;
   syphonAvailable: boolean;
+  spoutAvailable: boolean;
+  ndiAvailable: boolean;
+  outputConfigDraft: (output: VideoOutputSummary) => VideoOutputConfigDraft;
+  onOutputConfigDraft: (output: VideoOutputSummary, patch: Partial<VideoOutputConfigDraft>) => void;
+  onApplyOutputConfig: (output: VideoOutputSummary, monitor?: VideoDisplayMonitorDescriptor) => MaybePromise;
+  onRemoveOutput: (outputId: number) => MaybePromise;
   outputWidth: number;
   outputHeight: number;
   outputFadeMs: number;
@@ -66,6 +73,7 @@ type SetupVideoPanelProps = {
   onOutputEndpoint: (value: string) => void;
   invokeCommand: FrontendTauriInvoke;
   onAddDisplayOutput: (monitor: VideoDisplayMonitorDescriptor) => Promise<void>;
+  onAddExternalOutput: (compositionId: number) => Promise<boolean | void>;
   onEnableShowSpoutOutputs: () => MaybePromise;
   onResetShowSpoutOutputs: () => MaybePromise;
   onSelectOutput: (outputId: number) => void;
@@ -125,6 +133,9 @@ export function SetupVideoPanel(props: SetupVideoPanelProps) {
                   label={props.outputLabel}
                   kind={props.outputKind}
                   syphonAvailable={props.syphonAvailable}
+                  spoutAvailable={props.spoutAvailable}
+                  ndiAvailable={props.ndiAvailable}
+                  compositions={props.compositions}
                   width={props.outputWidth}
                   height={props.outputHeight}
                   fadeMs={props.outputFadeMs}
@@ -141,12 +152,21 @@ export function SetupVideoPanel(props: SetupVideoPanelProps) {
                   onEndpoint={props.onOutputEndpoint}
                   invokeCommand={props.invokeCommand}
                   onAddDisplayOutput={props.onAddDisplayOutput}
+                  onAddExternalOutput={props.onAddExternalOutput}
                   onEnableShowSpoutOutputs={props.onEnableShowSpoutOutputs}
                   onResetShowSpoutOutputs={props.onResetShowSpoutOutputs}
                 />
               </div>
             }
             outputs={props.outputs}
+            syphonAvailable={props.syphonAvailable}
+            spoutAvailable={props.spoutAvailable}
+            ndiAvailable={props.ndiAvailable}
+            invokeCommand={props.invokeCommand}
+            outputConfigDraft={props.outputConfigDraft}
+            onOutputConfigDraft={props.onOutputConfigDraft}
+            onApplyOutputConfig={props.onApplyOutputConfig}
+            onRemoveOutput={props.onRemoveOutput}
             compositions={props.compositions}
             mappingPresets={props.mappingPresets}
             mappingPresetLabel={props.mappingPresetLabel}

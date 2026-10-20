@@ -97,7 +97,6 @@ pub(crate) fn output_action_requires_native_danger_confirmation(
             | OutputControlActionV2::ResetShowSpoutOutputs {}
             | OutputControlActionV2::Arm { .. }
             | OutputControlActionV2::TakeOverStandby { .. }
-            | OutputControlActionV2::AddDisplay { .. }
             | OutputControlActionV2::AssignVideoOutputComposition { .. }
             | OutputControlActionV2::ForceTransferLease { .. }
     )
@@ -1411,6 +1410,26 @@ where
             )
             .map(|(_load_result, fence_after, receipt)| (true, fence_after, receipt))
         }
+        OutputControlActionV2::AddDisplay { .. }
+            if !state.engine.output_ownership_status().video_allowed =>
+        {
+            // Author an enabled Display while following the existing global
+            // role. Standby creation must not require a separate Arm action.
+            super::video_output_authoring::apply(
+                app,
+                window,
+                state,
+                &request.action,
+                super::video_output_authoring::ControlRequest {
+                    expected_fence: &request.expected_fence,
+                    lease_request: &lease_request,
+                    lease_now_ms,
+                    expected_owner_principal: &binding.principal,
+                    expected_owner_window_label: &binding.window_label,
+                    expected_owner_incarnation: binding.owner_incarnation,
+                },
+            )
+        }
         OutputControlActionV2::AddDisplay { spec, .. } => {
             super::add_display_output_with_output_control_fence(
                 app,
@@ -1418,6 +1437,24 @@ where
                 state,
                 super::DisplayOutputControlRequest {
                     spec,
+                    expected_fence: &request.expected_fence,
+                    lease_request: &lease_request,
+                    lease_now_ms,
+                    expected_owner_principal: &binding.principal,
+                    expected_owner_window_label: &binding.window_label,
+                    expected_owner_incarnation: binding.owner_incarnation,
+                },
+            )
+        }
+        OutputControlActionV2::AddExternalOutput { .. }
+        | OutputControlActionV2::ConfigureVideoOutput { .. }
+        | OutputControlActionV2::RemoveVideoOutput { .. } => {
+            super::video_output_authoring::apply(
+                app,
+                window,
+                state,
+                &request.action,
+                super::video_output_authoring::ControlRequest {
                     expected_fence: &request.expected_fence,
                     lease_request: &lease_request,
                     lease_now_ms,
@@ -1774,7 +1811,10 @@ fn output_action_current_rejection_code(
 ) -> OutputControlErrorCodeV2 {
     match action {
         OutputControlActionV2::EnableShowSpoutOutputs { .. }
-        | OutputControlActionV2::ResetShowSpoutOutputs {} => {
+        | OutputControlActionV2::ResetShowSpoutOutputs {}
+        | OutputControlActionV2::AddExternalOutput { .. }
+        | OutputControlActionV2::ConfigureVideoOutput { .. }
+        | OutputControlActionV2::RemoveVideoOutput { .. } => {
             OutputControlErrorCodeV2::InvalidRequest
         }
         _ => OutputControlErrorCodeV2::StaleFence,
@@ -1825,6 +1865,11 @@ fn validate_output_action_current(
                 return Err(format!("Video layer {layer_id} was not found"));
             }
             Ok(())
+        }
+        OutputControlActionV2::AddExternalOutput { .. }
+        | OutputControlActionV2::ConfigureVideoOutput { .. }
+        | OutputControlActionV2::RemoveVideoOutput { .. } => {
+            super::video_output_authoring::validate_current(state, action)
         }
         OutputControlActionV2::AddDisplay { spec, .. } => {
             let outputs = state.engine.video_outputs_snapshot();
@@ -1910,7 +1955,12 @@ fn validate_display_output_monitor(
     window: &WebviewWindow,
     action: &OutputControlActionV2,
 ) -> Result<(), String> {
-    let OutputControlActionV2::AddDisplay { spec, .. } = action else {
+    let spec = match action {
+        OutputControlActionV2::AddDisplay { spec, .. } => Some(spec.clone()),
+        OutputControlActionV2::ConfigureVideoOutput { spec, .. } => spec.display_spec(),
+        _ => None,
+    };
+    let Some(spec) = spec else {
         return Ok(());
     };
     spec.validate()
@@ -2006,6 +2056,9 @@ fn output_lease_error_code(
 /// these exact safe-boundary sentinels remains `PublicationFailed`: callers
 /// must not infer a physical state from a callback/in-doubt failure.
 fn classify_output_control_operation_error(error: &str) -> OutputControlErrorCodeV2 {
+    if error.starts_with("Video output authoring is in doubt; pending receipt retained:") {
+        return OutputControlErrorCodeV2::PublicationFailed;
+    }
     if let Some(code) = output_lease_safe_candidate_error_code(error) {
         return code;
     }
@@ -2966,6 +3019,9 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
         | OutputControlActionV2::SetBlackout { .. }
         | OutputControlActionV2::TakeOverStandby { .. }
         | OutputControlActionV2::AddDisplay { .. }
+        | OutputControlActionV2::AddExternalOutput { .. }
+        | OutputControlActionV2::ConfigureVideoOutput { .. }
+        | OutputControlActionV2::RemoveVideoOutput { .. }
         | OutputControlActionV2::AssignVideoOutputComposition { .. }
         | OutputControlActionV2::SetDisplayWindowOpen { .. }
         | OutputControlActionV2::SetLightingMaster { .. }
@@ -6848,6 +6904,23 @@ mod tests {
     }
 
     #[test]
+    fn authoring_in_doubt_failure_never_becomes_a_retry_safe_rejection() {
+        for inner in [
+            "Output control fence changed before native publication",
+            "superseded by an S0 safety blackout authority change",
+            "AI3 output lease authoring transition failed: StaleGeneration",
+            "durable prepare failed",
+        ] {
+            assert_eq!(
+                classify_output_control_operation_error(&format!(
+                    "Video output authoring is in doubt; pending receipt retained: {inner}"
+                )),
+                OutputControlErrorCodeV2::PublicationFailed,
+            );
+        }
+    }
+
+    #[test]
     fn native_danger_confirmation_copy_follows_the_os_locale() {
         assert_eq!(
             native_output_confirmation_copy_for_locale("ja-JP"),
@@ -7502,6 +7575,69 @@ mod tests {
             result.changes[0].after_phase,
             Some(OutputLeaseReceiptPhaseV2::HeldOrphaned)
         );
+    }
+
+    #[test]
+    fn output_authoring_never_requests_an_additional_confirmation() {
+        use protocol::control_plane_command::{
+            DisplayOutputSpecV2, ExternalVideoOutputSpecV2, VideoOutputConfigurationV2,
+        };
+        let lease = OutputLeaseAuthorityV1 {
+            lease_id: "lease-0000000000000001".to_string(),
+            generation: 1,
+        };
+        let actions = [
+            OutputControlActionV2::AddDisplay {
+                spec: DisplayOutputSpecV2 {
+                    label: "Display".to_string(),
+                    monitor_identity: "a".repeat(64),
+                    monitor_index: 0,
+                    width: 1920,
+                    height: 1080,
+                    fullscreen: true,
+                },
+                lease: lease.clone(),
+            },
+            OutputControlActionV2::AddExternalOutput {
+                spec: ExternalVideoOutputSpecV2 {
+                    kind: protocol::VideoOutputKind::SpoutSender,
+                    label: "Video".to_string(),
+                    width: 1920,
+                    height: 1080,
+                    endpoint_name: "Syndocal Main".to_string(),
+                    composition_id: 1,
+                },
+                lease: lease.clone(),
+            },
+            OutputControlActionV2::ConfigureVideoOutput {
+                output_id: 1,
+                spec: VideoOutputConfigurationV2 {
+                    kind: protocol::VideoOutputKind::SpoutSender,
+                    label: "Video".to_string(),
+                    width: 1280,
+                    height: 720,
+                    fullscreen: false,
+                    monitor_index: None,
+                    monitor_identity: None,
+                    endpoint_name: Some("Syndocal Main".to_string()),
+                },
+                lease: lease.clone(),
+            },
+            OutputControlActionV2::RemoveVideoOutput {
+                output_id: 1,
+                lease,
+            },
+        ];
+        for action in actions {
+            action.validate().unwrap();
+            let calls = std::cell::Cell::new(0);
+            let result = output_confirmation_gate(&action, &|_| {
+                calls.set(calls.get() + 1);
+                false
+            });
+            assert_eq!(result, Ok(()));
+            assert_eq!(calls.get(), 0, "authoring must use the original explicit click");
+        }
     }
 
     #[test]

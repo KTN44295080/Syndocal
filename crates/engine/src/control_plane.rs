@@ -90,7 +90,9 @@ mod tests {
         // disabled Spout restoration publication and authored blackout target
         // publication, atomic fixture repatching and network route publication added afterward.
         // RequestPlaybackLayerSnapshot (DEC-PLAYBACK-LAYER-001) is the 285th.
-        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 286;
+        // T27's audio control overlay is the 286th.
+        // AuthorVideoOutputPublished adds one exact authoring publication source.
+        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 287;
         let descriptors = control_plane_engine_command_descriptors();
         let variant_names = EngineCommand::CONTROL_PLANE_VARIANT_NAMES
             .iter()
@@ -111,6 +113,7 @@ mod tests {
         assert!(variant_names.contains("ResetShowSpoutOutputsExactPublished"));
         assert!(variant_names.contains("RequestSnapshotPublication"));
         assert!(variant_names.contains("RequestPlaybackLayerSnapshot"));
+        assert!(variant_names.contains("AuthorVideoOutputPublished"));
         assert!(variant_names.contains("SetNetworkDmxRoutesPublished"));
         assert!(variant_names.contains("EnableShowSerialDmxSafetyBlackoutRoute"));
         assert!(variant_names.contains("StopShowSerialDmxSafetyBlackoutRoute"));

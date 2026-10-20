@@ -1924,8 +1924,9 @@ pub const OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID: &str =
 // appends the lease-bound lighting master and group-submaster runtime actions.
 // v10 appends the lease-bound Video master runtime action. v11 appends the
 // lease-bound Video Take runtime action. v12 appends the lease-bound Video
-// Clip Launch runtime action.
-pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 12;
+// Clip Launch runtime action. v13 appends enabled external-output creation,
+// configuration and removal without changing any prior action discriminant.
+pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 13;
 pub const OUTPUT_OWNERSHIP_ARM_OPERATION_ID: &str = "syndocal.output.ownership.arm.v2";
 pub const OUTPUT_BLACKOUT_SET_OPERATION_ID: &str = "syndocal.output.blackout.set.v2";
 pub const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID: &str = "syndocal.output.blackout.release.v2";
@@ -1937,6 +1938,9 @@ pub const OUTPUT_LEASE_RELINQUISH_OPERATION_ID: &str = "syndocal.output.lease.re
 pub const OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID: &str =
     "syndocal.output.lease.force_transfer.v2";
 pub const OUTPUT_DISPLAY_ADD_OPERATION_ID: &str = "syndocal.output.display.add.v2";
+pub const OUTPUT_EXTERNAL_ADD_OPERATION_ID: &str = "syndocal.output.external.add.v2";
+pub const OUTPUT_VIDEO_CONFIGURE_OPERATION_ID: &str = "syndocal.output.video.configure.v2";
+pub const OUTPUT_VIDEO_REMOVE_OPERATION_ID: &str = "syndocal.output.video.remove.v2";
 /// The sole operator mutation for the physical live Display shell.  This is
 /// deliberately separate from AddDisplay: it never changes the persisted
 /// output graph, routing, mapping, enable state, or blackout state.
@@ -2007,6 +2011,179 @@ pub const OUTPUT_CONTROL_ARGUMENT_FINGERPRINT_DOMAIN_V2: &[u8] =
     b"syndocal.output-control.argument-fingerprint.v2\0";
 pub const OUTPUT_CONTROL_SHAPE_DOMAIN_V2: &[u8] = b"syndocal.output-control.command-shape.v2\0";
 
+/// Authored external-output creation. Activation is not caller-controlled:
+/// the native transaction creates an enabled output under the current role.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalVideoOutputSpecV2 {
+    pub kind: crate::VideoOutputKind,
+    pub label: String,
+    pub width: u32,
+    pub height: u32,
+    pub endpoint_name: String,
+    pub composition_id: u64,
+}
+
+impl ExternalVideoOutputSpecV2 {
+    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
+        validate_video_output_authoring_label(&self.label)?;
+        validate_external_video_output_fields(
+            &self.kind,
+            self.width,
+            self.height,
+            &self.endpoint_name,
+        )?;
+        validate_video_output_authoring_id(self.composition_id)
+    }
+
+    fn append_canonical_bytes(
+        &self,
+        output: &mut Vec<u8>,
+    ) -> Result<(), OutputControlValidationErrorV1> {
+        self.validate()?;
+        append_video_output_kind(output, &self.kind);
+        append_utf8(output, self.label.trim())?;
+        append_u64(output, u64::from(self.width));
+        append_u64(output, u64::from(self.height));
+        append_utf8(output, self.endpoint_name.trim())?;
+        append_u64(output, self.composition_id);
+        Ok(())
+    }
+}
+
+/// Complete configuration shape. Native authoring preserves the existing
+/// output's enabled/routing/mapping state and revalidates platform capability.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VideoOutputConfigurationV2 {
+    pub kind: crate::VideoOutputKind,
+    pub label: String,
+    pub width: u32,
+    pub height: u32,
+    pub fullscreen: bool,
+    pub monitor_index: Option<u32>,
+    pub monitor_identity: Option<String>,
+    pub endpoint_name: Option<String>,
+}
+
+impl VideoOutputConfigurationV2 {
+    pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
+        validate_video_output_authoring_label(&self.label)?;
+        if let Some(spec) = self.display_spec() {
+            if self.endpoint_name.is_some() {
+                return Err(OutputControlValidationErrorV1::InvalidVideoOutputSpec);
+            }
+            return spec.validate();
+        }
+        if self.kind == crate::VideoOutputKind::Display
+            || self.fullscreen
+            || self.monitor_index.is_some()
+            || self.monitor_identity.is_some()
+        {
+            return Err(OutputControlValidationErrorV1::InvalidVideoOutputSpec);
+        }
+        validate_external_video_output_fields(
+            &self.kind,
+            self.width,
+            self.height,
+            self.endpoint_name
+                .as_deref()
+                .ok_or(OutputControlValidationErrorV1::InvalidVideoOutputSpec)?,
+        )
+    }
+
+    pub fn display_spec(&self) -> Option<DisplayOutputSpecV2> {
+        if self.kind != crate::VideoOutputKind::Display {
+            return None;
+        }
+        Some(DisplayOutputSpecV2 {
+            label: self.label.clone(),
+            monitor_identity: self.monitor_identity.clone()?,
+            monitor_index: self.monitor_index?,
+            width: self.width,
+            height: self.height,
+            fullscreen: self.fullscreen,
+        })
+    }
+
+    fn append_canonical_bytes(
+        &self,
+        output: &mut Vec<u8>,
+    ) -> Result<(), OutputControlValidationErrorV1> {
+        self.validate()?;
+        append_video_output_kind(output, &self.kind);
+        append_utf8(output, self.label.trim())?;
+        append_u64(output, u64::from(self.width));
+        append_u64(output, u64::from(self.height));
+        output.push(u8::from(self.fullscreen));
+        output.push(u8::from(self.monitor_index.is_some()));
+        if let Some(index) = self.monitor_index {
+            append_u64(output, u64::from(index));
+        }
+        output.push(u8::from(self.monitor_identity.is_some()));
+        if let Some(identity) = &self.monitor_identity {
+            append_utf8(output, identity)?;
+        }
+        output.push(u8::from(self.endpoint_name.is_some()));
+        if let Some(endpoint) = &self.endpoint_name {
+            append_utf8(output, endpoint.trim())?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_video_output_authoring_label(
+    label: &str,
+) -> Result<(), OutputControlValidationErrorV1> {
+    let invalid_character = label.chars().any(|character| character.is_control() || matches!(character, '/' | '\\'));
+    let label = label.trim();
+    if label.is_empty()
+        || label.len() > 128
+        || invalid_character
+    {
+        return Err(OutputControlValidationErrorV1::InvalidVideoOutputSpec);
+    }
+    Ok(())
+}
+
+fn validate_video_output_authoring_id(
+    id: u64,
+) -> Result<(), OutputControlValidationErrorV1> {
+    if id == 0 || id > MAX_SAFE_JAVASCRIPT_INTEGER {
+        return Err(OutputControlValidationErrorV1::InvalidVideoOutputSpec);
+    }
+    Ok(())
+}
+
+fn validate_external_video_output_fields(
+    kind: &crate::VideoOutputKind,
+    width: u32,
+    height: u32,
+    endpoint: &str,
+) -> Result<(), OutputControlValidationErrorV1> {
+    let invalid_character = endpoint.chars().any(char::is_control);
+    let endpoint = endpoint.trim();
+    if *kind == crate::VideoOutputKind::Display
+        || !(1..=8192).contains(&width)
+        || !(1..=8192).contains(&height)
+        || endpoint.is_empty()
+        || endpoint.len() > 255
+        || invalid_character
+    {
+        return Err(OutputControlValidationErrorV1::InvalidVideoOutputSpec);
+    }
+    Ok(())
+}
+
+fn append_video_output_kind(output: &mut Vec<u8>, kind: &crate::VideoOutputKind) {
+    output.push(match kind {
+        crate::VideoOutputKind::Display => 0,
+        crate::VideoOutputKind::NdiSender => 1,
+        crate::VideoOutputKind::SpoutSender => 2,
+        crate::VideoOutputKind::SyphonServer => 3,
+    });
+}
+
 /// Minimal, display-only payload for the local R4 output-creation lane.
 ///
 /// The monitor index is resolved against the current native monitor snapshot
@@ -2026,13 +2203,7 @@ pub struct DisplayOutputSpecV2 {
 
 impl DisplayOutputSpecV2 {
     pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
-        let label = self.label.trim();
-        if label.is_empty()
-            || label.len() > 128
-            || !label.is_ascii()
-            || label
-                .bytes()
-                .any(|byte| byte.is_ascii_control() || matches!(byte, b'/' | b'\\'))
+        if validate_video_output_authoring_label(&self.label).is_err()
             || validate_lower_hex_sha256(&self.monitor_identity).is_err()
             || self.monitor_index > 255
             || !(1..=16_384).contains(&self.width)
@@ -2048,7 +2219,7 @@ impl DisplayOutputSpecV2 {
         output: &mut Vec<u8>,
     ) -> Result<(), OutputControlValidationErrorV1> {
         self.validate()?;
-        append_ascii(output, self.label.trim())
+        append_utf8(output, self.label.trim())
             .map_err(|_| OutputControlValidationErrorV1::InvalidDisplayOutputSpec)?;
         append_ascii(output, &self.monitor_identity)
             .map_err(|_| OutputControlValidationErrorV1::InvalidDisplayOutputSpec)?;
@@ -2382,6 +2553,7 @@ pub enum OutputControlValidationErrorV1 {
     InvalidReceiptOutcome,
     InvalidLeaseAuthority,
     InvalidDisplayOutputSpec,
+    InvalidVideoOutputSpec,
     InvalidLightingControl,
     InvalidVideoControl,
     InvalidVideoTake,
@@ -2402,6 +2574,7 @@ impl fmt::Display for OutputControlValidationErrorV1 {
             Self::InvalidReceiptOutcome => "output-control receipt outcome is invalid",
             Self::InvalidLeaseAuthority => "output lease authority is not canonical",
             Self::InvalidDisplayOutputSpec => "display output specification is invalid",
+            Self::InvalidVideoOutputSpec => "video output authoring specification is invalid",
             Self::InvalidLightingControl => "lighting control value, role, or group ID is invalid",
             Self::InvalidVideoControl => "video control value or role is invalid",
             Self::InvalidNetworkDmxRoutes => "network DMX routes are invalid",
@@ -2734,6 +2907,19 @@ pub enum OutputControlActionV2 {
         spec: DisplayOutputSpecV2,
         lease: OutputLeaseAuthorityV1,
     },
+    AddExternalOutput {
+        spec: ExternalVideoOutputSpecV2,
+        lease: OutputLeaseAuthorityV1,
+    },
+    ConfigureVideoOutput {
+        output_id: u64,
+        spec: VideoOutputConfigurationV2,
+        lease: OutputLeaseAuthorityV1,
+    },
+    RemoveVideoOutput {
+        output_id: u64,
+        lease: OutputLeaseAuthorityV1,
+    },
     SetDisplayWindowOpen {
         output_id: u64,
         open: bool,
@@ -2848,6 +3034,19 @@ enum OutputControlActionV2Wire {
         spec: DisplayOutputSpecV2,
         lease: OutputLeaseAuthorityV1,
     },
+    AddExternalOutput {
+        spec: ExternalVideoOutputSpecV2,
+        lease: OutputLeaseAuthorityV1,
+    },
+    ConfigureVideoOutput {
+        output_id: u64,
+        spec: VideoOutputConfigurationV2,
+        lease: OutputLeaseAuthorityV1,
+    },
+    RemoveVideoOutput {
+        output_id: u64,
+        lease: OutputLeaseAuthorityV1,
+    },
     SetDisplayWindowOpen {
         output_id: u64,
         open: bool,
@@ -2924,6 +3123,9 @@ impl OutputControlActionV2 {
             Self::RelinquishOutputLease { .. } => OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
             Self::ForceTransferLease { .. } => OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
             Self::AddDisplay { .. } => OUTPUT_DISPLAY_ADD_OPERATION_ID,
+            Self::AddExternalOutput { .. } => OUTPUT_EXTERNAL_ADD_OPERATION_ID,
+            Self::ConfigureVideoOutput { .. } => OUTPUT_VIDEO_CONFIGURE_OPERATION_ID,
+            Self::RemoveVideoOutput { .. } => OUTPUT_VIDEO_REMOVE_OPERATION_ID,
             Self::SetDisplayWindowOpen { .. } => OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
             Self::AssignVideoOutputComposition { .. } => {
                 OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
@@ -2985,6 +3187,19 @@ impl OutputControlActionV2 {
             | Self::ForceTransferLease { lease } => lease.validate()?,
             Self::AddDisplay { spec, lease } => {
                 spec.validate()?;
+                lease.validate()?;
+            }
+            Self::AddExternalOutput { spec, lease } => {
+                spec.validate()?;
+                lease.validate()?;
+            }
+            Self::ConfigureVideoOutput { output_id, spec, lease } => {
+                validate_video_output_authoring_id(*output_id)?;
+                spec.validate()?;
+                lease.validate()?;
+            }
+            Self::RemoveVideoOutput { output_id, lease } => {
+                validate_video_output_authoring_id(*output_id)?;
                 lease.validate()?;
             }
             Self::SetDisplayWindowOpen {
@@ -3170,6 +3385,21 @@ impl OutputControlActionV2 {
             },
             Self::AddDisplay { spec, lease } => OutputControlActionV2Wire::AddDisplay {
                 spec: spec.clone(),
+                lease: lease.clone(),
+            },
+            Self::AddExternalOutput { spec, lease } => OutputControlActionV2Wire::AddExternalOutput {
+                spec: spec.clone(),
+                lease: lease.clone(),
+            },
+            Self::ConfigureVideoOutput { output_id, spec, lease } => {
+                OutputControlActionV2Wire::ConfigureVideoOutput {
+                    output_id: *output_id,
+                    spec: spec.clone(),
+                    lease: lease.clone(),
+                }
+            }
+            Self::RemoveVideoOutput { output_id, lease } => OutputControlActionV2Wire::RemoveVideoOutput {
+                output_id: *output_id,
                 lease: lease.clone(),
             },
             Self::SetDisplayWindowOpen {
@@ -3406,6 +3636,26 @@ impl OutputControlActionV2 {
                 output.extend_from_slice(lease.lease_id.as_bytes());
                 append_u64(output, lease.generation);
             }
+            Self::AddExternalOutput { spec, lease } => {
+                // 0..=28 are frozen. Authoring appends three unique shapes.
+                output.push(29);
+                spec.append_canonical_bytes(output)?;
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
+            Self::ConfigureVideoOutput { output_id, spec, lease } => {
+                output.push(30);
+                append_u64(output, *output_id);
+                spec.append_canonical_bytes(output)?;
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
+            Self::RemoveVideoOutput { output_id, lease } => {
+                output.push(31);
+                append_u64(output, *output_id);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
             Self::SetDisplayWindowOpen {
                 output_id,
                 open,
@@ -3601,6 +3851,15 @@ impl<'de> Deserialize<'de> for OutputControlActionV2 {
             }
             OutputControlActionV2Wire::AddDisplay { spec, lease } => {
                 Self::AddDisplay { spec, lease }
+            }
+            OutputControlActionV2Wire::AddExternalOutput { spec, lease } => {
+                Self::AddExternalOutput { spec, lease }
+            }
+            OutputControlActionV2Wire::ConfigureVideoOutput { output_id, spec, lease } => {
+                Self::ConfigureVideoOutput { output_id, spec, lease }
+            }
+            OutputControlActionV2Wire::RemoveVideoOutput { output_id, lease } => {
+                Self::RemoveVideoOutput { output_id, lease }
             }
             OutputControlActionV2Wire::SetDisplayWindowOpen {
                 output_id,
@@ -4066,6 +4325,15 @@ impl OutputControlLeaseResultV2 {
         operation_id: &str,
     ) -> Result<(), OutputControlValidationErrorV1> {
         self.validate()?;
+        if matches!(
+            operation_id,
+            OUTPUT_EXTERNAL_ADD_OPERATION_ID
+                | OUTPUT_VIDEO_CONFIGURE_OPERATION_ID
+                | OUTPUT_VIDEO_REMOVE_OPERATION_ID
+        ) && !self.resources.contains(&OutputControlTargetRoleV1::Video)
+        {
+            return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
+        }
         let expected_outcome = match operation_id {
             OUTPUT_OWNERSHIP_ARM_OPERATION_ID
             | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
@@ -4081,7 +4349,10 @@ impl OutputControlLeaseResultV2 {
             OUTPUT_LEASE_RECOVER_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Recovered,
             OUTPUT_LEASE_RELINQUISH_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Relinquished,
             OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Transferred,
-            OUTPUT_DISPLAY_ADD_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
+            OUTPUT_DISPLAY_ADD_OPERATION_ID
+            | OUTPUT_EXTERNAL_ADD_OPERATION_ID
+            | OUTPUT_VIDEO_CONFIGURE_OPERATION_ID
+            | OUTPUT_VIDEO_REMOVE_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
             OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
             OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
             OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID | OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID => {
@@ -4298,6 +4569,9 @@ impl OutputControlReceiptV2 {
                 | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
                 | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                | OUTPUT_EXTERNAL_ADD_OPERATION_ID
+                | OUTPUT_VIDEO_CONFIGURE_OPERATION_ID
+                | OUTPUT_VIDEO_REMOVE_OPERATION_ID
                 | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                 | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                 | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
@@ -4361,6 +4635,16 @@ impl OutputControlReceiptV2 {
             {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
             }
+            OutputControlReceiptOutcomeV2::Applied
+                if matches!(
+                    self.operation_id.as_str(),
+                    OUTPUT_EXTERNAL_ADD_OPERATION_ID
+                        | OUTPUT_VIDEO_CONFIGURE_OPERATION_ID
+                        | OUTPUT_VIDEO_REMOVE_OPERATION_ID
+                ) && !is_exact_output_project_successor(&self.fence_before, &self.fence_after) =>
+            {
+                Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
+            }
             // Enabling the authored Show Spout pair may commit a project
             // candidate. Its terminal is valid only when the persisted
             // project fence is the exact one-step successor; a physical
@@ -4369,7 +4653,7 @@ impl OutputControlReceiptV2 {
             OutputControlReceiptOutcomeV2::Applied
                 if self.operation_id == OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
                     && self.fence_before != self.fence_after
-                    && !is_exact_show_spout_project_successor(
+                    && !is_exact_output_project_successor(
                         &self.fence_before,
                         &self.fence_after,
                     ) =>
@@ -4429,12 +4713,11 @@ impl OutputControlReceiptV2 {
     }
 }
 
-/// The authored Show Spout enable route has two valid Applied fence shapes:
-/// an unchanged fence when the pair already exists, or one exact persisted
-/// project successor when the route creates/enables the authored pair. Keep
+/// Authoring advances the project by one exact persisted successor. The Show
+/// Spout enable route also accepts an unchanged fence when its pair exists. Keep
 /// every process/session/output/safety identity invariant across that
 /// successor so a physical transition cannot masquerade as project commit.
-fn is_exact_show_spout_project_successor(
+fn is_exact_output_project_successor(
     before: &OutputControlFenceV1,
     after: &OutputControlFenceV1,
 ) -> bool {
@@ -4523,6 +4806,9 @@ impl OutputControlRejectionV2 {
                 | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
                 | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
+                | OUTPUT_EXTERNAL_ADD_OPERATION_ID
+                | OUTPUT_VIDEO_CONFIGURE_OPERATION_ID
+                | OUTPUT_VIDEO_REMOVE_OPERATION_ID
                 | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                 | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                 | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
@@ -5472,6 +5758,230 @@ mod tests {
             .is_err());
     }
 
+    fn external_authoring_spec() -> ExternalVideoOutputSpecV2 {
+        ExternalVideoOutputSpecV2 {
+            kind: crate::VideoOutputKind::SpoutSender,
+            label: "映像出力".to_string(),
+            width: 1920,
+            height: 1080,
+            endpoint_name: "Syndocal Main".to_string(),
+            composition_id: 1,
+        }
+    }
+
+    fn authoring_config_spec() -> VideoOutputConfigurationV2 {
+        VideoOutputConfigurationV2 {
+            kind: crate::VideoOutputKind::SpoutSender,
+            label: "映像出力".to_string(),
+            width: 1920,
+            height: 1080,
+            fullscreen: false,
+            monitor_index: None,
+            monitor_identity: None,
+            endpoint_name: Some("Syndocal Main".to_string()),
+        }
+    }
+
+    #[test]
+    fn output_authoring_wire_actions_are_append_only_and_round_trip() {
+        let actions = [
+            (29, OutputControlActionV2::AddExternalOutput {
+                spec: external_authoring_spec(),
+                lease: lease_authority(),
+            }),
+            (30, OutputControlActionV2::ConfigureVideoOutput {
+                output_id: 42,
+                spec: authoring_config_spec(),
+                lease: lease_authority(),
+            }),
+            (31, OutputControlActionV2::RemoveVideoOutput {
+                output_id: 42,
+                lease: lease_authority(),
+            }),
+        ];
+        for (discriminant, action) in actions {
+            let mut bytes = Vec::new();
+            action.append_canonical_bytes(&mut bytes).unwrap();
+            assert_eq!(bytes[0], discriminant);
+            let request = OutputControlCommandRequestV2 {
+                operation_id: action.operation_id().to_string(),
+                request_id: 42,
+                expected_fence: output_fence(),
+                action,
+            };
+            let value = serde_json::to_value(&request).unwrap();
+            assert_eq!(
+                serde_json::from_value::<OutputControlCommandRequestV2>(value.clone()).unwrap(),
+                request,
+            );
+            let mut unknown = value.clone();
+            unknown["action"]["enabled"] = serde_json::json!(true);
+            assert!(serde_json::from_value::<OutputControlCommandRequestV2>(unknown).is_err());
+            let mut stale_operation = value;
+            stale_operation["operation_id"] = serde_json::json!(OUTPUT_DISPLAY_ADD_OPERATION_ID);
+            assert!(serde_json::from_value::<OutputControlCommandRequestV2>(stale_operation).is_err());
+            let mut stale_epoch = request.clone();
+            stale_epoch.expected_fence.project_epoch += 1;
+            assert_ne!(
+                request.canonical_shape_bytes().unwrap(),
+                stale_epoch.canonical_shape_bytes().unwrap(),
+            );
+            let mut stale_revision = request.clone();
+            stale_revision.expected_fence.project_revision += 1;
+            assert_ne!(
+                request.canonical_shape_bytes().unwrap(),
+                stale_revision.canonical_shape_bytes().unwrap(),
+            );
+            assert_eq!(
+                request.argument_fingerprint_bytes().unwrap(),
+                stale_revision.argument_fingerprint_bytes().unwrap(),
+            );
+        }
+    }
+
+    #[test]
+    fn output_authoring_fingerprints_bind_each_destination_choice() {
+        let action = OutputControlActionV2::AddExternalOutput {
+            spec: external_authoring_spec(),
+            lease: lease_authority(),
+        };
+        let value = serde_json::to_value(&action).unwrap();
+        let mut baseline = Vec::new();
+        action.append_canonical_bytes(&mut baseline).unwrap();
+        for (field, changed) in [
+            ("kind", serde_json::json!("NdiSender")),
+            ("label", serde_json::json!("別の出力")),
+            ("width", serde_json::json!(1280)),
+            ("height", serde_json::json!(720)),
+            ("endpoint_name", serde_json::json!("Syndocal Other")),
+            ("composition_id", serde_json::json!(2)),
+        ] {
+            let mut next = value.clone();
+            next["spec"][field] = changed;
+            let next = serde_json::from_value::<OutputControlActionV2>(next).unwrap();
+            let mut bytes = Vec::new();
+            next.append_canonical_bytes(&mut bytes).unwrap();
+            assert_ne!(baseline, bytes, "creation must bind {field}");
+        }
+        let display = OutputControlActionV2::ConfigureVideoOutput {
+            output_id: 42,
+            spec: VideoOutputConfigurationV2 {
+                kind: crate::VideoOutputKind::Display,
+                endpoint_name: None,
+                monitor_index: Some(0),
+                monitor_identity: Some(hash('a')),
+                fullscreen: true,
+                ..authoring_config_spec()
+            },
+            lease: lease_authority(),
+        };
+        let value = serde_json::to_value(&display).unwrap();
+        let mut baseline = Vec::new();
+        display.append_canonical_bytes(&mut baseline).unwrap();
+        for (field, changed) in [
+            ("label", serde_json::json!("別画面")),
+            ("width", serde_json::json!(1280)),
+            ("height", serde_json::json!(720)),
+            ("fullscreen", serde_json::json!(false)),
+            ("monitor_index", serde_json::json!(1)),
+            ("monitor_identity", serde_json::json!(hash('b'))),
+        ] {
+            let mut next = value.clone();
+            next["spec"][field] = changed;
+            let next = serde_json::from_value::<OutputControlActionV2>(next).unwrap();
+            let mut bytes = Vec::new();
+            next.append_canonical_bytes(&mut bytes).unwrap();
+            assert_ne!(baseline, bytes, "configuration must bind {field}");
+        }
+        for kind in ["configure_video_output", "remove_video_output"] {
+            let mut next = value.clone();
+            next["kind"] = serde_json::json!(kind);
+            if kind == "remove_video_output" {
+                next.as_object_mut().unwrap().remove("spec");
+            }
+            let original = serde_json::from_value::<OutputControlActionV2>(next.clone()).unwrap();
+            next["output_id"] = serde_json::json!(43);
+            let changed = serde_json::from_value::<OutputControlActionV2>(next).unwrap();
+            let mut original_bytes = Vec::new();
+            let mut changed_bytes = Vec::new();
+            original.append_canonical_bytes(&mut original_bytes).unwrap();
+            changed.append_canonical_bytes(&mut changed_bytes).unwrap();
+            assert_ne!(original_bytes, changed_bytes, "{kind} must bind output identity");
+        }
+    }
+
+    #[test]
+    fn output_authoring_rejects_invalid_names_dimensions_ids_and_foreign_fields() {
+        let value = serde_json::to_value(OutputControlActionV2::AddExternalOutput {
+            spec: external_authoring_spec(),
+            lease: lease_authority(),
+        }).unwrap();
+        for (field, invalid) in [
+            ("kind", serde_json::json!("Display")),
+            ("label", serde_json::json!(" ")),
+            ("label", serde_json::json!("a".repeat(129))),
+            ("label", serde_json::json!("name/name")),
+            ("endpoint_name", serde_json::json!(" ")),
+            ("endpoint_name", serde_json::json!("a".repeat(256))),
+            ("endpoint_name", serde_json::json!("送信".repeat(43))),
+            ("endpoint_name", serde_json::json!("name\u{85}invalid")),
+            ("endpoint_name", serde_json::json!("name\ninvalid")),
+            ("endpoint_name", serde_json::json!("\nname")),
+            ("label", serde_json::json!("name\n")),
+            ("width", serde_json::json!(0)),
+            ("width", serde_json::json!(8193)),
+            ("height", serde_json::json!(8193)),
+            ("composition_id", serde_json::json!(0)),
+            ("composition_id", serde_json::json!(MAX_SAFE_JAVASCRIPT_INTEGER + 1)),
+            ("enabled", serde_json::json!(true)),
+        ] {
+            let mut next = value.clone();
+            next["spec"][field] = invalid;
+            assert!(
+                serde_json::from_value::<OutputControlActionV2>(next).is_err(),
+                "must reject invalid {field}"
+            );
+        }
+        for kind in [
+            crate::VideoOutputKind::SpoutSender,
+            crate::VideoOutputKind::NdiSender,
+            crate::VideoOutputKind::SyphonServer,
+        ] {
+            let spec = ExternalVideoOutputSpecV2 { kind, ..external_authoring_spec() };
+            assert!(spec.validate().is_ok());
+        }
+        let config = serde_json::to_value(OutputControlActionV2::ConfigureVideoOutput {
+            output_id: 42,
+            spec: authoring_config_spec(),
+            lease: lease_authority(),
+        }).unwrap();
+        for (field, invalid) in [
+            ("monitor_index", serde_json::json!(1)),
+            ("monitor_identity", serde_json::json!(hash('a'))),
+            ("fullscreen", serde_json::json!(true)),
+            ("endpoint_name", serde_json::Value::Null),
+        ] {
+            let mut next = config.clone();
+            next["spec"][field] = invalid;
+            assert!(serde_json::from_value::<OutputControlActionV2>(next).is_err());
+        }
+        for id in [0, MAX_SAFE_JAVASCRIPT_INTEGER + 1] {
+            assert!(OutputControlActionV2::RemoveVideoOutput {
+                output_id: id,
+                lease: lease_authority(),
+            }.validate().is_err());
+        }
+        let mut display = authoring_config_spec();
+        display.kind = crate::VideoOutputKind::Display;
+        display.endpoint_name = None;
+        assert!(display.validate().is_err());
+        display.monitor_index = Some(0);
+        display.monitor_identity = Some(hash('a'));
+        assert!(display.validate().is_ok());
+        display.monitor_identity = Some("stale-monitor".to_string());
+        assert!(display.validate().is_err());
+    }
+
     fn authorized_display_recovery_lease_result(
         before_generation: u64,
         after_generation: u64,
@@ -5774,6 +6284,60 @@ mod tests {
             error: OutputControlErrorCodeV2::PublicationFailed,
         };
         assert!(invalid_rejection.validate().is_err());
+    }
+
+    #[test]
+    fn output_authoring_receipts_require_exact_project_successor_and_video_authority() {
+        for operation_id in [
+            OUTPUT_EXTERNAL_ADD_OPERATION_ID,
+            OUTPUT_VIDEO_CONFIGURE_OPERATION_ID,
+            OUTPUT_VIDEO_REMOVE_OPERATION_ID,
+        ] {
+            let before = output_fence();
+            let mut after = before.clone();
+            after.project_revision += 1;
+            after.project_publication_generation += 1;
+            after.project_checkpoint_hash = hash('f');
+            let receipt = OutputControlReceiptV2 {
+                operation_id: operation_id.to_string(),
+                request_id: 88,
+                shape_sha256: hash('d'),
+                argument_fingerprint: hash('e'),
+                audit_sequence: 1,
+                fence_before: before.clone(),
+                fence_after: after,
+                outcome: OutputControlReceiptOutcomeV2::Applied,
+                lease_result: Some(authorized_both_lease_result()),
+            };
+            assert_eq!(receipt.validate(), Ok(()));
+            let encoded = serde_json::to_value(&receipt).unwrap();
+            assert_eq!(serde_json::from_value::<OutputControlReceiptV2>(encoded).unwrap(), receipt);
+            for field in [
+                "process_incarnation", "session_incarnation", "project_epoch",
+                "project_revision", "project_publication_generation",
+                "output_epoch", "output_generation",
+                "safety_blackout_epoch", "safety_blackout_generation",
+            ] {
+                let mut encoded = serde_json::to_value(&receipt).unwrap();
+                let value = encoded["fence_after"][field].as_u64().unwrap();
+                encoded["fence_after"][field] = serde_json::json!(value + 1);
+                assert!(serde_json::from_value::<OutputControlReceiptV2>(encoded).is_err(), "{field}");
+            }
+            let mut unchanged = receipt.clone();
+            unchanged.fence_after = before;
+            assert!(unchanged.validate().is_err());
+            unchanged.outcome = OutputControlReceiptOutcomeV2::NoOp;
+            assert_eq!(unchanged.validate(), Ok(()));
+            let mut wrong_lease = receipt.clone();
+            let lease = wrong_lease.lease_result.as_mut().unwrap();
+            lease.resources = vec![OutputControlTargetRoleV1::Lighting];
+            lease.changes[0].before_resources = lease.resources.clone();
+            lease.changes[0].after_resources = lease.resources.clone();
+            assert!(wrong_lease.validate().is_err());
+            let mut no_lease = receipt;
+            no_lease.lease_result = None;
+            assert!(no_lease.validate().is_err());
+        }
     }
 
     #[test]

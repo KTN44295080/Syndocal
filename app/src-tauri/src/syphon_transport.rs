@@ -112,6 +112,20 @@ impl SyphonTransportState {
         )
     }
 
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    pub fn start_route_for_authoring(
+        &mut self,
+        route: &video::ExternalVideoTransportRoute,
+        engine: &EngineHandle,
+        activation: Option<OutputOwnershipActivation>,
+        authority: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        self.start_route_with_factory_and_authority(
+            route, engine, activation, crate::syphon_native::SyphonSender::new,
+            Some(authority),
+        )
+    }
+
     fn start_route_with_factory<S, F>(
         &mut self,
         route: &video::ExternalVideoTransportRoute,
@@ -123,6 +137,24 @@ impl SyphonTransportState {
         S: SyphonOutputSender + 'static,
         F: FnOnce(&str) -> Result<S, String> + Send + 'static,
     {
+        self.start_route_with_factory_and_authority(route, engine, activation, factory, None)
+    }
+
+    fn start_route_with_factory_and_authority<S, F>(
+        &mut self,
+        route: &video::ExternalVideoTransportRoute,
+        engine: &EngineHandle,
+        activation: Option<OutputOwnershipActivation>,
+        factory: F,
+        authority: Option<&dyn Fn() -> Result<(), String>>,
+    ) -> Result<(), video::ExternalVideoTransportDriverError>
+    where
+        S: SyphonOutputSender + 'static,
+        F: FnOnce(&str) -> Result<S, String> + Send + 'static,
+    {
+        if let Some(validate) = authority {
+            validate().map_err(driver_error)?;
+        }
         self.harvest_failed_workers(engine)?;
         if route.direction != video::ExternalVideoTransportDirection::Output
             || route.backend_id != "syphon"
@@ -166,6 +198,9 @@ impl SyphonTransportState {
         let activation = activation
             .ok_or_else(|| driver_error("Syphon output resource activation was not admitted"))?;
         self.failed_output_routes.remove(&route.route_id);
+        if let Some(validate) = authority {
+            validate().map_err(driver_error)?;
+        }
         let worker = match SyphonRouteWorker::start_output_with_factory(
             route.route_id,
             route.endpoint_name.clone(),
@@ -185,11 +220,12 @@ impl SyphonTransportState {
             }
         };
         self.output_workers.insert(route.route_id, worker);
-        let publish_result = self
-            .output_workers
-            .get_mut(&route.route_id)
-            .expect("inserted Syphon worker")
-            .publish();
+        let publish_result = authority.map_or(Ok(()), |validate| validate()).and_then(|()| {
+            self.output_workers
+                .get_mut(&route.route_id)
+                .expect("inserted Syphon worker")
+                .publish()
+        });
         if let Err(error) = publish_result {
             let worker = self
                 .output_workers
@@ -215,6 +251,36 @@ impl SyphonTransportState {
         route: &video::ExternalVideoTransportRoute,
         engine: &EngineHandle,
     ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        self.stop_route_with_authority(route, engine, None)
+    }
+
+    /// Retire only the authoring target under a counted resource lease. The
+    /// ordinary stop API continues to require a global ownership transition.
+    pub fn stop_route_for_authoring(
+        &mut self,
+        route: &video::ExternalVideoTransportRoute,
+        engine: &EngineHandle,
+        authority: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        if route.direction != video::ExternalVideoTransportDirection::Output
+            || route.backend_id != "syphon"
+        {
+            return Err(video::ExternalVideoTransportDriverError {
+                message: "Syphon authoring accepts only its output routes".to_string(),
+            });
+        }
+        self.stop_route_with_authority(route, engine, Some(authority))
+    }
+
+    fn stop_route_with_authority(
+        &mut self,
+        route: &video::ExternalVideoTransportRoute,
+        engine: &EngineHandle,
+        authority: Option<&dyn Fn() -> Result<(), String>>,
+    ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        if let Some(validate) = authority {
+            validate().map_err(driver_error)?;
+        }
         self.harvest_failed_workers(engine)?;
         if route.direction != video::ExternalVideoTransportDirection::Output
             || route.backend_id != "syphon"
@@ -223,7 +289,7 @@ impl SyphonTransportState {
                 "Syphon transport accepts Syphon output routes only",
             ));
         }
-        if !matches!(
+        if authority.is_none() && !matches!(
             engine.output_ownership_status().state,
             protocol::OutputOwnershipState::Transitioning
                 | protocol::OutputOwnershipState::Activating
@@ -232,6 +298,12 @@ impl SyphonTransportState {
             return Err(driver_error(
                 "Syphon output teardown requires the serialized ownership transition",
             ));
+        }
+        if let Some(validate) = authority {
+            validate().map_err(driver_error)?;
+            if let Some(worker) = self.output_workers.get(&route.route_id) {
+                worker.admit_authoring_retirement(engine).map_err(driver_error)?;
+            }
         }
         if let Some(worker) = self.output_workers.remove(&route.route_id) {
             match worker.stop() {
@@ -1044,6 +1116,16 @@ impl SyphonRouteWorker {
         drop(lease);
     }
 
+    fn admit_authoring_retirement(&self, engine: &EngineHandle) -> Result<(), String> {
+        let lease = engine.begin_video_output_resource_teardown()?;
+        let mut slot = self.teardown_lease.lock()
+            .map_err(|_| "Video authoring retirement lease slot was poisoned".to_string())?;
+        if slot.is_none() {
+            *slot = Some(lease);
+        }
+        Ok(())
+    }
+
     fn stop(mut self) -> Result<(), SyphonOutputWorkerStopError> {
         self.lifecycle.stopping();
         let undelivered_creation_lease = self.signal_retirement();
@@ -1140,10 +1222,15 @@ fn finish_syphon_output_worker<S: SyphonOutputSender>(
     failure_lease: Option<engine::OutputOwnershipTeardownLease>,
     mut worker_error: Option<String>,
 ) -> Result<(), SyphonOutputWorkerStopError> {
+    let authored_teardown = teardown_lease_slot.lock()
+        .map(|mut slot| slot.take())
+        .unwrap_or_else(|poisoned| poisoned.into_inner().take());
     let teardown_lease = if let Some(lease) = failure_lease {
         lease
     } else if let Some(error) = worker_error.as_ref() {
         engine.begin_output_ownership_failure_fence(error.clone())
+    } else if let Some(lease) = authored_teardown {
+        lease
     } else {
         match engine.begin_output_ownership_teardown() {
             Ok(lease) => lease,
@@ -1678,6 +1765,114 @@ mod tests {
             &format!("Test Syphon {output_id}"),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn syphon_authoring_rejects_expired_authority_after_readiness_without_sending() {
+        let engine = test_engine(930_020);
+        let before = engine.output_ownership_status();
+        let activation = engine.admit_output_activation(before.effective_role).unwrap();
+        let expired = Arc::new(AtomicBool::new(false));
+        let expiry_after_constructor = Arc::clone(&expired);
+        let sends = Arc::new(AtomicUsize::new(0));
+        let closed = Arc::new(AtomicBool::new(false));
+        let sender_sends = Arc::clone(&sends);
+        let sender_closed = Arc::clone(&closed);
+        let authority = || {
+            if expired.load(Ordering::Acquire) {
+                Err("authoring lease expired during sender startup".to_string())
+            } else {
+                Ok(())
+            }
+        };
+        let mut transport = test_transport();
+        let error = transport.start_route_with_factory_and_authority(
+            &test_route(930_020), &engine, Some(activation),
+            move |_| {
+                expiry_after_constructor.store(true, Ordering::Release);
+                Ok(FakeSender::new(sender_sends, sender_closed))
+            },
+            Some(&authority),
+        ).unwrap_err();
+        assert!(error.message.contains("authoring lease expired"));
+        assert_eq!(sends.load(Ordering::Acquire), 0);
+        assert!(closed.load(Ordering::Acquire));
+        assert!(transport.output_workers.is_empty());
+        assert!(transport.pending_output_startups.is_empty());
+        assert_eq!(engine.output_ownership_status(), before);
+        engine.begin_output_ownership_transition(protocol::MachineOutputRole::Standby)
+            .unwrap().complete().unwrap();
+    }
+
+    #[test]
+    fn syphon_authoring_retires_one_live_route_without_rearming_or_stopping_another() {
+        let engine = test_engine(930_021);
+        let mut second = engine.video_output_snapshot(930_021).unwrap();
+        second.id = 930_022;
+        second.label = "Test Syphon 930022".to_string();
+        second.endpoint_name = Some("Test Syphon 930022".to_string());
+        // A persistence projection response can precede visible publication.
+        // Wait for the second output's acknowledged publication before either
+        // fake sender captures its output configuration.
+        engine
+            .send(engine::EngineCommand::AddVideoOutput(second))
+            .unwrap();
+        engine.await_snapshot_publication().unwrap();
+        assert!(engine.video_output_snapshot(930_021).is_some());
+        assert!(engine.video_output_snapshot(930_022).is_some());
+        let before = engine.output_ownership_status();
+        let closed_a = Arc::new(AtomicBool::new(false));
+        let closed_b = Arc::new(AtomicBool::new(false));
+        let mut transport = test_transport();
+        for (id, closed) in [(930_021, Arc::clone(&closed_a)), (930_022, Arc::clone(&closed_b))] {
+            let activation = engine.admit_output_activation(before.effective_role).unwrap();
+            transport.start_route_with_factory_and_authority(
+                &test_route(id), &engine, Some(activation),
+                move |_| Ok(FakeSender::new(Arc::new(AtomicUsize::new(0)), closed)),
+                Some(&|| Ok(())),
+            ).unwrap();
+        }
+        assert!(transport.stop_route(&test_route(930_021), &engine).is_err(),
+            "the ordinary API still requires a global transition");
+        assert!(transport.stop_route_for_authoring(&test_route(930_021), &engine,
+            &|| Err("stale authoring owner".to_string())).is_err());
+        assert_eq!(transport.output_workers.len(), 2);
+        assert!(!closed_a.load(Ordering::Acquire));
+        transport.stop_route_for_authoring(&test_route(930_021), &engine, &|| Ok(())).unwrap();
+        assert!(closed_a.load(Ordering::Acquire));
+        assert!(!closed_b.load(Ordering::Acquire));
+        assert!(!transport.output_workers.contains_key(&930_021));
+        assert!(transport.output_workers.contains_key(&930_022));
+        assert_eq!(engine.output_ownership_status(), before);
+        transport.stop_route_for_authoring(&test_route(930_022), &engine, &|| Ok(())).unwrap();
+        assert!(closed_b.load(Ordering::Acquire));
+        assert!(transport.output_workers.is_empty());
+        engine.begin_output_ownership_transition(protocol::MachineOutputRole::Standby)
+            .unwrap().complete().unwrap();
+    }
+
+    #[test]
+    fn syphon_authoring_failed_native_close_retains_accounting_and_fences_successors() {
+        let engine = test_engine(930_023);
+        let activation = engine.admit_output_activation(protocol::MachineOutputRole::Both).unwrap();
+        let closed = Arc::new(AtomicBool::new(false));
+        let sender_closed = Arc::clone(&closed);
+        let mut transport = test_transport();
+        transport.start_route_with_factory_and_authority(
+            &test_route(930_023), &engine, Some(activation),
+            move |_| {
+                let mut sender = FakeSender::new(Arc::new(AtomicUsize::new(0)), sender_closed);
+                sender.close_error = true;
+                Ok(sender)
+            },
+            Some(&|| Ok(())),
+        ).unwrap();
+        let error = transport.stop_route_for_authoring(&test_route(930_023), &engine, &|| Ok(())).unwrap_err();
+        assert!(error.message.contains("native stop failure"));
+        assert!(!closed.load(Ordering::Acquire));
+        assert!(transport.failed_output_routes.contains_key(&930_023));
+        assert_eq!(engine.output_ownership_status().state, protocol::OutputOwnershipState::Failed);
+        assert!(engine.begin_output_ownership_transition(protocol::MachineOutputRole::Both).is_err());
     }
 
     #[test]
