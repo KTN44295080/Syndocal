@@ -402,6 +402,7 @@ pub(crate) fn execute_external_output_control(
         OutputControlActionV2::AcquireLease { .. }
         | OutputControlActionV2::RenewLease { .. }
         | OutputControlActionV2::RecoverLease { .. }
+        | OutputControlActionV2::ReplaceVideoAuthoringLease { .. }
         | OutputControlActionV2::RelinquishOutputLease { .. }
         | OutputControlActionV2::ForceTransferLease { .. } => execute_output_lease_lifecycle_authorized(
             app, window, state, query_state, operation_id, request, |_| true, authorize,
@@ -1557,6 +1558,7 @@ where
         OutputControlActionV2::AcquireLease { .. }
         | OutputControlActionV2::RenewLease { .. }
         | OutputControlActionV2::RecoverLease { .. }
+        | OutputControlActionV2::ReplaceVideoAuthoringLease { .. }
         | OutputControlActionV2::RelinquishOutputLease { .. }
         | OutputControlActionV2::ForceTransferLease { .. } => {
             Err("Output lease lifecycle is not wired in this operation path".to_string())
@@ -1946,6 +1948,7 @@ fn validate_output_action_current(
         OutputControlActionV2::AcquireLease { .. }
         | OutputControlActionV2::RenewLease { .. }
         | OutputControlActionV2::RecoverLease { .. }
+        | OutputControlActionV2::ReplaceVideoAuthoringLease { .. }
         | OutputControlActionV2::RelinquishOutputLease { .. }
         | OutputControlActionV2::ForceTransferLease { .. } => Ok(()),
     }
@@ -2225,6 +2228,14 @@ fn build_output_lease_lifecycle_request(
             expected_generation: lease.generation,
             ttl_ms: MAX_OUTPUT_LEASE_TTL_MS,
         },
+        OutputControlActionV2::ReplaceVideoAuthoringLease { lease } => OutputLeaseRequestAction::ReplacePreviousProjectForAuthoring {
+            lease_id: OutputLeaseId::decode(&lease.lease_id)
+                .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?,
+            owner,
+            expected_generation: lease.generation,
+            project_identity: format!("project_epoch:{}", request.expected_fence.project_epoch),
+            ttl_ms: MAX_OUTPUT_LEASE_TTL_MS,
+        },
         OutputControlActionV2::RelinquishOutputLease { lease } => {
             OutputLeaseRequestAction::Relinquish {
                 lease_id: OutputLeaseId::decode(&lease.lease_id)
@@ -2258,6 +2269,7 @@ fn lifecycle_lease_id(action: &OutputControlActionV2) -> Option<&str> {
     match action {
         OutputControlActionV2::RenewLease { lease }
         | OutputControlActionV2::RecoverLease { lease }
+        | OutputControlActionV2::ReplaceVideoAuthoringLease { lease }
         | OutputControlActionV2::RelinquishOutputLease { lease }
         | OutputControlActionV2::ForceTransferLease { lease, .. } => Some(&lease.lease_id),
         OutputControlActionV2::AcquireLease { .. } => None,
@@ -2816,12 +2828,17 @@ where
         request.action,
         OutputControlActionV2::ForceTransferLease { .. }
     );
-    let receipt = match super::submit_output_lease_lifecycle_request(
+    let submitted = if matches!(request.action, OutputControlActionV2::ReplaceVideoAuthoringLease { .. }) {
+        super::video_authoring_lease::submit_replacement(state, &coordinator, &lease_request, &request.expected_fence)
+    } else {
+        super::submit_output_lease_lifecycle_request(
         state,
         &lease_request,
         lease_now_ms,
         require_transition,
-    ) {
+        )
+    };
+    let receipt = match submitted {
         Ok(receipt) => receipt,
         Err(error) => {
             state
@@ -3032,6 +3049,7 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
             OutputLeaseReceiptOutcomeV2::Authorized
         }
         OutputControlActionV2::AcquireLease { .. } => OutputLeaseReceiptOutcomeV2::Acquired,
+        OutputControlActionV2::ReplaceVideoAuthoringLease { .. } => OutputLeaseReceiptOutcomeV2::Acquired,
         OutputControlActionV2::RenewLease { .. } => OutputLeaseReceiptOutcomeV2::Renewed,
         OutputControlActionV2::RecoverLease { .. } => OutputLeaseReceiptOutcomeV2::Recovered,
         OutputControlActionV2::RelinquishOutputLease { .. } => {
@@ -3054,9 +3072,10 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
     let lease_id = receipt
         .lease_id
         .ok_or_else(|| "output lease receipt omitted its lease id".to_string())?;
-    let generation = receipt
-        .generation_after
-        .or(receipt.generation_before)
+    let selected_change = receipt.changes.iter().find(|change| change.lease_id == lease_id)
+        .ok_or_else(|| "output lease receipt omitted its authority change".to_string())?;
+    let generation = selected_change.after.as_ref().or(selected_change.before.as_ref())
+        .map(|snapshot| snapshot.generation)
         .ok_or_else(|| "output lease receipt omitted its generation".to_string())?;
     let resources = receipt
         .resources
@@ -3123,14 +3142,10 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
             after_phase: change.after.as_ref().map(phase_for_snapshot),
         })
         .collect::<Vec<_>>();
-    let last_change = receipt
-        .changes
-        .last()
-        .ok_or_else(|| "output lease receipt omitted its final change".to_string())?;
-    let phase = last_change
+    let phase = selected_change
         .after
         .as_ref()
-        .or(last_change.before.as_ref())
+        .or(selected_change.before.as_ref())
         .map(phase_for_snapshot)
         .ok_or_else(|| "output lease receipt omitted its final phase".to_string())?;
     let result = OutputControlLeaseResultV2 {

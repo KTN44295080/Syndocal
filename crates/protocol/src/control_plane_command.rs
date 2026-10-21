@@ -18,6 +18,11 @@ pub const OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID: &str = "syndocal.output.ne
 /// The largest integer which can make a round trip through JavaScript JSON
 /// without losing its identity.
 pub const MAX_SAFE_JAVASCRIPT_INTEGER: u64 = 9_007_199_254_740_991;
+pub const OUTPUT_VIDEO_AUTHORING_LEASE_REPLACE_OPERATION_ID: &str =
+    "syndocal.output.video.authoring.lease.replace.v1";
+
+#[path = "video_authoring_lease_receipt.rs"]
+mod video_authoring_lease_receipt;
 pub const SET_EFFECT_ENABLED_OPERATION_ID: &str = "syndocal.effects.set_enabled.v1";
 pub const CUE_LIST_REORDER_OPERATION_ID: &str = "syndocal.cue_lists.reorder.v1";
 pub const CUE_LIST_RENAME_OPERATION_ID: &str = "syndocal.cue_lists.rename.v1";
@@ -1926,7 +1931,9 @@ pub const OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID: &str =
 // lease-bound Video Take runtime action. v12 appends the lease-bound Video
 // Clip Launch runtime action. v13 appends enabled external-output creation,
 // configuration and removal without changing any prior action discriminant.
-pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 13;
+// v14 appends exact previous-project authoring authority replacement. Existing
+// Acquire/Recover/Relinquish identities and wire contracts stay unchanged.
+pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 14;
 pub const OUTPUT_OWNERSHIP_ARM_OPERATION_ID: &str = "syndocal.output.ownership.arm.v2";
 pub const OUTPUT_BLACKOUT_SET_OPERATION_ID: &str = "syndocal.output.blackout.set.v2";
 pub const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID: &str = "syndocal.output.blackout.release.v2";
@@ -2897,6 +2904,9 @@ pub enum OutputControlActionV2 {
     RecoverLease {
         lease: OutputLeaseAuthorityV1,
     },
+    ReplaceVideoAuthoringLease {
+        lease: OutputLeaseAuthorityV1,
+    },
     RelinquishOutputLease {
         lease: OutputLeaseAuthorityV1,
     },
@@ -3024,6 +3034,9 @@ enum OutputControlActionV2Wire {
     RecoverLease {
         lease: OutputLeaseAuthorityV1,
     },
+    ReplaceVideoAuthoringLease {
+        lease: OutputLeaseAuthorityV1,
+    },
     RelinquishOutputLease {
         lease: OutputLeaseAuthorityV1,
     },
@@ -3120,6 +3133,7 @@ impl OutputControlActionV2 {
             Self::AcquireLease { .. } => OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
             Self::RenewLease { .. } => OUTPUT_LEASE_RENEW_OPERATION_ID,
             Self::RecoverLease { .. } => OUTPUT_LEASE_RECOVER_OPERATION_ID,
+            Self::ReplaceVideoAuthoringLease { .. } => OUTPUT_VIDEO_AUTHORING_LEASE_REPLACE_OPERATION_ID,
             Self::RelinquishOutputLease { .. } => OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
             Self::ForceTransferLease { .. } => OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
             Self::AddDisplay { .. } => OUTPUT_DISPLAY_ADD_OPERATION_ID,
@@ -3183,6 +3197,7 @@ impl OutputControlActionV2 {
             | Self::SetBlackout { lease, .. }
             | Self::RenewLease { lease }
             | Self::RecoverLease { lease }
+            | Self::ReplaceVideoAuthoringLease { lease }
             | Self::RelinquishOutputLease { lease }
             | Self::ForceTransferLease { lease } => lease.validate()?,
             Self::AddDisplay { spec, lease } => {
@@ -3373,6 +3388,9 @@ impl OutputControlActionV2 {
                 lease: lease.clone(),
             },
             Self::RecoverLease { lease } => OutputControlActionV2Wire::RecoverLease {
+                lease: lease.clone(),
+            },
+            Self::ReplaceVideoAuthoringLease { lease } => OutputControlActionV2Wire::ReplaceVideoAuthoringLease {
                 lease: lease.clone(),
             },
             Self::RelinquishOutputLease { lease } => {
@@ -3620,6 +3638,11 @@ impl OutputControlActionV2 {
                 output.extend_from_slice(lease.lease_id.as_bytes());
                 append_u64(output, lease.generation);
             }
+            Self::ReplaceVideoAuthoringLease { lease } => {
+                output.push(32);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
             Self::RelinquishOutputLease { lease } => {
                 output.push(6);
                 output.extend_from_slice(lease.lease_id.as_bytes());
@@ -3843,6 +3866,7 @@ impl<'de> Deserialize<'de> for OutputControlActionV2 {
             OutputControlActionV2Wire::AcquireLease { role } => Self::AcquireLease { role },
             OutputControlActionV2Wire::RenewLease { lease } => Self::RenewLease { lease },
             OutputControlActionV2Wire::RecoverLease { lease } => Self::RecoverLease { lease },
+            OutputControlActionV2Wire::ReplaceVideoAuthoringLease { lease } => Self::ReplaceVideoAuthoringLease { lease },
             OutputControlActionV2Wire::RelinquishOutputLease { lease } => {
                 Self::RelinquishOutputLease { lease }
             }
@@ -4244,6 +4268,9 @@ pub struct OutputControlLeaseResultV2 {
 impl OutputControlLeaseResultV2 {
     pub fn validate(&self) -> Result<(), OutputControlValidationErrorV1> {
         self.authority.validate()?;
+        if self.changes.len() == 2 {
+            return self.validate_video_authoring_replacement();
+        }
         if self.audit_sequence == 0 || self.audit_sequence > MAX_SAFE_JAVASCRIPT_INTEGER {
             return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
         }
@@ -4325,6 +4352,9 @@ impl OutputControlLeaseResultV2 {
         operation_id: &str,
     ) -> Result<(), OutputControlValidationErrorV1> {
         self.validate()?;
+        if operation_id == OUTPUT_VIDEO_AUTHORING_LEASE_REPLACE_OPERATION_ID {
+            return self.validate_video_authoring_replacement();
+        }
         if matches!(
             operation_id,
             OUTPUT_EXTERNAL_ADD_OPERATION_ID
@@ -4566,6 +4596,7 @@ impl OutputControlReceiptV2 {
                 | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                 | OUTPUT_LEASE_RENEW_OPERATION_ID
                 | OUTPUT_LEASE_RECOVER_OPERATION_ID
+                | OUTPUT_VIDEO_AUTHORING_LEASE_REPLACE_OPERATION_ID
                 | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
                 | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
@@ -4803,6 +4834,7 @@ impl OutputControlRejectionV2 {
                 | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                 | OUTPUT_LEASE_RENEW_OPERATION_ID
                 | OUTPUT_LEASE_RECOVER_OPERATION_ID
+                | OUTPUT_VIDEO_AUTHORING_LEASE_REPLACE_OPERATION_ID
                 | OUTPUT_LEASE_RELINQUISH_OPERATION_ID
                 | OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID

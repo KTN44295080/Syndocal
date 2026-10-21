@@ -100,6 +100,8 @@ const japaneseText: Record<string, string> = {
   "The project changed before this output edit. Refresh and try again.": "出力の編集を適用する前に、プロジェクトが変更されました。更新してから再試行してください。",
   "The output edit was rejected. Check the name, resolution, target, backend and composition.": "出力の編集を適用できませんでした。名前、解像度、出力先、出力機能、コンポジションを確認してください。",
   "Video output ownership is unavailable. Refresh output ownership and try again.": "映像出力の操作権限を取得できません。出力の所有状態を更新してから再試行してください。",
+  "Relinquish the previous project's managed lease in Output Ownership, then retry editing.": "出力の所有状態で、前のプロジェクトの管理された操作権限を解放してから、編集を再試行してください。",
+  "Video output authority expired. Enter Standby and relinquish that lease in Output Ownership before retrying.": "映像出力の操作権限が期限切れです。Standbyに切り替え、出力の所有状態で権限を解放してから再試行してください。",
   "Another output operation is in progress. Wait for it to finish and try again.": "別の出力操作を処理中です。完了を待ってから再試行してください。",
   "The output state could not be verified. Refresh the output list before trying again.": "出力の状態を確認できませんでした。出力一覧を更新してから再試行してください。",
   "Publishes video to Syphon clients on this Mac and follows the current output state.": "このMac上のSyphonクライアントに映像を送出します。送出は現在の出力状態に従います。",

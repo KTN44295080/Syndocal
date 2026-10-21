@@ -72,9 +72,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 591;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 593;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "8910316b231c1a76e447a9800ade5249e56a2410395d0164153f37ba8b003adf";
+    "681ba8856906926fbe1b2dfe440b9e8654c3a2ff73007001e76d2d2dc1b65683";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -419,6 +419,7 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "query_output_control_authority_v1"
             | "allocate_output_control_request_id_v1"
             | "query_output_lease_authority_v1"
+            | "query_video_authoring_lease_authority_v1"
             | "query_timeline_follow_abort_authority_v1"
             | "query_timeline_loop_runtime_authority_v1"
             | "query_timeline_transport_authority_v1"
@@ -513,6 +514,9 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "pulse_video_layer_isf_event"
             | "queue_video_clip_slot_authoritative"
             | "recover_output_lease_v2"
+            // Local authoring admission only. Discovery remains R5/Unavailable
+            // until an external adapter and query schema are separately reviewed.
+            | "replace_video_authoring_lease_v1"
             | "refresh_video_layer_metadata"
             | "release_blackout_output_control_v2"
             | "set_blackout_output_control_v2"
@@ -2405,6 +2409,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn video_authoring_routes_are_local_admission_only() {
+        for (command, class) in [
+            ("query_video_authoring_lease_authority_v1", TauriRouteAdmissionClass::ReadOnly),
+            ("replace_video_authoring_lease_v1", TauriRouteAdmissionClass::RuntimeMutation),
+        ] {
+            assert_eq!(tauri_route_admission_class(command), Some(class));
+            let descriptor = descriptor_for_command(command);
+            assert_eq!(descriptor.risk, OperationRisk::R5);
+            assert_eq!(descriptor.availability, OperationAvailability::Unavailable);
+            assert!(reviewed_canonical_operation(command).is_none());
+        }
+    }
+
+    #[test]
     fn tauri_route_admission_table_is_exact_and_fail_closed() {
         let names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE).unwrap();
         let fingerprint = format!("{:x}", Sha256::digest(names.join("\n").as_bytes()));
@@ -2642,11 +2660,11 @@ mod tests {
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
             31
         );
-        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 117);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 118);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 11);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 8);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 182);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 183);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 29);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 28);
@@ -2744,7 +2762,7 @@ mod tests {
         // add two more of each. Native output cadence health adds one read-only
         // Tauri source and one frontend invocation source; the read-only Media
         // Health folder listing (`select_media_relink_folder`) adds one more of each.
-        const FRONTEND_INVOKE_COUNT: usize = 511;
+        const FRONTEND_INVOKE_COUNT: usize = 513;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 240);
         assert_eq!(
             registry.operations.len(),
@@ -2754,7 +2772,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1745);
+        assert_eq!(registry.operations.len(), 1749);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -3155,15 +3173,15 @@ mod tests {
         const ENGINE_COUNT: usize = 287;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 240;
-        const FRONTEND_COUNT: usize = 511;
+        const FRONTEND_COUNT: usize = 513;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1745);
-        assert_eq!(SOURCE_TOTAL, 1778);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1749);
+        assert_eq!(SOURCE_TOTAL, 1782);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 80);
 
@@ -3611,7 +3629,9 @@ mod tests {
         // renderer-routed events are inventoried sources, not classified
         // external operations. Five group MIDI and five shared OSC/DMX actions
         // add ten more local, unclassified sources.
-        assert_eq!(unclassified.len(), 1182);
+        // The two authoring authority routes are local-only; their frontend
+        // sources are aliases, and do not create external canonical operations.
+        assert_eq!(unclassified.len(), 1184);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -4389,11 +4409,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both native and frontend sources for generator create/update.
-        assert_eq!(legacy.operations.len(), 1745);
+        assert_eq!(legacy.operations.len(), 1749);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1745);
+        assert_eq!(operations.len(), 1749);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

@@ -133,6 +133,14 @@ Reviewer connectivity briefly failed. A fresh Core/Web reviewer completed the re
 
 **P2 — same-process authoring after project Open can keep a previous-project Video lease.**
 
+Follow-up: the unmanaged previous-project Video/Both path is now fixed and
+validated in [Video authoring authority after same-process Open](VIDEO_AUTHORING_PROJECT_LEASE_2026-10-21.md).
+That note records the dedicated exact-scope authority exchange, regressions,
+independent review and same-process native Open/edit proof. The description below
+is retained as evidence of the original checkpoint defect. Managed turnover and
+current-project expiry retain their explicit lifecycle boundaries; the other
+physical/performance limits below remain unchanged.
+
 - Trigger: save/reopen to a new project epoch, then Add/Configure/Remove through the production App controller. The old owner-visible lease may be recovered or reused.
 - Source: `app/src/App.tsx:23582-23589`; `app/src/outputControlController.ts:1716-1738`; Recover preserves project binding in `app/src-tauri/src/output_lease.rs:339-356,2378-2395` and `control_plane_runtime.rs:2221-2226`.
 - Effect: native `main.rs:58974-58988` correctly rejects with “Video output authoring requires a Video-capable lease for this project.” The edit is not applied and outputs are not rearmed. After TTL expiry, the public query can omit the still-indexed claim (`output_lease.rs:1370-1398`), so a fresh Acquire can also conflict.

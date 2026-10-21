@@ -58,6 +58,8 @@ export function videoOutputAuthoringErrorMessage(error: unknown): string {
     return "The output change could not be verified. Restart Syndocal and use Recovery before editing outputs again.";
   }
   if (messages.has(message)) return message;
+  if (message === "Relinquish the previous project's managed lease in Output Ownership, then retry editing."
+    || message === "Video output authority expired. Enter Standby and relinquish that lease in Output Ownership before retrying.") return message;
   if (/stale_fence|project authority changed/.test(message)) return "The project changed before this output edit. Refresh and try again.";
   if (/invalid_request|settings are invalid/.test(message)) return "The output edit was rejected. Check the name, resolution, target, backend and composition.";
   if (/forbidden|lease|authority|ownership/i.test(message)) return "Video output ownership is unavailable. Refresh output ownership and try again.";

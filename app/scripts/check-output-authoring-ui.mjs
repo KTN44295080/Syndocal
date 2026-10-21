@@ -61,6 +61,8 @@ function machine(options = {}) {
   let fence = initialFence();
   let phase = options.phase ?? "held_active";
   let generation = 1;
+  let leaseId = "lease-0000000000000001";
+  let projectMatches = !options.previousProject;
   let resources = options.resources ?? ["lighting", "video"];
   let nextRequest = 40;
   let audit = 10;
@@ -68,10 +70,21 @@ function machine(options = {}) {
   let lost = false;
   let projectDrifted = false;
   const calls = [], replay = new Map();
-  const authority = () => ({ lease_id: "lease-0000000000000001", generation });
+  const authority = () => ({ lease_id: leaseId, generation });
   const invoke = async (command, args) => {
     calls.push({ command, args });
     if (command === "query_output_control_authority_v1") return { operation_id: controller.OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID, fence: { ...fence } };
+    if (command === "query_video_authoring_lease_authority_v1") {
+      const observedFence = { ...fence };
+      if (options.driftOnFirstLeaseQuery && !projectDrifted) {
+        projectDrifted = true;
+        fence = { ...fence, ...options.driftOnFirstLeaseQuery };
+      }
+      return { operationId: "syndocal.query.output.video.authoring.lease.v1", fence: observedFence,
+        status: phase, authority: phase === "unavailable" ? null : authority(),
+        resources: phase === "unavailable" ? [] : [...resources],
+        projectMatches: phase === "unavailable" ? null : projectMatches, managed: Boolean(options.managed) };
+    }
     if (command === "query_output_lease_authority_v1") {
       if (options.driftOnFirstLeaseQuery && !projectDrifted) {
         projectDrifted = true;
@@ -90,6 +103,7 @@ function machine(options = {}) {
     const action = request.action;
     const before = { ...fence };
     let outcome = "authorized", beforePhase = phase, beforeGeneration = generation, beforeResources = [...resources];
+    let replacementChanges;
     if (action.kind === "acquire_lease") {
       assert.equal(command, "acquire_output_lease_v2");
       assert.equal(action.role, "both", "fresh setup retains Display's exact-Both authority without arming");
@@ -99,6 +113,17 @@ function machine(options = {}) {
     } else if (action.kind === "recover_lease") {
       assert.equal(command, "recover_output_lease_v2");
       phase = "held_active"; generation += 1; outcome = "recovered"; fence.output_generation += 1;
+    } else if (action.kind === "replace_video_authoring_lease") {
+      assert.equal(command, "replace_video_authoring_lease_v1");
+      assert.equal(projectMatches, false);
+      assert.deepEqual(action.lease, authority());
+      const previous = authority();
+      leaseId = "lease-0000000000000002"; generation = 1; phase = "held_active"; outcome = "acquired"; projectMatches = true;
+      replacementChanges = [
+        { lease_id: previous.lease_id, before_generation: previous.generation, after_generation: previous.generation + 1,
+          before_resources: [...resources], after_resources: [], before_phase: beforePhase === "expired" ? "held_active" : beforePhase, after_phase: "unclaimed" },
+        { lease_id: leaseId, before_generation: null, after_generation: 1, before_resources: [], after_resources: [...resources], before_phase: null, after_phase: "held_active" },
+      ];
     } else {
       assert.equal(command, routes[action.kind][0]);
       assert.equal(request.operation_id, routes[action.kind][1]);
@@ -114,14 +139,18 @@ function machine(options = {}) {
     const response = { type: "receipt", receipt: {
       operation_id: request.operation_id, request_id: request.request_id,
       shape_sha256: "1".repeat(64), argument_fingerprint: "2".repeat(64), audit_sequence: ++audit,
-      fence_before: before, fence_after: { ...fence }, outcome: options.noOp && routes[action.kind] ? "no_op" : "applied",
+      fence_before: before, fence_after: { ...fence }, outcome: action.kind === "replace_video_authoring_lease" || options.noOp && routes[action.kind] ? "no_op" : "applied",
       lease_result: {
         authority: authority(), resources: [...resources], phase, outcome, audit_sequence: audit,
-        changes: [{ lease_id: authority().lease_id, before_generation: beforeGeneration, after_generation: generation,
+        changes: replacementChanges ?? [{ lease_id: authority().lease_id, before_generation: beforeGeneration, after_generation: generation,
           before_resources: beforeResources, after_resources: [...resources], before_phase: beforePhase, after_phase: phase }],
       },
     } };
     replay.set(request.request_id, response);
+    if (action.kind === "replace_video_authoring_lease" && options.driftAfterReplacement) {
+      fence = { ...fence, project_epoch: fence.project_epoch + 1 };
+    }
+    if (options.loseReplacementReply && action.kind === "replace_video_authoring_lease" && !lost) { lost = true; throw new Error("replacement reply lost"); }
     if (options.loseFirstReply && routes[action.kind] && !lost) { lost = true; throw new Error("reply lost"); }
     return response;
   };
@@ -177,7 +206,7 @@ for (const phase of ["unavailable", "held_orphaned"]) {
       /project authority changed before dispatch/,
     );
     assert.deepEqual(staleSetup.calls.map((call) => call.command), [
-      "query_output_lease_authority_v1", "query_output_control_authority_v1",
+      "query_video_authoring_lease_authority_v1", "query_output_control_authority_v1",
     ], `${phase}: a project change after intent preparation must stop before lease mutation or request allocation`);
     assert.equal(staleSetup.committed(), 0);
   }
@@ -188,6 +217,38 @@ assert.equal(retry.committed(), 1);
 const dispatches = retry.calls.filter((call) => call.command === "add_external_output_v2");
 assert.equal(dispatches.length, 2);
 assert.equal(dispatches[0].args, dispatches[1].args, "a lost reply retries one immutable request identity");
+
+for (const phase of ["held_active", "held_orphaned", "expired"]) {
+  const backend = machine({ phase, previousProject: true, resources: ["video"], loseReplacementReply: true });
+  await controller.executeVideoOutputAuthoringControl(backend.invoke, intents[0], preparedAuthoringProject);
+  assert.equal(backend.committed(), 1);
+  const replacement = backend.calls.filter(call => call.command === "replace_video_authoring_lease_v1");
+  assert.equal(replacement.length, 2);
+  assert.equal(replacement[0].args, replacement[1].args, "lost replacement reply reuses the exact request");
+  const edit = backend.calls.find(call => call.command === "add_external_output_v2");
+  assert.equal(edit.args.request.action.lease.lease_id, "lease-0000000000000002", "only the new project authority may edit");
+  assert.equal(backend.calls.some(call => /^(arm_|enable_|recover_|force_transfer|relinquish)/.test(call.command)), false);
+}
+for (const options of [{ phase: "held_orphaned", previousProject: true, managed: true },
+  { phase: "expired", previousProject: false }]) {
+  const backend = machine(options);
+  await assert.rejects(controller.executeVideoOutputAuthoringControl(backend.invoke, intents[0]), /relinquish/i);
+  assert.equal(backend.calls.length, 1, "unsupported ownership requires explicit lifecycle action without mutation");
+}
+const changedAfterReplacement = machine({ previousProject: true, driftAfterReplacement: true });
+await assert.rejects(controller.executeVideoOutputAuthoringControl(changedAfterReplacement.invoke, intents[0]), /project authority changed/);
+assert.equal(changedAfterReplacement.committed(), 0, "project replacement between preparation and edit never edits the replacement show");
+for (const corrupt of [
+  { projectMatches: null }, { status: "held_future" }, { managed: "false" },
+  { resources: ["lighting"] }, { extra: true },
+]) {
+  const backend = machine();
+  await assert.rejects(controller.executeVideoOutputAuthoringControl(async (command, args) => {
+    const result = await backend.invoke(command, args);
+    return command === "query_video_authoring_lease_authority_v1" ? { ...result, ...corrupt } : result;
+  }, intents[0]), /authority was invalid/);
+  assert.equal(backend.committed(), 0);
+}
 for (const invalid of [
   { ...intents[0], spec: { ...spec, enabled: true } },
   { ...intents[0], spec: { ...spec, kind: "Display" } },

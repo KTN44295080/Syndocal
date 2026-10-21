@@ -616,6 +616,16 @@ pub(crate) enum OutputLeaseRequestAction {
         project_identity: String,
         ttl_ms: u64,
     },
+    /// Internal authoring-only turnover after the native adapter has proved
+    /// physical retirement and rejected managed ownership. Generic Recover
+    /// never changes project binding; this action creates a different id.
+    ReplacePreviousProjectForAuthoring {
+        lease_id: OutputLeaseId,
+        owner: OutputLeaseOwner,
+        expected_generation: u64,
+        project_identity: String,
+        ttl_ms: u64,
+    },
     Renew {
         lease_id: OutputLeaseId,
         owner: OutputLeaseOwner,
@@ -678,6 +688,9 @@ impl OutputLeaseRequestAction {
             Self::Acquire { .. } => "acquire",
             Self::EnableAcquireOrRecover { .. } => "enable_acquire_or_recover",
             Self::AuthorizeOrRecoverDisplay { .. } => "authorize_or_recover_display",
+            Self::ReplacePreviousProjectForAuthoring { .. } => {
+                "replace_previous_project_for_authoring"
+            }
             Self::Renew { .. } => "renew",
             #[cfg(test)]
             Self::ObserveExpiry { .. } => "observe_expiry",
@@ -723,6 +736,19 @@ impl OutputLeaseRequestAction {
                 shape.owner = Some(owner.clone());
                 shape.expected_generation = Some(*expected_generation);
                 shape.resources = Some(exact_resources.clone());
+                shape.project_identity = Some(project_identity.clone());
+                shape.ttl_ms = Some(*ttl_ms);
+            }
+            Self::ReplacePreviousProjectForAuthoring {
+                lease_id,
+                owner,
+                expected_generation,
+                project_identity,
+                ttl_ms,
+            } => {
+                shape.lease_id = Some(*lease_id);
+                shape.owner = Some(owner.clone());
+                shape.expected_generation = Some(*expected_generation);
                 shape.project_identity = Some(project_identity.clone());
                 shape.ttl_ms = Some(*ttl_ms);
             }
@@ -1396,6 +1422,52 @@ impl OutputLeaseRegistry {
                 }
             })
             .collect())
+    }
+
+    /// Pure authoring discovery, including an expired active claim at its
+    /// original generation. A read must neither orphan it nor hide its index.
+    /// Reconstruct the bounded index before returning even None, so missing,
+    /// dangling, noncanonical or overlapping claims cannot look available.
+    pub(crate) fn query_video_authoring_lease(
+        &self,
+        owner: &OutputLeaseOwner,
+        now_ms: u64,
+    ) -> Result<Option<OutputLeaseLeaseView>, OutputLeaseError> {
+        self.ensure_now(now_ms)?;
+        validate_persisted_owner(owner)?;
+        if owner.process_session_incarnation != self.process_session_incarnation {
+            return Err(OutputLeaseError::StaleOwner);
+        }
+        let mut expected_index: BTreeMap<OutputLeaseResource, BTreeSet<OutputLeaseId>> =
+            BTreeMap::new();
+        let mut selected = None;
+        for (&lease_id, record) in &self.leases {
+            let snapshot = &record.state.snapshot;
+            validate_persisted_snapshot(snapshot)?;
+            let Some(resources) = snapshot.resources.as_ref() else {
+                continue;
+            };
+            if OutputLeaseResources::new(resources.as_slice())? != *resources {
+                return Err(OutputLeaseError::InvalidResources);
+            }
+            for resource in resources.as_slice() {
+                let ids = expected_index.entry(*resource).or_default();
+                if !ids.is_empty() {
+                    return Err(OutputLeaseError::ResourceConflict);
+                }
+                ids.insert(lease_id);
+            }
+            if snapshot.owner.as_ref() == Some(owner)
+                && resources.as_slice().contains(&OutputLeaseResource::Video)
+            {
+                record.state.require_current_process(owner)?;
+                selected = Some(self.lease_view(lease_id)?);
+            }
+        }
+        if expected_index != self.resource_index {
+            return Err(OutputLeaseError::ResourceConflict);
+        }
+        Ok(selected)
     }
 
     fn ensure_now(&self, now_ms: u64) -> Result<(), OutputLeaseError> {
@@ -2395,6 +2467,86 @@ impl OutputLeaseRegistry {
         Ok(snapshot)
     }
 
+    /// Both authority changes remain private if validation or the new Acquire
+    /// fails. The enclosing submit_request_with_commit keeps this candidate
+    /// private again until its complete two-lease receipt is durably recorded.
+    fn replace_previous_project_for_authoring(
+        &mut self,
+        lease_id: OutputLeaseId,
+        owner: &OutputLeaseOwner,
+        expected_generation: u64,
+        project_identity: &str,
+        now_ms: u64,
+        ttl_ms: u64,
+    ) -> Result<(OutputLeaseGrant, OutputLeaseChange), OutputLeaseError> {
+        let mut candidate = self.clone();
+        candidate.advance_now(now_ms)?;
+        checked_deadline(now_ms, ttl_ms)?;
+        if owner.process_session_incarnation != candidate.process_session_incarnation {
+            return Err(OutputLeaseError::StaleOwner);
+        }
+        if !bounded_nonempty(project_identity, MAX_OUTPUT_LEASE_PROJECT_BYTES) {
+            return Err(OutputLeaseError::InvalidProject);
+        }
+        let record = candidate
+            .leases
+            .get(&lease_id)
+            .ok_or(OutputLeaseError::UnknownLease)?;
+        record.state.require_current_process(owner)?;
+        record.state.require_owner(owner)?;
+        record.state.require_generation(expected_generation)?;
+        if record.project_identity == project_identity {
+            return Err(OutputLeaseError::InvalidProject);
+        }
+        let before = record.state.snapshot();
+        if !matches!(
+            before.phase,
+            OutputLeasePhase::HeldActive | OutputLeasePhase::HeldOrphaned
+        ) {
+            return Err(OutputLeaseError::InvalidTransition);
+        }
+        let resources = before
+            .resources
+            .clone()
+            .ok_or(OutputLeaseError::ResourceConflict)?;
+        if !matches!(
+            resources.as_slice(),
+            [OutputLeaseResource::Video]
+                | [OutputLeaseResource::Lighting, OutputLeaseResource::Video]
+        ) {
+            return Err(OutputLeaseError::ResourceConflict);
+        }
+        if candidate
+            .query_video_authoring_lease(owner, now_ms)?
+            .map(|view| view.lease_id)
+            != Some(lease_id)
+        {
+            return Err(OutputLeaseError::ResourceConflict);
+        }
+        let after = candidate.relinquish_output_lease(
+            lease_id,
+            owner,
+            expected_generation,
+            now_ms,
+        )?;
+        let grant = candidate.acquire_inner(
+            owner.clone(),
+            resources,
+            project_identity.to_string(),
+            now_ms,
+            ttl_ms,
+        )?;
+        *self = candidate;
+        Ok((
+            grant,
+            OutputLeaseChange {
+                lease_id,
+                before: Some(before),
+                after: Some(after),
+            },
+        ))
+    }
+
     fn relinquish_output_lease(
         &mut self,
         lease_id: OutputLeaseId,
@@ -3286,6 +3438,48 @@ impl OutputLeaseRegistry {
                     ),
                 }
             }
+            OutputLeaseRequestAction::ReplacePreviousProjectForAuthoring {
+                lease_id,
+                owner,
+                expected_generation,
+                project_identity,
+                ttl_ms,
+            } => {
+                let previous_resources = self
+                    .lease_view(*lease_id)
+                    .ok()
+                    .and_then(|view| view.snapshot.resources);
+                match self.replace_previous_project_for_authoring(
+                    *lease_id,
+                    owner,
+                    *expected_generation,
+                    project_identity,
+                    now_ms,
+                    *ttl_ms,
+                ) {
+                    Ok((grant, previous_change)) => OutputLeaseApplyResult::success(
+                        vec![grant.lease_id, *lease_id],
+                        Some(owner.clone()),
+                        grant.snapshot.resources.clone(),
+                        vec![
+                            OutputLeaseChange {
+                                lease_id: grant.lease_id,
+                                before: None,
+                                after: Some(grant.snapshot),
+                            },
+                            previous_change,
+                        ],
+                        OutputLeaseOperationOutcome::Acquired,
+                    ),
+                    Err(error) => OutputLeaseApplyResult::error(
+                        vec![*lease_id],
+                        Some(owner.clone()),
+                        previous_resources,
+                        Vec::new(),
+                        error,
+                    ),
+                }
+            }
             OutputLeaseRequestAction::Renew {
                 lease_id,
                 owner,
@@ -3589,6 +3783,10 @@ impl OutputLeaseRegistry {
         applied: OutputLeaseApplyResult,
     ) -> OutputLeaseRequestReceipt {
         let lease_id = applied.lease_ids.first().copied();
+        // The primary id is semantic (the new authoring lease), whereas the
+        // persisted affected-id set must remain in canonical ascending order.
+        let mut affected_lease_ids = applied.lease_ids;
+        affected_lease_ids.sort_unstable();
         let (generation_before, generation_after) = applied
             .changes
             .first()
@@ -3603,7 +3801,7 @@ impl OutputLeaseRegistry {
             key: request.key.clone(),
             shape_hash: request.shape_hash.clone(),
             lease_id,
-            affected_lease_ids: applied.lease_ids,
+            affected_lease_ids,
             owner: applied.owner,
             process_session_incarnation: self.process_session_incarnation,
             resources: applied.resources,
@@ -5072,3 +5270,7 @@ pub(crate) mod output_lease_keepalive;
 #[cfg(test)]
 #[path = "output_lease_managed_keepalive_tests.rs"]
 mod output_lease_managed_keepalive_tests;
+
+#[cfg(test)]
+#[path = "video_authoring_lease_registry_tests.rs"]
+mod video_authoring_lease_registry_tests;

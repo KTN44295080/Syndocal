@@ -345,6 +345,8 @@ mod ndi_transport;
 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
 mod normal_audio_output;
 mod output_lease;
+mod video_authoring_lease;
+use video_authoring_lease::query_video_authoring_lease_authority_v1;
 mod output_lease_keepalive_integration;
 mod output_lease_keepalive_runtime;
 mod renderer_ticketed_admission;
@@ -25624,6 +25626,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "relinquish_output_lease_v2",
     "remove_video_output_v2",
     "renew_output_lease_v2",
+    "replace_video_authoring_lease_v1",
     "request_dj_link_operator_return_to_dj_control",
     "reselect_asio_output_profile",
     "revalidate_asio_program_cue_output",
@@ -51629,6 +51632,19 @@ async fn recover_output_lease_v2(
         request,
     )
     .await
+}
+
+#[tauri::command]
+async fn replace_video_authoring_lease_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_lease_lifecycle_off_event_loop(
+        app, window,
+        protocol::control_plane_command::OUTPUT_VIDEO_AUTHORING_LEASE_REPLACE_OPERATION_ID,
+        request,
+    ).await
 }
 
 #[tauri::command]
@@ -137182,6 +137198,8 @@ fn main() {
             acquire_output_lease_v2,
             renew_output_lease_v2,
             recover_output_lease_v2,
+            replace_video_authoring_lease_v1,
+            query_video_authoring_lease_authority_v1,
             relinquish_output_lease_v2,
             force_transfer_output_lease_v2,
             safety_blackout_engage_v1,

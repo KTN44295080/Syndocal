@@ -1399,6 +1399,9 @@ pub struct OutputOwnershipGate {
     inner: Arc<OutputOwnershipGateInner>,
 }
 
+#[path = "retired_output_ownership.rs"]
+mod retired_output_ownership;
+
 #[derive(Debug)]
 pub struct OutputOwnershipPermit {
     inner: Arc<OutputOwnershipGateInner>,

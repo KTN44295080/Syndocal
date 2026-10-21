@@ -470,14 +470,27 @@ impl OutputLeaseKeepaliveRuntime {
     /// Relinquish into the serialized bridge without first mutating the
     /// manager through the generic registry command path.
     pub(crate) fn manages_lease_id(&self, lease_id: &str) -> Result<bool, String> {
-        let _serial = self.operation_serial.lock().map_err(|_| {
-            "Managed output-lease keepalive operation serialization lock was poisoned".to_string()
-        })?;
-        let snapshot = self
-            .manager
-            .lock()
-            .map_err(|_| "Managed output-lease keepalive manager lock was poisoned".to_string())?
-            .snapshot();
+        self.observe_managed_lease(lease_id, false)
+    }
+
+    /// Authority commits already retain project locks. Never queue behind a
+    /// manager operation which may need those locks while stopping outputs.
+    pub(crate) fn try_manages_lease_id(&self, lease_id: &str) -> Result<bool, String> {
+        self.observe_managed_lease(lease_id, true)
+    }
+
+    fn observe_managed_lease(&self, lease_id: &str, nonblocking: bool) -> Result<bool, String> {
+        let _serial = if nonblocking {
+            self.operation_serial.try_lock().map_err(|_| "Managed output authority is busy".to_string())?
+        } else {
+            self.operation_serial.lock().map_err(|_| "Managed output-lease keepalive operation serialization lock was poisoned".to_string())?
+        };
+        let manager = if nonblocking {
+            self.manager.try_lock().map_err(|_| "Managed output authority is busy".to_string())?
+        } else {
+            self.manager.lock().map_err(|_| "Managed output-lease keepalive manager lock was poisoned".to_string())?
+        };
+        let snapshot = manager.snapshot();
         Ok(snapshot
             .armed
             .as_ref()

@@ -310,6 +310,7 @@ export type OutputLeaseLifecycleAction =
   | { kind: "acquire_lease"; role: OutputControlTargetRole }
   | { kind: "renew_lease"; lease: OutputLeaseAuthority }
   | { kind: "recover_lease"; lease: OutputLeaseAuthority }
+  | { kind: "replace_video_authoring_lease"; lease: OutputLeaseAuthority }
   | { kind: "relinquish_output_lease"; lease: OutputLeaseAuthority }
   | { kind: "force_transfer_lease"; lease: OutputLeaseAuthority };
 
@@ -560,6 +561,7 @@ const operationIdForAction = (action: OutputControlOperationAction): string => {
     case "acquire_lease": return OUTPUT_LEASE_ACQUIRE_OPERATION_ID;
     case "renew_lease": return OUTPUT_LEASE_RENEW_OPERATION_ID;
     case "recover_lease": return OUTPUT_LEASE_RECOVER_OPERATION_ID;
+    case "replace_video_authoring_lease": return "syndocal.output.video.authoring.lease.replace.v1";
     case "relinquish_output_lease": return OUTPUT_LEASE_RELINQUISH_OPERATION_ID;
     case "force_transfer_lease": return OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID;
   }
@@ -595,6 +597,7 @@ type OutputControlInvokeCommand =
   | "acquire_output_lease_v2"
   | "renew_output_lease_v2"
   | "recover_output_lease_v2"
+  | "replace_video_authoring_lease_v1"
   | "relinquish_output_lease_v2"
   | "force_transfer_output_lease_v2";
 
@@ -629,6 +632,7 @@ const commandForAction = (action: OutputControlOperationAction): OutputControlIn
     case "acquire_lease": return "acquire_output_lease_v2";
     case "renew_lease": return "renew_output_lease_v2";
     case "recover_lease": return "recover_output_lease_v2";
+    case "replace_video_authoring_lease": return "replace_video_authoring_lease_v1";
     case "relinquish_output_lease": return "relinquish_output_lease_v2";
     case "force_transfer_lease": return "force_transfer_output_lease_v2";
   }
@@ -1125,6 +1129,25 @@ const assertLeaseResult = (value: unknown, action: OutputControlOperationAction)
     throw new Error("Show Spout reset must not carry output-lease state.");
   }
   const errorMessage = "OutputControl lease result was invalid; physical output state is unknown.";
+  if (action.kind === "replace_video_authoring_lease") {
+    if (!isObject(value) || !Array.isArray(value.changes) || value.changes.length !== 2
+      || !isObject(value.authority) || value.authority.lease_id === action.lease.lease_id) throw new Error(errorMessage);
+    const freshId = value.authority.lease_id;
+    const fresh = value.changes.find(change => isObject(change) && change.lease_id === freshId);
+    const retired = value.changes.find(change => isObject(change) && change.lease_id === action.lease.lease_id);
+    if (!fresh || !retired || !isObject(retired) || retired.before_generation !== action.lease.generation
+      || retired.after_generation !== action.lease.generation + 1) throw new Error(errorMessage);
+    const resources = assertResources(value.resources, errorMessage);
+    if (!resources.includes("video")) throw new Error(errorMessage);
+    const acquired = assertLeaseResult({ ...value, changes: [fresh] },
+      { kind: "acquire_lease", role: resources.length === 1 ? "video" : "both" });
+    const released = assertLeaseResult({ ...value, authority: { lease_id: action.lease.lease_id, generation: retired.after_generation },
+      phase: "unclaimed", outcome: "relinquished", changes: [retired] }, { kind: "relinquish_output_lease", lease: action.lease });
+    if (acquired.changes[0].before_generation !== null || acquired.changes[0].before_phase !== null
+      || acquired.changes[0].before_resources.length !== 0
+      || !sameResources(released.resources, acquired.resources)) throw new Error(errorMessage);
+    return { ...acquired, changes: [...released.changes, ...acquired.changes] };
+  }
   if (!isObject(value) || !hasExactKeys(value, ["authority", "resources", "phase", "outcome", "audit_sequence", "changes"])
     || !Array.isArray(value.changes) || value.changes.length !== 1 || !isPositiveSafeInteger(value.audit_sequence)) throw new Error(errorMessage);
   const authority = assertLeaseAuthority(value.authority, errorMessage);
@@ -1458,7 +1481,7 @@ const executeOutputControlOperation = async (
     if (!displayBypass && !enabledLeaseProofBypass) {
       throw new Error("Only canonical Display actions may bypass the public lease query; nothing was applied.");
     }
-  } else if (action.kind !== "reset_show_spout_outputs") {
+  } else if (action.kind !== "reset_show_spout_outputs" && action.kind !== "replace_video_authoring_lease") {
     const leaseQuery = await queryOutputLeaseAuthority(invoke);
     assertSelectedLeaseIsUsable(leaseQuery, action);
   }
@@ -1707,33 +1730,63 @@ export async function executeOutputLeaseLifecycle(
 }
 
 /** Authoring follows current output state; acquiring ownership never arms outputs. */
+export async function queryVideoAuthoringLeaseAuthority(invoke: FrontendTauriInvoke) {
+  const error = "Video authoring lease authority was invalid; refresh before editing.";
+  const value = await invoke<unknown>("query_video_authoring_lease_authority_v1");
+  if (!isObject(value) || !hasExactKeys(value, ["operationId", "fence", "status", "authority", "resources", "projectMatches", "managed"])
+    || value.operationId !== "syndocal.query.output.video.authoring.lease.v1"
+    || typeof value.managed !== "boolean"
+    || !["unavailable", "held_active", "held_orphaned", "expired"].includes(value.status as string)) throw new Error(error);
+  const fence = assertFence(value.fence, error);
+  if (value.status === "unavailable") {
+    if (value.authority !== null || value.projectMatches !== null || value.managed
+      || !Array.isArray(value.resources) || value.resources.length !== 0) throw new Error(error);
+    return { fence, status: "unavailable" as const, authority: null, resources: [] as OutputLeaseResources,
+      projectMatches: null, managed: false };
+  }
+  const authority = assertLeaseAuthority(value.authority, error);
+  const resources = assertResources(value.resources, error);
+  if (!resources.includes("video") || typeof value.projectMatches !== "boolean") throw new Error(error);
+  return { fence, status: value.status as "held_active" | "held_orphaned" | "expired", authority,
+    resources, projectMatches: value.projectMatches, managed: value.managed };
+}
+
 export async function executeVideoOutputAuthoringControl(
   invoke: FrontendTauriInvoke,
   intent: OutputVideoAuthoringIntent,
   expectedProject?: OutputControlExpectedProject,
 ): Promise<OutputControlReceipt> {
   const frozen = deepFreeze(structuredClone(intent));
-  const query = await queryOutputLeaseAuthority(invoke);
-  const videoStatuses = query.statuses.filter((status): status is OutputLeaseAuthorityQueryHeld =>
-    status.status !== "unavailable" && status.resources.includes("video"));
-  const active = videoStatuses.filter((status) => status.status === "held_active");
+  const query = await queryVideoAuthoringLeaseAuthority(invoke);
+  const preparedProject = expectedProject ?? { project_epoch: query.fence.project_epoch,
+    project_revision: query.fence.project_revision, checkpoint_hash: query.fence.project_checkpoint_hash };
+  if (query.fence.project_epoch !== preparedProject.project_epoch
+    || query.fence.project_revision !== preparedProject.project_revision
+    || query.fence.project_checkpoint_hash !== preparedProject.checkpoint_hash) {
+    throw new Error("OutputControl project authority changed before lease preparation; nothing was applied.");
+  }
   let lease: OutputLeaseAuthority;
-  if (active.length === 1) {
-    lease = { ...active[0].authority };
-  } else if (active.length > 1 || videoStatuses.length > 1) {
-    throw new Error("Video output authority is ambiguous; refresh output ownership before retrying.");
+  if (query.projectMatches && query.status === "held_active") {
+    lease = { ...query.authority! };
   } else {
-    // Ownership setup belongs to the same prepared project as the edit.
-    // Check its fence before acquiring or recovering any lease, not only
-    // before the subsequent authoring command.
-    const receipt = videoStatuses.length === 1
-      ? await executeOutputControlOperation(invoke, { kind: "recover_lease", lease: videoStatuses[0].authority }, { expectedProject })
-      : await executeOutputControlOperation(invoke, { kind: "acquire_lease", role: "both" }, { expectedProject });
+    if (query.authority && !query.projectMatches && query.managed) {
+      throw new Error("Relinquish the previous project's managed lease in Output Ownership, then retry editing.");
+    }
+    if (query.projectMatches && query.status === "expired") {
+      throw new Error("Video output authority expired. Enter Standby and relinquish that lease in Output Ownership before retrying.");
+    }
+    const action: OutputLeaseLifecycleAction = query.authority
+      ? query.projectMatches
+        ? { kind: "recover_lease", lease: query.authority }
+        : { kind: "replace_video_authoring_lease", lease: query.authority }
+      : { kind: "acquire_lease", role: "both" };
+    const receipt = await executeOutputControlOperation(invoke, action, { expectedProject: preparedProject });
     if (!receipt.lease_result || receipt.lease_result.phase !== "held_active"
-      || !receipt.lease_result.resources.includes("video")) {
+      || !receipt.lease_result.resources.includes("video")
+      || query.authority && !sameResources(query.resources, receipt.lease_result.resources)) {
       throw new Error("Video output ownership is unavailable; refresh output ownership before retrying.");
     }
     lease = { ...receipt.lease_result.authority };
   }
-  return executeOutputControlOperation(invoke, { ...frozen, lease }, { expectedProject });
+  return executeOutputControlOperation(invoke, { ...frozen, lease }, { expectedProject: preparedProject });
 }
