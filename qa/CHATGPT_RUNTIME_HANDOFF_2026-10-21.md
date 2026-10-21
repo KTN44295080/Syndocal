@@ -93,6 +93,12 @@ The fixed-build harness verifies build migration and prior evidence identity; it
 
 ## Performance and local Spout receiving
 
+The [2026-10-22 matched Display measurements](FX_DISPLAY_PERFORMANCE_2026-10-22.md)
+subsequently reproduced 59.99 fps without FX and 12.27 fps with three FX per layer
+on unchanged current source, including 600-frame native pass/fail evidence and
+matched ISF/CPU component timings. This diagnoses the remaining FX limit; it is
+not a performance fix. The historical results below remain unchanged.
+
 Final-source QA results use executable `7bcef320…`; no compiler ran during measurement. Main viewport was 2560 x 1504 at DPR 2. Native Display used 2560 x 1600 nonfullscreen output. Times below describe the sampled boundary, not a hard real-time guarantee.
 
 | Workload / binary | Native observed submission rate | Dropped | Stop command wall time | Result/boundary |
