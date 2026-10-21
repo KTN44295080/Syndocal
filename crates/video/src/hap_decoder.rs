@@ -2,7 +2,7 @@ use std::{
     fs::File,
     io::BufReader,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{atomic::{AtomicBool, Ordering}, Arc},
 };
 
 use hap_parser::TextureFormat;
@@ -57,6 +57,7 @@ pub struct PreferredVideoFrameDecoder {
     libav: LibavFrameDecoder,
     fallback: FfmpegCliFrameDecoder,
     diagnostics: VideoDecoderDiagnostics,
+    stop_signal: Option<Arc<AtomicBool>>,
 }
 
 pub struct HapMovFrameDecoder {
@@ -114,11 +115,24 @@ impl PreferredVideoFrameDecoder {
             libav: LibavFrameDecoder::new(),
             fallback,
             diagnostics: VideoDecoderDiagnostics::default(),
+            stop_signal: None,
         }
     }
 
     pub fn from_env() -> Self {
         Self::new(FfmpegCliFrameDecoder::from_env())
+    }
+
+    /// Bind the decoder to its output owner without disabling shared batch decode.
+    pub fn with_stop_signal(mut self, stop: Arc<AtomicBool>) -> Self {
+        self.libav = self.libav.with_stop_signal(Arc::clone(&stop));
+        self.stop_signal = Some(stop);
+        self
+    }
+
+    fn stopped(&self, cancellation: Option<&dyn VideoRenderCancellation>) -> bool {
+        self.stop_signal.as_ref().is_some_and(|stop| stop.load(Ordering::Acquire))
+            || cancellation.is_some_and(VideoRenderCancellation::is_cancelled)
     }
 
     pub fn hap(&self) -> &HapMovFrameDecoder {
@@ -170,14 +184,15 @@ impl PreferredVideoFrameDecoder {
         primary_error: Option<VideoDecodeError>,
         cancellation: Option<&dyn VideoRenderCancellation>,
     ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
+        if self.stopped(cancellation) {
+            return Err(VideoDecodeError::Cancelled);
+        }
         self.diagnostics.cli_fallback_requests =
             self.diagnostics.cli_fallback_requests.saturating_add(1);
-        let decoded = match cancellation {
-            Some(cancellation) => self
-                .fallback
-                .decode_input_frame_with_cancellation(input, cancellation),
-            None => self.fallback.decode_input_frame(input),
-        };
+        let stop = self.stop_signal.clone();
+        let cancelled = || stop.as_ref().is_some_and(|stop| stop.load(Ordering::Acquire))
+            || cancellation.is_some_and(VideoRenderCancellation::is_cancelled);
+        let decoded = self.fallback.decode_input_frame_with_cancellation(input, &cancelled);
         match decoded {
             Ok(Some(frame)) => {
                 self.diagnostics.cli_fallback_successes =
@@ -189,6 +204,7 @@ impl PreferredVideoFrameDecoder {
                     self.diagnostics.deferred_requests.saturating_add(1);
                 Ok(None)
             }
+            Err(VideoDecodeError::Cancelled) => Err(VideoDecodeError::Cancelled),
             Err(fallback_error) => {
                 self.diagnostics.cli_fallback_failures =
                     self.diagnostics.cli_fallback_failures.saturating_add(1);
@@ -208,7 +224,7 @@ impl PreferredVideoFrameDecoder {
         cancellation: Option<&dyn VideoRenderCancellation>,
         shared: bool,
     ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
-        if cancellation.is_some_and(VideoRenderCancellation::is_cancelled) {
+        if self.stopped(cancellation) {
             return Err(VideoDecodeError::Cancelled);
         }
         let request = &input.request;
@@ -244,7 +260,11 @@ impl PreferredVideoFrameDecoder {
         primary_error: Option<VideoDecodeError>,
         cancellation: Option<&dyn VideoRenderCancellation>,
     ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
+        if self.stopped(cancellation) {
+            return Err(VideoDecodeError::Cancelled);
+        }
         match decoded {
+            Err(VideoDecodeError::Cancelled) => Err(VideoDecodeError::Cancelled),
             Ok(Some(frame)) => {
                 self.diagnostics.libav_successes =
                     self.diagnostics.libav_successes.saturating_add(1);
@@ -294,7 +314,7 @@ impl PreferredVideoFrameDecoder {
         cancellation: Option<&dyn VideoRenderCancellation>,
         shared: bool,
     ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
-        if cancellation.is_some_and(VideoRenderCancellation::is_cancelled) {
+        if self.stopped(cancellation) {
             return Err(VideoDecodeError::Cancelled);
         }
         let request = &input.request;
@@ -316,7 +336,7 @@ impl PreferredVideoFrameDecoder {
                 .hap
                 .decode_input_frame(input)
                 .map(|frame| frame.map(Arc::new));
-            if cancellation.is_some_and(VideoRenderCancellation::is_cancelled) {
+            if self.stopped(cancellation) {
                 return Err(VideoDecodeError::Cancelled);
             }
             return match decoded {
@@ -427,6 +447,9 @@ impl PreferredVideoFrameDecoder {
         inputs: &[VideoRenderInput],
         shared: bool,
     ) -> Vec<Result<Option<Arc<VideoFrame>>, VideoDecodeError>> {
+        if self.stopped(None) {
+            return inputs.iter().map(|_| Err(VideoDecodeError::Cancelled)).collect();
+        }
         let together = inputs.len() > 1
             && inputs.iter().all(|input| {
                 let request = &input.request;

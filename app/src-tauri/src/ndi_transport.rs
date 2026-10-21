@@ -1,16 +1,19 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicBool, Arc, Mutex},
 };
+
+#[cfg(feature = "ndi")]
+#[path = "external_output_retirement.rs"]
+mod external_output_retirement;
+#[cfg(feature = "ndi")]
+use external_output_retirement::{wait_for_output_worker, OUTPUT_WORKER_STOP_TIMEOUT};
 
 #[cfg(any(feature = "ndi", test))]
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "ndi")]
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    mpsc,
-};
+use std::sync::{atomic::Ordering, mpsc};
 
 #[cfg(any(feature = "ndi", test))]
 use engine::EngineHandle;
@@ -91,6 +94,11 @@ pub struct NdiAwareVideoFrameDecoder {
 }
 
 impl NdiAwareVideoFrameDecoder {
+    pub fn with_stop_signal(mut self, stop: Arc<AtomicBool>) -> Self {
+        self.files = self.files.with_stop_signal(stop);
+        self
+    }
+
     pub fn from_env() -> Self {
         Self {
             files: video::PreferredVideoFrameDecoder::from_env(),
@@ -406,12 +414,27 @@ pub struct NdiTransportState {
     outputs: HashMap<u64, NdiOutputWorker>,
     pending_output_startups: HashMap<u64, NdiPendingOutputStartup>,
     pending_output_teardowns: HashMap<u64, io::ndi::NdiOutputTeardown>,
+    pending_output_retirement_leases: HashMap<u64, OutputOwnershipTeardownLease>,
     failed_output_routes: HashMap<u64, String>,
     capture_inputs: crate::capture_transport::CaptureInputRegistry,
 }
 
 #[cfg(feature = "ndi")]
 impl NdiTransportState {
+    /// Observe cancellation handles without removing workers or their leases.
+    /// Pending SDK teardown records have already left the decoder worker.
+    pub(crate) fn output_stop_signals(&self) -> Vec<Arc<AtomicBool>> {
+        self.outputs
+            .values()
+            .map(|worker| Arc::clone(&worker.stop))
+            .chain(
+                self.pending_output_startups
+                    .values()
+                    .map(|pending| Arc::clone(&pending.stop)),
+            )
+            .collect()
+    }
+
     pub fn new(
         inputs: NdiInputRegistry,
         capture_inputs: crate::capture_transport::CaptureInputRegistry,
@@ -421,6 +444,7 @@ impl NdiTransportState {
             outputs: HashMap::new(),
             pending_output_startups: HashMap::new(),
             pending_output_teardowns: HashMap::new(),
+            pending_output_retirement_leases: HashMap::new(),
             failed_output_routes: HashMap::new(),
             capture_inputs,
         }
@@ -440,10 +464,19 @@ impl NdiTransportState {
             .map_err(|_| "NDI input state is busy; retry".to_string())
     }
 
-    fn harvest_failed_workers(
+    pub(crate) fn harvest_failed_workers(
         &mut self,
         engine: &EngineHandle,
     ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        let acknowledged = self.pending_output_retirement_leases.keys()
+            .filter(|route_id| !self.outputs.contains_key(*route_id))
+            .filter(|route_id| self.pending_output_teardowns.get(*route_id)
+                .is_some_and(|teardown| teardown.is_complete() && teardown.wait(Duration::ZERO).is_ok()))
+            .copied().collect::<Vec<_>>();
+        for route_id in acknowledged {
+            self.pending_output_teardowns.remove(&route_id);
+            self.pending_output_retirement_leases.remove(&route_id);
+        }
         let pending_ids = self
             .pending_output_startups
             .keys()
@@ -465,14 +498,12 @@ impl NdiTransportState {
         let failed_ids = self
             .outputs
             .iter()
-            .filter_map(|(route_id, worker)| worker.failure_snapshot().map(|_| *route_id))
+            .filter_map(|(route_id, worker)| worker.has_finished().then_some(*route_id))
             .collect::<Vec<_>>();
         for route_id in failed_ids {
-            let Some(worker) = self.outputs.remove(&route_id) else {
-                continue;
-            };
-            let failure = worker.failure_snapshot();
-            let stop_result = worker.stop(engine);
+            let failure = self.outputs.get(&route_id)
+                .and_then(NdiOutputWorker::failure_snapshot);
+            let stop_result = self.retire_output_worker(route_id, engine, Duration::ZERO);
             let failure = failure.or_else(|| stop_result.as_ref().err().cloned());
             if let Some(failure) = failure {
                 if let Some(teardown) = failure.pending_teardown {
@@ -482,6 +513,46 @@ impl NdiTransportState {
             }
         }
         Ok(())
+    }
+
+    fn retire_output_worker(
+        &mut self,
+        route_id: u64,
+        engine: &EngineHandle,
+        timeout: Duration,
+    ) -> Result<(), NdiOutputWorkerStopError> {
+        let Some(worker) = self.outputs.get_mut(&route_id) else {
+            return Ok(());
+        };
+        worker.request_retirement();
+        if !wait_for_output_worker(timeout, || worker.has_finished()) {
+            let message = format!(
+                "NDI output route {route_id} stop timed out; worker and SDK retirement remain pending"
+            );
+            self.pending_output_retirement_leases.entry(route_id)
+                .or_insert_with(|| engine.begin_output_ownership_failure_fence(message.clone()));
+            self.failed_output_routes.insert(route_id, message.clone());
+            return Err(NdiOutputWorkerStopError {
+                message,
+                pending_teardown: None,
+                resource_teardown_pending: true,
+            });
+        }
+        let worker = self.outputs.remove(&route_id)
+            .expect("finished NDI owner remains registered until join");
+        let result = worker.stop(engine);
+        if let Err(error) = &result {
+            if let Some(teardown) = error.pending_teardown.as_ref() {
+                self.pending_output_teardowns.insert(route_id, teardown.clone());
+            }
+            if error.resource_teardown_pending || error.pending_teardown.is_some() {
+                self.pending_output_retirement_leases.entry(route_id)
+                    .or_insert_with(|| engine.begin_output_ownership_failure_fence(error.message.clone()));
+                return result;
+            }
+        }
+        self.pending_output_retirement_leases.remove(&route_id);
+        result
     }
 
     pub fn start_route(
@@ -575,6 +646,7 @@ impl NdiTransportState {
                             });
                         }
                         self.pending_output_teardowns.remove(&route.route_id);
+                        self.pending_output_retirement_leases.remove(&route.route_id);
                         self.failed_output_routes.remove(&route.route_id);
                     } else {
                         return Err(video::ExternalVideoTransportDriverError {
@@ -585,7 +657,9 @@ impl NdiTransportState {
                         });
                     }
                 }
-                if authority.is_some() && self.outputs.contains_key(&route.route_id) {
+                if self.outputs.contains_key(&route.route_id)
+                    || self.pending_output_retirement_leases.contains_key(&route.route_id)
+                {
                     return Err(video::ExternalVideoTransportDriverError {
                         message: "NDI output is still awaiting worker teardown acknowledgement".to_string(),
                     });
@@ -621,11 +695,9 @@ impl NdiTransportState {
                         .publish()
                 });
                 if let Err(_error) = publish_result {
-                    let output = self
-                        .outputs
-                        .remove(&route.route_id)
-                        .expect("just-inserted NDI output worker");
-                    if let Err(stop_error) = output.stop(engine) {
+                    if let Err(stop_error) = self.retire_output_worker(
+                        route.route_id, engine, OUTPUT_WORKER_STOP_TIMEOUT,
+                    ) {
                         if let Some(teardown) = stop_error.pending_teardown {
                             self.pending_output_teardowns
                                 .insert(route.route_id, teardown);
@@ -723,18 +795,17 @@ impl NdiTransportState {
                             .to_string(),
                     });
                 }
-                if authority.is_some() {
-                    if let Some(pending) = self.pending_output_startups.get(&route.route_id) {
-                        return Err(video::ExternalVideoTransportDriverError {
-                            message: format!("NDI startup cleanup is still pending: {}", pending.message),
-                        });
-                    }
+                if let Some(pending) = self.pending_output_startups.get(&route.route_id) {
+                    return Err(video::ExternalVideoTransportDriverError {
+                        message: format!("NDI startup cleanup is still pending: {}", pending.message),
+                    });
                 }
                 if let Some(teardown) = self.pending_output_teardowns.get(&route.route_id).cloned()
                 {
                     let result = teardown.wait(Duration::from_secs(3));
                     if teardown.is_complete() && result.is_ok() {
                         self.pending_output_teardowns.remove(&route.route_id);
+                        self.pending_output_retirement_leases.remove(&route.route_id);
                         self.failed_output_routes.remove(&route.route_id);
                     }
                     return result.map_err(|error| video::ExternalVideoTransportDriverError {
@@ -747,8 +818,10 @@ impl NdiTransportState {
                         output.admit_authoring_retirement(engine).map_err(|message| video::ExternalVideoTransportDriverError { message })?;
                     }
                 }
-                if let Some(output) = self.outputs.remove(&route.route_id) {
-                    match output.stop(engine) {
+                if self.outputs.contains_key(&route.route_id) {
+                    match self.retire_output_worker(
+                        route.route_id, engine, OUTPUT_WORKER_STOP_TIMEOUT,
+                    ) {
                         Ok(()) => {
                             self.failed_output_routes.remove(&route.route_id);
                         }
@@ -798,6 +871,7 @@ impl std::fmt::Debug for NdiOutputWorkerStartError {
 
 #[cfg(feature = "ndi")]
 struct NdiPendingOutputStartup {
+    stop: Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<Result<(), NdiOutputWorkerStopError>>>,
     failure_lease: Option<OutputOwnershipTeardownLease>,
     teardown: Option<io::ndi::NdiOutputTeardown>,
@@ -1020,7 +1094,7 @@ impl NdiOutputWorker {
                                 &mut follow_output_state,
                                 key,
                                 TimelineFollowSettlementAckResult::NotApplicable,
-                                || worker_stop.load(Ordering::Acquire),
+                                &worker_stop,
                             );
                         }
                     }
@@ -1061,7 +1135,7 @@ impl NdiOutputWorker {
                                     TimelineFollowSettlementAckResult::Fault {
                                         fault: fault.clone(),
                                     },
-                                    || worker_stop.load(Ordering::Acquire),
+                                    &worker_stop,
                                 );
                             }
                             Err(key_error) => {
@@ -1130,6 +1204,7 @@ impl NdiOutputWorker {
                 video::VideoRuntimeConfig::default(),
                 video::DecoderBackedFrameProvider::new(
                     NdiAwareVideoFrameDecoder::from_env()
+                        .with_stop_signal(Arc::clone(&worker_stop))
                         .with_ndi_inputs(inputs)
                         .with_capture_inputs(capture_inputs),
                 )
@@ -1259,6 +1334,9 @@ impl NdiOutputWorker {
                 // Include preparation / materialization, not admission waits,
                 // the SDK send or cadence sleep.
                 let render_time = render_started.elapsed();
+                if worker_stop.load(Ordering::Acquire) {
+                    break;
+                }
                 let result = match rendered {
                     Ok((TimelineFollowOutputRenderDecision::NotApplicable { key, reason }, _)) => {
                         // This transport cannot prove an atomic engine video
@@ -1283,7 +1361,7 @@ impl NdiOutputWorker {
                                 &mut follow_output_state,
                                 failed_key,
                                 TimelineFollowSettlementAckResult::Fault { fault: fault.clone() },
-                                || worker_stop.load(Ordering::Acquire),
+                                &worker_stop,
                             );
                             Err(fault)
                         } else {
@@ -1316,7 +1394,7 @@ impl NdiOutputWorker {
                                     TimelineFollowSettlementAckResult::Fault {
                                         fault: fault.clone(),
                                     },
-                                    || worker_stop.load(Ordering::Acquire),
+                                    &worker_stop,
                                 );
                                 outcome = Err(fault);
                             }
@@ -1361,10 +1439,15 @@ impl NdiOutputWorker {
                                     // The bounded wait above turns a stuck
                                     // gate into a visible fault instead of an
                                     // indefinite silent hold.
+                                    #[cfg(test)]
+                                    external_output_retirement::stop_after_denied_admission_for_test(Some(&worker_stop));
                                     std::thread::sleep(Duration::from_millis(5));
                                 }
                             }
                         };
+                        if worker_stop.load(Ordering::Acquire) {
+                            break;
+                        }
                         match permit_outcome {
                             Ok(_permit) => {
                                 let send_result = send_frame_if_authorized(
@@ -1373,6 +1456,9 @@ impl NdiOutputWorker {
                                     &authority,
                                     follow_identity,
                                     || {
+                                        if worker_stop.load(Ordering::Acquire) {
+                                            return Err("NDI output worker is stopping".to_string());
+                                        }
                                         sender
                                             .send_rgba(&io::ndi::NdiRgbaFrame {
                                                 width: frame.width,
@@ -1386,6 +1472,9 @@ impl NdiOutputWorker {
                                         Ok(())
                                     },
                                 );
+                                if worker_stop.load(Ordering::Acquire) {
+                                    break;
+                                }
                                 match send_result {
                             Ok(()) => {
                                 if follow_identity.is_some() {
@@ -1412,7 +1501,7 @@ impl NdiOutputWorker {
                                             &mut follow_output_state,
                                             key,
                                             settlement,
-                                            || worker_stop.load(Ordering::Acquire),
+                                            &worker_stop,
                                         );
                                     } else {
                                         let _ = publish_timeline_follow_output_result(
@@ -1420,6 +1509,7 @@ impl NdiOutputWorker {
                                             &mut follow_output_state,
                                             key,
                                             settlement,
+                                            &worker_stop,
                                         );
                                     }
                                 }
@@ -1455,7 +1545,7 @@ impl NdiOutputWorker {
                                         TimelineFollowSettlementAckResult::Fault {
                                             fault: fault.clone(),
                                         },
-                                        || worker_stop.load(Ordering::Acquire),
+                                        &worker_stop,
                                     );
                                     outcome = Err(fault);
                                 }
@@ -1497,7 +1587,7 @@ impl NdiOutputWorker {
                                         &mut follow_output_state,
                                         failed_follow_key.unwrap_or(key),
                                         settlement,
-                                        || worker_stop.load(Ordering::Acquire),
+                                        &worker_stop,
                                     );
                                 }
                                 Err(error)
@@ -1526,7 +1616,7 @@ impl NdiOutputWorker {
                                         TimelineFollowSettlementAckResult::Fault {
                                             fault: fault.clone(),
                                         },
-                                        || worker_stop.load(Ordering::Acquire),
+                                        &worker_stop,
                                     );
                                     Err(fault)
                                 } else {
@@ -1539,6 +1629,9 @@ impl NdiOutputWorker {
                         "NDI output frame was produced without an authority contract".to_string(),
                     ),
                     Err(error) => {
+                        if worker_stop.load(Ordering::Acquire) {
+                            break;
+                        }
                         if let Some(follow) = follow.as_ref() {
                             let fault =
                                 format!("NDI output route {output_id} render failed: {error}");
@@ -1556,7 +1649,7 @@ impl NdiOutputWorker {
                                         &mut follow_output_state,
                                         failed_key,
                                         TimelineFollowSettlementAckResult::Fault { fault },
-                                        || worker_stop.load(Ordering::Acquire),
+                                        &worker_stop,
                                     );
                                 }
                                 Err(key_error) => {
@@ -1680,6 +1773,7 @@ impl NdiOutputWorker {
                 return Err(NdiOutputWorkerStartError {
                     message,
                     pending_startup: Some(NdiPendingOutputStartup {
+                        stop: Arc::clone(&stop),
                         worker: Some(worker),
                         failure_lease: Some(failure_lease),
                         teardown: None,
@@ -1699,6 +1793,7 @@ impl NdiOutputWorker {
                 return Err(NdiOutputWorkerStartError {
                     message,
                     pending_startup: Some(NdiPendingOutputStartup {
+                        stop: Arc::clone(&stop),
                         worker: Some(worker),
                         failure_lease: Some(failure_lease),
                         teardown: None,
@@ -1787,6 +1882,15 @@ impl NdiOutputWorker {
         }
         drop(undelivered_creation_lease);
         Ok(())
+    }
+
+    fn request_retirement(&mut self) {
+        self.creation_lease = self.signal_retirement();
+        self.stop.store(true, Ordering::Release);
+    }
+
+    fn has_finished(&self) -> bool {
+        self.worker.as_ref().is_none_or(std::thread::JoinHandle::is_finished)
     }
 }
 
@@ -2875,7 +2979,7 @@ mod capture_decoder_tests {
             &mut state,
             failed_key,
             TimelineFollowSettlementAckResult::Fault { fault },
-            || false,
+            &Arc::new(AtomicBool::new(false)),
         );
         assert!(state.published_for(failed_key));
         let runtime = engine.snapshot().timeline.follow_runtime;
@@ -3097,7 +3201,7 @@ mod capture_decoder_tests {
         state.queue_ack(key, TimelineFollowSettlementAckResult::Applied, now);
         let mut attempts = Vec::new();
         assert!(state
-            .try_publish_ack(now, |ack| {
+            .try_publish_ack(now, || false, |ack| {
                 attempts.push(ack.clone());
                 Err("injected reply loss".to_string())
             })
@@ -3110,7 +3214,7 @@ mod capture_decoder_tests {
             now + TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY,
         );
         assert!(state
-            .try_publish_ack(now + TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY, |ack| {
+            .try_publish_ack(now + TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY, || false, |ack| {
                 attempts.push(ack.clone());
                 Ok(())
             })
@@ -3134,7 +3238,7 @@ mod capture_decoder_tests {
             Instant::now(),
         );
         assert!(!state
-            .try_publish_ack(Instant::now(), |_| {
+            .try_publish_ack(Instant::now(), || false, |_| {
                 post_publish_calls += 1;
                 Ok(())
             })
@@ -3150,7 +3254,7 @@ mod capture_decoder_tests {
             TimelineFollowSettlementAckResult::NotApplicable,
             Instant::now(),
         );
-        assert!(state.try_publish_ack(Instant::now(), |_| Ok(())).unwrap());
+        assert!(state.try_publish_ack(Instant::now(), || false, |_| Ok(())).unwrap());
         assert!(state.published_for(next));
     }
 
@@ -3173,7 +3277,7 @@ mod capture_decoder_tests {
         // The old physical send succeeded, but its engine reply was lost.
         state.queue_ack(old, TimelineFollowSettlementAckResult::Applied, now);
         assert!(state
-            .try_publish_ack(now, |_| Err("injected old reply loss".to_string()))
+            .try_publish_ack(now, || false, |_| Err("injected old reply loss".to_string()))
             .is_err());
         assert_eq!(
             state.pending_ack_result(),
@@ -3186,7 +3290,7 @@ mod capture_decoder_tests {
         state.queue_ack(new, TimelineFollowSettlementAckResult::Applied, now);
         let mut published = Vec::new();
         assert!(state
-            .try_publish_ack(now, |ack| {
+            .try_publish_ack(now, || false, |ack| {
                 published.push(ack.clone());
                 Ok(())
             })
@@ -3227,7 +3331,7 @@ mod capture_decoder_tests {
         state.update_last_valid(old, old_frame);
         state.queue_ack(old, TimelineFollowSettlementAckResult::Applied, now);
         assert!(state
-            .try_publish_ack(now, |_| Err("injected old reply loss".to_string()))
+            .try_publish_ack(now, || false, |_| Err("injected old reply loss".to_string()))
             .is_err());
 
         // The engine consumer is unchanged by resize, so only last-valid is
@@ -3253,7 +3357,7 @@ mod capture_decoder_tests {
         );
         let mut published = Vec::new();
         assert!(state
-            .try_publish_ack(now + TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY, |ack| {
+            .try_publish_ack(now + TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY, || false, |ack| {
                 published.push(ack.clone());
                 Ok(())
             })
@@ -3334,7 +3438,7 @@ mod capture_decoder_tests {
         assert!(engine.acquire_video_output().is_err());
         let now = Instant::now();
         assert!(state
-            .try_publish_ack(now, |_| Err("injected ACK timeout".to_string()))
+            .try_publish_ack(now, || false, |_| Err("injected ACK timeout".to_string()))
             .is_err());
         assert_eq!(
             engine.output_ownership_status().state,
@@ -3342,7 +3446,7 @@ mod capture_decoder_tests {
         );
         assert!(engine.acquire_video_output().is_err());
         assert!(state
-            .try_publish_ack(now + TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY, |_| Ok(()))
+            .try_publish_ack(now + TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY, || false, |_| Ok(()))
             .unwrap());
         assert_ne!(failed_key.epoch, key.epoch);
         assert!(state.published_for(failed_key));
@@ -3862,6 +3966,7 @@ mod spout_decoder_tests {
 
 #[cfg(all(test, feature = "ndi"))]
 mod ndi_output_worker_tests {
+    include!("ndi_retirement_stop_tests.rs");
     use super::*;
     use std::sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -3912,6 +4017,10 @@ mod ndi_output_worker_tests {
             Arc::new(Mutex::new(HashMap::new())),
         );
         transport.outputs.insert(route.route_id, output);
+        let signals = transport.output_stop_signals();
+        assert_eq!(signals.len(), 1);
+        assert!(Arc::ptr_eq(&signals[0], &transport.outputs[&route.route_id].stop));
+        assert!(!signals[0].load(Ordering::Acquire), "observing cancellation must not stop the target");
         assert!(transport.stop_route(&route, &engine).is_err());
         assert!(transport.outputs.contains_key(&route.route_id));
         transport.stop_route_for_authoring(&route, &engine, &|| Ok(())).unwrap();
@@ -4060,6 +4169,7 @@ mod ndi_output_worker_tests {
             "NDI startup constructor timed out; cleanup remains pending",
         );
         let pending = NdiPendingOutputStartup {
+            stop: Arc::new(AtomicBool::new(true)),
             worker: Some(worker),
             failure_lease: Some(failure_lease),
             teardown: None,
@@ -4071,6 +4181,10 @@ mod ndi_output_worker_tests {
             Arc::new(Mutex::new(HashMap::new())),
         );
         transport.pending_output_startups.insert(77, pending);
+        let signals = transport.output_stop_signals();
+        assert_eq!(signals.len(), 1);
+        assert!(Arc::ptr_eq(&signals[0], &transport.pending_output_startups[&77].stop));
+        assert_eq!(transport.pending_output_startups.len(), 1, "observing cancellation must retain quarantine ownership");
         let route = video::ExternalVideoTransportRoute {
             direction: video::ExternalVideoTransportDirection::Output,
             route_id: 77,
@@ -4136,6 +4250,7 @@ mod ndi_output_worker_tests {
             "NDI publication handshake disconnected during startup",
         );
         let mut pending = NdiPendingOutputStartup {
+            stop: Arc::new(AtomicBool::new(true)),
             worker: Some(worker),
             failure_lease: Some(failure_lease),
             teardown: None,

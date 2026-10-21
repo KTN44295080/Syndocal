@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{hash_map::DefaultHasher, HashMap, HashSet},
     fmt,
     hash::{Hash, Hasher},
@@ -134,6 +135,26 @@ pub struct IsfStageInputs<'a> {
     pub shader: &'a PreparedIsfShader,
     pub controls: &'a [[f32; 4]],
     pub images: &'a [IsfImageInput<'a>],
+}
+
+impl IsfStageInputs<'_> {
+    /// Only the shared host upload and ping/pong may be live. Combining stages
+    /// with additional textures would increase their simultaneous reservation
+    /// and could evict another stage's feedback sooner than singleton renders.
+    fn can_share_host_buffers(&self) -> bool {
+        self.images.is_empty()
+            && self.shader.image_input_names.len() <= 1
+            && self.shader.image_binding_names.is_empty()
+            && self.shader.imported_images.is_empty()
+            && self.shader.bound_images.is_empty()
+            && self.shader.audio_inputs.is_empty()
+            && self.shader.passes.iter().all(|pass| {
+                pass.target.is_none()
+                    && !pass.float
+                    && pass.width.is_none()
+                    && pass.height.is_none()
+            })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -376,32 +397,71 @@ impl IsfGpuRuntime {
     ) -> (VideoFrame, Vec<(usize, IsfRuntimeError)>) {
         let started = std::time::Instant::now();
         let frame_index = self.frame_index;
-        let mut current = frame.clone();
+        let mut current = Cow::Borrowed(frame);
         let mut failures = Vec::new();
-        for (index, stage) in stages.iter().enumerate() {
+        let mut index = 0;
+        while index < stages.len() {
             let Some(key) = keys.get(index) else {
                 failures.push((index, runtime_error("ISF stage ownership key is missing")));
+                index += 1;
                 continue;
             };
-            match self.apply_stack_at_frame_index(
-                &current,
-                std::slice::from_ref(stage),
-                time_seconds,
-                time_delta_seconds,
-                frame_index,
-                date,
-                std::slice::from_ref(key),
-            ) {
-                Ok(frame) => current = frame,
-                Err(error) => failures.push((index, error)),
+            // A target-backed stage can own feedback. Keep its established
+            // one-stage transaction; retrying it could advance history twice.
+            // Ordinary resource-neutral stages can share the host upload,
+            // GPU ping/pong and final readback without adding eviction pressure.
+            let mut end = index + 1;
+            if stages[index].can_share_host_buffers() {
+                while end < stages.len() && end < keys.len() && stages[end].can_share_host_buffers()
+                {
+                    end += 1;
+                }
             }
+            if end > index + 1 {
+                if let Ok(rendered) = self.apply_stack_at_frame_index(
+                    &current,
+                    &stages[index..end],
+                    time_seconds,
+                    time_delta_seconds,
+                    frame_index,
+                    date,
+                    &keys[index..end],
+                ) {
+                    current = Cow::Owned(rendered);
+                    index = end;
+                    continue;
+                }
+                // A bounded recovery on the same input/clock identifies the
+                // failed stage and preserves the existing bypass-only-that-
+                // stage contract. No target-backed stage is ever replayed.
+            }
+            for stage_index in index..end {
+                let stage_key = if stage_index == index {
+                    key
+                } else {
+                    &keys[stage_index]
+                };
+                match self.apply_stack_at_frame_index(
+                    &current,
+                    std::slice::from_ref(&stages[stage_index]),
+                    time_seconds,
+                    time_delta_seconds,
+                    frame_index,
+                    date,
+                    std::slice::from_ref(stage_key),
+                ) {
+                    Ok(rendered) => current = Cow::Owned(rendered),
+                    Err(error) => failures.push((stage_index, error)),
+                }
+            }
+            index = end;
         }
         if !stages.is_empty() {
             self.frame_index = self.frame_index.wrapping_add(1);
         }
         self.last_stack_stage_count = stages.len();
         self.last_stack_render_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
-        (current, failures)
+        (current.into_owned(), failures)
     }
 
     /// Consumes one host frame for a non-empty stage-local chain whose stages

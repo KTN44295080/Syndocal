@@ -2159,7 +2159,7 @@ impl<'a> ProductionKeepaliveFailStopPorts<'a> {
         if self.teardown_lease.is_some() {
             return Ok(());
         }
-        let (signals, signal_error) = match super::show_spout_authority_change_stop_signals(self.state) {
+        let (signals, signal_error) = match super::output_owner_retirement::stop_signals(self.state) {
             Ok(signals) => (signals, None),
             Err(error) => {
                 self.record_failure_detail(&error);

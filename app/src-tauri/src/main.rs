@@ -40,6 +40,8 @@ mod native_thumbnail_dispatch;
 mod native_thumbnail_ticket;
 #[cfg(test)]
 mod native_thumbnail_render_tests;
+#[cfg(test)]
+mod native_video_output_stop_ack_tests;
 mod media_asset_preview_contract;
 mod media_relink_folder;
 use media_asset_preview_contract::{
@@ -75,6 +77,8 @@ use project_snapshot_persistence::{
 };
 #[cfg(test)]
 mod project_transaction_terminal_recovery_tests;
+#[cfg(test)]
+mod project_authority_poll_reservation_tests;
 mod recording_artifact;
 mod recording_shutdown;
 mod snapshot_sync;
@@ -100,6 +104,7 @@ mod live_video_monitor_packet;
 mod live_video_output_health;
 mod native_display_lease_boundary;
 mod video_output_pacer;
+mod output_owner_retirement;
 use live_video_monitor_packet::*;
 mod video_recording_lifecycle;
 mod video_recording_runtime;
@@ -24901,6 +24906,29 @@ impl ProjectExternalCommandAdmission {
         // generation is an implementation seqlock, not a client-visible ID.
         self.generation.fetch_add(1, Ordering::AcqRel);
     }
+
+    fn note_project_transaction_reservation(&self) {
+        // A candidate may be published and safely rolled back before a poll
+        // reacquires coordinator. Invalidate that capture even when committed
+        // authority and history return to their original values.
+        self.generation.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+fn reserve_output_authoring_project_transaction(
+    state: &AppState,
+    _coordinator: &ProjectCoordinator,
+) -> Result<(), ()> {
+    // The caller retains coordinator through reservation and invalidation, so
+    // no poll can reconcile a candidate between those two operations.
+    state
+        .project_transaction_active
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .map_err(|_| ())?;
+    state
+        .project_external_command_admission
+        .note_project_transaction_reservation();
+    Ok(())
 }
 
 impl Default for ProjectCoordinator {
@@ -56215,6 +56243,22 @@ fn poll_project_authority_bundle_seqlock(
     state: &AppState,
     cursor: ProjectAuthorityPollCursor,
 ) -> Result<Option<ProjectAuthorityBundle>, String> {
+    poll_project_authority_bundle_with_capture(state, cursor, || {
+        Ok((
+            state.engine.persistence_snapshot()?,
+            state.engine.snapshot_for_ui(),
+        ))
+    })
+}
+
+fn poll_project_authority_bundle_with_capture<Capture>(
+    state: &AppState,
+    cursor: ProjectAuthorityPollCursor,
+    mut capture: Capture,
+) -> Result<Option<ProjectAuthorityBundle>, String>
+where
+    Capture: FnMut() -> Result<(EngineSnapshot, EngineSnapshot), String>,
+{
     let (
         known_epoch,
         known_revision,
@@ -56234,10 +56278,12 @@ fn poll_project_authority_bundle_seqlock(
             // gate as their linearization point.
             let (stamp, ancillary, mappings) = {
                 let coordinator = lock_project_coordinator(state)?;
-                // A Begin reservation owns a partial engine image. There is no
+                // An active transaction owns a partial engine image. There is no
                 // coherent frontend image to return until Commit/Cancel resolves
                 // it, so make polling a harmless no-op rather than blocking.
-                if !coordinator.history.pending.is_empty() {
+                if state.project_transaction_active.load(Ordering::Acquire)
+                    || !coordinator.history.pending.is_empty()
+                {
                     return Ok(ProjectAuthoritySeqlockCapture::Complete(None));
                 }
                 (
@@ -56250,8 +56296,7 @@ fn poll_project_authority_bundle_seqlock(
             // This can wait on the engine's published snapshot. No admission or
             // coordinator guard is live while it does, so live callback sends are
             // never held behind a UI poll.
-            let persistence_snapshot = state.engine.persistence_snapshot()?;
-            let published_snapshot = state.engine.snapshot_for_ui();
+            let (persistence_snapshot, published_snapshot) = capture()?;
             if state.project_external_command_admission.generation() != admitted_before {
                 return Ok(ProjectAuthoritySeqlockCapture::Retry);
             }
@@ -56260,8 +56305,14 @@ fn poll_project_authority_bundle_seqlock(
             let hash = project_checkpoint_hash(&project, &mappings)?;
 
             let mut coordinator = lock_project_coordinator(state)?;
-            if !coordinator.history.pending.is_empty()
-                || !project_authority_capture_stamp_matches(&coordinator, &stamp)
+            // Authoring can reserve and publish its candidate while the engine
+            // capture is in flight. Never reconcile that uncommitted candidate.
+            if state.project_transaction_active.load(Ordering::Acquire)
+                || !coordinator.history.pending.is_empty()
+            {
+                return Ok(ProjectAuthoritySeqlockCapture::Complete(None));
+            }
+            if !project_authority_capture_stamp_matches(&coordinator, &stamp)
                 || state.project_external_command_admission.generation() != admitted_before
             {
                 return Ok(ProjectAuthoritySeqlockCapture::Retry);
@@ -68181,6 +68232,7 @@ where
     // leaves it pending fail-closed if the abort itself cannot be persisted).
     let desired_role = state.engine.output_ownership_status().desired_role;
     let pre_ack_transition: Result<engine::OutputOwnershipRetirement, String> = (|| {
+        output_owner_retirement::harvest_finished_outputs(state)?;
         if coordinator_effect != ProjectReplacementCoordinatorEffect::RuntimeSanitize {
             // Identity and HistoryNavigation invalidate any prior browser
             // recovery image. Persist the new machine-local serial before
@@ -68210,7 +68262,7 @@ where
             };
             platform.advance_recovery_authority(state, coordinator, transition)?;
         }
-        let stop_signals = show_spout_authority_change_stop_signals(state)?;
+        let stop_signals = output_owner_retirement::stop_signals(state)?;
         let retirement = state.engine
             .reserve_output_ownership_retirement(desired_role, &stop_signals)
             .map_err(|error| format!("Project replacement could not enter output fence: {error}"))?;
@@ -74322,20 +74374,6 @@ fn harvest_syphon_output_failures(state: &AppState) -> Result<(), String> {
         .map_err(|error| error.message)
 }
 
-fn show_spout_authority_change_stop_signals(state: &AppState) -> Result<Vec<Arc<AtomicBool>>, String> {
-    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-    {
-        return state.show_spout_transport.lock()
-            .map(|transport| transport.authority_change_stop_signals())
-            .map_err(|_| "Show Spout transport state lock was poisoned before authority transition".to_string());
-    }
-    #[cfg(not(all(feature = "spout", target_os = "windows", target_arch = "x86_64")))]
-    {
-        let _ = state;
-        Ok(Vec::new())
-    }
-}
-
 /// The strict show pair is not represented by generic route synchronization.
 /// Once either sender loses its fence or its worker, retire both native
 /// registrations first and then remove only that exact engine pair.  A later
@@ -74357,13 +74395,22 @@ fn harvest_show_spout_output_failures(
     // retirement acknowledgement. Do not hold `show_transport` while that
     // physical cleanup and bounded engine wait run.
     let retired = retiring.retire();
-    let failure = show_transport
-        .lock()
-        .map_err(|_| {
-            "Show Spout transport state lock was poisoned while recording failed-pair cleanup"
-                .to_string()
-        })?
-        .finish_failed_active_pair(retired);
+    let result = match show_transport.lock() {
+        Ok(mut transport) => transport.finish_retiring_pair(retired),
+        Err(poisoned) => {
+            // A timed-out attempt still owns both workers. Return it to state
+            // even on poison, before reporting the lock failure.
+            let _ = poisoned.into_inner().finish_retiring_pair(retired);
+            return Err(
+                "Show Spout transport state lock was poisoned while recording failed-pair cleanup"
+                    .to_string(),
+            );
+        }
+    };
+    let failure = match result {
+        Ok(()) => return Ok(()),
+        Err(failure) => failure,
+    };
     match failure.automatic_engine_retirement {
         Some(Ok(())) => Err(format!(
             "Show Spout authority was lost, both SDK senders were retired, and its exact engine pair was automatically retired: {}",
@@ -74373,10 +74420,7 @@ fn harvest_show_spout_output_failures(
             "Show Spout authority was lost after both SDK senders retired: {}; exact engine-pair automatic retirement failed: {retire_error}",
             failure.message
         )),
-        None => Err(format!(
-            "Show Spout authority was lost after physical sender retirement, but the required automatic exact engine-pair retirement did not report a result: {}",
-            failure.message
-        )),
+        None => Err(failure.message),
     }
 }
 
@@ -74405,10 +74449,7 @@ fn retire_show_spout_outputs_for_authority_change(state: &AppState) -> Result<()
                     "strict show Spout authority transition left engine cleanup blocked after native teardown: {}; automatic exact engine retirement failed: {retire_error}",
                     failure.message
                 )),
-                None => Err(format!(
-                    "strict show Spout authority transition did not report required exact engine retirement after native teardown: {}",
-                    failure.message
-                )),
+                None => Err(failure.message),
             };
         }
     };
@@ -74419,14 +74460,16 @@ fn retire_show_spout_outputs_for_authority_change(state: &AppState) -> Result<()
     // to stop. Joining the senders and their exact engine compensation is
     // deliberately outside the state mutex.
     let retired = retiring.retire();
-    let result = state
-        .show_spout_transport
-        .lock()
-        .map_err(|_| {
-            "Show Spout transport state lock was poisoned while recording authority-transition cleanup"
-                .to_string()
-        })?
-        .finish_active_for_authority_change(retired);
+    let result = match state.show_spout_transport.lock() {
+        Ok(mut transport) => transport.finish_retiring_pair(retired),
+        Err(poisoned) => {
+            let _ = poisoned.into_inner().finish_retiring_pair(retired);
+            return Err(
+                "Show Spout transport state lock was poisoned while recording authority-transition cleanup"
+                    .to_string(),
+            );
+        }
+    };
     match result {
         Ok(()) => Ok(()),
         Err(failure) => match failure.automatic_engine_retirement {
@@ -74438,10 +74481,7 @@ fn retire_show_spout_outputs_for_authority_change(state: &AppState) -> Result<()
                 "strict show Spout authority transition left engine cleanup blocked after native teardown: {}; automatic exact engine retirement failed: {retire_error}",
                 failure.message
             )),
-            None => Err(format!(
-                "strict show Spout authority transition did not report required exact engine retirement after native teardown: {}",
-                failure.message
-            )),
+            None => Err(failure.message),
         },
     }
 }
@@ -77147,9 +77187,7 @@ where
                     "Display output authority changed before physical admission",
                 ));
             }
-            state
-                .project_transaction_active
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            reserve_output_authoring_project_transaction(state, &coordinator)
                 .map_err(|_| {
                     OutputLeaseCandidateCommitFailure::safe(
                         "Another project transaction is active; retry Display creation",
@@ -79864,8 +79902,9 @@ fn apply_output_ownership_transition_after_reservation(
     state: &AppState,
     role: MachineOutputRole,
     path: &Path,
-    mut transition: Option<engine::OutputOwnershipTransition>,
+    mut retirement: Option<engine::OutputOwnershipRetirement>,
 ) -> Result<OutputOwnershipStatus, String> {
+    let mut transition = None;
     let result = (|| -> Result<OutputOwnershipStatus, String> {
         // The gate is already denying new physical operations here. Fence the
         // engine and then wait for every app-owned transport/window to retire.
@@ -79889,6 +79928,10 @@ fn apply_output_ownership_transition_after_reservation(
             ));
         }
         retire_native_video_output_windows(app, &state.native_video_output_workers)?;
+
+        transition = Some(retirement.take()
+            .ok_or_else(|| "Output ownership retirement was unexpectedly consumed".to_string())?
+            .finish_retirement()?);
 
         let prepared = (|| -> Result<(), String> {
             state.engine.prepare_output_ownership_role(role)?;
@@ -79955,21 +79998,26 @@ fn apply_output_ownership_transition_after_reservation(
 
     match result {
         Ok(status) => Ok(status),
-        Err(error) => Err(fail_output_ownership_transition(
+        Err(error) => {
+            if let Some(retirement) = retirement.take() {
+                retirement.fail(error.clone());
+            }
+            Err(fail_output_ownership_transition(
             app,
             state,
             Some(path),
             role,
             error,
             transition.take(),
-        )),
+        ))
+        },
     }
 }
 
 fn reserve_standby_output_ownership_transition(
     app: &tauri::AppHandle,
     state: &AppState,
-) -> Result<(PathBuf, engine::OutputOwnershipTransition), (Option<PathBuf>, String)> {
+) -> Result<(PathBuf, engine::OutputOwnershipRetirement), (Option<PathBuf>, String)> {
     let path = output_ownership_state_path(app).map_err(|error| (None, error))?;
     persist_output_ownership_role_to_path(&path, MachineOutputRole::Standby).map_err(|error| {
         (
@@ -79986,17 +80034,13 @@ fn reserve_standby_output_ownership_transition(
                 format!("Unable to publish durable Standby fence before standby start: {error}"),
             )
         })?;
-    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-    harvest_show_spout_output_failures(state.show_spout_transport.as_ref(), &state.engine)
+    output_owner_retirement::harvest_finished_outputs(state)
         .map_err(|error| (Some(path.clone()), error))?;
-    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-    harvest_spout_output_failures(state.spout_transport.as_ref(), &state.engine)
+    let stop_signals = output_owner_retirement::stop_signals(state)
         .map_err(|error| (Some(path.clone()), error))?;
-    #[cfg(all(feature = "syphon", target_os = "macos"))]
-    harvest_syphon_output_failures(state).map_err(|error| (Some(path.clone()), error))?;
     state
         .engine
-        .begin_output_ownership_transition(MachineOutputRole::Standby)
+        .reserve_output_ownership_retirement(MachineOutputRole::Standby, &stop_signals)
         .map(|transition| (path.clone(), transition))
         .map_err(|error| (Some(path), error))
 }
@@ -80024,12 +80068,7 @@ fn apply_output_ownership_role_with_transition_guard(
         );
     }
     validate_output_role_change_for_standby_sync(state, role)?;
-    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-    harvest_show_spout_output_failures(state.show_spout_transport.as_ref(), &state.engine)?;
-    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-    harvest_spout_output_failures(state.spout_transport.as_ref(), &state.engine)?;
-    #[cfg(all(feature = "syphon", target_os = "macos"))]
-    harvest_syphon_output_failures(state)?;
+    output_owner_retirement::harvest_finished_outputs(state)?;
 
     let path = match output_ownership_state_path(app) {
         Ok(path) => path,
@@ -80066,7 +80105,9 @@ fn apply_output_ownership_role_with_transition_guard(
         ));
     }
 
-    let transition = match state.engine.begin_output_ownership_transition(role) {
+    let retirement = output_owner_retirement::stop_signals(state).and_then(|signals|
+        state.engine.reserve_output_ownership_retirement(role, &signals));
+    let transition = match retirement {
         Ok(transition) => Some(transition),
         Err(error) => {
             return Err(fail_output_ownership_transition(
@@ -80247,12 +80288,7 @@ fn sync_external_video_transports(
             .mark_output_ownership_transition_failure(error.clone());
         error
     })?;
-    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-    harvest_show_spout_output_failures(state.show_spout_transport.as_ref(), &state.engine)?;
-    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-    harvest_spout_output_failures(state.spout_transport.as_ref(), &state.engine)?;
-    #[cfg(all(feature = "syphon", target_os = "macos"))]
-    harvest_syphon_output_failures(state)?;
+    output_owner_retirement::harvest_finished_outputs(&state)?;
     let role = state.engine.output_ownership_status().role;
     let transition = state
         .engine
@@ -84008,6 +84044,38 @@ enum NativeVideoOutputLiveFrameError {
     Physical(String),
 }
 
+fn retain_native_video_output_failure_before_ack(
+    engine: &EngineHandle,
+    teardown_lease: &Arc<Mutex<Option<engine::OutputOwnershipTeardownLease>>>,
+    label: &str,
+    error: String,
+    acknowledgement: Option<TimelineFollowSettlementAck>,
+    acknowledge: impl FnOnce(TimelineFollowSettlementAck),
+) -> String {
+    // This failure was classified before entering any ACK wait. A later Stop
+    // cannot turn it into a successful cancellation or release its owner fence.
+    arm_native_video_output_failure_fence(engine, teardown_lease, label, error.clone());
+    if let Some(mut acknowledgement) = acknowledgement {
+        // Fencing changes ownership epoch, never the failed frame's Follow
+        // generation or consumer identity.
+        acknowledgement.epoch = engine.output_ownership_status().epoch;
+        acknowledge(acknowledgement);
+    }
+    error
+}
+
+fn native_video_output_result_after_latched_failure(
+    stop: &AtomicBool,
+    ownership_state: protocol::OutputOwnershipState,
+    physical_result: Result<(), String>,
+    latched_failure: Option<String>,
+) -> Result<(), String> {
+    match latched_failure {
+        Some(error) => Err(error),
+        None => native_video_output_worker_result(stop, ownership_state, physical_result),
+    }
+}
+
 fn native_video_output_live_frame_with_permit<
     Presenter,
     Permit,
@@ -84715,13 +84783,17 @@ fn prepare_native_display_output(
 fn acknowledge_native_timeline_follow_video_settlement(
     engine: &EngineHandle,
     acknowledgement: TimelineFollowSettlementAck,
+    stop: &Arc<AtomicBool>,
 ) {
-    // A renderer thread is deliberately outside the engine command worker. A
-    // late acknowledgement is fenced by the captured epoch/generation and is
-    // therefore harmless; no physical present retry is attempted here.
-    let _ = engine.acknowledge_timeline_follow_settlement_published(
+    if stop.load(Ordering::Acquire) {
+        return;
+    }
+    // The queued acknowledgement and its waiter share the physical owner's
+    // cancellation token; stopping cannot leave a same-epoch ACK applying later.
+    let _ = engine.acknowledge_timeline_follow_settlement_published_with_stop(
         acknowledgement,
         Instant::now() + Duration::from_secs(2),
+        Arc::clone(stop),
     );
 }
 
@@ -84747,6 +84819,18 @@ fn native_timeline_follow_video_ack(
     output_id: VideoOutputId,
     result: TimelineFollowSettlementAckResult,
 ) -> TimelineFollowSettlementAck {
+    native_timeline_follow_video_ack_for_identity(
+        native_timeline_follow_active_identity(follow),
+        output_id,
+        result,
+    )
+}
+
+fn native_timeline_follow_video_ack_for_identity(
+    follow: NativeTimelineFollowActiveIdentity,
+    output_id: VideoOutputId,
+    result: TimelineFollowSettlementAckResult,
+) -> TimelineFollowSettlementAck {
     TimelineFollowSettlementAck {
         epoch: follow.epoch,
         generation: follow.generation,
@@ -84760,11 +84844,16 @@ fn report_native_timeline_follow_video_result(
     engine: &EngineHandle,
     output_id: VideoOutputId,
     result: TimelineFollowSettlementAckResult,
+    stop: &Arc<AtomicBool>,
 ) {
+    if stop.load(Ordering::Acquire) {
+        return;
+    }
     if let Some(follow) = engine.timeline_follow_video_render_snapshot() {
         acknowledge_native_timeline_follow_video_settlement(
             engine,
             native_timeline_follow_video_ack(&follow, output_id, result),
+            stop,
         );
     }
 }
@@ -85074,7 +85163,9 @@ fn prepare_native_video_output(
     window_label: &str,
     unpublished_snapshot: Option<&EngineSnapshot>,
     gpu: Option<video::VideoOutputGpuSupport>,
+    observed_follow: &mut Option<NativeTimelineFollowActiveIdentity>,
 ) -> Result<NativeVideoOutputFrame, String> {
+    *observed_follow = None;
     if let Some(snapshot) = unpublished_snapshot {
         follow_last_valid.take();
         renderer
@@ -85099,6 +85190,7 @@ fn prepare_native_video_output(
         );
     }
     if let Some((context, follow)) = capture_native_timeline_follow_video_render_snapshot(engine) {
+        *observed_follow = Some(native_timeline_follow_active_identity(&follow));
         renderer
             .frame_provider_mut()
             .set_bpm(Some(context.runtime.clock_bpm));
@@ -85227,11 +85319,17 @@ fn start_native_video_live_output(
         label,
         teardown_lease,
     } = request;
+    // The first-frame phase, queued ACKs and eventual worker share one token.
+    let stop = phase_cancelled.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+    if stop.load(Ordering::Acquire) {
+        return Err("Display output native phase expired before initialization".to_string());
+    }
     if let Err(error) = ensure_video_output_allowed(&engine) {
         report_native_timeline_follow_video_result(
             &engine,
             output_id,
             TimelineFollowSettlementAckResult::NotApplicable,
+            &stop,
         );
         return Err(error);
     }
@@ -85255,8 +85353,9 @@ fn start_native_video_live_output(
                 .map_err(|error| format!("Native video output initialization failed: {error:?}"))?,
         )
     };
-    let decoder =
-        ndi_transport::NdiAwareVideoFrameDecoder::from_env().with_capture_inputs(capture_inputs);
+    let decoder = ndi_transport::NdiAwareVideoFrameDecoder::from_env()
+        .with_stop_signal(Arc::clone(&stop))
+        .with_capture_inputs(capture_inputs);
     #[cfg(feature = "ndi")]
     let decoder = decoder.with_ndi_inputs(ndi_inputs);
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
@@ -85268,6 +85367,7 @@ fn start_native_video_live_output(
     let mut output_health =
         live_video_output_health::OutputHealthWriter::register(output_id, "display");
     let mut initial_follow_last_valid = None;
+    let mut first_observed_follow = None;
     let mut first_validation_identity = None;
     let mut first_validation_boundary = None;
     let first_started = Instant::now();
@@ -85283,6 +85383,7 @@ fn start_native_video_live_output(
         presenter
             .as_ref()
             .and_then(video::GpuSurfacePresenter::gpu_composition_support),
+        &mut first_observed_follow,
     )
     .and_then(|first_output| {
         first_validation_identity = match &first_output {
@@ -85294,10 +85395,7 @@ fn start_native_video_live_output(
                 None
             }
         };
-        if phase_cancelled
-            .as_ref()
-            .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
-        {
+        if stop.load(Ordering::Acquire) {
             return Err(
                 "Display output native phase expired before first physical frame".to_string(),
             );
@@ -85336,11 +85434,17 @@ fn start_native_video_live_output(
         let presenter = presenter
             .as_mut()
             .ok_or_else(|| "Native video output presenter was not initialized".to_string())?;
+        if stop.load(Ordering::Acquire) {
+            return Err("Display output native phase expired before first-frame settlement".to_string());
+        }
         match first_output {
             NativeVideoOutputFrame::SettlementOnly(acknowledgement) => {
                 // A definitive non-presenting settlement (NotApplicable or a
                 // typed Fault) publishes exactly zero presents.
-                acknowledge_native_timeline_follow_video_settlement(&engine, acknowledgement);
+                acknowledge_native_timeline_follow_video_settlement(&engine, acknowledgement, &stop);
+                if stop.load(Ordering::Acquire) {
+                    return Err("Display output native phase expired during first-frame settlement".to_string());
+                }
                 Ok(())
             }
             NativeVideoOutputFrame::Presentable(first_frame) => {
@@ -85349,9 +85453,7 @@ fn start_native_video_live_output(
                     &first_frame.authority,
                     first_frame.follow_identity,
                     || {
-                        if phase_cancelled.as_ref().is_some_and(|cancelled| {
-                            cancelled.load(Ordering::Acquire)
-                        }) {
+                        if stop.load(Ordering::Acquire) {
                             return Err("Display output native phase expired before first physical present".to_string());
                         }
                         if let Some(admit) = first_frame_admission.as_ref() {
@@ -85360,9 +85462,7 @@ fn start_native_video_live_output(
                         // Lease validation can acquire short authority locks.
                         // Recheck the native token afterward so no presentation
                         // mutation slips between the last token read and present.
-                        if phase_cancelled.as_ref().is_some_and(|cancelled| {
-                            cancelled.load(Ordering::Acquire)
-                        }) {
+                        if stop.load(Ordering::Acquire) {
                             return Err("Display output native phase expired before first physical present".to_string());
                         }
                         if engine.video_presentation_config_token()
@@ -85382,11 +85482,18 @@ fn start_native_video_live_output(
                     | NativeDisplayPresentError::Physical(error) => error,
                 })
                 .and_then(|()| {
+                    if stop.load(Ordering::Acquire) {
+                        return Err("Display output native phase expired after first physical present".to_string());
+                    }
                     if let Some(acknowledgement) = first_frame.settlement {
                         acknowledge_native_timeline_follow_video_settlement(
                             &engine,
                             acknowledgement,
+                            &stop,
                         );
+                    }
+                    if stop.load(Ordering::Acquire) {
+                        return Err("Display output native phase expired during first-frame settlement".to_string());
                     }
                     Ok(())
                 })
@@ -85407,14 +85514,20 @@ fn start_native_video_live_output(
         first_validation_identity,
         first_validation_boundary,
     );
-    if let Err(error) = &first_result {
-        report_native_timeline_follow_video_result(
-            &engine,
-            output_id,
-            TimelineFollowSettlementAckResult::Fault {
-                fault: format!("Native Timeline Follow first output frame failed: {error}"),
-            },
-        );
+    if let Some(error) = first_result.as_ref().err().filter(|_| !stop.load(Ordering::Acquire)) {
+        if let Some(follow) = first_observed_follow {
+            acknowledge_native_timeline_follow_video_settlement(
+                &engine,
+                native_timeline_follow_video_ack_for_identity(
+                    follow,
+                    output_id,
+                    TimelineFollowSettlementAckResult::Fault {
+                        fault: format!("Native Timeline Follow first output frame failed: {error}"),
+                    },
+                ),
+                &stop,
+            );
+        }
     }
     first_result?;
     let mut presenter =
@@ -85422,7 +85535,6 @@ fn start_native_video_live_output(
 
     let mut follow_last_valid = initial_follow_last_valid;
 
-    let stop = Arc::new(AtomicBool::new(false));
     let event_stop = Arc::clone(&stop);
     window.on_window_event(move |event| {
         if matches!(
@@ -85491,10 +85603,21 @@ fn start_native_video_live_output(
                     let mut frame_validation_identity = None;
                     let mut frame_validation_boundary = None;
                     let gpu_support = presenter.gpu_composition_support();
+                    let frame_follow_identity = RefCell::new(None);
+                    let latched_failure = RefCell::new(None);
                     let result = native_video_output_live_frame_with_permit(
                         &mut presenter,
                         || engine.acquire_video_output(),
                         |presenter| {
+                            // Only a changed surface needs a pre-resize identity.
+                            // Ordinary frames reuse preparation's exact capture
+                            // without cloning the full Follow render inputs twice.
+                            if presenter.size() != (width, height) {
+                                frame_follow_identity.replace(
+                                    engine.timeline_follow_video_render_snapshot().as_ref()
+                                        .map(native_timeline_follow_active_identity),
+                                );
+                            }
                             presenter.resize(width, height).map_err(|error| {
                                 format!("Native video output resize failed: {error:?}")
                             })
@@ -85513,11 +85636,15 @@ fn start_native_video_live_output(
                                 &label,
                                 None,
                                 gpu_support,
+                                &mut *frame_follow_identity.borrow_mut(),
                             );
                             let render_time = render_started.elapsed();
                             output.map(|output| (output, render_time))
                         },
                         |presenter, (output, render_time)| {
+                            if worker_stop.load(Ordering::Acquire) {
+                                return Ok(());
+                            }
                             frame_validation_identity = match &output {
                                 NativeVideoOutputFrame::Presentable(frame) => {
                                     Some(frame.validation_identity.clone())
@@ -85537,6 +85664,7 @@ fn start_native_video_live_output(
                                 acknowledge_native_timeline_follow_video_settlement(
                                     &engine,
                                     acknowledgement,
+                                    &worker_stop,
                                 );
                                 Ok(())
                             }
@@ -85546,6 +85674,9 @@ fn start_native_video_live_output(
                                     &frame.authority,
                                     frame.follow_identity,
                                     || {
+                                        if worker_stop.load(Ordering::Acquire) {
+                                            return Ok(());
+                                        }
                                         present_native_display_payload(presenter, &frame)
                                             .map_err(|error| {
                                                 format!(
@@ -85557,10 +85688,14 @@ fn start_native_video_live_output(
                                     },
                                 ) {
                                     Ok(()) => {
+                                        if worker_stop.load(Ordering::Acquire) {
+                                            return Ok(());
+                                        }
                                         if let Some(acknowledgement) = frame.settlement {
                                             acknowledge_native_timeline_follow_video_settlement(
                                                 &engine,
                                                 acknowledgement,
+                                                &worker_stop,
                                             );
                                         }
                                         Ok(())
@@ -85584,27 +85719,36 @@ fn start_native_video_live_output(
                             }
                         },
                         |error| {
-                            report_native_timeline_follow_video_result(
-                                &engine,
-                                output_id,
-                                TimelineFollowSettlementAckResult::Fault {
-                                    fault: format!(
-                                        "Native Timeline Follow output physical failure: {error}"
-                                    ),
-                                },
-                            );
                             let result = native_video_output_worker_result(
                                 &worker_stop,
                                 engine.output_ownership_status().state,
                                 Err(error.to_string()),
                             );
                             if let Err(error) = result {
-                                arm_native_video_output_failure_fence(
+                                let acknowledgement = frame_follow_identity.borrow().map(|follow| {
+                                    native_timeline_follow_video_ack_for_identity(
+                                        follow,
+                                        output_id,
+                                        TimelineFollowSettlementAckResult::Fault {
+                                            fault: format!(
+                                                "Native Timeline Follow output physical failure: {error}"
+                                            ),
+                                        },
+                                    )
+                                });
+                                let error = retain_native_video_output_failure_before_ack(
                                     &engine,
                                     &worker_teardown_lease,
                                     &label,
                                     error,
+                                    acknowledgement,
+                                    |acknowledgement| acknowledge_native_timeline_follow_video_settlement(
+                                        &engine,
+                                        acknowledgement,
+                                        &worker_stop,
+                                    ),
                                 );
+                                latched_failure.replace(Some(error));
                             }
                         },
                     );
@@ -85625,17 +85769,23 @@ fn start_native_video_live_output(
                     match result {
                         Ok(()) => {}
                         Err(NativeVideoOutputLiveFrameError::Permit(_)) => {
+                            if worker_stop.load(Ordering::Acquire) {
+                                break;
+                            }
                             // Capability denial is not a physical presenter
                             // failure. A role transition owns its teardown;
                             // every other denial means this worker is done.
                             if engine.output_ownership_status().state
                                 == protocol::OutputOwnershipState::Transitioning
-                                && wait_for_native_video_output_transition_retry(&worker_stop)
                             {
+                                if !wait_for_native_video_output_transition_retry(&worker_stop) {
+                                    break;
+                                }
                                 report_native_timeline_follow_video_result(
                                     &engine,
                                     output_id,
                                     TimelineFollowSettlementAckResult::NotApplicable,
+                                    &worker_stop,
                                 );
                                 continue;
                             }
@@ -85643,14 +85793,16 @@ fn start_native_video_live_output(
                                 &engine,
                                 output_id,
                                 TimelineFollowSettlementAckResult::NotApplicable,
+                                &worker_stop,
                             );
                             break;
                         }
                         Err(NativeVideoOutputLiveFrameError::Physical(error)) => {
-                            let result = native_video_output_worker_result(
+                            let result = native_video_output_result_after_latched_failure(
                                 &worker_stop,
                                 engine.output_ownership_status().state,
                                 Err(error),
+                                latched_failure.into_inner(),
                             );
                             if let Err(error) = result {
                                 let _ = window.close();

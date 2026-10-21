@@ -1,4 +1,13 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{atomic::AtomicBool, Arc},
+};
+
+#[path = "libav_cancellation.rs"]
+mod cancellation;
+#[cfg(feature = "libav")]
+use cancellation::InterruptInput;
+use cancellation::StopState;
 
 use protocol::{VideoLayerId, VideoSourceKind};
 
@@ -30,6 +39,10 @@ mod loop_wrap_tests;
 #[cfg(all(feature = "libav", test))]
 #[path = "libav_parallel_decode_tests.rs"]
 mod parallel_decode_tests;
+
+#[cfg(all(feature = "libav", test))]
+#[path = "libav_cancellation_tests.rs"]
+mod cancellation_tests;
 
 #[cfg(all(feature = "libav", test))]
 use std::cell::Cell;
@@ -72,6 +85,7 @@ thread_local! {
 }
 
 pub struct LibavFrameDecoder {
+    stop: StopState,
     entries: Vec<LibavFrameCacheEntry>,
     working_set_lru: Vec<LibavRenderInputOwner>,
     #[cfg(feature = "libav")]
@@ -216,7 +230,8 @@ struct LibavDecodeSession {
     width: u32,
     height: u32,
     signature: StillImageSignature,
-    input: ffmpeg::format::context::Input,
+    input: InterruptInput,
+    stop: StopState,
     decoder: ffmpeg::decoder::Video,
     hardware: bool,
     stream_index: usize,
@@ -283,6 +298,7 @@ impl Default for LibavFrameDecoder {
 impl LibavFrameDecoder {
     pub fn new() -> Self {
         Self {
+            stop: StopState::new(None),
             entries: Vec::new(),
             working_set_lru: Vec::new(),
             #[cfg(feature = "libav")]
@@ -296,13 +312,27 @@ impl LibavFrameDecoder {
         }
     }
 
+    /// Bind the decoder to its worker's stop signal. Replacement first reaps
+    /// the old jobs; decoder Drop never changes the worker's external signal.
+    pub fn with_stop_signal(mut self, stop: Arc<AtomicBool>) -> Self {
+        self.stop.cancel();
+        self.join_lookaheads();
+        #[cfg(feature = "libav")]
+        self.sessions.clear();
+        self.entries.clear();
+        self.working_set_lru.clear();
+        self.stop = StopState::new(Some(stop));
+        self
+    }
+
     #[cfg(test)]
     pub(crate) fn software_for_tests() -> Self {
         let decoder = Self::new();
         #[cfg(feature = "libav")]
-        let decoder = Self {
-            hardware_enabled: false,
-            ..decoder
+        let decoder = {
+            let mut decoder = decoder;
+            decoder.hardware_enabled = false;
+            decoder
         };
         decoder
     }
@@ -569,6 +599,9 @@ impl LibavFrameDecoder {
     /// opening) the session that must decode.
     #[cfg(feature = "libav")]
     fn prepare_decode(&mut self, input: &VideoRenderInput) -> LibavPrepared {
+        if let Err(error) = self.stop.check() {
+            return LibavPrepared::Done(Err(error));
+        }
         let key = input.key;
         let request = &input.request;
         let Some(path) = request
@@ -682,16 +715,19 @@ impl LibavFrameDecoder {
             }
             self.release_input_key(key, request.layer_id);
             self.touch_input(key, request.layer_id);
-            let session = match open_libav_session(
+            let session = match open_libav_session_with_stop(
                 key,
                 request,
                 path.clone(),
                 signature.clone(),
                 self.hardware_enabled,
+                &self.stop,
             ) {
                 Ok(session) => session,
                 Err(error) => {
-                    self.session_counters.errors = self.session_counters.errors.saturating_add(1);
+                    if error != VideoDecodeError::Cancelled {
+                        self.session_counters.errors = self.session_counters.errors.saturating_add(1);
+                    }
                     self.release_input_key(key, request.layer_id);
                     self.record_hardware_error(&error);
                     return LibavPrepared::Done(Err(error));
@@ -798,6 +834,9 @@ impl LibavFrameDecoder {
     /// pool, so a request that lands on it next is answered at once.
     #[cfg(feature = "libav")]
     fn start_lookahead(&mut self, input: &VideoRenderInput, served: &Arc<VideoFrame>) {
+        if self.stop.is_cancelled() {
+            return;
+        }
         let Some(pool) = libav_decode_pool() else {
             return;
         };
@@ -839,13 +878,16 @@ impl LibavFrameDecoder {
                     &mut hardware_frames,
                 )
             }));
-            // A panic drops the session here; the join sees the closed channel.
             if let Ok(result) = result {
                 let _ = sender.send(LibavLookaheadDone {
                     session,
                     result,
                     hardware_frames,
                 });
+            } else {
+                // Disconnect is the join acknowledgement. Finish native
+                // session cleanup before the captured sender can be dropped.
+                drop(session);
             }
         });
         self.lookaheads.push(LibavLookahead {
@@ -886,8 +928,24 @@ impl LibavFrameDecoder {
         inputs: &[VideoRenderInput],
         look_ahead: bool,
     ) -> Vec<Result<Option<Arc<VideoFrame>>, VideoDecodeError>> {
+        if self.stop.check().is_err() {
+            // Still reap queued owners; returning does not detach pool jobs.
+            self.stop.cancel();
+            self.join_lookaheads();
+            return inputs
+                .iter()
+                .map(|_| Err(VideoDecodeError::Cancelled))
+                .collect();
+        }
         self.join_lookaheads_for(inputs);
         let results = self.decode_tick_together_or_one_by_one(inputs);
+        if self.stop.is_cancelled() {
+            self.stop.cancel();
+            return inputs
+                .iter()
+                .map(|_| Err(VideoDecodeError::Cancelled))
+                .collect();
+        }
         #[cfg(feature = "libav")]
         if look_ahead {
             for (index, (input, result)) in inputs.iter().zip(&results).enumerate() {
@@ -932,24 +990,38 @@ impl LibavFrameDecoder {
             rewound,
             ..
         } = job;
+        let primary_decode = if self.stop.is_cancelled() {
+            Err(VideoDecodeError::Cancelled)
+        } else {
+            primary_decode
+        };
         let frame = match primary_decode {
+            Err(VideoDecodeError::Cancelled) => {
+                self.evict_input_state(key, request.layer_id);
+                self.working_set_lru
+                    .retain(|owner| !owner.matches(key, request.layer_id));
+                return Err(VideoDecodeError::Cancelled);
+            }
             Ok(frame) => frame,
             Err(ref error)
                 if !matches!(error, VideoDecodeError::HardwareDecode { .. })
                     && seek_before_decode
                     && (request.position_ms > 0 || rewound) =>
             {
-                let mut fallback_session = match open_libav_session(
+                let mut fallback_session = match open_libav_session_with_stop(
                     key,
                     request,
                     path.clone(),
                     signature.clone(),
                     self.hardware_enabled,
+                    &self.stop,
                 ) {
                     Ok(session) => session,
                     Err(error) => {
-                        self.session_counters.errors =
-                            self.session_counters.errors.saturating_add(1);
+                        if error != VideoDecodeError::Cancelled {
+                            self.session_counters.errors =
+                                self.session_counters.errors.saturating_add(1);
+                        }
                         self.release_input_key(key, request.layer_id);
                         self.record_hardware_error(&error);
                         return Err(error);
@@ -971,8 +1043,10 @@ impl LibavFrameDecoder {
                         frame
                     }
                     Err(error) => {
-                        self.session_counters.errors =
-                            self.session_counters.errors.saturating_add(1);
+                        if error != VideoDecodeError::Cancelled {
+                            self.session_counters.errors =
+                                self.session_counters.errors.saturating_add(1);
+                        }
                         self.release_input_key(key, request.layer_id);
                         self.record_hardware_error(&error);
                         return Err(error);
@@ -998,6 +1072,15 @@ impl LibavFrameDecoder {
             frame: Arc::clone(&frame),
         });
         Ok(Some(frame))
+    }
+}
+
+impl Drop for LibavFrameDecoder {
+    fn drop(&mut self) {
+        // Queued jobs own native sessions. Signal first, then recover every
+        // owner before the renderer/thread may be considered retired.
+        self.stop.cancel();
+        self.join_lookaheads();
     }
 }
 
@@ -1196,6 +1279,7 @@ fn session_decision(
 }
 
 #[cfg(feature = "libav")]
+#[cfg(test)]
 fn open_libav_session(
     key: protocol::VideoRenderInputKey,
     request: &VideoFrameRequest,
@@ -1203,9 +1287,36 @@ fn open_libav_session(
     signature: StillImageSignature,
     hardware_enabled: bool,
 ) -> Result<LibavDecodeSession, VideoDecodeError> {
+    open_libav_session_with_stop(
+        key,
+        request,
+        path,
+        signature,
+        hardware_enabled,
+        &StopState::new(None),
+    )
+}
+
+#[cfg(feature = "libav")]
+fn open_libav_session_with_stop(
+    key: protocol::VideoRenderInputKey,
+    request: &VideoFrameRequest,
+    path: PathBuf,
+    signature: StillImageSignature,
+    hardware_enabled: bool,
+    stop: &StopState,
+) -> Result<LibavDecodeSession, VideoDecodeError> {
+    stop.check()?;
     use ffmpeg::media::Type;
     ffmpeg::init().map_err(|error| decode_error(request, error))?;
-    let input = ffmpeg::format::input(&path).map_err(|error| decode_error(request, error))?;
+    let input = InterruptInput::open(&path, stop).map_err(|error| {
+        if stop.is_cancelled() {
+            VideoDecodeError::Cancelled
+        } else {
+            decode_error(request, error)
+        }
+    })?;
+    stop.check()?;
     let stream = input
         .streams()
         .best(Type::Video)
@@ -1219,11 +1330,13 @@ fn open_libav_session(
     let mut context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
         .map_err(|error| decode_error(request, error))?;
     let hardware = hardware::configure(&mut context, request, hardware_enabled)?;
+    stop.check()?;
     let mut decoder = context
         .decoder()
         .video()
         .map_err(|error| hardware::classify(request, hardware, decode_error(request, error)))?;
     decoder.flush();
+    stop.check()?;
     Ok(LibavDecodeSession {
         key,
         layer_id: request.layer_id,
@@ -1232,6 +1345,7 @@ fn open_libav_session(
         height: request.height,
         signature,
         input,
+        stop: stop.clone(),
         decoder,
         hardware,
         stream_index,
@@ -1367,6 +1481,7 @@ fn decode_libav_session_frame(
     terminal_frame: Option<&VideoFrame>,
     hardware_frames: &mut u64,
 ) -> Result<VideoFrame, VideoDecodeError> {
+    session.stop.check()?;
     let hardware = session.hardware;
     // A rewound session must really be rewound: if the container cannot seek
     // (raw elementary streams, image sequences, unseekable inputs) it would keep
@@ -1384,7 +1499,9 @@ fn decode_libav_session_frame(
         let forced_failure = FORCE_REWIND_SEEK_FAILURE.with(Cell::get);
         #[cfg(not(test))]
         let forced_failure = false;
-        if forced_failure || session.input.seek(target_us, ..).is_err() {
+        let failed = forced_failure || session.input.seek(target_us, ..).is_err();
+        session.stop.check()?;
+        if failed {
             return Err(decode_message(
                 request,
                 "rewinding the open session failed; re-opening the media",
@@ -1400,7 +1517,17 @@ fn decode_libav_session_frame(
         terminal_frame,
         hardware_frames,
     )
-    .map_err(|error| hardware::classify(request, hardware, error))
+    .and_then(|frame| {
+        session.stop.check()?;
+        Ok(frame)
+    })
+    .map_err(|error| {
+        if session.stop.is_cancelled() {
+            VideoDecodeError::Cancelled
+        } else {
+            hardware::classify(request, hardware, error)
+        }
+    })
 }
 
 #[cfg(feature = "libav")]
@@ -1411,6 +1538,7 @@ fn decode_libav_session_frame_inner(
     terminal_frame: Option<&VideoFrame>,
     hardware_frames: &mut u64,
 ) -> Result<VideoFrame, VideoDecodeError> {
+    session.stop.check()?;
     let target_offset_us = request
         .position_ms
         .saturating_mul(1_000)
@@ -1419,6 +1547,7 @@ fn decode_libav_session_frame_inner(
     if seek_before_decode && request.position_ms > 0 && session.input.seek(target_us, ..).is_ok() {
         session.decoder.flush();
     }
+    session.stop.check()?;
     let mut candidate = None;
 
     let received = receive_target_frame(
@@ -1429,6 +1558,7 @@ fn decode_libav_session_frame_inner(
         session.time_base,
         session.timestamp_origin,
         &mut candidate,
+        &session.stop,
     )?;
     session.decoder_drained = received.decoder_drained;
     if let Some(frame) = received.frame {
@@ -1436,19 +1566,34 @@ fn decode_libav_session_frame_inner(
         return Ok(frame);
     }
     if session.decoder_drained {
-        let frame = finish_decoded_candidate(
+        let frame = finish_decoded_candidate_with_stop(
             request,
             candidate,
             terminal_frame,
             session.hardware,
             hardware_frames,
+            &session.stop,
         )?;
         session.last_request_ms = Some(request.position_ms);
         return Ok(frame);
     }
 
-    for (packet_stream, packet) in session.input.packets() {
-        if packet_stream.index() != session.stream_index {
+    loop {
+        session.stop.check()?;
+        // ffmpeg-next's packets() silently retries every non-EOF read error,
+        // including AVERROR_EXIT from an interrupt. Read explicitly so a stop
+        // cannot spin forever inside its iterator.
+        let mut packet = ffmpeg::Packet::empty();
+        let read = packet.read(&mut session.input);
+        #[cfg(test)]
+        cancellation_tests::cancel_after_packet_read(&session.stop);
+        session.stop.check()?;
+        match read {
+            Ok(()) => {}
+            Err(ffmpeg::Error::Eof) => break,
+            Err(error) => return Err(decode_error(request, error)),
+        }
+        if packet.stream() != session.stream_index {
             continue;
         }
         session
@@ -1463,6 +1608,7 @@ fn decode_libav_session_frame_inner(
             session.time_base,
             session.timestamp_origin,
             &mut candidate,
+            &session.stop,
         )?;
         session.decoder_drained = received.decoder_drained;
         if let Some(frame) = received.frame {
@@ -1485,18 +1631,20 @@ fn decode_libav_session_frame_inner(
         session.time_base,
         session.timestamp_origin,
         &mut candidate,
+        &session.stop,
     )?;
     session.decoder_drained = received.decoder_drained;
     if let Some(frame) = received.frame {
         session.last_request_ms = Some(request.position_ms);
         return Ok(frame);
     }
-    let frame = finish_decoded_candidate(
+    let frame = finish_decoded_candidate_with_stop(
         request,
         candidate,
         terminal_frame,
         session.hardware,
         hardware_frames,
+        &session.stop,
     )?;
     session.last_request_ms = Some(request.position_ms);
     Ok(frame)
@@ -1515,8 +1663,11 @@ fn project_decoded_frame(
     pts_ms: u64,
     hardware: bool,
     hardware_frames: &mut u64,
+    stop: &StopState,
 ) -> Result<VideoFrame, VideoDecodeError> {
+    stop.check()?;
     let transferred = hardware::transfer(request, hardware, decoded)?;
+    stop.check()?;
     if hardware {
         *hardware_frames = hardware_frames.saturating_add(1);
     }
@@ -1527,10 +1678,11 @@ fn project_decoded_frame(
     scaler
         .run(source, &mut rgba)
         .map_err(|error| decode_error(request, error))?;
-    copy_rgba_frame(request, &rgba, pts_ms)
+    stop.check()?;
+    copy_rgba_frame_with_stop(request, &rgba, pts_ms, stop)
 }
 
-#[cfg(feature = "libav")]
+#[cfg(all(feature = "libav", test))]
 fn finish_decoded_candidate(
     request: &VideoFrameRequest,
     candidate: Option<DecodedCandidate>,
@@ -1538,6 +1690,19 @@ fn finish_decoded_candidate(
     hardware: bool,
     hardware_frames: &mut u64,
 ) -> Result<VideoFrame, VideoDecodeError> {
+    finish_decoded_candidate_with_stop(request, candidate, terminal_frame, hardware, hardware_frames, &StopState::new(None))
+}
+
+#[cfg(feature = "libav")]
+fn finish_decoded_candidate_with_stop(
+    request: &VideoFrameRequest,
+    candidate: Option<DecodedCandidate>,
+    terminal_frame: Option<&VideoFrame>,
+    hardware: bool,
+    hardware_frames: &mut u64,
+    stop: &StopState,
+) -> Result<VideoFrame, VideoDecodeError> {
+    stop.check()?;
     match candidate {
         Some(candidate) => project_decoded_frame(
             request,
@@ -1545,6 +1710,7 @@ fn finish_decoded_candidate(
             candidate.pts_ms,
             hardware,
             hardware_frames,
+            stop,
         ),
         None => terminal_frame
             .cloned()
@@ -1561,13 +1727,17 @@ fn receive_target_frame(
     time_base: ffmpeg_next::Rational,
     timestamp_origin: i64,
     candidate: &mut Option<DecodedCandidate>,
+    stop: &StopState,
 ) -> Result<LibavReceiveResult, VideoDecodeError> {
     use ffmpeg_next::error::EAGAIN;
     use ffmpeg_next::util::frame::video::Video;
 
     let mut decoded = Video::empty();
     loop {
-        match decoder.receive_frame(&mut decoded) {
+        stop.check()?;
+        let received = decoder.receive_frame(&mut decoded);
+        stop.check()?;
+        match received {
             Ok(()) => {
                 let pts_ms = match decoded.timestamp().and_then(|timestamp| {
                     normalized_timestamp_ms(timestamp, timestamp_origin, time_base)
@@ -1591,6 +1761,7 @@ fn receive_target_frame(
                         pts_ms,
                         hardware,
                         hardware_frames,
+                        stop,
                     )?;
                     return Ok(LibavReceiveResult {
                         frame: Some(frame),
@@ -1623,11 +1794,23 @@ fn receive_target_frame(
 }
 
 #[cfg(feature = "libav")]
+#[cfg(test)]
 fn copy_rgba_frame(
     request: &VideoFrameRequest,
     frame: &ffmpeg_next::util::frame::video::Video,
     pts_ms: u64,
 ) -> Result<VideoFrame, VideoDecodeError> {
+    copy_rgba_frame_with_stop(request, frame, pts_ms, &StopState::new(None))
+}
+
+#[cfg(feature = "libav")]
+fn copy_rgba_frame_with_stop(
+    request: &VideoFrameRequest,
+    frame: &ffmpeg_next::util::frame::video::Video,
+    pts_ms: u64,
+    stop: &StopState,
+) -> Result<VideoFrame, VideoDecodeError> {
+    stop.check()?;
     let row_bytes = (request.width as usize)
         .checked_mul(4)
         .ok_or_else(|| decode_message(request, "RGBA row size overflow"))?;
@@ -1638,6 +1821,7 @@ fn copy_rgba_frame(
     let stride = frame.stride(0);
     let mut data = vec![0; data_len];
     for row in 0..request.height as usize {
+        stop.check()?;
         let source_start = row
             .checked_mul(stride)
             .ok_or_else(|| decode_message(request, "RGBA source offset overflow"))?;

@@ -3,6 +3,10 @@
 #[path = "spout_output_timing.rs"]
 mod spout_output_timing;
 
+#[path = "external_output_retirement.rs"]
+pub(crate) mod external_output_retirement;
+use external_output_retirement::{wait_for_output_worker, OUTPUT_WORKER_STOP_TIMEOUT};
+
 #[cfg(test)]
 #[path = "spout_receiver_cadence_tests.rs"]
 mod receiver_cadence_tests;
@@ -75,6 +79,8 @@ pub struct SpoutTransportState {
     input_workers: HashMap<u64, SpoutRouteWorker>,
     output_workers: HashMap<u64, SpoutRouteWorker>,
     pending_output_startups: HashMap<u64, SpoutPendingOutputStartup>,
+    // A timed-out owner stays in output_workers until its exact join.
+    pending_output_retirement_leases: HashMap<u64, OutputOwnershipTeardownLease>,
     failed_output_routes: HashMap<u64, String>,
     #[cfg(feature = "ndi")]
     ndi_inputs: crate::ndi_transport::NdiInputRegistry,
@@ -82,6 +88,20 @@ pub struct SpoutTransportState {
 }
 
 impl SpoutTransportState {
+    /// Observe only output owners, including quarantined startup workers.
+    /// Cancellation does not remove their registry entries or counted leases.
+    pub(crate) fn output_stop_signals(&self) -> Vec<Arc<AtomicBool>> {
+        self.output_workers
+            .values()
+            .map(|worker| Arc::clone(&worker.stop))
+            .chain(
+                self.pending_output_startups
+                    .values()
+                    .map(|pending| Arc::clone(&pending.stop)),
+            )
+            .collect()
+    }
+
     pub fn new(
         inputs: SpoutInputRegistry,
         #[cfg(feature = "ndi")] ndi_inputs: crate::ndi_transport::NdiInputRegistry,
@@ -92,6 +112,7 @@ impl SpoutTransportState {
             input_workers: HashMap::new(),
             output_workers: HashMap::new(),
             pending_output_startups: HashMap::new(),
+            pending_output_retirement_leases: HashMap::new(),
             failed_output_routes: HashMap::new(),
             #[cfg(feature = "ndi")]
             ndi_inputs,
@@ -145,20 +166,13 @@ impl SpoutTransportState {
             .output_workers
             .iter()
             .filter_map(|(route_id, worker)| {
-                (worker.failure_snapshot().is_some()
-                    || worker
-                        .worker
-                        .as_ref()
-                        .is_some_and(|worker| worker.is_finished()))
-                .then_some(*route_id)
+                worker.has_finished().then_some(*route_id)
             })
             .collect::<Vec<_>>();
         for route_id in failed_ids {
-            let Some(worker) = self.output_workers.remove(&route_id) else {
-                continue;
-            };
-            let failure = worker.failure_snapshot();
-            let stop_result = worker.stop();
+            let failure = self.output_workers.get(&route_id)
+                .and_then(SpoutRouteWorker::failure_snapshot);
+            let stop_result = self.retire_output_worker(route_id, engine, Duration::ZERO);
             let failure = failure.or_else(|| stop_result.as_ref().err().cloned());
             if let Some(failure) = failure {
                 if engine.output_ownership_status().state != protocol::OutputOwnershipState::Failed
@@ -172,6 +186,33 @@ impl SpoutTransportState {
             }
         }
         Ok(())
+    }
+
+    fn retire_output_worker(
+        &mut self,
+        route_id: u64,
+        engine: &EngineHandle,
+        timeout: Duration,
+    ) -> Result<(), SpoutOutputWorkerStopError> {
+        let Some(worker) = self.output_workers.get_mut(&route_id) else {
+            return Ok(());
+        };
+        worker.request_retirement();
+        if !wait_for_output_worker(timeout, || worker.has_finished()) {
+            let message = format!(
+                "Spout output route {route_id} stop timed out; worker and SDK retirement remain pending"
+            );
+            self.pending_output_retirement_leases.entry(route_id)
+                .or_insert_with(|| engine.begin_output_ownership_failure_fence(message.clone()));
+            self.failed_output_routes.insert(route_id, message.clone());
+            return Err(SpoutOutputWorkerStopError { message });
+        }
+        let worker = self.output_workers.remove(&route_id)
+            .expect("finished Spout owner remains registered until join");
+        let result = worker.stop();
+        // Both synchronous SDK destruction and the exact worker join completed.
+        self.pending_output_retirement_leases.remove(&route_id);
+        result
     }
 
     /// Narrow adapter used by the strict show pair. Generic routes remain in
@@ -340,11 +381,7 @@ impl SpoutTransportState {
                         return Err(driver_error(error.message));
                     }
                 };
-                if let Some(previous) = self.output_workers.insert(route.route_id, worker) {
-                    previous
-                        .stop()
-                        .map_err(|error| driver_error(error.message))?;
-                }
+                self.output_workers.insert(route.route_id, worker);
                 let publish_result = authority.map_or(Ok(()), |validate| validate()).and_then(|()| {
                     self.output_workers
                         .get_mut(&route.route_id)
@@ -352,11 +389,9 @@ impl SpoutTransportState {
                         .publish()
                 });
                 if let Err(error) = publish_result {
-                    let worker = self
-                        .output_workers
-                        .remove(&route.route_id)
-                        .expect("just-inserted Spout output worker");
-                    if let Err(stop_error) = worker.stop() {
+                    if let Err(stop_error) = self.retire_output_worker(
+                        route.route_id, engine, OUTPUT_WORKER_STOP_TIMEOUT,
+                    ) {
                         self.failed_output_routes
                             .insert(route.route_id, stop_error.message.clone());
                         return Err(driver_error(format!(
@@ -431,12 +466,10 @@ impl SpoutTransportState {
                         "Spout output teardown requires the serialized ownership transition",
                     ));
                 }
-                if authority.is_some() {
-                    if let Some(pending) = self.pending_output_startups.get(&route.route_id) {
-                        return Err(video::ExternalVideoTransportDriverError {
-                            message: format!("Spout startup cleanup is still pending: {}", pending.message),
-                        });
-                    }
+                if let Some(pending) = self.pending_output_startups.get(&route.route_id) {
+                    return Err(video::ExternalVideoTransportDriverError {
+                        message: format!("Spout startup cleanup is still pending: {}", pending.message),
+                    });
                 }
                 if let Some(validate) = authority {
                     validate().map_err(driver_error)?;
@@ -444,8 +477,10 @@ impl SpoutTransportState {
                         worker.admit_authoring_retirement(engine).map_err(driver_error)?;
                     }
                 }
-                if let Some(worker) = self.output_workers.remove(&route.route_id) {
-                    match worker.stop() {
+                if self.output_workers.contains_key(&route.route_id) {
+                    match self.retire_output_worker(
+                        route.route_id, engine, OUTPUT_WORKER_STOP_TIMEOUT,
+                    ) {
                         Ok(()) => {
                             self.failed_output_routes.remove(&route.route_id);
                         }
@@ -498,6 +533,7 @@ impl std::fmt::Debug for SpoutOutputWorkerStartError {
 }
 
 struct SpoutPendingOutputStartup {
+    stop: Arc<AtomicBool>,
     sender_name: String,
     worker: Option<std::thread::JoinHandle<Result<(), SpoutOutputWorkerStopError>>>,
     failure_lease: Option<OutputOwnershipTeardownLease>,
@@ -862,7 +898,7 @@ impl SpoutRouteWorker {
                                 &mut startup_follow_state,
                                 key,
                                 TimelineFollowSettlementAckResult::NotApplicable,
-                                || worker_stop.load(Ordering::Acquire),
+                                &worker_stop,
                             );
                         }
                     }
@@ -899,7 +935,7 @@ impl SpoutRouteWorker {
                                     TimelineFollowSettlementAckResult::Fault {
                                         fault: fault.clone(),
                                     },
-                                    || worker_stop.load(Ordering::Acquire),
+                                    &worker_stop,
                                 );
                             }
                             Err(key_error) => {
@@ -1048,6 +1084,7 @@ impl SpoutRouteWorker {
                 }
             }
             let decoder = crate::ndi_transport::NdiAwareVideoFrameDecoder::from_env()
+                .with_stop_signal(Arc::clone(&worker_stop))
                 .with_spout_inputs(spout_inputs)
                 .with_capture_inputs(capture_inputs);
             #[cfg(feature = "ndi")]
@@ -1187,6 +1224,9 @@ impl SpoutRouteWorker {
                             spout_render_error_decision(error, follow.as_ref(), output_id)
                         }
                     };
+                    if render_worker_stop.load(Ordering::Acquire) {
+                        return rendered;
+                    }
                     if let Err(error) = &rendered {
                         if let Some(follow) = follow.as_ref() {
                             let fault =
@@ -1205,7 +1245,7 @@ impl SpoutRouteWorker {
                                             follow_output_state,
                                             failed_key,
                                             TimelineFollowSettlementAckResult::Fault { fault },
-                                            || render_worker_stop.load(Ordering::Acquire),
+                                            &render_worker_stop,
                                         );
                                         failure_fence
                                     }
@@ -1288,6 +1328,7 @@ impl SpoutRouteWorker {
                 Err(SpoutOutputWorkerStartError {
                     message: error,
                     pending_startup: Some(SpoutPendingOutputStartup {
+                        stop: Arc::clone(&stop),
                         sender_name: pending_sender_name.clone(),
                         worker: Some(worker),
                         failure_lease: Some(failure_lease),
@@ -1308,6 +1349,7 @@ impl SpoutRouteWorker {
                 Err(SpoutOutputWorkerStartError {
                     message,
                     pending_startup: Some(SpoutPendingOutputStartup {
+                        stop: Arc::clone(&stop),
                         sender_name: pending_sender_name,
                         worker: Some(worker),
                         failure_lease: Some(failure_lease),
@@ -1387,12 +1429,44 @@ impl SpoutRouteWorker {
         self.stop.store(true, Ordering::Release);
     }
 
+    /// Retain an undelivered creation lease in this owner until the exact join.
+    pub(crate) fn request_retirement(&mut self) {
+        self.creation_lease = self.signal_retirement();
+        self.request_stop();
+    }
+
+    pub(crate) fn has_finished(&self) -> bool {
+        self.worker.as_ref().is_none_or(std::thread::JoinHandle::is_finished)
+    }
+
     pub(crate) fn stop_signal(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.stop)
     }
 
     pub(crate) fn stop_requested(&self) -> bool {
         self.stop.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retained_worker_for_retirement_tests(
+        endpoint_name: String,
+        stop: Arc<AtomicBool>,
+        worker: std::thread::JoinHandle<Result<(), SpoutOutputWorkerStopError>>,
+        failure: Option<String>,
+        teardown_lease: Arc<Mutex<Option<OutputOwnershipTeardownLease>>>,
+        creation_lease: Option<OutputOwnershipCreationLease>,
+    ) -> Self {
+        Self {
+            endpoint_name: Some(endpoint_name),
+            stop,
+            worker: Some(worker),
+            failure: Arc::new(Mutex::new(
+                failure.map(|message| SpoutOutputWorkerStopError { message }),
+            )),
+            teardown_lease,
+            start_signal: None,
+            creation_lease,
+        }
     }
 
     #[cfg(test)]
@@ -1634,6 +1708,7 @@ where
                         &engine,
                         &mut sender,
                         show_control,
+                        &worker_stop,
                     );
                     if keepalive_result.is_ok() {
                         output_health.delivered();
@@ -1692,6 +1767,16 @@ where
                     Ok(mut slot) => slot.take(),
                     Err(poisoned) => poisoned.into_inner().take(),
                 });
+        if handed_off_failure_lease.is_some() {
+            failure_lease = handed_off_failure_lease;
+        }
+        if worker_stop.load(Ordering::Acquire) {
+            // A real earlier failure still owns its fence through SDK teardown.
+            if failure_lease.is_some() {
+                worker_error = rendered.as_ref().err().cloned();
+            }
+            break;
+        }
         let result = match rendered {
             Ok((TimelineFollowOutputRenderDecision::NotApplicable { key, reason }, _)) => {
                 // This transport cannot prove an atomic engine video quorum,
@@ -1713,7 +1798,7 @@ where
                         TimelineFollowSettlementAckResult::Fault {
                             fault: fault.clone(),
                         },
-                        || worker_stop.load(Ordering::Acquire),
+                        &worker_stop,
                     );
                     Err(fault)
                 } else {
@@ -1740,7 +1825,7 @@ where
                             TimelineFollowSettlementAckResult::Fault {
                                 fault: fault.clone(),
                             },
-                            || worker_stop.load(Ordering::Acquire),
+                            &worker_stop,
                         );
                         outcome = Err(fault);
                     }
@@ -1780,10 +1865,15 @@ where
                             // acknowledge it. The bounded wait above turns a
                             // stuck gate into a visible fault instead of an
                             // indefinite silent hold.
+                            #[cfg(test)]
+                            external_output_retirement::stop_after_denied_admission_for_test(Some(&worker_stop));
                             std::thread::sleep(Duration::from_millis(5));
                         }
                     }
                 };
+                if worker_stop.load(Ordering::Acquire) {
+                    break;
+                }
                 match permit_outcome {
                     Ok(_permit) => {
                         if let Some(timing) = timing.as_mut() {
@@ -1796,6 +1886,10 @@ where
                             &authority,
                             follow_identity,
                             || {
+                                if worker_stop.load(Ordering::Acquire) {
+                                    return Err(PhysicalOutputSendError::Revoked(
+                                        "Spout output worker is stopping".to_string()));
+                                }
                                 if let Some(show_control) = show_control.as_ref() {
                                     if show_control.presentation_is_keepalive_black()? {
                                         send_authorized_show_spout_black(
@@ -1805,6 +1899,7 @@ where
                                             sender_name,
                                             show_control,
                                             "Spout physical keepalive send",
+                                        &worker_stop,
                                         )?;
                                         output_health.delivered();
                                         return Ok(());
@@ -1817,6 +1912,10 @@ where
                                     show_control.revalidate("Spout physical live send")?;
                                 }
                                 revalidate_final_sdk_authority(&engine, &authority)?;
+                                if worker_stop.load(Ordering::Acquire) {
+                                    return Err(PhysicalOutputSendError::Revoked(
+                                        "Spout output worker is stopping".to_string()));
+                                }
                                 sender.send_image(&frame.data, frame.width, frame.height)?;
                                 output_health.delivered_with_render_time(render_time);
                                 if show_control.is_some() {
@@ -1831,6 +1930,9 @@ where
                         );
                         if let (Some(timing), Some(start)) = (timing.as_mut(), send_started) {
                             timing.sent(start.elapsed(), send_result.is_ok(), false);
+                        }
+                        if worker_stop.load(Ordering::Acquire) {
+                            break;
                         }
                         match send_result {
                             Ok(()) => {
@@ -1856,7 +1958,7 @@ where
                                             &mut follow_output_state,
                                             key,
                                             settlement,
-                                            || worker_stop.load(Ordering::Acquire),
+                                            &worker_stop,
                                         );
                                     } else {
                                         let _ = publish_timeline_follow_output_result(
@@ -1864,6 +1966,7 @@ where
                                             &mut follow_output_state,
                                             key,
                                             settlement,
+                                            &worker_stop,
                                         );
                                     }
                                 }
@@ -1898,7 +2001,7 @@ where
                                         TimelineFollowSettlementAckResult::Fault {
                                             fault: fault.clone(),
                                         },
-                                        || worker_stop.load(Ordering::Acquire),
+                                        &worker_stop,
                                     );
                                     outcome = Err(fault);
                                 }
@@ -1935,7 +2038,7 @@ where
                                         &mut follow_output_state,
                                         failed_follow_key.unwrap_or(key),
                                         settlement,
-                                        || worker_stop.load(Ordering::Acquire),
+                                        &worker_stop,
                                     );
                                 }
                                 Err(error)
@@ -1963,7 +2066,7 @@ where
                                 TimelineFollowSettlementAckResult::Fault {
                                     fault: fault.clone(),
                                 },
-                                || worker_stop.load(Ordering::Acquire),
+                                &worker_stop,
                             );
                             Err(fault)
                         } else {
@@ -1978,16 +2081,16 @@ where
             Err(error) => Err(error),
         };
         if let Err(error) = result {
-            if !worker_stop.load(Ordering::Acquire) {
+            if failure_lease.is_some() || !worker_stop.load(Ordering::Acquire) {
                 if failure_lease.is_none() {
                     // Render failures happen before a frame permit can be
                     // acquired. The inner render path may already have
                     // fenced and handed off its lease; otherwise fence here.
-                    failure_lease = Some(handed_off_failure_lease.unwrap_or_else(|| {
+                    failure_lease = Some(
                         engine.begin_output_ownership_failure_fence(format!(
                             "Spout output route {output_id} render failed: {error}"
                         ))
-                    }));
+                    );
                 }
                 worker_error = Some(error.clone());
             }
@@ -2052,11 +2155,16 @@ fn send_authorized_show_spout_black<S: SpoutOutputSender>(
     expected_name: &str,
     show_control: &ShowSpoutWorkerControl,
     phase: &str,
+    worker_stop: &AtomicBool,
 ) -> Result<(), PhysicalOutputSendError> {
     ensure_strict_show_spout_sender_name(sender, expected_name, phase)?;
     show_control.revalidate(phase)?;
     let black = show_control.black_frame(expected_name)?;
     revalidate_final_sdk_authority(engine, authority)?;
+    if worker_stop.load(Ordering::Acquire) {
+        return Err(PhysicalOutputSendError::Revoked(
+            "Spout output worker is stopping".to_string()));
+    }
     sender.send_image(black.as_rgba(), black.width(), black.height())?;
     ensure_strict_show_spout_sender_name(sender, expected_name, &format!("{phase} completion"))?;
     Ok(())
@@ -2068,6 +2176,7 @@ fn send_show_spout_keepalive_frame<S: SpoutOutputSender>(
     engine: &EngineHandle,
     sender: &mut S,
     show_control: &ShowSpoutWorkerControl,
+    worker_stop: &AtomicBool,
 ) -> Result<(), OutputPresentationRevalidationError> {
     let presentation_sample = engine.video_presentation_sample();
     let authority = capture_output_presentation_authority(
@@ -2093,6 +2202,7 @@ fn send_show_spout_keepalive_frame<S: SpoutOutputSender>(
             sender_name,
             show_control,
             "Spout physical keepalive send",
+            worker_stop,
         ))
     })
     .and_then(|result| result)
@@ -2150,6 +2260,7 @@ fn spout_render_error_decision(
 
 #[cfg(test)]
 mod tests {
+    include!("spout_retirement_stop_tests.rs");
     include!("show_spout_project_retirement_tests.rs");
     include!("spout_safety_cycle_tests.rs");
     include!("spout_blackout_recovery_tests.rs");
@@ -2265,7 +2376,7 @@ mod tests {
         // while old is current.
         state.queue_ack(old, TimelineFollowSettlementAckResult::Applied, now);
         assert!(state
-            .try_publish_ack(now, |_| Err("injected old reply loss".to_string()))
+            .try_publish_ack(now, || false, |_| Err("injected old reply loss".to_string()))
             .is_err());
 
         // The old presenter then disappears; the next Fresh+sent frame owns
@@ -2273,7 +2384,7 @@ mod tests {
         state.queue_ack(new, TimelineFollowSettlementAckResult::Applied, now);
         let mut published = Vec::new();
         assert!(state
-            .try_publish_ack(now, |ack| {
+            .try_publish_ack(now, || false, |ack| {
                 published.push(ack.clone());
                 Ok(())
             })
@@ -2313,7 +2424,7 @@ mod tests {
         state.update_last_valid(old, old_frame);
         state.queue_ack(old, TimelineFollowSettlementAckResult::Applied, now);
         assert!(state
-            .try_publish_ack(now, |_| Err("injected old reply loss".to_string()))
+            .try_publish_ack(now, || false, |_| Err("injected old reply loss".to_string()))
             .is_err());
 
         state.observe_key(resized);
@@ -2336,7 +2447,7 @@ mod tests {
         );
         let mut published = Vec::new();
         assert!(state
-            .try_publish_ack(now + TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY, |ack| {
+            .try_publish_ack(now + TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY, || false, |ack| {
                 published.push(ack.clone());
                 Ok(())
             })
@@ -2417,7 +2528,7 @@ mod tests {
         assert!(engine.acquire_video_output().is_err());
         let now = Instant::now();
         assert!(state
-            .try_publish_ack(now, |_| Err("injected ACK timeout".to_string()))
+            .try_publish_ack(now, || false, |_| Err("injected ACK timeout".to_string()))
             .is_err());
         assert_eq!(
             engine.output_ownership_status().state,
@@ -2425,7 +2536,7 @@ mod tests {
         );
         assert!(engine.acquire_video_output().is_err());
         assert!(state
-            .try_publish_ack(now + TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY, |_| Ok(()))
+            .try_publish_ack(now + TIMELINE_FOLLOW_SETTLEMENT_ACK_RETRY, || false, |_| Ok(()))
             .unwrap());
         assert_ne!(failed_key.epoch, key.epoch);
         assert!(state.published_for(failed_key));
@@ -3831,7 +3942,7 @@ mod tests {
                             TimelineFollowSettlementAckResult::Fault {
                                 fault: fault.clone(),
                             },
-                            || false,
+                            &Arc::new(AtomicBool::new(false)),
                         );
                         match render_failure_lease.lock() {
                             Ok(mut slot) => *slot = Some(failure_lease),
@@ -4173,6 +4284,38 @@ mod tests {
     }
 
     #[test]
+    fn output_stop_signals_cancel_only_outputs_and_preserve_owners() {
+        let input_stop = Arc::new(AtomicBool::new(false));
+        let output_stop = Arc::new(AtomicBool::new(false));
+        let worker = |stop| SpoutRouteWorker {
+            endpoint_name: None,
+            stop,
+            worker: None,
+            failure: Arc::new(Mutex::new(None)),
+            teardown_lease: Arc::new(Mutex::new(None)),
+            start_signal: None,
+            creation_lease: None,
+        };
+        let mut transport = SpoutTransportState::new(
+            Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(feature = "ndi")]
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+        );
+        transport.input_workers.insert(1, worker(Arc::clone(&input_stop)));
+        transport.output_workers.insert(2, worker(Arc::clone(&output_stop)));
+        let signals = transport.output_stop_signals();
+        assert_eq!(signals.len(), 1);
+        assert!(Arc::ptr_eq(&signals[0], &output_stop));
+        assert!(!output_stop.load(Ordering::Acquire));
+        signals[0].store(true, Ordering::Release);
+        assert!(output_stop.load(Ordering::Acquire));
+        assert!(!input_stop.load(Ordering::Acquire));
+        assert_eq!(transport.input_workers.len(), 1);
+        assert_eq!(transport.output_workers.len(), 1);
+    }
+
+    #[test]
     fn spout_authoring_retirement_keeps_live_global_authority_and_holds_token_until_join() {
         let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
             enabled: false,
@@ -4394,6 +4537,7 @@ mod tests {
         transport.pending_output_startups.insert(
             71,
             SpoutPendingOutputStartup {
+                stop: Arc::new(AtomicBool::new(true)),
                 sender_name: "Syndocal Background".to_string(),
                 worker: None,
                 failure_lease: Some(failure_lease),
@@ -4467,6 +4611,7 @@ mod tests {
         );
         let teardown_lease = Arc::new(Mutex::new(None));
         let pending = SpoutPendingOutputStartup {
+            stop: Arc::new(AtomicBool::new(true)),
             sender_name: "Delayed Spout".to_string(),
             worker: Some(worker),
             failure_lease: Some(failure_lease),
@@ -4480,6 +4625,10 @@ mod tests {
             Arc::new(Mutex::new(HashMap::new())),
         );
         transport.pending_output_startups.insert(77, pending);
+        let signals = transport.output_stop_signals();
+        assert_eq!(signals.len(), 1);
+        assert!(Arc::ptr_eq(&signals[0], &transport.pending_output_startups[&77].stop));
+        assert_eq!(transport.pending_output_startups.len(), 1, "observing cancellation must retain quarantine ownership");
         let route = video::ExternalVideoTransportRoute {
             direction: video::ExternalVideoTransportDirection::Output,
             route_id: 77,
@@ -4542,6 +4691,7 @@ mod tests {
             "Spout publication handshake disconnected during startup",
         );
         let mut pending = SpoutPendingOutputStartup {
+            stop: Arc::new(AtomicBool::new(true)),
             sender_name: "Disconnected Spout".to_string(),
             worker: Some(worker),
             failure_lease: Some(failure_lease),

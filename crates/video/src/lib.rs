@@ -488,6 +488,7 @@ fn gpu_composition_frame(frame: &VideoFrame) -> bool {
 
 /// What the native Display seam's GPU attempt left for the CPU path.
 enum GpuCompositionAttempt {
+    Cancelled,
     /// Not attempted: the CPU path renders from the start.
     NotEligible,
     /// The frames are prepared, with these faults, but the GPU cannot
@@ -5214,6 +5215,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     },
                 })
             }
+            Err(error) if error.is_cancelled() => Err(VideoPreviewError::Cancelled),
             Err(error) => Ok(self.failed_output_artistic_render_result(
                 &key,
                 plan,
@@ -5424,6 +5426,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             None => GpuCompositionAttempt::NotEligible,
         };
         let prepared = match attempt {
+            GpuCompositionAttempt::Cancelled => return Err(VideoPreviewError::Cancelled),
             GpuCompositionAttempt::Composition(composition) => {
                 return Ok(VideoOutputDisplayRender::GpuComposition(composition));
             }
@@ -5473,7 +5476,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .map(|layer| layer.layer_id)
             .collect::<Vec<_>>();
         // A preparation error is left for the CPU path to meet and record.
-        let Ok(faults) = self.prepare_frames_with_effects_with_cancellation(
+        let prepared = self.prepare_frames_with_effects_with_cancellation(
             snapshot,
             context.clip_runtime,
             context.project_render_epoch,
@@ -5484,8 +5487,11 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             Some(plan.output_id),
             Some(transition_runtime),
             None,
-        ) else {
-            return GpuCompositionAttempt::NotEligible;
+        );
+        let faults = match prepared {
+            Ok(faults) => faults,
+            Err(error) if error.is_cancelled() => return GpuCompositionAttempt::Cancelled,
+            Err(_) => return GpuCompositionAttempt::NotEligible,
         };
         if !faults.is_empty() {
             return GpuCompositionAttempt::Prepared(faults);

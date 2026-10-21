@@ -20,7 +20,10 @@ use crate::{
         ShowSpoutEnsureDecision, ShowSpoutOutputs, ShowSpoutPresentationEvent,
         ShowSpoutPresentationState,
     },
-    spout_transport::{SpoutRouteWorker, SpoutTransportState},
+    spout_transport::{
+        external_output_retirement::{wait_for_output_worker, OUTPUT_WORKER_STOP_TIMEOUT},
+        SpoutRouteWorker, SpoutTransportState,
+    },
 };
 use engine::{EngineHandle, OutputOwnershipActivation};
 
@@ -86,9 +89,10 @@ struct ShowSpoutReaping {
     expected: ShowSpoutOutputs,
     kind: ShowSpoutReapingKind,
     reason: String,
+    stop_signals: [Arc<AtomicBool>; 2],
 }
 
-/// Detached only while both physical SDK senders are being joined. Removing
+/// Temporarily detached for bounded physical retirement. Removing
 /// the pair from `ShowSpoutTransportState::active` before this object is
 /// returned makes a concurrent observer fail closed rather than receiving an
 /// active receipt during teardown. Its `retire` method must run without the
@@ -99,14 +103,21 @@ pub(crate) struct ShowSpoutRetiringOutputPair {
     reaping: ShowSpoutReaping,
     control: Arc<ShowSpoutWorkerControl>,
     worker_failure: Option<String>,
+    /// A timeout also fences global output reauthorization until both exact
+    /// worker joins complete, even if neither worker has reached SDK teardown.
+    retirement_lease: Option<engine::OutputOwnershipTeardownLease>,
 }
 
-pub(crate) struct ShowSpoutPhysicalRetirement {
+/// A completed physical receipt or the intact owner of a timed-out attempt.
+/// The caller must return either outcome to the state before reporting it.
+#[must_use = "Return the retirement attempt to the show state so pending workers remain owned"]
+pub(crate) struct ShowSpoutRetirementAttempt {
     expected: ShowSpoutOutputs,
     reaping: ShowSpoutReaping,
     worker_failure: Option<String>,
     cleanup: Result<(), String>,
     automatic_engine_retirement: Option<Result<(), String>>,
+    pending: Option<ShowSpoutRetiringOutputPair>,
 }
 
 impl ShowSpoutRetiringOutputPair {
@@ -120,25 +131,63 @@ impl ShowSpoutRetiringOutputPair {
             control: Arc::clone(&pair.control),
             pair: Some(pair),
             worker_failure,
+            retirement_lease: None,
         }
     }
 
-    /// This owns the physical stop/join and deliberately runs outside the
-    /// `ShowSpoutTransportState` mutex. The worker's second physical-drop
-    /// callback retires the exact engine pair only after both SDK resources
-    /// have been destroyed.
-    pub(crate) fn retire(mut self) -> ShowSpoutPhysicalRetirement {
+    fn has_finished(&self) -> bool {
+        self.pair.as_ref().is_some_and(ShowSpoutOutputPair::has_finished)
+    }
+
+    fn pending_message(&self, phase: &str) -> String {
+        format!(
+            "strict show Spout {} {phase}; both worker owners, their leases and the exact pair remain pending until SDK teardown and the post-drop engine acknowledgement finish ({})",
+            self.reaping.kind.label(),
+            self.reaping.reason,
+        )
+    }
+
+    /// Signal both workers before one shared deadline, outside the state
+    /// mutex. `is_finished` includes the second worker's post-SDK-drop engine
+    /// acknowledgement. Neither consuming join is allowed before both finish.
+    pub(crate) fn retire(self) -> ShowSpoutRetirementAttempt {
+        self.retire_with_timeout(OUTPUT_WORKER_STOP_TIMEOUT)
+    }
+
+    fn retire_with_timeout(mut self, timeout: Duration) -> ShowSpoutRetirementAttempt {
+        let pair = self
+            .pair
+            .as_mut()
+            .expect("strict show Spout detached pair was already consumed");
+        pair.request_retirement();
+        if !wait_for_output_worker(timeout, || pair.has_finished()) {
+            let message = self.pending_message("stop timed out");
+            if self.retirement_lease.is_none() {
+                self.retirement_lease = Some(
+                    self.control.engine.begin_output_ownership_failure_fence(message.clone()),
+                );
+            }
+            return ShowSpoutRetirementAttempt {
+                expected: self.reaping.expected.clone(),
+                reaping: self.reaping.clone(),
+                worker_failure: self.worker_failure.clone(),
+                cleanup: Err(message),
+                automatic_engine_retirement: None,
+                pending: Some(self),
+            };
+        }
         let cleanup = self
             .pair
             .take()
             .expect("strict show Spout detached pair was already consumed")
             .retire();
-        ShowSpoutPhysicalRetirement {
+        ShowSpoutRetirementAttempt {
             expected: self.reaping.expected.clone(),
             reaping: self.reaping,
             worker_failure: self.worker_failure,
             cleanup,
             automatic_engine_retirement: self.control.automatic_engine_retirement(),
+            pending: None,
         }
     }
 }
@@ -560,6 +609,10 @@ pub(crate) struct ShowSpoutTransportState {
     /// pair reports its physical and exact engine cleanup result. No observer
     /// may infer that `active: None` makes the fixed sender names reusable.
     reaping: Option<ShowSpoutReaping>,
+    /// Normally exactly one owner. Retain even an invalid duplicate receipt
+    /// rather than dropping an unfinished worker while the state mutex is held.
+    /// Any identity conflict stays quarantined and cannot admit a new sender.
+    pending_retirements: Vec<ShowSpoutRetiringOutputPair>,
     /// Exact old-engine cleanup is in flight outside this mutex. Like
     /// `reaping`, this remains visible to every observer until its matching
     /// engine ACK receipt is finalized under the mutex.
@@ -600,6 +653,7 @@ impl Default for ShowSpoutTransportState {
         Self {
             active: None,
             reaping: None,
+            pending_retirements: Vec::new(),
             blocked_retirement_retry: None,
             next_blocked_retirement_retry_id: 1,
             blocked_engine_retirement: None,
@@ -611,9 +665,21 @@ impl ShowSpoutTransportState {
     /// Signal only while the engine gate atomically reserves all-deny.
     /// Collection itself never stops a worker under Ready authority.
     pub(crate) fn authority_change_stop_signals(&self) -> Vec<Arc<AtomicBool>> {
-        self.active.as_ref().map_or_else(Vec::new, |pair| {
-            vec![pair.background.stop_signal(), pair.foreground.stop_signal()]
-        })
+        let mut signals = self.active
+            .iter()
+            .chain(self.pending_retirements.iter().filter_map(|pending| pending.pair.as_ref()))
+            .flat_map(|pair| [pair.background.stop_signal(), pair.foreground.stop_signal()])
+            .collect::<Vec<_>>();
+        // The physical owner can be outside this mutex while its one deadline
+        // runs. Retain its exact signals in the receipt throughout that gap.
+        if let Some(reaping) = self.reaping.as_ref() {
+            for stop in &reaping.stop_signals {
+                if !signals.iter().any(|known| Arc::ptr_eq(known, stop)) {
+                    signals.push(Arc::clone(stop));
+                }
+            }
+        }
+        signals
     }
 
     fn reject_reaping(&self, phase: &str) -> Result<(), String> {
@@ -622,6 +688,11 @@ impl ShowSpoutTransportState {
                 "strict show Spout {phase} is blocked while the exact sender pair is reaping after {} ({})",
                 reaping.kind.label(),
                 reaping.reason,
+            ));
+        }
+        if !self.pending_retirements.is_empty() {
+            return Err(format!(
+                "strict show Spout {phase} is blocked by retained worker retirement without a matching reaping receipt"
             ));
         }
         if let Some(retry) = self.blocked_retirement_retry.as_ref() {
@@ -647,6 +718,8 @@ impl ShowSpoutTransportState {
         if current.expected != reaping.expected
             || current.kind != reaping.kind
             || current.reason != reaping.reason
+            || current.stop_signals.iter().zip(&reaping.stop_signals)
+                .any(|(current, received)| !Arc::ptr_eq(current, received))
         {
             return Err(format!(
                 "strict show Spout {phase} found a different state-owned reaping receipt"
@@ -657,7 +730,7 @@ impl ShowSpoutTransportState {
 
     fn require_matching_physical_retirement(
         &self,
-        retired: &ShowSpoutPhysicalRetirement,
+        retired: &ShowSpoutRetirementAttempt,
         phase: &str,
     ) -> Result<(), String> {
         if retired.expected != retired.reaping.expected {
@@ -670,8 +743,78 @@ impl ShowSpoutTransportState {
 
     fn finish_reaping(&mut self, reaping: &ShowSpoutReaping, phase: &str) -> Result<(), String> {
         self.require_matching_reaping(reaping, phase)?;
+        if !self.pending_retirements.is_empty() {
+            return Err(format!(
+                "strict show Spout {phase} cannot release fixed names while worker retirement remains pending"
+            ));
+        }
         self.reaping = None;
         Ok(())
+    }
+
+    /// Poll only while holding the state mutex. The returned owner must be
+    /// joined and finalized outside/inside the mutex respectively, exactly as
+    /// on its original authority-change or failed-worker retirement path.
+    fn take_finished_pending_retirement(
+        &mut self,
+    ) -> Result<Option<ShowSpoutRetiringOutputPair>, ShowSpoutTransportFailure> {
+        let Some(pending) = self.pending_retirements.first() else {
+            return Ok(None);
+        };
+        if let Err(message) = self.require_matching_reaping(&pending.reaping, "pending-worker harvest") {
+            return Err(ShowSpoutTransportFailure {
+                message,
+                automatic_engine_retirement: None,
+            });
+        }
+        if self.pending_retirements.len() != 1 {
+            return Err(ShowSpoutTransportFailure {
+                message: "strict show Spout pending-worker harvest found conflicting retained owners; exact reaping remains quarantined".to_string(),
+                automatic_engine_retirement: None,
+            });
+        }
+        if !pending.has_finished() {
+            return Err(ShowSpoutTransportFailure {
+                message: pending.pending_message("retirement is still in progress"),
+                automatic_engine_retirement: None,
+            });
+        }
+        Ok(self.pending_retirements.pop())
+    }
+
+    fn retain_pending_retirement(
+        &mut self,
+        retired: &mut ShowSpoutRetirementAttempt,
+    ) -> Option<ShowSpoutTransportFailure> {
+        let pending = retired.pending.take()?;
+        let identity_error = self
+            .require_matching_physical_retirement(retired, "pending-worker retention")
+            .and_then(|()| self.require_matching_reaping(&pending.reaping, "pending-worker retention"))
+            .err();
+        let mut message = pending.pending_message("stop timed out");
+        if let Some(error) = identity_error {
+            message.push_str(&format!("; {error}"));
+        }
+        // Keep the complete owner even on a mismatched receipt. In particular,
+        // never run SpoutRouteWorker::Drop (and its join) under this mutex.
+        self.pending_retirements.push(pending);
+        Some(ShowSpoutTransportFailure {
+            message,
+            automatic_engine_retirement: None,
+        })
+    }
+
+    /// A later harvest may finish an authority-change owner and vice versa.
+    /// Preserve the original reaping kind rather than relabeling a planned
+    /// stop as a new worker failure when another caller performs the harvest.
+    pub(crate) fn finish_retiring_pair(
+        &mut self,
+        retired: ShowSpoutRetirementAttempt,
+    ) -> Result<(), ShowSpoutTransportFailure> {
+        match retired.reaping.kind {
+            ShowSpoutReapingKind::AuthorityChange => self.finish_active_for_authority_change(retired),
+            ShowSpoutReapingKind::FailedWorker => Err(self.finish_failed_active_pair(retired)),
+        }
     }
 
     /// The common R4 admission gate. It is intentionally separate from SDK
@@ -976,6 +1119,9 @@ impl ShowSpoutTransportState {
     pub(crate) fn take_active_for_authority_change(
         &mut self,
     ) -> Result<Option<ShowSpoutRetiringOutputPair>, ShowSpoutTransportFailure> {
+        if !self.pending_retirements.is_empty() {
+            return self.take_finished_pending_retirement();
+        }
         if let Err(message) = self.reject_reaping("authority transition") {
             return Err(ShowSpoutTransportFailure {
                 message,
@@ -1000,6 +1146,7 @@ impl ShowSpoutTransportState {
             expected: pair.expected.clone(),
             kind: ShowSpoutReapingKind::AuthorityChange,
             reason: "authority transition requested physical sender retirement".to_string(),
+            stop_signals: [pair.background.stop_signal(), pair.foreground.stop_signal()],
         };
         self.reaping = Some(reaping.clone());
         Ok(Some(ShowSpoutRetiringOutputPair::from_pair(
@@ -1007,12 +1154,15 @@ impl ShowSpoutTransportState {
         )))
     }
 
-    /// Completes an authority-transition retirement after its physical pair
-    /// has been stopped and joined outside the state mutex.
+    /// Records an authority-transition attempt after its bounded wait outside
+    /// the mutex, retaining the complete owner if either worker is unfinished.
     pub(crate) fn finish_active_for_authority_change(
         &mut self,
-        retired: ShowSpoutPhysicalRetirement,
+        mut retired: ShowSpoutRetirementAttempt,
     ) -> Result<(), ShowSpoutTransportFailure> {
+        if let Some(failure) = self.retain_pending_retirement(&mut retired) {
+            return Err(failure);
+        }
         let reaping = retired.reaping.clone();
         if let Err(error) =
             self.require_matching_physical_retirement(&retired, "authority-transition finish")
@@ -1094,6 +1244,9 @@ impl ShowSpoutTransportState {
     pub(crate) fn take_failed_active_pair(
         &mut self,
     ) -> Result<Option<ShowSpoutRetiringOutputPair>, ShowSpoutTransportFailure> {
+        if !self.pending_retirements.is_empty() {
+            return self.take_finished_pending_retirement();
+        }
         if let Err(message) = self.reject_reaping("failed-worker harvest") {
             return Err(ShowSpoutTransportFailure {
                 message,
@@ -1119,6 +1272,7 @@ impl ShowSpoutTransportState {
             .active
             .take()
             .expect("active show Spout pair was checked");
+        pair.request_stop();
         pair.control.mark_authority_lost();
         let worker_failure = pair.failure_message().unwrap_or_else(|| {
             "strict show Spout worker stopped before a failure reason was recorded".to_string()
@@ -1127,6 +1281,7 @@ impl ShowSpoutTransportState {
             expected: pair.expected.clone(),
             kind: ShowSpoutReapingKind::FailedWorker,
             reason: worker_failure.clone(),
+            stop_signals: [pair.background.stop_signal(), pair.foreground.stop_signal()],
         };
         self.reaping = Some(reaping.clone());
         Ok(Some(ShowSpoutRetiringOutputPair::from_pair(
@@ -1136,13 +1291,16 @@ impl ShowSpoutTransportState {
         )))
     }
 
-    /// Records a failed-pair cleanup after physical sender retirement. This
-    /// stays intentionally fail-closed: if the automatic exact engine retire
-    /// did not report success, the next R4 is blocked by this original pair.
+    /// Retains an unfinished failed pair, or records its completed cleanup.
+    /// If automatic exact engine retirement did not report success after both
+    /// joins, the next R4 remains blocked by this original engine pair.
     pub(crate) fn finish_failed_active_pair(
         &mut self,
-        retired: ShowSpoutPhysicalRetirement,
+        mut retired: ShowSpoutRetirementAttempt,
     ) -> ShowSpoutTransportFailure {
+        if let Some(failure) = self.retain_pending_retirement(&mut retired) {
+            return failure;
+        }
         let reaping = retired.reaping.clone();
         if let Err(error) =
             self.require_matching_physical_retirement(&retired, "failed-worker finish")
@@ -1241,6 +1399,15 @@ impl ShowSpoutOutputPair {
         self.foreground.request_stop();
     }
 
+    fn request_retirement(&mut self) {
+        self.background.request_retirement();
+        self.foreground.request_retirement();
+    }
+
+    fn has_finished(&self) -> bool {
+        self.background.has_finished() && self.foreground.has_finished()
+    }
+
     fn matches(&self, expected: &ShowSpoutOutputs) -> bool {
         self.expected == *expected
     }
@@ -1322,6 +1489,7 @@ pub(crate) fn send_show_spout_keepalive_black<S: SpoutOutputSender>(
 #[cfg(test)]
 mod tests {
     include!("show_spout_planned_harvest_tests.rs");
+    include!("show_spout_retirement_stop_tests.rs");
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1906,10 +2074,12 @@ mod tests {
             kind: ShowSpoutReapingKind::AuthorityChange,
             reason: "test detached pair is still joining and awaiting exact engine retirement"
                 .to_string(),
+            stop_signals: [Arc::new(AtomicBool::new(true)), Arc::new(AtomicBool::new(true))],
         };
         let state = Arc::new(Mutex::new(ShowSpoutTransportState {
             active: None,
             reaping: Some(reaping.clone()),
+            pending_retirements: Vec::new(),
             blocked_retirement_retry: None,
             next_blocked_retirement_retry_id: 1,
             blocked_engine_retirement: None,
@@ -1972,12 +2142,13 @@ mod tests {
         let substituted =
             crate::show_spout_outputs::build_show_spout_outputs(41, 42, 3, 2).unwrap();
         let mismatch = show
-            .finish_active_for_authority_change(ShowSpoutPhysicalRetirement {
+            .finish_active_for_authority_change(ShowSpoutRetirementAttempt {
                 expected: substituted,
                 reaping: reaping.clone(),
                 worker_failure: None,
                 cleanup: Ok(()),
                 automatic_engine_retirement: Some(Ok(())),
+                pending: None,
             })
             .expect_err("a finish receipt for a different exact engine pair must not reopen R4");
         assert!(mismatch.message.contains("exact engine pair"));
@@ -1987,12 +2158,13 @@ mod tests {
         // `retire`: it represents both physical sender joins and the exact
         // engine-retirement acknowledgement. Only this matching finish clears
         // the receipt; subsequent R4 preparation may then pass its state gate.
-        show.finish_active_for_authority_change(ShowSpoutPhysicalRetirement {
+        show.finish_active_for_authority_change(ShowSpoutRetirementAttempt {
             expected: expected.clone(),
             reaping: reaping.clone(),
             worker_failure: None,
             cleanup: Ok(()),
             automatic_engine_retirement: Some(Ok(())),
+            pending: None,
         })
         .unwrap();
         assert!(show.reaping.is_none());
@@ -2007,10 +2179,12 @@ mod tests {
             expected: expected.clone(),
             kind: ShowSpoutReapingKind::AuthorityChange,
             reason: "test joined sender teardown".to_string(),
+            stop_signals: [Arc::new(AtomicBool::new(true)), Arc::new(AtomicBool::new(true))],
         };
         let mut show = ShowSpoutTransportState {
             active: None,
             reaping: Some(reaping.clone()),
+            pending_retirements: Vec::new(),
             blocked_retirement_retry: None,
             next_blocked_retirement_retry_id: 1,
             blocked_engine_retirement: None,
@@ -2021,12 +2195,13 @@ mod tests {
         // visible to the authority command, but must not claim a live active
         // receipt after physical joins and exact engine retirement succeeded.
         let failure = show
-            .finish_active_for_authority_change(ShowSpoutPhysicalRetirement {
+            .finish_active_for_authority_change(ShowSpoutRetirementAttempt {
                 expected,
                 reaping,
                 worker_failure: None,
                 cleanup: Err("foreground sender reported a post-join fault".to_string()),
                 automatic_engine_retirement: Some(Ok(())),
+                pending: None,
             })
             .expect_err("post-join cleanup error must be returned to the caller");
         assert!(failure.message.contains("physical teardown failure"));

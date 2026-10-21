@@ -379,3 +379,401 @@ fn unnamed_intermediates_are_rejected_before_exceeding_gpu_memory_budget() {
         [64, 191, 0, 255],
     );
 }
+
+/// The prior stage-local execution is the reference for pixels, faults and
+/// frame clocks. Keep each stage's instance key even when an earlier one fails.
+fn render_stages_one_by_one(
+    runtime: &mut IsfGpuRuntime,
+    input: &VideoFrame,
+    stages: &[IsfStageInputs<'_>],
+    keys: &[IsfInstanceKey],
+    date: [f32; 4],
+) -> (VideoFrame, Vec<(usize, IsfRuntimeError)>) {
+    let frame_index = runtime.frame_index;
+    let mut current = input.clone();
+    let mut failures = Vec::new();
+    for (index, stage) in stages.iter().enumerate() {
+        let Some(key) = keys.get(index) else {
+            failures.push((index, runtime_error("ISF stage ownership key is missing")));
+            continue;
+        };
+        match runtime.apply_stack_at_frame_index(
+            &current,
+            std::slice::from_ref(stage),
+            1.0,
+            0.016,
+            frame_index,
+            date,
+            std::slice::from_ref(key),
+        ) {
+            Ok(rendered) => current = rendered,
+            Err(error) => failures.push((index, error)),
+        }
+    }
+    if !stages.is_empty() {
+        runtime.frame_index = runtime.frame_index.wrapping_add(1);
+    }
+    (current, failures)
+}
+
+#[test]
+fn isf_targetless_batches_preserve_pixels_clocks_and_stateful_failure_boundaries() {
+    let increment = prepare_isf_shader(
+        r#"/*{
+        "INPUTS":[{"NAME":"inputImage","TYPE":"image"}]
+    }*/ void main() {
+        vec4 pixel = IMG_THIS_PIXEL(inputImage);
+        gl_FragColor = vec4(pixel.r + 1.0 / 255.0, pixel.gb, pixel.a);
+    }"#,
+    )
+    .unwrap();
+    let persistent = prepare_isf_shader(PERSISTENT).unwrap();
+    let mut invalid = increment.clone();
+    invalid.wgsl = "not valid WGSL".into();
+    let stage = |shader| IsfStageInputs {
+        shader,
+        controls: &[],
+        images: &[],
+    };
+    let input = frame(3, 2);
+    let shaders = [
+        &increment,
+        &increment,
+        &persistent,
+        &invalid,
+        &increment,
+        &increment,
+    ];
+    let stages = shaders.map(stage);
+    let keys = (0..stages.len())
+        .map(|index| IsfInstanceKey::legacy(input.layer_id, index))
+        .collect::<Vec<_>>();
+    let date = [2026.0, 10.0, 21.0, 512.0];
+    let mut optimized = gpu();
+    let mut reference = gpu();
+    for expected_red in 3..=5 {
+        let expected = render_stages_one_by_one(&mut reference, &input, &stages, &keys, date);
+        let actual = optimized
+            .apply_stack_stage_local_with_inputs_and_keys(&input, &stages, 1.0, 0.016, date, &keys);
+        assert_pixels(&actual.0, [expected_red, 0, 0, 255]);
+        assert_eq!(actual.0, expected.0);
+        assert_eq!(
+            actual.1.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+            [3]
+        );
+        assert_eq!(actual.1, expected.1);
+        assert_eq!(optimized.frame_index, reference.frame_index);
+    }
+    // A missing instance key still skips only its own stage. A preceding
+    // targetless run uses the same FRAMEINDEX for every shader.
+    let clock = prepare_isf_shader(
+        r#"/*{
+        "INPUTS":[{"NAME":"inputImage","TYPE":"image"}]
+    }*/ void main() {
+        vec4 pixel = IMG_THIS_PIXEL(inputImage);
+        gl_FragColor = vec4(pixel.r, float(FRAMEINDEX) / 255.0, DATE.w / 1024.0, pixel.a);
+    }"#,
+    )
+    .unwrap();
+    let stages = [stage(&increment), stage(&clock), stage(&increment)];
+    let keys = &keys[..2];
+    let expected = render_stages_one_by_one(&mut reference, &input, &stages, keys, date);
+    let actual = optimized
+        .apply_stack_stage_local_with_inputs_and_keys(&input, &stages, 1.0, 0.016, date, keys);
+    assert_pixels(&actual.0, [1, 3, 128, 255]);
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn isf_targetless_batches_keep_named_images_audio_and_date_current() {
+    let source = r#"/*{
+        "INPUTS":[{"NAME":"inputImage","TYPE":"image"},{"NAME":"other","TYPE":"image"},
+          {"NAME":"wave","TYPE":"audio","MAX":2},{"NAME":"spectrum","TYPE":"audioFFT","MAX":2}]
+    }*/ void main() {
+        gl_FragColor = vec4(
+            (IMG_THIS_PIXEL(inputImage).r + IMG_THIS_PIXEL(other).r) * 0.5,
+            IMG_NORM_PIXEL(wave, vec2(0.0, 0.5)).r,
+            IMG_NORM_PIXEL(spectrum, vec2(0.0, 0.5)).r,
+            DATE.w / 1024.0);
+    }"#;
+    let mixed = prepare_isf_shader_with_image_bindings(
+        source,
+        None,
+        &[protocol::VideoIsfImageBinding {
+            name: "other".into(),
+            source: protocol::VideoIsfImageSource::Layer { layer_id: 2 },
+        }],
+    )
+    .unwrap();
+    let identity = prepare_isf_shader(
+        r#"/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"}]}*/
+        void main() { gl_FragColor = IMG_THIS_PIXEL(inputImage); }"#,
+    )
+    .unwrap();
+    let mut input = frame(1, 1);
+    input.data = vec![64, 0, 0, 255];
+    let mut other = frame(1, 1);
+    other.layer_id = 2;
+    other.data = vec![192, 0, 0, 255];
+    let audio = protocol::LiveAudioTextureFrame {
+        generation: 1,
+        feature_sequence: 1,
+        sample_rate: 48_000,
+        waveform: [-0.5; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+        fft: [0.75; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+    };
+    let keys = [
+        IsfInstanceKey::legacy(input.layer_id, 0),
+        IsfInstanceKey::legacy(input.layer_id, 1),
+    ];
+    let date = [2026.0, 10.0, 21.0, 512.0];
+    let mut optimized = gpu();
+    let mut reference = gpu();
+    for (audio, red, expected) in [
+        (Some(&audio), 192, [128, 64, 191, 128]),
+        (Some(&audio), 32, [48, 64, 191, 128]),
+        (None, 32, [48, 128, 0, 128]),
+    ] {
+        other.data[0] = red;
+        optimized.set_audio_frame(audio);
+        reference.set_audio_frame(audio);
+        let images = [IsfImageInput {
+            name: "other",
+            frame: &other,
+        }];
+        let stages = [
+            IsfStageInputs {
+                shader: &mixed,
+                controls: &[],
+                images: &images,
+            },
+            IsfStageInputs {
+                shader: &identity,
+                controls: &[],
+                images: &[],
+            },
+        ];
+        let reference_output =
+            render_stages_one_by_one(&mut reference, &input, &stages, &keys, date);
+        let actual = optimized
+            .apply_stack_stage_local_with_inputs_and_keys(&input, &stages, 1.0, 0.016, date, &keys);
+        assert!(actual.1.is_empty());
+        assert_pixels(&actual.0, expected);
+        assert_eq!(actual, reference_output);
+    }
+    let stages = [
+        IsfStageInputs {
+            shader: &mixed,
+            controls: &[],
+            images: &[],
+        },
+        IsfStageInputs {
+            shader: &identity,
+            controls: &[],
+            images: &[],
+        },
+    ];
+    let actual = optimized
+        .apply_stack_stage_local_with_inputs_and_keys(&input, &stages, 1.0, 0.016, date, &keys);
+    assert_eq!(actual.0, input);
+    assert_eq!(actual.1.len(), 1);
+    assert_eq!(actual.1[0].0, 0);
+    assert!(actual.1[0].1.message.contains("layer 2 is unavailable"));
+}
+
+#[test]
+#[ignore = "explicit matched GPU timing experiment; no wall-time assertion"]
+fn isf_targetless_batch_timing_experiment() {
+    let shader = prepare_isf_shader(crate::BUILTIN_ISF_PRESETS[0].source).unwrap();
+    let input = frame(1920, 1080);
+    let stages = [IsfStageInputs {
+        shader: &shader,
+        controls: &[],
+        images: &[],
+    }; 3];
+    let keys = (0..stages.len())
+        .map(|index| IsfInstanceKey::legacy(input.layer_id, index))
+        .collect::<Vec<_>>();
+    let date = [2026.0, 10.0, 21.0, 512.0];
+    let mut optimized = gpu();
+    let mut reference = gpu();
+    for count in [1, 3] {
+        let mut reference_us = Vec::new();
+        let mut optimized_us = Vec::new();
+        for iteration in 0..28 {
+            let mut outputs = Vec::new();
+            // Alternate ordering to reduce fixed first/second-run bias.
+            for is_optimized in if iteration % 2 == 0 {
+                [false, true]
+            } else {
+                [true, false]
+            } {
+                let started = std::time::Instant::now();
+                let output = if is_optimized {
+                    optimized.apply_stack_stage_local_with_inputs_and_keys(
+                        &input,
+                        &stages[..count],
+                        1.0,
+                        0.016,
+                        date,
+                        &keys[..count],
+                    )
+                } else {
+                    render_stages_one_by_one(
+                        &mut reference,
+                        &input,
+                        &stages[..count],
+                        &keys[..count],
+                        date,
+                    )
+                };
+                let elapsed = started.elapsed().as_micros();
+                assert!(output.1.is_empty());
+                outputs.push(output.0);
+                if iteration >= 4 {
+                    if is_optimized {
+                        optimized_us.push(elapsed);
+                    } else {
+                        reference_us.push(elapsed);
+                    }
+                }
+            }
+            assert_eq!(outputs[0], outputs[1]);
+        }
+        reference_us.sort_unstable();
+        optimized_us.sort_unstable();
+        eprintln!("ISF_BATCH_TIMING width=1920 height=1080 stages={count} samples={} before_p50_us={} before_p95_us={} after_p50_us={} after_p95_us={}",
+            reference_us.len(), reference_us[12], reference_us[22], optimized_us[12], optimized_us[22]);
+    }
+}
+
+#[test]
+fn isf_resource_backed_stages_remain_singletons_and_preserve_feedback() {
+    let identity = prepare_isf_shader(
+        r#"/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"}]}*/
+        void main() { gl_FragColor = IMG_THIS_PIXEL(inputImage); }"#,
+    )
+    .unwrap();
+    let image = prepare_isf_shader_with_image_bindings(
+        r#"/*{
+        "INPUTS":[{"NAME":"inputImage","TYPE":"image"},{"NAME":"other","TYPE":"image"}]
+    }*/ void main() {
+        vec4 pixel = IMG_THIS_PIXEL(inputImage);
+        gl_FragColor = vec4(pixel.r, IMG_THIS_PIXEL(other).g, pixel.ba);
+    }"#,
+        None,
+        &[protocol::VideoIsfImageBinding {
+            name: "other".into(),
+            source: protocol::VideoIsfImageSource::Layer { layer_id: 2 },
+        }],
+    )
+    .unwrap();
+    let audio = prepare_isf_shader(r#"/*{
+        "INPUTS":[{"NAME":"inputImage","TYPE":"image"},{"NAME":"spectrum","TYPE":"audioFFT","MAX":2}]
+    }*/ void main() {
+        vec4 pixel = IMG_THIS_PIXEL(inputImage);
+        gl_FragColor = vec4(pixel.rg, IMG_NORM_PIXEL(spectrum, vec2(0.0, 0.5)).r, pixel.a);
+    }"#).unwrap();
+    let persistent = prepare_isf_shader(
+        r#"/*{
+        "INPUTS":[{"NAME":"inputImage","TYPE":"image"}],
+        "PASSES":[{"TARGET":"history","PERSISTENT":true},{}]
+    }*/ void main() {
+        if (PASSINDEX == 0) {
+            vec4 pixel = IMG_THIS_PIXEL(inputImage);
+            gl_FragColor = vec4(IMG_THIS_PIXEL(history).r + 1.0 / 255.0, pixel.gba);
+        } else {
+            gl_FragColor = IMG_THIS_PIXEL(history);
+        }
+    }"#,
+    )
+    .unwrap();
+    let ordinary = IsfStageInputs {
+        shader: &identity,
+        controls: &[],
+        images: &[],
+    };
+    assert!(ordinary.can_share_host_buffers());
+    // Dimensions/FLOAT can allocate anonymous intermediates even without a
+    // named TARGET; every such declaration stays on the singleton path.
+    for declaration in [r#"{"WIDTH":2}"#, r#"{"HEIGHT":2}"#, r#"{"FLOAT":true}"#] {
+        let source = format!(
+            r#"/*{{"INPUTS":[{{"NAME":"inputImage","TYPE":"image"}}],"PASSES":[{declaration}]}}*/
+            void main() {{ gl_FragColor = IMG_THIS_PIXEL(inputImage); }}"#
+        );
+        let shader = prepare_isf_shader(&source).unwrap();
+        assert!(!IsfStageInputs {
+            shader: &shader,
+            controls: &[],
+            images: &[]
+        }
+        .can_share_host_buffers());
+    }
+    let directory = FixtureDirectory::new();
+    directory.image(&[255, 0, 0, 255, 0, 255, 0, 255]);
+    let imported = prepare_isf_shader_with_path(IMPORTED, Some(&directory.shader())).unwrap();
+    assert!(!IsfStageInputs {
+        shader: &imported,
+        controls: &[],
+        images: &[]
+    }
+    .can_share_host_buffers());
+    let input = frame(1, 1);
+    let mut other = frame(1, 1);
+    other.layer_id = 2;
+    other.data = vec![0, 64, 0, 255];
+    let images = [IsfImageInput {
+        name: "other",
+        frame: &other,
+    }];
+    let image_stage = IsfStageInputs {
+        shader: &image,
+        controls: &[],
+        images: &images,
+    };
+    let audio_stage = IsfStageInputs {
+        shader: &audio,
+        controls: &[],
+        images: &[],
+    };
+    let feedback = IsfStageInputs {
+        shader: &persistent,
+        controls: &[],
+        images: &[],
+    };
+    assert!(!image_stage.can_share_host_buffers());
+    assert!(!audio_stage.can_share_host_buffers());
+    assert!(!feedback.can_share_host_buffers());
+    let stages = [
+        image_stage,
+        image_stage,
+        feedback,
+        audio_stage,
+        audio_stage,
+        ordinary,
+        ordinary,
+    ];
+    let keys = (0..stages.len())
+        .map(|index| IsfInstanceKey::legacy(input.layer_id, index))
+        .collect::<Vec<_>>();
+    let date = [2026.0, 10.0, 21.0, 512.0];
+    let audio = protocol::LiveAudioTextureFrame {
+        generation: 1,
+        feature_sequence: 1,
+        sample_rate: 48_000,
+        waveform: [0.0; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+        fft: [0.75; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+    };
+    let mut optimized = gpu();
+    let mut reference = gpu();
+    optimized.set_audio_frame(Some(&audio));
+    reference.set_audio_frame(Some(&audio));
+    for expected_red in 1..=3 {
+        let expected = render_stages_one_by_one(&mut reference, &input, &stages, &keys, date);
+        let actual = optimized
+            .apply_stack_stage_local_with_inputs_and_keys(&input, &stages, 1.0, 0.016, date, &keys);
+        assert!(actual.1.is_empty());
+        assert_eq!(actual, expected);
+        assert_pixels(&actual.0, [expected_red, 64, 191, 255]);
+    }
+}

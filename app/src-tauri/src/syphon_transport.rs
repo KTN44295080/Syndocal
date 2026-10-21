@@ -21,9 +21,14 @@ use std::{
 mod physical_output_fence;
 use physical_output_fence::*;
 
+#[path = "external_output_retirement.rs"]
+mod external_output_retirement;
+use external_output_retirement::{wait_for_output_worker, OUTPUT_WORKER_STOP_TIMEOUT};
+
 pub struct SyphonTransportState {
     output_workers: HashMap<u64, SyphonRouteWorker>,
     pending_output_startups: HashMap<u64, SyphonPendingOutputStartup>,
+    pending_output_retirement_leases: HashMap<u64, OutputOwnershipTeardownLease>,
     failed_output_routes: HashMap<u64, String>,
     #[cfg(feature = "ndi")]
     ndi_inputs: crate::ndi_transport::NdiInputRegistry,
@@ -31,6 +36,20 @@ pub struct SyphonTransportState {
 }
 
 impl SyphonTransportState {
+    /// Observe cancellation handles while active and quarantined owners retain
+    /// every registry entry and lease until their existing reap boundary.
+    pub(crate) fn output_stop_signals(&self) -> Vec<Arc<AtomicBool>> {
+        self.output_workers
+            .values()
+            .map(|worker| Arc::clone(&worker.stop))
+            .chain(
+                self.pending_output_startups
+                    .values()
+                    .map(|pending| Arc::clone(&pending.stop)),
+            )
+            .collect()
+    }
+
     pub fn new(
         #[cfg(feature = "ndi")] ndi_inputs: crate::ndi_transport::NdiInputRegistry,
         capture_inputs: crate::capture_transport::CaptureInputRegistry,
@@ -38,6 +57,7 @@ impl SyphonTransportState {
         Self {
             output_workers: HashMap::new(),
             pending_output_startups: HashMap::new(),
+            pending_output_retirement_leases: HashMap::new(),
             failed_output_routes: HashMap::new(),
             #[cfg(feature = "ndi")]
             ndi_inputs,
@@ -69,20 +89,13 @@ impl SyphonTransportState {
             .output_workers
             .iter()
             .filter_map(|(route_id, worker)| {
-                (worker.failure_snapshot().is_some()
-                    || worker
-                        .worker
-                        .as_ref()
-                        .is_some_and(std::thread::JoinHandle::is_finished))
-                .then_some(*route_id)
+                worker.has_finished().then_some(*route_id)
             })
             .collect::<Vec<_>>();
         for route_id in failed_ids {
-            let Some(worker) = self.output_workers.remove(&route_id) else {
-                continue;
-            };
-            let failure = worker.failure_snapshot();
-            let stop_result = worker.stop();
+            let failure = self.output_workers.get(&route_id)
+                .and_then(SyphonRouteWorker::failure_snapshot);
+            let stop_result = self.retire_output_worker(route_id, engine, Duration::ZERO);
             if let Some(failure) = failure.or_else(|| stop_result.err()) {
                 if engine.output_ownership_status().state != protocol::OutputOwnershipState::Failed
                 {
@@ -95,6 +108,32 @@ impl SyphonTransportState {
             }
         }
         Ok(())
+    }
+
+    fn retire_output_worker(
+        &mut self,
+        route_id: u64,
+        engine: &EngineHandle,
+        timeout: Duration,
+    ) -> Result<(), SyphonOutputWorkerStopError> {
+        let Some(worker) = self.output_workers.get_mut(&route_id) else {
+            return Ok(());
+        };
+        worker.request_retirement();
+        if !wait_for_output_worker(timeout, || worker.has_finished()) {
+            let message = format!(
+                "Syphon output route {route_id} stop timed out; worker and native retirement remain pending"
+            );
+            self.pending_output_retirement_leases.entry(route_id)
+                .or_insert_with(|| engine.begin_output_ownership_failure_fence(message.clone()));
+            self.failed_output_routes.insert(route_id, message.clone());
+            return Err(SyphonOutputWorkerStopError { message });
+        }
+        let worker = self.output_workers.remove(&route_id)
+            .expect("finished Syphon owner remains registered until join");
+        let result = worker.stop();
+        self.pending_output_retirement_leases.remove(&route_id);
+        result
     }
 
     #[cfg(all(feature = "syphon", target_os = "macos"))]
@@ -227,11 +266,9 @@ impl SyphonTransportState {
                 .publish()
         });
         if let Err(error) = publish_result {
-            let worker = self
-                .output_workers
-                .remove(&route.route_id)
-                .expect("inserted Syphon worker");
-            if let Err(stop_error) = worker.stop() {
+            if let Err(stop_error) = self.retire_output_worker(
+                route.route_id, engine, OUTPUT_WORKER_STOP_TIMEOUT,
+            ) {
                 self.failed_output_routes
                     .insert(route.route_id, stop_error.message.clone());
                 return Err(driver_error(format!(
@@ -305,8 +342,10 @@ impl SyphonTransportState {
                 worker.admit_authoring_retirement(engine).map_err(driver_error)?;
             }
         }
-        if let Some(worker) = self.output_workers.remove(&route.route_id) {
-            match worker.stop() {
+        if self.output_workers.contains_key(&route.route_id) {
+            match self.retire_output_worker(
+                route.route_id, engine, OUTPUT_WORKER_STOP_TIMEOUT,
+            ) {
                 Ok(()) => {
                     self.failed_output_routes.remove(&route.route_id);
                 }
@@ -370,6 +409,7 @@ impl std::fmt::Debug for SyphonOutputWorkerStartError {
 }
 
 struct SyphonPendingOutputStartup {
+    stop: Arc<AtomicBool>,
     sender_name: String,
     worker: Option<std::thread::JoinHandle<Result<(), SyphonOutputWorkerStopError>>>,
     failure_lease: Option<OutputOwnershipTeardownLease>,
@@ -663,7 +703,7 @@ impl SyphonRouteWorker {
                                 &mut startup_follow_state,
                                 key,
                                 TimelineFollowSettlementAckResult::NotApplicable,
-                                || worker_stop.load(Ordering::Acquire),
+                                &worker_stop,
                             );
                         }
                     }
@@ -698,7 +738,7 @@ impl SyphonRouteWorker {
                                     TimelineFollowSettlementAckResult::Fault {
                                         fault: fault.clone(),
                                     },
-                                    || worker_stop.load(Ordering::Acquire),
+                                    &worker_stop,
                                 );
                             }
                             Err(key_error) => {
@@ -795,6 +835,7 @@ impl SyphonRouteWorker {
                 return result;
             }
             let decoder = crate::ndi_transport::NdiAwareVideoFrameDecoder::from_env()
+                .with_stop_signal(Arc::clone(&worker_stop))
                 .with_capture_inputs(capture_inputs);
             #[cfg(feature = "ndi")]
             let decoder = decoder.with_ndi_inputs(ndi_inputs);
@@ -932,6 +973,9 @@ impl SyphonRouteWorker {
                             syphon_render_error_decision(error, follow.as_ref(), output_id)
                         }
                     };
+                    if render_worker_stop.load(Ordering::Acquire) {
+                        return rendered;
+                    }
                     if let Err(error) = &rendered {
                         if let Some(follow) = follow.as_ref() {
                             let fault =
@@ -950,7 +994,7 @@ impl SyphonRouteWorker {
                                             follow_output_state,
                                             failed_key,
                                             TimelineFollowSettlementAckResult::Fault { fault },
-                                            || render_worker_stop.load(Ordering::Acquire),
+                                            &render_worker_stop,
                                         );
                                         failure_fence
                                     }
@@ -998,6 +1042,7 @@ impl SyphonRouteWorker {
                     return Err(SyphonOutputWorkerStartError {
                         message: message.clone(),
                         pending_startup: Some(SyphonPendingOutputStartup {
+                            stop: Arc::clone(&stop),
                             sender_name: pending_sender_name,
                             worker: Some(worker),
                             failure_lease: take_startup_failure_lease(&startup_failure_lease),
@@ -1046,6 +1091,7 @@ impl SyphonRouteWorker {
                 Err(SyphonOutputWorkerStartError {
                     message: error,
                     pending_startup: Some(SyphonPendingOutputStartup {
+                        stop: Arc::clone(&stop),
                         sender_name: pending_sender_name.clone(),
                         worker: Some(worker),
                         failure_lease: Some(failure_lease),
@@ -1066,6 +1112,7 @@ impl SyphonRouteWorker {
                 Err(SyphonOutputWorkerStartError {
                     message,
                     pending_startup: Some(SyphonPendingOutputStartup {
+                        stop: Arc::clone(&stop),
                         sender_name: pending_sender_name,
                         worker: Some(worker),
                         failure_lease: Some(failure_lease),
@@ -1153,6 +1200,16 @@ impl SyphonRouteWorker {
                 Err(error)
             }
         }
+    }
+
+    fn request_retirement(&mut self) {
+        self.lifecycle.stopping();
+        self.creation_lease = self.signal_retirement();
+        self.stop.store(true, Ordering::Release);
+    }
+
+    fn has_finished(&self) -> bool {
+        self.worker.as_ref().is_none_or(std::thread::JoinHandle::is_finished)
     }
 
     fn signal_retirement(&mut self) -> Option<OutputOwnershipCreationLease> {
@@ -1311,6 +1368,15 @@ where
                     Ok(mut slot) => slot.take(),
                     Err(poisoned) => poisoned.into_inner().take(),
                 });
+        if handed_off_failure_lease.is_some() {
+            failure_lease = handed_off_failure_lease;
+        }
+        if worker_stop.load(Ordering::Acquire) {
+            if failure_lease.is_some() {
+                worker_error = rendered.as_ref().err().cloned();
+            }
+            break;
+        }
         let result = match rendered {
             Ok((TimelineFollowOutputRenderDecision::NotApplicable { key, reason }, _)) => {
                 // This transport cannot prove an atomic engine video quorum,
@@ -1333,7 +1399,7 @@ where
                         TimelineFollowSettlementAckResult::Fault {
                             fault: fault.clone(),
                         },
-                        || worker_stop.load(Ordering::Acquire),
+                        &worker_stop,
                     );
                     Err(fault)
                 } else {
@@ -1361,7 +1427,7 @@ where
                             TimelineFollowSettlementAckResult::Fault {
                                 fault: fault.clone(),
                             },
-                            || worker_stop.load(Ordering::Acquire),
+                            &worker_stop,
                         );
                         outcome = Err(fault);
                     }
@@ -1401,10 +1467,15 @@ where
                             // acknowledge it. The bounded wait above turns a
                             // stuck gate into a visible fault instead of an
                             // indefinite silent hold.
+                            #[cfg(test)]
+                            external_output_retirement::stop_after_denied_admission_for_test(Some(&worker_stop));
                             std::thread::sleep(Duration::from_millis(5));
                         }
                     }
                 };
+                if worker_stop.load(Ordering::Acquire) {
+                    break;
+                }
                 match permit_outcome {
                     Ok(_permit) => {
                         let send_result = send_frame_if_authorized(
@@ -1413,11 +1484,17 @@ where
                             &authority,
                             follow_identity,
                             || {
+                                if worker_stop.load(Ordering::Acquire) {
+                                    return Err("Syphon output worker is stopping".to_string());
+                                }
                                 sender.send_rgba(frame.width, frame.height, &frame.data)?;
                                 output_health.delivered();
                                 Ok(())
                             },
                         );
+                        if worker_stop.load(Ordering::Acquire) {
+                            break;
+                        }
                         match send_result {
                             Ok(()) => {
                                 if follow_identity.is_some() {
@@ -1442,7 +1519,7 @@ where
                                             &mut follow_output_state,
                                             key,
                                             settlement,
-                                            || worker_stop.load(Ordering::Acquire),
+                                            &worker_stop,
                                         );
                                     } else {
                                         let _ = publish_timeline_follow_output_result(
@@ -1450,6 +1527,7 @@ where
                                             &mut follow_output_state,
                                             key,
                                             settlement,
+                                            &worker_stop,
                                         );
                                     }
                                 }
@@ -1484,7 +1562,7 @@ where
                                         TimelineFollowSettlementAckResult::Fault {
                                             fault: fault.clone(),
                                         },
-                                        || worker_stop.load(Ordering::Acquire),
+                                        &worker_stop,
                                     );
                                     outcome = Err(fault);
                                 }
@@ -1521,7 +1599,7 @@ where
                                         &mut follow_output_state,
                                         failed_follow_key.unwrap_or(key),
                                         settlement,
-                                        || worker_stop.load(Ordering::Acquire),
+                                        &worker_stop,
                                     );
                                 }
                                 Err(error)
@@ -1549,7 +1627,7 @@ where
                                 TimelineFollowSettlementAckResult::Fault {
                                     fault: fault.clone(),
                                 },
-                                || worker_stop.load(Ordering::Acquire),
+                                &worker_stop,
                             );
                             Err(fault)
                         } else {
@@ -1564,16 +1642,16 @@ where
             Err(error) => Err(error),
         };
         if let Err(error) = result {
-            if !worker_stop.load(Ordering::Acquire) {
+            if failure_lease.is_some() || !worker_stop.load(Ordering::Acquire) {
                 if failure_lease.is_none() {
                     // Render failures happen before a frame permit can be
                     // acquired. The inner render path may already have
                     // fenced and handed off its lease; otherwise fence here.
-                    failure_lease = Some(handed_off_failure_lease.unwrap_or_else(|| {
+                    failure_lease = Some(
                         engine.begin_output_ownership_failure_fence(format!(
                             "Syphon output route {output_id} render failed: {error}"
                         ))
-                    }));
+                    );
                 }
                 worker_error = Some(error.clone());
             }
@@ -1627,6 +1705,7 @@ fn syphon_render_error_decision(
 
 #[cfg(test)]
 mod tests {
+    include!("syphon_retirement_stop_tests.rs");
     use super::*;
     use std::sync::atomic::AtomicUsize;
 
@@ -1832,6 +1911,11 @@ mod tests {
                 Some(&|| Ok(())),
             ).unwrap();
         }
+        let signals = transport.output_stop_signals();
+        assert_eq!(signals.len(), 2);
+        assert!(signals.iter().all(|signal| !signal.load(Ordering::Acquire)),
+            "observing cancellation must not stop either output");
+        assert_eq!(transport.output_workers.len(), 2);
         assert!(transport.stop_route(&test_route(930_021), &engine).is_err(),
             "the ordinary API still requires a global transition");
         assert!(transport.stop_route_for_authoring(&test_route(930_021), &engine,
@@ -1963,6 +2047,10 @@ mod tests {
             })
             .unwrap_err();
         assert!(error.message.contains("injected constructor failure"));
+        let signals = transport.output_stop_signals();
+        assert_eq!(signals.len(), 1);
+        assert!(Arc::ptr_eq(&signals[0], &transport.pending_output_startups[&930_003].stop));
+        assert_eq!(transport.pending_output_startups.len(), 1, "observing cancellation must retain quarantine ownership");
         assert_eq!(
             engine.output_ownership_status().state,
             protocol::OutputOwnershipState::Failed

@@ -1,4 +1,17 @@
-use super::{VideoPreviewError, VideoRuntimeError};
+use super::{VideoDecodeError, VideoFrameProviderError, VideoPreviewError, VideoRuntimeError};
+
+impl VideoPreviewError {
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Cancelled | Self::Runtime(VideoRuntimeError::Cancelled)
+            | Self::Decode { error: VideoDecodeError::Cancelled, .. } => true,
+            Self::RenderInput { error, .. } => matches!(error,
+                VideoFrameProviderError::Cancelled
+                | VideoFrameProviderError::Decode { error: VideoDecodeError::Cancelled, .. }),
+            _ => false,
+        }
+    }
+}
 
 /// Cooperative cancellation supplied by owners that must stop a render
 /// without detaching the renderer or abandoning decoder ownership.

@@ -10,7 +10,12 @@ pub(super) fn classify(
     hardware: bool,
     error: VideoDecodeError,
 ) -> VideoDecodeError {
-    if hardware && !matches!(error, VideoDecodeError::HardwareDecode { .. }) {
+    if hardware
+        && !matches!(
+            error,
+            VideoDecodeError::HardwareDecode { .. } | VideoDecodeError::Cancelled
+        )
+    {
         failure(request, format!("{error:?}"))
     } else {
         error

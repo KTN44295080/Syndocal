@@ -413,7 +413,7 @@ const ownershipTransition = sliceBetween(
 assertOrdered(
   ownershipTransition,
   "persist_output_ownership_role_to_path(&path, MachineOutputRole::Standby)",
-  "begin_output_ownership_transition(role)",
+  "reserve_output_ownership_retirement(role, &signals)",
   "the durable Standby marker must precede runtime transition publication",
 );
 assert.match(
@@ -638,7 +638,7 @@ const ndiWorkerClosure = sliceBetween(
 const ndiOutputProduction = sliceBetween(
   ndiTransport,
   "#[cfg(feature = \"ndi\")]\nimpl NdiOutputWorker {\n",
-  "#[cfg(test)]",
+  "#[cfg(feature = \"ndi\")]\nimpl Drop for NdiOutputWorker",
   "NDI output production lifecycle",
 );
 for (const marker of [

@@ -71,10 +71,35 @@ globalThis.window = {
 };
 
 const project = {
-  version: 1,
+  // Exercise the schema emitted by the native save path, independently of
+  // the browser checkpoint/envelope versions. A future native schema change
+  // must fail this round-trip until Recovery explicitly supports it.
+  version: Number(mainSource.match(/const PROJECT_FILE_VERSION: u32 = (\d+);/)?.[1]),
   app: "Syndocal",
   snapshot: { fixtures: [], cues: [] },
 };
+assert.ok(Number.isSafeInteger(project.version));
+const recoveryKey = "syndocal.projectRecovery.v1";
+for (const version of new Set([1, project.version])) {
+  const checkpoint = createProjectRecoveryCheckpoint(
+    { ...project, version }, "C:/shows/schema-roundtrip.sdc", "schema-roundtrip",
+  );
+  assert.equal(saveProjectRecoveryCheckpoint(checkpoint, 4), true);
+  assert.deepEqual(loadProjectRecoveryStorageState(4), {
+    kind: "checkpoint", recovery_authority_serial: 4, checkpoint,
+  }, `native-supported project schema ${version} survives browser serialization`);
+  storage.clear();
+}
+for (const version of [0, -1, 1.5, project.version + 1, "2", null]) {
+  const checkpoint = createProjectRecoveryCheckpoint(
+    { ...project, version }, "C:/shows/invalid.sdc", "invalid-schema",
+  );
+  const raw = JSON.stringify({ version: 3, kind: "checkpoint", recovery_authority_serial: 4, checkpoint });
+  storage.set(recoveryKey, raw);
+  assert.throws(() => loadProjectRecoveryStorageState(4), /Browser recovery data is invalid/);
+  assert.equal(storage.get(recoveryKey), raw, "unsupported project schema must preserve recovery evidence");
+  storage.clear();
+}
 const checkpointA = createProjectRecoveryCheckpoint(
   project,
   "C:/shows/A.sdc",

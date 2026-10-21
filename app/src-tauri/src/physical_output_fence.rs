@@ -30,7 +30,7 @@
 //! a visible Fault through the engine settlement API instead of extending a
 //! Timeline Follow hold indefinitely.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use engine::{
@@ -197,6 +197,7 @@ impl TimelineFollowOutputState {
     pub(super) fn try_publish_ack(
         &mut self,
         now: Instant,
+        mut should_stop: impl FnMut() -> bool,
         mut publish: impl FnMut(&TimelineFollowSettlementAck) -> Result<(), String>,
     ) -> Result<bool, String> {
         let Some(pending) = self.pending_ack.as_mut() else {
@@ -206,6 +207,11 @@ impl TimelineFollowOutputState {
             return Ok(false);
         }
         let ack = pending.ack.clone();
+        // Stop can arrive after queueing or during a previous ACK retry. The
+        // retained pending receipt is not evidence of a new physical result.
+        if should_stop() {
+            return Ok(false);
+        }
         match publish(&ack) {
             Ok(()) => {
                 self.published_ack = Some(ack);
@@ -1030,15 +1036,34 @@ pub(super) fn publish_timeline_follow_output_result(
     state: &mut TimelineFollowOutputState,
     key: TimelineFollowOutputFrameKey,
     result: TimelineFollowSettlementAckResult,
+    stop: &Arc<AtomicBool>,
 ) -> Result<bool, String> {
-    let now = Instant::now();
-    state.queue_ack(key, result, now);
-    state.try_publish_ack(now, |ack| {
-        engine.acknowledge_timeline_follow_settlement_published(
+    publish_timeline_follow_output_result_with(
+        state,
+        key,
+        result,
+        || stop.load(Ordering::Acquire),
+        |ack| engine.acknowledge_timeline_follow_settlement_published_with_stop(
             ack.clone(),
             Instant::now() + TIMELINE_FOLLOW_SETTLEMENT_ACK_TTL,
-        )
-    })
+            Arc::clone(stop),
+        ),
+    )
+}
+
+fn publish_timeline_follow_output_result_with(
+    state: &mut TimelineFollowOutputState,
+    key: TimelineFollowOutputFrameKey,
+    result: TimelineFollowSettlementAckResult,
+    mut should_stop: impl FnMut() -> bool,
+    publish: impl FnMut(&TimelineFollowSettlementAck) -> Result<(), String>,
+) -> Result<bool, String> {
+    if should_stop() {
+        return Ok(false);
+    }
+    let now = Instant::now();
+    state.queue_ack(key, result, now);
+    state.try_publish_ack(now, should_stop, publish)
 }
 
 pub(super) fn publish_timeline_follow_output_result_until_resolved(
@@ -1046,18 +1071,19 @@ pub(super) fn publish_timeline_follow_output_result_until_resolved(
     state: &mut TimelineFollowOutputState,
     key: TimelineFollowOutputFrameKey,
     result: TimelineFollowSettlementAckResult,
-    should_stop: impl FnMut() -> bool,
+    stop: &Arc<AtomicBool>,
 ) {
     publish_timeline_follow_output_result_until_resolved_with(
         engine,
         state,
         key,
         result,
-        should_stop,
+        || stop.load(Ordering::Acquire),
         |ack| {
-            engine.acknowledge_timeline_follow_settlement_published(
+            engine.acknowledge_timeline_follow_settlement_published_with_stop(
                 ack.clone(),
                 Instant::now() + TIMELINE_FOLLOW_SETTLEMENT_ACK_TTL,
+                Arc::clone(stop),
             )
         },
     );
@@ -1076,9 +1102,12 @@ pub(super) fn publish_timeline_follow_output_result_until_resolved_with(
     let mut issued_publish = false;
     let mut terminal_receipt_retries = 0;
     loop {
+        if should_stop() {
+            return;
+        }
         let now = Instant::now();
         state.queue_ack(key, result.clone(), now);
-        let _ = state.try_publish_ack(now, |ack| {
+        let _ = state.try_publish_ack(now, &mut should_stop, |ack| {
             issued_publish = true;
             publish(ack)
         });
@@ -1451,7 +1480,7 @@ mod tests {
             &mut state,
             failed_key,
             TimelineFollowSettlementAckResult::Fault { fault },
-            || false,
+            &Arc::new(AtomicBool::new(false)),
         );
         assert!(state.published_for(failed_key));
         let runtime = engine.snapshot().timeline.follow_runtime;
@@ -1483,6 +1512,7 @@ mod tests {
             &mut state,
             key,
             TimelineFollowSettlementAckResult::Applied,
+            &Arc::new(AtomicBool::new(false)),
         )
         .expect("a live presenter accepts the exact video Applied acknowledgement");
         assert!(published);
@@ -1499,3 +1529,7 @@ mod tests {
 #[cfg(test)]
 #[path = "physical_output_blackout_target_tests.rs"]
 mod physical_output_blackout_target_tests;
+
+#[cfg(test)]
+#[path = "physical_output_ack_stop_tests.rs"]
+mod physical_output_ack_stop_tests;

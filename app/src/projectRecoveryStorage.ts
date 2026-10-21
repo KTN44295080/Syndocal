@@ -98,7 +98,10 @@ const isProjectFile = (candidate: unknown): candidate is ProjectFile => {
   if (!candidate || typeof candidate !== "object") return false;
   const source = candidate as Partial<ProjectFile>;
   const snapshot = source.snapshot as Partial<ProjectFile["snapshot"]> | undefined;
-  return source.version === 1
+  // The browser checkpoint/envelope versions are independent of the project
+  // schema. Native project_file_decode accepts legacy v1 and current v2;
+  // preserve either payload for authoritative native validation/migration.
+  return (source.version === 1 || source.version === 2)
     && source.app === "Syndocal"
     && Boolean(snapshot)
     && Array.isArray(snapshot?.fixtures)

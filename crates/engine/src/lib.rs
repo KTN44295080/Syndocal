@@ -42,6 +42,7 @@ mod telemetry_percentiles;
 mod timeline_audio_live_fence;
 mod audio_control;
 mod audio_control_snapshot;
+mod timeline_follow_ack;
 mod timeline_follow_hold;
 mod video_generator;
 pub mod video_output_authoring;
@@ -4981,6 +4982,7 @@ define_engine_command! {
     AcknowledgeTimelineFollowSettlement {
         settlement_ack: TimelineFollowSettlementAck,
         expires_at: Instant,
+        stop: Option<Arc<AtomicBool>>,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
     AddTimelineAutomation {
@@ -11588,18 +11590,51 @@ impl EngineHandle {
         settlement_ack: TimelineFollowSettlementAck,
         expires_at: Instant,
     ) -> Result<(), String> {
-        let (ack, receiver) = mpsc::sync_channel(1);
-        self.send(EngineCommand::AcknowledgeTimelineFollowSettlement {
+        self.acknowledge_timeline_follow_settlement_published_inner(
             settlement_ack,
             expires_at,
+            None,
+        )
+    }
+
+    /// Stop-aware settlement acknowledgement for an output worker. Stop
+    /// rejects a queued acknowledgement before application and interrupts the
+    /// reply wait. It never rolls back an acknowledgement already applied by
+    /// the engine; that exact receipt remains available to a later retry.
+    pub fn acknowledge_timeline_follow_settlement_published_with_stop(
+        &self,
+        settlement_ack: TimelineFollowSettlementAck,
+        expires_at: Instant,
+        stop: Arc<AtomicBool>,
+    ) -> Result<(), String> {
+        self.acknowledge_timeline_follow_settlement_published_inner(
+            settlement_ack,
+            expires_at,
+            Some(stop),
+        )
+    }
+
+    fn acknowledge_timeline_follow_settlement_published_inner(
+        &self,
+        settlement_ack: TimelineFollowSettlementAck,
+        expires_at: Instant,
+        stop: Option<Arc<AtomicBool>>,
+    ) -> Result<(), String> {
+        timeline_follow_ack::require_running(stop.as_deref())?;
+        validate_timeline_follow_settlement_ack(&settlement_ack)?;
+        let (ack, receiver) = mpsc::sync_channel(1);
+        // This runtime-only command has no allocator candidates. Do not wait
+        // behind the allocator gate: legacy ISF adaptation can hold it while
+        // awaiting the engine, which would delay Stop before the ACK waiter.
+        // Keep normal queue telemetry/wakeup and all apply-time authority checks.
+        self.enqueue_prepared_command(EngineCommand::AcknowledgeTimelineFollowSettlement {
+            settlement_ack,
+            expires_at,
+            stop: stop.clone(),
             ack,
         })
         .map_err(|error| error.to_string())?;
-        receiver
-            .recv_timeout(Duration::from_secs(3))
-            .map_err(|error| {
-                format!("Timeline Follow settlement acknowledgement failed: {error}")
-            })?
+        timeline_follow_ack::wait_for_publication(&receiver, stop.as_deref())
     }
 
     pub fn output_ownership_status(&self) -> OutputOwnershipStatus {
@@ -28848,13 +28883,18 @@ impl EngineRuntime {
             EngineCommand::AcknowledgeTimelineFollowSettlement {
                 settlement_ack,
                 expires_at,
+                stop,
                 ack,
             } => {
                 let result = if Instant::now() > expires_at {
                     Err("Timeline Follow settlement acknowledgement expired before engine execution"
                         .to_string())
                 } else {
-                    self.acknowledge_timeline_follow_settlement(settlement_ack, Instant::now())
+                    self.acknowledge_timeline_follow_settlement_with_stop(
+                        settlement_ack,
+                        Instant::now(),
+                        stop.as_deref(),
+                    )
                 };
                 self.pending_command_acks.push(PendingCommandAck {
                     ack: PendingCommandAckSender::Plain(ack),
@@ -44944,6 +44984,16 @@ impl EngineRuntime {
         acknowledgement: TimelineFollowSettlementAck,
         now: Instant,
     ) -> Result<(), String> {
+        self.acknowledge_timeline_follow_settlement_with_stop(acknowledgement, now, None)
+    }
+
+    fn acknowledge_timeline_follow_settlement_with_stop(
+        &mut self,
+        acknowledgement: TimelineFollowSettlementAck,
+        now: Instant,
+        stop: Option<&AtomicBool>,
+    ) -> Result<(), String> {
+        timeline_follow_ack::require_running(stop)?;
         validate_timeline_follow_settlement_ack(&acknowledgement)?;
         if acknowledgement.epoch != self.output_ownership_gate.status().epoch {
             return Err("Timeline Follow settlement acknowledgement epoch is stale".to_string());
@@ -45072,6 +45122,10 @@ impl EngineRuntime {
             };
             self.reserve_timeline_audio_transport_revision_successors(successors)?;
         }
+        // Validation above can wait for the output epoch gate. Recheck Stop
+        // at the first runtime mutation, then keep the admitted result even
+        // if its owner stops before the publication reply is delivered.
+        timeline_follow_ack::require_running(stop)?;
         // Record the accepted physical acknowledgement before completion can
         // retire the Follow child. The transition only admits captured
         // consumers, so this per-generation vector is inherently bounded.
@@ -69632,6 +69686,9 @@ mod tests {
 
     #[path = "../timeline_fractional_tick_tests.rs"]
     mod timeline_fractional_tick_tests;
+
+    #[path = "../timeline_follow_ack_stop_tests.rs"]
+    mod timeline_follow_ack_stop_tests;
 
     const RELEASE_GATE_EFFECT_COUNT: usize = SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS;
     const RELEASE_GATE_FIXTURE_COUNT: usize = SUPPORTED_EFFECT_ENVELOPE_FIXTURES;

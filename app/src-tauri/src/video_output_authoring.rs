@@ -992,10 +992,7 @@ fn apply_with_native(
             request.lease_request,
             state.output_lease_now_ms()?,
         )?;
-        if state
-            .project_transaction_active
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
+        if reserve_output_authoring_project_transaction(state, &coordinator).is_err()
         {
             return Err(abort_prepared_display_output_lease_candidate(
                 state,
