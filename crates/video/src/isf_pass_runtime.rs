@@ -14,10 +14,15 @@ const RESOURCE_CACHE_CAPACITY: usize = 64;
 const MAX_STAGE_RESOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_CACHED_RESOURCE_BYTES: u64 = 512 * 1024 * 1024;
 
+#[path = "isf_stack_workspace.rs"]
+mod stack_workspace;
+use stack_workspace::StackWorkspace;
+
 #[derive(Default)]
 pub(super) struct IsfResourcePool {
     entries: BTreeMap<IsfInstanceKey, StageResources>,
     clock: u64,
+    workspace: Option<StackWorkspace>,
 }
 
 #[derive(Clone)]
@@ -124,17 +129,24 @@ fn audio_texture_rgba(
             Some(frame) if input.fft => {
                 let start = x * protocol::LIVE_AUDIO_TEXTURE_SAMPLES / width;
                 let end = ((x + 1) * protocol::LIVE_AUDIO_TEXTURE_SAMPLES / width).max(start + 1);
-                frame.fft[start..end].iter().copied().fold(0.0_f32, f32::max)
+                frame.fft[start..end]
+                    .iter()
+                    .copied()
+                    .fold(0.0_f32, f32::max)
             }
             Some(frame) if width == 1 => {
-                let rms = (frame.waveform.iter().map(|value| value * value).sum::<f32>()
+                let rms = (frame
+                    .waveform
+                    .iter()
+                    .map(|value| value * value)
+                    .sum::<f32>()
                     / protocol::LIVE_AUDIO_TEXTURE_SAMPLES as f32)
                     .sqrt();
                 rms * 0.5 + 0.5
             }
             Some(frame) => {
-                let position =
-                    x as f32 * (protocol::LIVE_AUDIO_TEXTURE_SAMPLES - 1) as f32 / (width - 1) as f32;
+                let position = x as f32 * (protocol::LIVE_AUDIO_TEXTURE_SAMPLES - 1) as f32
+                    / (width - 1) as f32;
                 let left = position.floor() as usize;
                 let right = (left + 1).min(protocol::LIVE_AUDIO_TEXTURE_SAMPLES - 1);
                 let value = frame.waveform[left]
@@ -191,6 +203,9 @@ impl IsfGpuRuntime {
         }
         self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        // An in-flight or failed stack cannot expose reusable scratch buffers.
+        // Only the outer transaction, after both GPU scopes, can return them.
+        let workspace = self.resources.workspace.take();
         let result = self.render_pass_stack_inner(
             frame,
             stages,
@@ -199,6 +214,7 @@ impl IsfGpuRuntime {
             frame_index,
             date,
             keys,
+            workspace,
         );
         // Failed validation can leave write_texture staging uploads pending.
         // Submit and drain them so repeated failures cannot retain unbounded uploads.
@@ -225,7 +241,10 @@ impl IsfGpuRuntime {
                 "ISF GPU upload cleanup failed: {error}"
             )));
         }
-        result
+        result.map(|(frame, workspace)| {
+            self.resources.workspace = Some(workspace);
+            frame
+        })
     }
 
     fn render_pass_stack_inner(
@@ -237,18 +256,18 @@ impl IsfGpuRuntime {
         frame_index: u32,
         date: [f32; 4],
         keys: &[IsfInstanceKey],
-    ) -> Result<VideoFrame, IsfRuntimeError> {
+        workspace: Option<StackWorkspace>,
+    ) -> Result<(VideoFrame, StackWorkspace), IsfRuntimeError> {
         if keys.len() != stages.len() {
             return Err(runtime_error(
                 "ISF stage ownership key count does not match the stack",
             ));
         }
         self.validate_pass_size(frame.width, frame.height)?;
-        let padded_bytes_per_row = (frame.width * 4).div_ceil(256) * 256;
+        let padded_bytes_per_row = StackWorkspace::bytes_per_row(frame.width);
         // The encoder retains each intermediate allocation until submission.
         // Reserve upload, ping/pong and padded readback before creating them.
-        let baseline_bytes = u64::from(frame.width) * u64::from(frame.height) * 12
-            + u64::from(padded_bytes_per_row) * u64::from(frame.height);
+        let baseline_bytes = StackWorkspace::required_bytes(frame.width, frame.height);
         if baseline_bytes > MAX_CACHED_RESOURCE_BYTES {
             return Err(runtime_error(
                 "ISF pass size exceeds the GPU buffer memory budget",
@@ -267,42 +286,23 @@ impl IsfGpuRuntime {
                 "ISF input frame byte length does not match its dimensions",
             ));
         }
-        let input = GpuImage::new(
-            &self.device,
-            frame.width,
-            frame.height,
-            false,
-            "Syndocal ISF input",
-        );
+        // filter drops a mismatched old allocation before creating its
+        // replacement; scratch is never retained per layer or per resolution.
+        let workspace = workspace
+            .filter(|workspace| workspace.matches(frame.width, frame.height))
+            .unwrap_or_else(|| StackWorkspace::new(&self.device, frame.width, frame.height));
+        let input = &workspace.input;
+        let ping = &workspace.ping;
+        let pong = &workspace.pong;
+        let sampler = &workspace.sampler;
+        let readback = &workspace.readback;
         input.upload_rgba(&self.queue, &rgba.data);
-        let ping = GpuImage::new(
-            &self.device,
-            frame.width,
-            frame.height,
-            false,
-            "Syndocal ISF stack ping",
-        );
-        let pong = GpuImage::new(
-            &self.device,
-            frame.width,
-            frame.height,
-            false,
-            "Syndocal ISF stack pong",
-        );
-        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Syndocal ISF sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Syndocal ISF pass stack encoder"),
             });
-        let mut current = input;
+        let mut current = input.clone();
         let mut pending_states = Vec::new();
         let mut pending_bytes = baseline_bytes;
         for (stage_index, (stage, key)) in stages.iter().zip(keys).enumerate() {
@@ -413,7 +413,7 @@ impl IsfGpuRuntime {
                     clear_image(&mut encoder, &target.images[target.front]);
                 }
             }
-            let stage_output = if stage_index % 2 == 0 { &ping } else { &pong };
+            let stage_output = if stage_index % 2 == 0 { ping } else { pong };
             let stage_input = current.clone();
             for (pass_index, pass) in shader.passes.iter().enumerate() {
                 let (width, height) = state.sizes[pass_index];
@@ -477,7 +477,7 @@ impl IsfGpuRuntime {
                     &mut encoder,
                     &shader.wgsl,
                     &sampled,
-                    &sampler,
+                    sampler,
                     &uniforms,
                     &output,
                 );
@@ -504,7 +504,7 @@ impl IsfGpuRuntime {
                     &mut encoder,
                     BLIT_SHADER,
                     &[&current.view],
-                    &sampler,
+                    sampler,
                     &uniforms,
                     stage_output,
                 );
@@ -516,12 +516,6 @@ impl IsfGpuRuntime {
                 pending_states.push((key.clone(), state));
             }
         }
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Syndocal ISF readback"),
-            size: u64::from(padded_bytes_per_row) * u64::from(frame.height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &current.texture,
@@ -530,7 +524,7 @@ impl IsfGpuRuntime {
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &readback,
+                buffer: readback,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bytes_per_row),
@@ -581,15 +575,18 @@ impl IsfGpuRuntime {
                 .expect("nonempty resource pool exceeds its capacity");
             self.resources.entries.remove(&oldest);
         }
-        Ok(VideoFrame {
-            layer_id: frame.layer_id,
-            width: frame.width,
-            height: frame.height,
-            pts_ms: frame.pts_ms,
-            duration_ms: frame.duration_ms,
-            format: VideoPixelFormat::Rgba8,
-            data,
-        })
+        Ok((
+            VideoFrame {
+                layer_id: frame.layer_id,
+                width: frame.width,
+                height: frame.height,
+                pts_ms: frame.pts_ms,
+                duration_ms: frame.duration_ms,
+                format: VideoPixelFormat::Rgba8,
+                data,
+            },
+            workspace,
+        ))
     }
 
     fn dynamic_image_bytes(
@@ -818,7 +815,13 @@ impl IsfGpuRuntime {
             .audio_inputs
             .iter()
             .map(|input| {
-                GpuImage::new(&self.device, input.width, 1, false, "Syndocal ISF live audio")
+                GpuImage::new(
+                    &self.device,
+                    input.width,
+                    1,
+                    false,
+                    "Syndocal ISF live audio",
+                )
             })
             .collect();
         Ok(StageResources {
@@ -1040,6 +1043,10 @@ fn main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     return textureSample(source_image, source_sampler, uv);
 }
 "#;
+
+#[cfg(test)]
+#[path = "isf_stack_workspace_tests.rs"]
+mod workspace_tests;
 
 #[cfg(test)]
 mod tests {
