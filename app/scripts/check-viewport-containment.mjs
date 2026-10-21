@@ -15,6 +15,65 @@ import {
   selectSetupIoConnection,
 } from "./setup-io-operator-contract.mjs";
 
+// Serialized into the page by the existing header-related probes below.
+function readResponsiveTopbarInPage() {
+  const topbar = document.querySelector('.topbar');
+  const visible = (element) => element instanceof HTMLElement &&
+    element.checkVisibility({ checkVisibilityCSS: true }) &&
+    element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
+  const rect = (element) => element?.getBoundingClientRect();
+  const bounds = rect(topbar);
+  const nav = rect(topbar?.querySelector('.topbarLeft'));
+  const project = rect(topbar?.querySelector('.topbarProject'));
+  const status = rect(topbar?.querySelector('.status'));
+  const windows = rect(topbar?.querySelector('.windowControls'));
+  const contained = (box) => Boolean(bounds && box && box.left >= bounds.left - 1 &&
+    box.right <= bounds.right + 1 && box.top >= bounds.top - 1 && box.bottom <= bounds.bottom + 1);
+  const expected = [
+    ['.appMenuButton', 29, 29], ['[data-workspace-option="setup"]', 70, 34],
+    ['[data-workspace-option="control"]', 70, 34], ['[data-workspace-option="touch"]', 70, 34],
+    ['[data-global-operator-action="back"]', 32], ['[data-global-operator-action="go"]', 48],
+    ['[data-global-operator-action="dmx-blackout"]', 42], ['[data-global-operator-action="video-blackout"]', 42],
+    ['[data-global-operator-action="all-blackout"]', 42], ['.topbarTools > summary', 52],
+    ['.topbarBpmValue', 1, 28], ['[data-topbar-tap]', 40], ['[data-window-control="minimize"]', 40],
+    ['[data-window-control="maximize"]', 40], ['[data-window-control="close"]', 40],
+  ];
+  const controls = expected.map(([selector, minimumWidth, minimumHeight = 40]) => {
+    const element = topbar?.querySelector(selector);
+    const box = rect(element);
+    const hit = box && document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+    return { selector, visible: visible(element), contained: contained(box), reachable: Boolean(element?.contains(hit)),
+      width: box?.width ?? 0, height: box?.height ?? 0, minimumWidth, minimumHeight };
+  });
+  const items = [...(topbar?.querySelectorAll('button, summary, .topbarProject > strong, .topbarProject > span, .topbarStateCluster > span, .topbarSyncSource, .topbarSyncStatus') ?? [])]
+    .filter((element) => visible(element) && !element.closest('.topbarToolsPopover, .topbarWorkspaceMenu'));
+  const itemRects = items.map(rect);
+  const overlaps = itemRects.some((left, index) => itemRects.slice(index + 1).some((right) =>
+    Math.min(left.right, right.right) - Math.max(left.left, right.left) > 1 &&
+    Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top) > 1));
+  const rows = topbar ? getComputedStyle(topbar).gridTemplateRows.split(/\s+/).map(Number.parseFloat) : [];
+  const narrow = innerWidth <= 1500;
+  const rowContract = Boolean(bounds && nav && project && status && windows &&
+    rows.length === (narrow ? 2 : 1) && rows.every((height) => Math.abs(height - 40) <= 0.5) &&
+    Math.abs(bounds.height - (narrow ? 90 : 42)) <= 0.5 &&
+    (narrow
+      ? status.top >= Math.max(nav.bottom, windows.bottom) + 3 && project.bottom <= status.top &&
+        Math.abs(nav.top + nav.height / 2 - windows.top - windows.height / 2) <= 1
+      : Math.abs(nav.top + nav.height / 2 - status.top - status.height / 2) <= 1));
+  return {
+    rows, rowContract, controls, overlaps,
+    contained: [nav, project, status, windows, ...itemRects].every(contained),
+    reachable: controls.every((control) => control.visible && control.reachable),
+    buttonSizesPreserved: controls.every((control) => control.width >= control.minimumWidth && control.height >= control.minimumHeight),
+    noHorizontalOverflow: Boolean(topbar && topbar.scrollWidth <= topbar.clientWidth + 1),
+  };
+}
+
+function responsiveTopbarIsUsable(state) {
+  return Boolean(state?.rowContract && state.contained && state.reachable &&
+    state.buttonSizesPreserved && state.noHorizontalOverflow && !state.overlaps);
+}
+
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const verifiedGenericProfileCount = 118;
@@ -3466,6 +3525,7 @@ async function measureTimelinePaneExpansionState(client) {
       })(),
       t25Density: {
         topbarRect,
+        responsiveTopbar: (${readResponsiveTopbarInPage.toString()})(),
         topbarClientWidth: topbar?.clientWidth ?? 0,
         topbarScrollWidth: topbar?.scrollWidth ?? 0,
         topbarMasterClusterRect,
@@ -3675,9 +3735,9 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     ) <= 2
   );
   const normalDensity = before.t25Density ?? {};
-  const topbarIsSingleContainedRow = Boolean(
+  const topbarUsesContainedResponsiveRows = Boolean(
     normalDensity.topbarRect &&
-    normalDensity.topbarRect.height <= 44 &&
+    responsiveTopbarIsUsable(normalDensity.responsiveTopbar) &&
     normalDensity.topbarScrollWidth <= normalDensity.topbarClientWidth + 1 &&
     // The persistent Lighting/Video master sliders were intentionally
     // removed from the header; their non-header runtime controls remain.
@@ -3719,7 +3779,7 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
   const timelinePaneExpansionConditions = [
     ['timelineExpandToggleVisible', () => Boolean(before.timelinePaneExpandToggleVisible)],
     ['timelineExpandToggleNamed', () => Boolean(before.timelinePaneExpandToggleNamed)],
-    ['t25TopbarIsSingleContainedRow', () => topbarIsSingleContainedRow],
+    ['t25TopbarUsesContainedResponsiveRows', () => topbarUsesContainedResponsiveRows],
     ['t25TopbarBpmAndTapIntegratedWithoutHeaderMasters', () => topbarBpmAndTapAreIntegratedWithoutHeaderMasters],
     ['t25ETopbarOwnsDragRegionOnlyOnBackground', () => Boolean(
       normalDensity.topbarDragRegion &&
@@ -4077,6 +4137,7 @@ async function measureLiveDeskHeaderState(client) {
       viewToggleRect,
       statusToggleRect,
       topbarRect: measuredRect(topbar),
+      responsiveTopbar: (${readResponsiveTopbarInPage.toString()})(),
       matrixRect: measuredRect(matrix),
       cuePadRect: measuredRect(cuePads),
       liveDeskHeaderCount: document.querySelectorAll('.liveControlPanel > .liveDeskHeader').length,
@@ -4406,10 +4467,10 @@ async function runLiveDeskHeaderViewport(client, viewport) {
       viewIconMetrics.find((metric) => metric.action === 'matrix')?.boxShadow !== 'none' &&
       expanded.viewActionButtonMetrics.find((metric) => metric.action === 'status')?.expanded === 'true' &&
       expanded.viewActionButtonMetrics.find((metric) => metric.action === 'status')?.boxShadow !== 'none',
-    topbarAndSurfaceHeaderKeepFortyTwoAndThirtyTwoPxRows:
+    topbarReflowsWithoutShrinkingTheSurfaceHeader:
       // The surface header rect includes its 1px bottom hairline, so the
       // border-inclusive measurement is 33 on the Control/Edit host.
-      matrix.topbarRect?.height === 42 &&
+      responsiveTopbarIsUsable(matrix.responsiveTopbar) &&
       matrix.toolbarRect?.height === 33,
     globalTransportNaturallyFitsAvailableWidth:
       matrix.toolbarFitsAvailableWidth &&
@@ -16569,7 +16630,7 @@ async function openMixerDrawer(client, drawerId, stripSelector) {
   await sleep(60);
 }
 
-function readTopbarPulseStateInPage() {
+function readTopbarPulseStateInPage(readResponsiveTopbar) {
   const visible = (element) => {
     if (!(element instanceof HTMLElement)) return false;
     const rect = element.getBoundingClientRect();
@@ -16630,22 +16691,19 @@ function readTopbarPulseStateInPage() {
   };
   const atomicControls = Object.values(controlGroups).flat().filter(element => !element.closest('.topbarToolsPopover'));
   const atomicRects = atomicControls.map(rectOf).filter(Boolean).sort((left, right) => left.x - right.x);
-  const controlCenterSpread = atomicRects.length > 0
-    ? Math.max(...atomicRects.map((rect) => rect.centerY)) - Math.min(...atomicRects.map((rect) => rect.centerY))
-    : Number.POSITIVE_INFINITY;
   const controlsContained = Boolean(topbarRect) && atomicRects.every((rect) =>
     rect.x >= topbarRect.x - 0.5 &&
     rect.right <= topbarRect.right + 0.5 &&
     rect.y >= topbarRect.y - 0.5 &&
     rect.bottom <= topbarRect.bottom + 0.5
   );
-  const controlsOverlap = atomicRects.some((rect, index) => {
-    const next = atomicRects[index + 1];
-    return Boolean(next && rect.right > next.x + 0.5);
-  });
+  const controlsOverlap = atomicRects.some((rect, index) => atomicRects.slice(index + 1).some((other) =>
+    Math.min(rect.right, other.right) - Math.max(rect.x, other.x) > 0.5 &&
+    Math.min(rect.bottom, other.bottom) - Math.max(rect.y, other.y) > 0.5));
   return {
     viewport: { width: window.innerWidth, height: window.innerHeight },
     topbarRect,
+    responsiveTopbar: readResponsiveTopbar(),
     goRect,
     masterClusterRect,
     bpmRect,
@@ -16680,13 +16738,12 @@ function readTopbarPulseStateInPage() {
     ).length ?? 0,
     controlsContained,
     controlsOverlap,
-    controlCenterSpread: Math.round(controlCenterSpread * 100) / 100,
     statusOverflowX: status instanceof HTMLElement ? status.scrollWidth - status.clientWidth : Number.POSITIVE_INFINITY,
   };
 }
 
 async function readTopbarPulseState(client) {
-  return client.evaluate("(" + readTopbarPulseStateInPage.toString() + ")()");
+  return client.evaluate("(" + readTopbarPulseStateInPage.toString() + ")(" + readResponsiveTopbarInPage.toString() + ")");
 }
 
 async function runTopbarPulseViewport(client, viewport) {
@@ -16835,11 +16892,9 @@ async function runTopbarPulseViewport(client, viewport) {
     pulseExists:
       stopped.controlCounts.pulse === 1 &&
       stopped.pulseText === "PULSE",
-    pulseDisclosedInToolsWithFortyTwoPixelTitleRow:
-      stopped.topbarRect?.height >= 41.5 &&
-      stopped.topbarRect?.height <= 42.5 &&
+    pulseDisclosedInToolsWithUsableResponsiveTitleRows:
+      responsiveTopbarIsUsable(stopped.responsiveTopbar) &&
       stopped.controlsContained &&
-      stopped.controlCenterSpread <= 1 &&
       stopped.pulseVisible && stopped.pulseInTools && stopped.toolsContained,
     pulseCompactAt1280:
       stopped.viewport.width === 1280 &&

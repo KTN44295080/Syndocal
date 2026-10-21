@@ -20,9 +20,13 @@ try { ({ chromium } = require("playwright")); } catch {
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const artifactDir = resolve(process.env.SYNDOCAL_HEADER_ARTIFACT_DIR ?? resolve(root, "../target/qa/header-20261002"));
 const fixtureName = `.header-proof-${process.pid}.tsx`;
+const baselineFixtureName = `.header-proof-before-${process.pid}.tsx`;
 const baselineName = `.header-baseline-${process.pid}.tsx`;
+const baselineCssName = `.header-baseline-${process.pid}.css`;
 const fixturePath = resolve(root, fixtureName);
+const baselineFixturePath = resolve(root, baselineFixtureName);
 const baselinePath = resolve(root, "src/components", baselineName);
+const baselineCssPath = resolve(root, "src/components", baselineCssName);
 let server, browser;
 await mkdir(artifactDir, { recursive: true });
 const baselineRef = process.env.SYNDOCAL_HEADER_BASELINE_REF;
@@ -30,17 +34,27 @@ try {
   const baseline = baselineRef
     ? execFileSync("git", ["show", `${baselineRef}:app/src/components/WorkspaceChrome.tsx`], { cwd: root, encoding: "utf8" })
     : await readFile(resolve(root, "src/components/WorkspaceChrome.tsx"), "utf8");
-  await writeFile(baselinePath, baseline);
-  await writeFile(fixturePath, `
+  const baselineCss = baselineRef
+    ? execFileSync("git", ["show", `${baselineRef}:app/src/components/WorkspaceChrome.css`], { cwd: root, encoding: "utf8" })
+    : await readFile(resolve(root, "src/components/WorkspaceChrome.css"), "utf8");
+  assert.ok(baseline.includes('import "./WorkspaceChrome.css";'), 'baseline imports its owned chrome CSS');
+  await writeFile(baselinePath, baseline.replace('import "./WorkspaceChrome.css";', `import "./${baselineCssName}";`));
+  await writeFile(baselineCssPath, baselineCss);
+  const fixture = component => `
 import {createSignal} from 'solid-js'; import {render} from 'solid-js/web';
-import {WorkspaceChrome} from '/src/components/WorkspaceChrome';
-import {WorkspaceChrome as BaselineChrome} from '/src/components/${baselineName}';
+import {WorkspaceChrome as Chrome} from '${component}';
 import {WorkspaceOperationsMenu} from '/src/components/WorkspaceOperationsMenu';
+import {installUiLocalization} from '/src/uiLocalization';
 import '/src/theme.css';import '/src/styles.css';
 const [workspace,setWorkspace]=createSignal('touch'),[bpm,setBpm]=createSignal(120),[learn,setLearn]=createSignal(null);
 const [dmx,setDmx]=createSignal(false),[video,setVideo]=createSignal(false),[safety,setSafety]=createSignal(false);
 const [dirty,setDirty]=createSignal(false),[lock,setLock]=createSignal(null),[label,setLabel]=createSignal('Untitled.sdc');
-window.proof={calls:[],setWorkspace,setSafety,setDirty,setLock,setLabel,setBpm,get bpm(){return bpm()}};
+const [locale,setLocale]=createSignal('en'),[scale,setScale]=createSignal(100);
+const localization=installUiLocalization(document.body,locale);
+window.proof={calls:[],setWorkspace,setSafety,setDirty,setLock,setLabel,setBpm,get bpm(){return bpm()},
+ setLocale:value=>{setLocale(value);localization.refresh()},setScale:value=>{setScale(value);
+ document.documentElement.style.setProperty('--ui-scale',String(value/100));
+ document.documentElement.style.setProperty('--ui-scale-inverse',String(10000/value)+'%')}};
 const call=name=>()=>window.proof.calls.push(name), noop=()=>{}, done=async()=>{};
 const operations=()=> <WorkspaceOperationsMenu profiles={[]} selectedProfileId={null} poppedPanes={[]}
  paneTransitions={{}} workspaceBusy={false} operatorPolicy={null} operatorLockMode={lock()}
@@ -53,7 +67,7 @@ const props={get workspaceTab(){return workspace()},setupSubTab:'output',control
  liveAudioInputTelemetryFresh:false,liveAudioInputRms:0,liveAudioInputPeak:0,tickMs:25,jitterUs:0,
  packetBytes:0,dmxSuccessCount:0,dmxOutputCount:0,get projectLabel(){return label()},get projectDirty(){return dirty()},
  currentProjectPath:null,recentProjectPaths:[],recoveryCheckpoint:null,projectBackups:[],daslightProjectImportBusy:false,
- historyStatus:{can_undo:false,can_redo:false,undo_depth:0,redo_depth:0},uiScale:100,uiLocale:'en',
+ historyStatus:{can_undo:false,can_redo:false,undo_depth:0,redo_depth:0},get uiScale(){return scale()},get uiLocale(){return locale()},
  canBack:true,canGo:true,canPauseFade:true,fadePaused:false,canToggleTimeline:true,timelinePlaying:false,anyFixtureFlags:true,
  nextCueLabel:'Next cue',get operatorLockMode(){return lock()},get controlLearnMode(){return learn()},
  controlLearnBusy:false,controlLearnTargetLabel:null,showClockStatus:{running:false,state:'STOPPED',output_armed:false},showClockError:null,
@@ -67,9 +81,10 @@ const props={get workspaceTab(){return workspace()},setupSubTab:'output',control
  onLoadRecovery:noop,onDiscardRecovery:noop,onLoadBackup:noop,onDeleteBackup:noop,onExportDiagnostics:noop,
  onCheckForUpdates:noop,onInstallUpdate:noop,onUndo:noop,onRedo:noop,onUiLocale:noop,onUiScale:noop,
  onResetWorkspaceLayout:noop,onLoadSample:noop,onRunSmoke:noop};
-const Chrome=new URL(location.href).searchParams.has('baseline')?BaselineChrome:WorkspaceChrome;
 render(()=><main class="app"><Chrome {...props}/><section>Control header proof</section></main>,document.body);
-`);
+`;
+  await writeFile(fixturePath, fixture('/src/components/WorkspaceChrome'));
+  await writeFile(baselineFixturePath, fixture(`/src/components/${baselineName}`));
   const reservation = createTcpServer();
   await new Promise((resolve, reject) => { reservation.once("error",reject); reservation.listen(0,"127.0.0.1",resolve); });
   const port = reservation.address().port;
@@ -80,7 +95,8 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     plugins:[{name:'header-proof',configureServer(server){server.middlewares.use((request,response,next)=> {
       if (!request.url?.startsWith('/header-proof')) return next();
       response.setHeader('Content-Type','text/html');
-      response.end(`<html><head><link rel="icon" href="data:,"></head><body><script type="module" src="/${fixtureName}"></script></body></html>`);
+      const entry = new URL(request.url, 'http://127.0.0.1').searchParams.has('baseline') ? baselineFixtureName : fixtureName;
+      response.end(`<html><head><link rel="icon" href="data:,"></head><body><script type="module" src="/${entry}"></script></body></html>`);
     });}}] });
   await server.listen();
   const origin = `http://127.0.0.1:${server.httpServer.address().port}/`;
@@ -95,17 +111,70 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     const header = document.querySelector('.topbar'), nav = document.querySelector('.topbarLeft');
     const rect = el => { const r=el.getBoundingClientRect(); return {x:r.x,y:r.y,w:r.width,h:r.height,right:r.right,bottom:r.bottom}; };
     const bounds=rect(header);
-    const elements=[...header.querySelectorAll('button, .topbarTools > summary, .topbarProject > strong, .topbarProject > span, .topbarStateCluster > span')]
-      .filter(el=>el.checkVisibility({checkVisibilityCSS:true})&&el.getBoundingClientRect().width>0);
-    const items=elements.map(el=>({label:el.getAttribute('aria-label')||el.textContent.trim(),...rect(el)}));
+    const visible = el => el.checkVisibility({checkVisibilityCSS:true}) && el.getBoundingClientRect().width>0 && el.getBoundingClientRect().height>0;
+    const elements=[...header.querySelectorAll('button, .topbarTools > summary, .topbarProject > strong, .topbarProject > span, .topbarStateCluster > span, .topbarSyncSource, .topbarSyncStatus')].filter(visible);
+    const items=elements.map(el=>{
+      const r=rect(el), interactive=el.matches('button,summary');
+      const hit=document.elementFromPoint(r.x+r.w/2,r.y+r.h/2);
+      return {label:el.getAttribute('aria-label')||el.textContent.trim(),...r,interactive,reachable:!interactive||el.contains(hit),fontSize:parseFloat(getComputedStyle(el).fontSize)};
+    });
     const overlaps=[];
     items.forEach((a,i)=>items.slice(i+1).forEach(b=>{
       if(Math.min(a.right,b.right)-Math.max(a.x,b.x)>1&&Math.min(a.bottom,b.bottom)-Math.max(a.y,b.y)>1) overlaps.push([a.label,b.label]);
     }));
-    return {bounds,items,overlaps,contained:items.every(r=>r.x>=bounds.x-1&&r.right<=bounds.right+1&&r.y>=bounds.y-1&&r.bottom<=bounds.bottom+1),
+    const text = [...header.querySelectorAll('.topbarSyncSource, .topbarSyncStatus, .topbarShowClockStatus > span, .topbarShowClockStatus > strong')].map(el=>{
+      const range=document.createRange();range.selectNodeContents(el);const r=range.getBoundingClientRect(),box=el.getBoundingClientRect();
+      return {label:el.textContent.trim(),visible:visible(el),fits:r.width<=box.width+1&&r.height<=box.height+1&&el.scrollWidth<=el.clientWidth+1,
+        textWidth:r.width,textHeight:r.height,boxWidth:box.width,boxHeight:box.height,scrollWidth:el.scrollWidth,clientWidth:el.clientWidth};
+    });
+    const expected=['[data-workspace-option="setup"]','[data-workspace-option="control"]','[data-workspace-option="touch"]',
+      '[data-global-operator-action="back"]','[data-global-operator-action="go"]','[data-global-operator-action="dmx-blackout"]',
+      '[data-global-operator-action="video-blackout"]','[data-global-operator-action="all-blackout"]','.topbarTools > summary',
+      '.topbarBpmValue','[data-topbar-tap]','[data-window-control="minimize"]','[data-window-control="maximize"]','[data-window-control="close"]'];
+    const missing = expected.filter(selector=>{const matches=[...header.querySelectorAll(selector)].filter(visible);return matches.length!==1;});
+    const sizes=Object.fromEntries(expected.map(selector=>[selector,rect(header.querySelector(selector))]));
+    const source=header.querySelector('.topbarSyncSource').getBoundingClientRect(),sync=header.querySelector('.topbarSyncRow').getBoundingClientRect();
+    const headerStyle=getComputedStyle(header);
+    const rowBoxExtras=['paddingTop','paddingBottom','borderTopWidth','borderBottomWidth'].reduce((sum,key)=>sum+parseFloat(headerStyle[key]),0);
+    return {bounds,items,overlaps,text,missing,sizes,tempoRowsSeparate:source.bottom<=sync.top+1,
+      contained:items.every(r=>r.x>=bounds.x-1&&r.right<=bounds.right+1&&r.y>=bounds.y-1&&r.bottom<=bounds.bottom+1),
       horizontalOverflow:header.scrollWidth>header.clientWidth+1,nav:rect(nav),status:rect(header.querySelector('.status')),
+      windows:rect(header.querySelector('.windowControls')),project:rect(header.querySelector('.topbarProject')),
+      rows:headerStyle.gridTemplateRows.split(' ').map(parseFloat),rowGap:parseFloat(headerStyle.rowGap),rowBoxExtras,
       controlSelected:header.querySelector('[data-workspace-option="touch"]').getAttribute('aria-pressed')==='true'};
   });
+  const assertHeader = (geometry, width, state, scale = 1) => {
+    const label=`${width}px ${state}`;
+    assert.deepEqual(geometry.missing,[],`${label}: required controls remain visible`);
+    assert.deepEqual(geometry.overlaps,[],`${label}: overlapping header items`);
+    assert.equal(geometry.contained,true,`${label}: containment: ${JSON.stringify(geometry)}`);
+    assert.equal(geometry.horizontalOverflow,false,`${label}: horizontal overflow`);
+    assert.ok(geometry.items.every(item=>item.reachable),`${label}: all visible buttons are hit-testable`);
+    assert.ok(geometry.text.length===4&&geometry.text.every(item=>item.visible&&item.fits),`${label}: clock and sync labels are not clipped: ${JSON.stringify(geometry.text)}`);
+    assert.equal(geometry.tempoRowsSeparate,true,`${label}: source and sync text occupy separate rows`);
+    assert.ok(geometry.items.every(item=>item.fontSize>=13),`${label}: text size is preserved`);
+    for(const [selector,minimumWidth] of [['[data-global-operator-action="back"]',32],['[data-global-operator-action="go"]',48],
+      ['[data-global-operator-action="dmx-blackout"]',42],['[data-global-operator-action="video-blackout"]',42],['[data-global-operator-action="all-blackout"]',42],
+      ['[data-topbar-tap]',40],['[data-window-control="minimize"]',40],['[data-window-control="maximize"]',40],['[data-window-control="close"]',40]]) {
+      const size=geometry.sizes[selector];assert.ok(size.w>=minimumWidth&&size.h>=40,`${label}: authored button size ${selector}: ${JSON.stringify(size)}`);
+    }
+    if(width<=1500) {
+      if(scale===1) {
+        assert.deepEqual(geometry.rows,[40,40],`${label}: two explicit 40px rows`);
+        assert.equal(geometry.bounds.h,90,`${label}: two rows, row gap and borders`);
+      } else assert.ok(geometry.rows.length===2&&geometry.rows.every(height=>height>=40),`${label}: two full-size rows can grow naturally`);
+      assert.ok(geometry.status.y>=Math.max(geometry.nav.bottom,geometry.windows.bottom)+3,`${label}: operator row follows navigation and window buttons`);
+      assert.ok(geometry.project.w>0&&geometry.project.bottom<=geometry.status.y,`${label}: project identity remains on the first row`);
+    } else {
+      if(scale===1) {
+        assert.deepEqual(geometry.rows,[40],`${label}: wide desktop keeps one 40px row`);
+        assert.equal(geometry.bounds.h,42,`${label}: wide desktop keeps compact chrome`);
+      } else assert.ok(geometry.rows.length===1&&geometry.rows[0]>=40,`${label}: wide row retains its full-size minimum`);
+      assert.ok(Math.abs((geometry.status.y+geometry.status.h/2)-(geometry.nav.y+geometry.nav.h/2))<=1,`${label}: wide controls share the title row`);
+    }
+    const expectedHeight=(geometry.rows.reduce((sum,height)=>sum+height,0)+geometry.rowGap*(geometry.rows.length-1)+geometry.rowBoxExtras)*scale;
+    assert.ok(Math.abs(geometry.bounds.h-expectedHeight)<0.1,`${label}: rendered height matches grid tracks, gap, padding, borders and UI zoom: ${geometry.bounds.h}/${expectedHeight}`);
+  };
   const hash = contents => createHash('sha256').update(contents).digest('hex');
   const componentHashes = {};
   for (const name of ['WorkspaceChrome.tsx','WorkspaceChrome.css','TopbarTools.tsx']) {
@@ -119,27 +188,24 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     await page.goto(`${origin}header-proof?baseline=1`);
     await page.locator('.topbar').waitFor();
     evidence.before = await measure();
-    assert.ok(evidence.before.overlaps.length>0 || evidence.before.horizontalOverflow || !evidence.before.contained,
+    assert.ok(evidence.before.overlaps.length>0 || evidence.before.horizontalOverflow || !evidence.before.contained || evidence.before.text.some(item=>!item.visible||!item.fits),
       'baseline must reproduce the reported overlap or loss of containment');
     await page.locator('.workspaceChrome').screenshot({path:resolve(artifactDir,'header-before-1280.png')});
   }
-  for (const width of [960,1100,1280,1920,2560,3840]) {
-    await page.setViewportSize({width,height:776});
+  for (const [width,height] of [[960,640],[1100,720],[1280,720],[1366,768],[1500,900],[1501,900],[1920,1080],[2560,1440],[3840,2160]]) {
+    await page.setViewportSize({width,height});
     await page.goto(`${origin}header-proof`);
     await page.locator('.topbar').waitFor();
     const geometry = await measure();
-    assert.deepEqual(geometry.overlaps, [], `${width}px overlapping header items`);
-    assert.equal(geometry.contained, true, `${width}px containment: ${JSON.stringify(geometry)}`);
-    assert.equal(geometry.horizontalOverflow, false, `${width}px horizontal overflow`);
+    await writeFile(resolve(artifactDir,`header-geometry-${width}.json`),JSON.stringify(geometry,null,2));
+    await page.locator('.workspaceChrome').screenshot({path:resolve(artifactDir,`header-after-${width}.png`)});
+    assertHeader(geometry,width,'normal');
     assert.equal(geometry.controlSelected, true, 'actual Control route is touch');
-    assert.ok(Math.abs((geometry.status.y+geometry.status.h/2)-(geometry.nav.y+geometry.nav.h/2))<=1&&geometry.bounds.h===42, 'header remains one 42px row');
     await page.evaluate(()=>{window.proof.setSafety(true);window.proof.setDirty(true);window.proof.setLock('Partial');window.proof.setLabel('長いプロジェクト名'.repeat(12)+'.sdc *')});
     assert.equal(await page.locator('[data-global-operator-action="safety-blackout-release"]').count(),0, "no independent SAFE control");
     assert.equal(await page.locator('[data-global-operator-action="dmx-blackout"]').getAttribute("aria-pressed"),"true", "runtime blackout uses the DMX control");
     const expanded=await measure();
-    assert.deepEqual(expanded.overlaps, [], `${width}px safe/dirty/locked header overlap`);
-    assert.equal(expanded.contained,true,`${width}px safe/dirty/locked containment`);
-    assert.equal(expanded.horizontalOverflow,false,`${width}px safe/dirty/locked overflow`);
+    assertHeader(expanded,width,'safe/dirty/locked');
     const go=expanded.items.find(i=>i.label==='GO');
     const tap=expanded.items.find(i=>i.label==='Tap');
     assert.ok(go.w>=48&&go.h>=40&&tap.w>=40&&tap.h>=40, 'existing hit sizes preserved');
@@ -160,9 +226,31 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     assert.equal(tools.contained,true,`${width}px Tools popup containment`);
     assert.equal(tools.buttonsReachable,true,`${width}px Tools hit testing: ${JSON.stringify(tools.buttons)}`);
     if(width===1280) await page.screenshot({path:resolve(artifactDir,'header-tools-1280.png')});
+    const learnStates=[];
+    if(width===960||width===1280) {
+      for(const mode of ['midi','osc','dmx']) {
+        await page.locator(`[data-control-learn-toggle="${mode}"]`).click();
+        const learn=await page.evaluate(()=>{
+          const prompt=document.querySelector('.controlLearnPrompt'),r=prompt.getBoundingClientRect();
+          const header=document.querySelector('.topbar').getBoundingClientRect();
+          const otherRows=[...prompt.parentElement.children,document.querySelector('.topbarToolsPopover')].filter(el=>el&&el!==prompt&&el.checkVisibility({checkVisibilityCSS:true})).map(el=>el.getBoundingClientRect());
+          const buttons=[...document.querySelectorAll('.topbar button,.topbar summary')].filter(el=>el.checkVisibility({checkVisibilityCSS:true})).map(el=>{
+            const b=el.getBoundingClientRect(),hit=document.elementFromPoint(b.x+b.width/2,b.y+b.height/2);
+            return {label:el.getAttribute('aria-label')||el.textContent.trim(),reachable:b.width>0&&b.height>0&&el.contains(hit)};
+          });
+          return {belowHeader:r.top>=header.bottom,contained:r.left>=0&&r.right<=innerWidth&&r.bottom<=innerHeight,
+            staticPosition:getComputedStyle(prompt).position==='static',
+            overlaps:otherRows.some(b=>Math.min(b.right,r.right)-Math.max(b.left,r.left)>1&&Math.min(b.bottom,r.bottom)-Math.max(b.top,r.top)>1),buttons};
+        });
+        assert.ok(learn.belowHeader&&learn.contained&&learn.staticPosition&&!learn.overlaps&&learn.buttons.every(button=>button.reachable),`${width}px ${mode} Learn prompt and controls remain usable: ${JSON.stringify(learn)}`);
+        if(mode==='midi') await page.screenshot({path:resolve(artifactDir,`header-learn-${width}.png`)});
+        learnStates.push({mode,...learn});
+        await page.locator(`[data-control-learn-toggle="${mode}"]`).click();
+      }
+    }
     await page.locator('.topbarTools > summary').press('Escape');
     assert.equal(await page.locator('.topbarTools').getAttribute('open'),null);
-    evidence.viewports.push({width,geometry,expanded,tools});
+    evidence.viewports.push({width,height,geometry,expanded,tools,learnStates});
   }
   for (const action of ['back','go']) await page.locator(`[data-global-operator-action="${action}"]`).click();
   await page.locator('.topbarTools > summary').click();
@@ -204,14 +292,33 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
   await page.locator('.workspaceOperationsButton').click();
   await page.locator('[data-project-menu-action="save"]').click();
   assert.equal(await page.evaluate(()=>window.proof.calls.at(-1)),'save');
+  evidence.presentation=[];
+  for(const width of [1280,1501]) {
+    await page.setViewportSize({width,height:800});
+    await page.goto(`${origin}header-proof`);
+    await page.locator('.topbar').waitFor();
+    await page.evaluate(()=>{window.proof.setLocale('ja');window.proof.setScale(110)});
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    const geometry=await measure();
+    await writeFile(resolve(artifactDir,`header-geometry-ja-110-${width}.json`),JSON.stringify(geometry,null,2));
+    await page.locator('.workspaceChrome').screenshot({path:resolve(artifactDir,`header-ja-110-${width}.png`)});
+    assert.equal(await page.locator('html').getAttribute('lang'),'ja','actual localization is active');
+    assertHeader(geometry,width,'Japanese, 110% UI scale',1.1);
+    await page.evaluate(()=>{window.proof.setLock('Partial');window.proof.setLabel('長いプロジェクト名'.repeat(12)+'.sdc *')});
+    const expanded=await measure();
+    assertHeader(expanded,width,'Japanese, 110% UI scale, locked',1.1);
+    evidence.presentation.push({width,locale:'ja',uiScale:110,geometry,expanded});
+  }
   assert.deepEqual(errors,[]);
   evidence.interactionsPassed=true;
   evidence.errors=errors;
   await writeFile(resolve(artifactDir,'header-evidence.json'),JSON.stringify(evidence,null,2)+'\n');
-  console.log(`PASS single-row Control header: six widths, safe/dirty/locked states, no overlap, retained hit targets, transport/blackout/learn/tempo/project/workspace actions and Escape focus; evidence=${artifactDir}`);
+  console.log(`PASS responsive Control header: nine widths, safe/dirty/locked states, no clipping or overlap, retained hit targets, transport/blackout/learn/tempo/project/workspace actions and Escape focus; evidence=${artifactDir}`);
 } finally {
   await browser?.close();
   await server?.close();
   await unlink(fixturePath).catch(()=>{});
+  await unlink(baselineFixturePath).catch(()=>{});
   await unlink(baselinePath).catch(()=>{});
+  await unlink(baselineCssPath).catch(()=>{});
 }

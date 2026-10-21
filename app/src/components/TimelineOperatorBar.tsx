@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { onCleanup, Show } from "solid-js";
 import type { TimelineContextDrawer, TimelineDeskSurface } from "../uiModes";
 import type {
   TimelineFollowRuntimeSummary,
@@ -95,6 +95,51 @@ const formatOperatorTime = (timeMs: number) => {
 };
 
 export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
+  let stopToolsSizing = () => {};
+  const constrainToolsToViewport = (details: HTMLDetailsElement) => {
+    stopToolsSizing();
+    const header = details.closest('.timelineArrangerHeader');
+    const panel = details.querySelector<HTMLDivElement>('.timelineToolsDisclosurePanel');
+    // Other hosts open upward and keep their existing positioning contract.
+    if (!details.open || !header || !panel) return;
+    const layout = header.closest('.layout');
+    const update = () => {
+      if (!details.open || !panel.isConnected) return;
+      const bounds = panel.getBoundingClientRect();
+      const cssWidth = Number.parseFloat(getComputedStyle(panel).width);
+      if (bounds.width <= 0 || !Number.isFinite(cssWidth) || cssWidth <= 0) return;
+      const zoom = bounds.width / cssWidth;
+      const viewport = window.visualViewport;
+      const bottom = Math.min(window.innerHeight,
+        viewport ? viewport.offsetTop + viewport.height : window.innerHeight,
+        layout?.getBoundingClientRect().bottom ?? window.innerHeight);
+      const available = `${Math.max(0, (bottom - bounds.top - 8) / zoom)}px`;
+      if (panel.style.getPropertyValue('--timeline-tools-available-height') !== available) {
+        panel.style.setProperty('--timeline-tools-available-height', available);
+      }
+    };
+    const resize = new ResizeObserver(update);
+    resize.observe(header);
+    resize.observe(panel);
+    if (layout) resize.observe(layout);
+    const chrome = document.querySelector('.workspaceChrome');
+    if (chrome) resize.observe(chrome);
+    const preferences = new MutationObserver(update);
+    preferences.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+    window.addEventListener('resize', update);
+    window.visualViewport?.addEventListener('resize', update);
+    document.addEventListener('scroll', update, true);
+    stopToolsSizing = () => {
+      resize.disconnect();
+      preferences.disconnect();
+      window.removeEventListener('resize', update);
+      window.visualViewport?.removeEventListener('resize', update);
+      document.removeEventListener('scroll', update, true);
+      panel.style.removeProperty('--timeline-tools-available-height');
+    };
+    update();
+  };
+  onCleanup(() => stopToolsSizing());
   const selectedCueArmed = () => props.selectedCueId !== null && props.armedCueId === props.selectedCueId;
   const loopEnabled = () => props.loopRuntime.status !== "disabled";
   const setLoopBoundary = (edge: "a" | "b") => {
@@ -184,7 +229,8 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
         <button type="button" title="Double loop length" disabled={props.loopRegion === null} onClick={() => void props.onScaleLoop("double")}>×2</button>
         <output class={`timelineLoopState ${props.loopRuntime.status}`} aria-live="polite" data-no-localize>{props.loopRuntime.status === "armed" ? "ARMED" : props.loopRuntime.status === "looping" ? `LOOP ×${props.loopRuntime.wrap_count}` : "OFF"}</output>
       </div>
-      <details class="timelineToolsDisclosure" name="timeline-header-disclosure">
+      <details class="timelineToolsDisclosure" name="timeline-header-disclosure"
+        onToggle={(event) => constrainToolsToViewport(event.currentTarget)}>
         <summary title="Timeline tools" aria-label="Timeline tools">
           <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▤</span>
         </summary>

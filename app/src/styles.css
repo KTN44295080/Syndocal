@@ -38755,7 +38755,7 @@ html:not([data-window-mode="fullscreen"])
   bottom: auto;
   width: min(356px, calc(100vw - 24px));
   max-width: min(356px, calc(100vw - 24px));
-  max-height: min(680px, calc(100vh - 160px));
+  max-height: min(680px, var(--timeline-tools-available-height, calc(100vh - 160px)));
   overflow: hidden auto;
 }
 

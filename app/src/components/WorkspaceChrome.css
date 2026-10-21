@@ -1,19 +1,30 @@
-/* Keep one title row. Occasional controls live in Tools and Workspaces in
-   the project menu; intrinsic tracks cannot overlap the project label. */
+/* Wide windows keep one title row. Constrained windows give the operator
+   controls their own row rather than clipping controls or shrinking labels. */
 .workspaceChrome:has(> .topbarOrganized) { overflow: visible; }
 .topbar.topbarOrganized {
+  grid-template-areas: "navigation project controls window";
   grid-template-columns: max-content minmax(0, 1fr) max-content 120px;
-  grid-template-rows: 40px;
+  grid-template-rows: minmax(40px, auto);
   gap: 8px;
   overflow: visible;
 }
 
+.topbarOrganized > .topbarLeft { grid-area: navigation; }
+.topbarOrganized > .topbarProject { grid-area: project; }
+.topbarOrganized > .status { grid-area: controls; }
+.topbarOrganized > .windowControls { grid-area: window; }
 .topbarOrganized > .topbarLeft,
 .topbarOrganized > .topbarProject,
 .topbarOrganized > .status { overflow: visible; }
 .topbarOrganized > .topbarProject { justify-content: flex-start; }
 .topbarOrganized > .status { width: auto; flex-wrap: nowrap; gap: 8px; }
-.topbarReadoutStrip { display: contents; }
+.topbarReadoutStrip {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
 
 .topbarOrganized .topbarTempoCluster,
 .topbarOrganized .topbarStateCluster {
@@ -30,24 +41,30 @@
 .topbarTempoSync {
   display: grid;
   flex: 0 0 auto;
-  grid-template-rows: 14px 14px;
+  grid-template-rows: auto auto;
   align-content: center;
-  width: 106px;
-  height: 40px;
-  min-width: 0;
+  gap: 2px;
+  width: max-content;
+  min-width: 106px;
+  min-height: 40px;
   padding: 0 4px;
   color: var(--theme-muted);
   font-size: var(--fs-text);
-  line-height: 14px;
+  line-height: 1.4;
 }
-.topbarSyncSource { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.topbarSyncRow { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; }
+.topbarSyncSource { white-space: nowrap; }
+.topbarSyncRow { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .topbarBeats { display: inline-flex; flex: 0 0 auto; gap: 2px; }
 .topbarBeats i { width: 8px; height: 8px; box-sizing: border-box; border: 1px solid var(--theme-line-strong); border-radius: 0; background: var(--theme-inset); }
 .topbarBeats i.lit { border-color: var(--theme-ok); background: var(--theme-ok); box-shadow: 0 0 0 2px var(--theme-line); }
 .topbarSyncStatus { flex: 0 0 auto; white-space: nowrap; font-size: var(--fs-text); font-weight: 700; letter-spacing: 0; }
 .topbarTempoSync[data-topbar-sync-state="LOCK"] .topbarSyncStatus { color: var(--theme-ok); }
 .topbarTempoSync[data-topbar-sync-state="STALE"] .topbarSyncStatus { color: var(--theme-warn); }
+.topbarOrganized .topbarShowClockStatus {
+  max-width: none;
+  overflow: visible;
+}
+.topbarOrganized .topbarShowClockStatus > strong { overflow: visible; }
 
 .topbarTools { position: relative; flex: 0 0 auto; }
 .topbarTools > summary {
@@ -90,45 +107,33 @@
 .topbarLockedOperations .workspaceOperationsButton { width: auto; white-space: nowrap; }
 .topbarOrganized .topbarProject > span { overflow: hidden; text-overflow: ellipsis; }
 
-@media (max-width: 1100px) {
-  .topbar.topbarOrganized { grid-template-columns: max-content max-content 120px; }
-  .topbarOrganized > .topbarProject { display: none; }
-  .topbarOrganized .topbarShowClockStatus > span { display: none; }
-  .topbarOrganized .topbarTransportCluster > [data-global-operator-action="dmx-blackout"] { margin-left: 0; }
-  /* The tempo cluster (BPM, Tap, sync) must fit the 960px window minimum next to
-     the window controls. Keep the sync source and LOCK/STALE status; the beat
-     lights are the part omitted at the compact boundary. */
-  .topbarTempoSync { width: 70px; }
-  .topbarTempoSync .topbarBeats { display: none; }
-  /* The 14px chrome badge and key labels need a little less tracking and padding here so the
-     whole bar stays inside the 960px minimum window. */
-  .topbarOrganized .topbarShowClockStatus { letter-spacing: .02em; padding-inline: 4px; }
-}
-
-/* Compact workspaces can be narrower than the native window minimum.
-   Keep navigation, GO/Blackout, Tools and window controls fixed; tempo and
-   status readouts scroll locally without reducing authored control sizes. */
-@media (max-width: 959px) {
-  .workspaceChrome:has(> .topbarOrganized) { min-width: 0; }
+@media (max-width: 1500px) {
   .topbar.topbarOrganized {
+    grid-template-areas:
+      "navigation project window"
+      "controls controls controls";
     grid-template-columns: max-content minmax(0, 1fr) 120px;
-    width: 100%;
-    min-width: 0;
+    grid-template-rows: minmax(40px, auto) minmax(40px, auto);
+    row-gap: 4px;
+    padding-bottom: 4px;
   }
-  .topbarOrganized > .status { justify-content: flex-start; }
-  .topbarReadoutStrip {
-    display: flex;
-    flex: 1 1 auto;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-    overflow: auto hidden;
-    scrollbar-width: none;
+  .topbarOrganized > .status {
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
-  .topbarReadoutStrip::-webkit-scrollbar { display: none; }
+  .topbarOrganized > .topbarProject > span { display: block; }
+  .topbarOrganized .topbarReadoutStrip {
+    flex-wrap: wrap;
+    margin-left: auto;
+    max-width: 100%;
+  }
+  .workspaceChrome > .controlLearnPrompt {
+    position: static;
+    justify-self: end;
+  }
 }
 
-/* Condensed label typography retains the existing title row and hit targets. */
+/* Condensed label typography retains the existing label and hit-target sizes. */
 .topbarOrganized :is(.workspaceTab, .workspaceOperationsButton, .topbarTools > summary) {
   font-family: var(--theme-font-label);
   font-weight: 700;

@@ -974,6 +974,7 @@ const measureLighting = (client) => evaluate(client, `(() => {
 
 const measureTopbarIdentity = (client) => evaluate(client, `(() => {
   const topbar = document.querySelector('.topbar');
+  const navigation = topbar?.querySelector('.topbarLeft');
   const project = document.querySelector('.topbarProject');
   const brand = project?.querySelector(':scope > strong');
   const label = project?.querySelector(':scope > span');
@@ -987,8 +988,40 @@ const measureTopbarIdentity = (client) => evaluate(client, `(() => {
     display: getComputedStyle(element).display,
     rect: [element.getBoundingClientRect().x, element.getBoundingClientRect().y, element.getBoundingClientRect().width, element.getBoundingClientRect().height],
   } : null;
+  const visible = (element) => element instanceof HTMLElement &&
+    element.checkVisibility({ checkVisibilityCSS: true }) &&
+    element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
+  const bounds = topbar?.getBoundingClientRect();
+  const contained = (rect) => Boolean(bounds && rect && rect.left >= bounds.left - 1 &&
+    rect.right <= bounds.right + 1 && rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1);
+  const required = [
+    ['.appMenuButton', 29, 29], ['[data-workspace-option="setup"]', 70, 34], ['[data-workspace-option="control"]', 70, 34],
+    ['[data-workspace-option="touch"]', 70, 34], ['[data-global-operator-action="back"]', 32],
+    ['[data-global-operator-action="go"]', 48], ['[data-global-operator-action="dmx-blackout"]', 42],
+    ['[data-global-operator-action="video-blackout"]', 42], ['[data-global-operator-action="all-blackout"]', 42],
+    ['.topbarTools > summary', 52], ['.topbarBpmValue', 1, 28], ['[data-topbar-tap]', 40],
+    ['[data-window-control="minimize"]', 40], ['[data-window-control="maximize"]', 40], ['[data-window-control="close"]', 40],
+  ];
+  const controls = required.map(([selector, minimumWidth, minimumHeight = 40]) => {
+    const element = topbar?.querySelector(selector);
+    const rect = element?.getBoundingClientRect();
+    const hit = rect && document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    return { selector, visible: visible(element), contained: contained(rect), reachable: Boolean(element?.contains(hit)),
+      width: rect?.width ?? 0, height: rect?.height ?? 0, minimumWidth, minimumHeight };
+  });
+  const items = [...(topbar?.querySelectorAll('button, summary, .topbarProject > strong, .topbarProject > span, .topbarStateCluster > span, .topbarSyncSource, .topbarSyncStatus') ?? [])]
+    .filter((element) => visible(element) && !element.closest('.topbarToolsPopover, .topbarWorkspaceMenu'));
+  const itemRects = items.map((element) => element.getBoundingClientRect());
+  const overlaps = itemRects.some((left, index) => itemRects.slice(index + 1).some((right) =>
+    Math.min(left.right, right.right) - Math.max(left.left, right.left) > 1 &&
+    Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top) > 1));
   return {
     topbar: state(topbar),
+    navigation: state(navigation),
+    rows: topbar ? getComputedStyle(topbar).gridTemplateRows.split(' ').map(Number.parseFloat) : [],
+    controls,
+    overlaps,
+    itemsContained: itemRects.every(contained),
     project: state(project),
     brand: state(brand),
     label: state(label),
@@ -1471,10 +1504,20 @@ try {
     const topbarBounds = topbarIdentity.topbar?.rect;
     const statusBounds = topbarIdentity.status?.rect;
     const windowControlBounds = topbarIdentity.windowControls?.rect;
-    assert.ok(projectBounds && brandBounds && brandBounds[0] >= projectBounds[0] - 1 && brandBounds[0] + brandBounds[2] <= projectBounds[0] + projectBounds[2] + 1 && projectBounds[0] + projectBounds[2] <= statusBounds[0] + 1, `Topbar project identity stays contained before show controls at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity)}`);
+    const navigationBounds = topbarIdentity.navigation?.rect;
+    const narrowHeader = viewport.width <= 1500;
+    assert.ok(projectBounds && brandBounds && brandBounds[0] >= projectBounds[0] - 1 && brandBounds[0] + brandBounds[2] <= projectBounds[0] + projectBounds[2] + 1, `Topbar project identity stays contained at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity)}`);
     assert.ok(statusBounds && statusBounds[2] > 0 && statusBounds[3] > 0 && topbarIdentity.status.display !== "none", `Topbar transport/status controls remain visibly rendered at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity.status)}`);
     assert.ok(windowControlBounds && windowControlBounds[2] > 0 && windowControlBounds[3] > 0 && topbarIdentity.windowControls.display !== "none", `Window controls remain visibly rendered at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity.windowControls)}`);
-    assert.ok(topbarBounds && statusBounds && windowControlBounds && statusBounds[0] >= topbarBounds[0] - 1 && windowControlBounds[0] >= statusBounds[0] - 1 && windowControlBounds[0] + windowControlBounds[2] <= topbarBounds[0] + topbarBounds[2] + 1, `Topbar transport/status/window controls remain contained at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity)}`);
+    assert.ok(topbarBounds && [navigationBounds, projectBounds, statusBounds, windowControlBounds].every((rect) => rect && rect[0] >= topbarBounds[0] - 1 && rect[1] >= topbarBounds[1] - 1 && rect[0] + rect[2] <= topbarBounds[0] + topbarBounds[2] + 1 && rect[1] + rect[3] <= topbarBounds[1] + topbarBounds[3] + 1), `Topbar navigation/project/operator/window groups remain contained at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity)}`);
+    assert.deepEqual(topbarIdentity.rows, narrowHeader ? [40, 40] : [40], `Topbar uses two full-size rows on constrained widths and one on wide desktops at ${viewport.width}x${viewport.height}`);
+    assert.equal(topbarBounds[3], narrowHeader ? 90 : 42, "Responsive header preserves 40px controls and explicit row spacing");
+    assert.ok(narrowHeader
+      ? statusBounds[1] >= Math.max(navigationBounds[1] + navigationBounds[3], windowControlBounds[1] + windowControlBounds[3]) + 3 && projectBounds[1] + projectBounds[3] <= statusBounds[1]
+      : projectBounds[0] + projectBounds[2] <= statusBounds[0] + 1 && statusBounds[0] + statusBounds[2] <= windowControlBounds[0] + 1,
+    `Topbar groups follow the responsive row contract at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity)}`);
+    assert.ok(topbarIdentity.itemsContained && !topbarIdentity.overlaps && topbarIdentity.controls.every((control) => control.visible && control.contained && control.reachable && control.width >= control.minimumWidth && control.height >= control.minimumHeight), `Topbar controls remain visible, hit-testable, full-size and without overlaps at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity)}`);
+    assert.ok(topbarIdentity.topbar.clientWidth >= topbarIdentity.topbar.scrollWidth - 1, "Responsive header requires no horizontal scroll");
     assert.ok(topbarIdentity.status.clientWidth >= topbarIdentity.status.scrollWidth, `Topbar transport/status controls require no hidden horizontal scroll at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity.status)}`);
     assert.ok(topbarIdentity.windowControls.clientWidth >= topbarIdentity.windowControls.scrollWidth, `Window controls are not clipped at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity.windowControls)}`);
     assert.equal(await clickVisible(client, '.appMenuButton'), true, "open project menu for Workspaces");
@@ -1633,12 +1676,48 @@ try {
     assert.equal(toolsLast?.directPerformanceEditorInsidePopupHorizontally, true, `Timeline Performance editor remains horizontally inside the popup after nested details open at ${viewport.width}x${viewport.height}: ${JSON.stringify(toolsLast)}`);
     assert.deepEqual(toolsLast?.nestedHorizontalRegions?.map(({ name }) => name), ['bank', 'cueAudio', 'phases'], `Timeline Tools measures every nested horizontal region at ${viewport.width}x${viewport.height}`);
     assert.equal(toolsLast?.nestedHorizontalRegions?.every(({ clientWidth, scrollWidth }) => clientWidth > 0 && scrollWidth <= clientWidth + 1), true, `Timeline Bank/Cue Audio/Phases regions have no horizontal overflow after nesting at ${viewport.width}x${viewport.height}: ${JSON.stringify(toolsLast?.nestedHorizontalRegions)}`);
+    const toolsZoom = await evaluate(client, `(async () => {
+      const root = document.documentElement;
+      const previous = [root.style.getPropertyValue('--ui-scale'), root.style.getPropertyValue('--ui-scale-inverse')];
+      const settle = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const measure = async () => {
+        await settle();
+        const panel = document.querySelector('.timelineToolsDisclosure[open] .timelineToolsDisclosurePanel');
+        panel.scrollTop = panel.scrollHeight;
+        await settle();
+        const rect = panel.getBoundingClientRect();
+        const layout = panel.closest('.layout').getBoundingClientRect();
+        const last = [...panel.querySelectorAll('button')].filter(button => !button.disabled && button.checkVisibility({ checkVisibilityCSS: true })).at(-1);
+        const target = last.getBoundingClientRect();
+        const hit = document.elementFromPoint(target.x + target.width / 2, target.y + target.height / 2);
+        const zoom = rect.width / Number.parseFloat(getComputedStyle(panel).width);
+        return { top: rect.top, bottom: rect.bottom, layoutTop: layout.top, layoutBottom: layout.bottom,
+          viewportBottom: innerHeight, zoom, budget: panel.style.getPropertyValue('--timeline-tools-available-height'),
+          contained: rect.top >= layout.top - 1 && rect.bottom <= Math.min(innerHeight, layout.bottom) - 7,
+          targetHeight: target.height, targetInside: target.top >= rect.top && target.bottom <= rect.bottom,
+          hit: last.contains(hit) };
+      };
+      try {
+        root.style.setProperty('--ui-scale', '1.1');
+        root.style.setProperty('--ui-scale-inverse', String(10000 / 110) + '%');
+        const scaled = await measure();
+        root.style.setProperty('--ui-scale', previous[0]);
+        root.style.setProperty('--ui-scale-inverse', previous[1]);
+        return { scaled, restored: await measure() };
+      } finally {
+        root.style.setProperty('--ui-scale', previous[0]);
+        root.style.setProperty('--ui-scale-inverse', previous[1]);
+      }
+    })()`);
+    assert.ok([toolsZoom.scaled, toolsZoom.restored].every(state => state.contained && state.targetInside && state.hit && state.budget && state.targetHeight >= 44 * state.zoom - 0.5), `Open Timeline Tools follows UI zoom while retaining full-size, scroll-reachable terminal controls: ${JSON.stringify(toolsZoom)}`);
+    await writeFile(resolve(screenshotDir, `timeline-tools-zoom-${viewport.width}x${viewport.height}.json`), JSON.stringify(toolsZoom, null, 2));
     assert.equal(await clickVisible(client, '.groupLiveMixerDisclosure > summary'), true, "open Live Mixer");
     const mixerOpen = await waitFor(async () => {
       const value = await measureTimeline(client);
       return value?.mixerOpen ? value : false;
     }, "Live Mixer disclosure");
     assert.equal(mixerOpen.toolsOpen, false, "Live Mixer and Tools disclosures are mutually exclusive in the gate sequence");
+    await waitFor(() => evaluate(client, `document.querySelector('.timelineToolsDisclosurePanel').style.getPropertyValue('--timeline-tools-available-height') === ''`), "closed Timeline Tools releases measured height");
     assert.ok(mixerOpen.mixerPanelInViewport, `Live Mixer remains contained at ${viewport.width}x${viewport.height}`);
     assert.equal(mixerOpen.mixerPanelElementFromPointReachable, true, `Live Mixer is reachable by elementFromPoint: ${JSON.stringify(mixerOpen.mixerPanelHitPoint)}`);
     assert.ok(mixerOpen.mixerInteractiveCount > 0, "Live Mixer remains interactive");

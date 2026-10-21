@@ -231,3 +231,92 @@ Next bounded investigation: observe native ISF input dimensions, scratch
 reuse/recreation counts and per-layer phase totals. The isolated warm savings
 alone do not explain the remaining roughly 75 ms native prepare path. Preserve
 the canonical rendering/fault paths and do not claim 60 fps completion.
+
+## Native phase observation and takeover checkpoint
+
+Base: `main` at `f6c5fad38f4b1b0d06bf9467076a1828064bca3d`, which includes
+the committed scratch reuse implementation. Campaign:
+`native/88baa1b5-514c-47d4-8626-21b0729a59e5/` under the evidence root above.
+The inherited temporary trace was reviewed, measured, archived, and removed.
+It did not change rendering eligibility, LastValid, cancellation, or fault policy.
+
+The exact checkout release executable was built with the pinned MSVC 14.44
+procedure and an isolated QA identifier. SHA256:
+`a1891fbb02cdd5714d6fec10d94b02e9195b9b2878df0b23e07ba5b15810e725`.
+`build-takeover-01.json` binds the unchanged three trace source files and binary.
+The same executable, fixture, and media were used in fresh processes for trace
+ON and trace OFF. The fixture contains three H.264 layers with three ISF stages
+on each layer; every observed stack and the actual Display were 2560 x 1600.
+The trace OFF child had the opt-in environment variable removed and produced
+an empty stderr file. Both native runs required one responsive exact executable
+instance and observed maximization before acquiring output control.
+
+| Same executable, actual 2560 x 1600 Display | Trace ON | Trace OFF |
+| --- | ---: | ---: |
+| Measurement interval | 59.603023 s | 59.647925 s |
+| Application submissions / interval | 1092 | 1181 |
+| Submission counter fps | 18.3212 | 19.7995 |
+| Dropped-frame counter delta | 2484 | 2399 |
+| Native prepare p50 / p95 | 56.7685 / 62.5595 ms | 54.9651 / 60.5187 ms |
+| Native validation samples / deadline misses | 600 / 600 | 600 / 600 |
+| Native frame-budget result | **failed** | **failed** |
+| Stop command wall time | 412.6158 ms | 413.4085 ms |
+
+Evidence: `perf-h264-1080-3l-3fx-trace02/evidence.json` and
+`perf-h264-1080-3l-3fx-off02/evidence.json`, with their launch records. Their
+`passed` field means the guarded observation and Stop completed; it does not
+override `frame_budget_pass: false`. Both runs had zero decoder/output failures.
+Stop returned Ready/Standby with both output domains denied, no open output
+windows, active transport routes, or health rows. PIDs 32520 and 38456 were then
+closed through the protected Discard/Stop/Close dialog. Earlier `trace01` and
+`off01` measurement attempts failed the maximization preflight before Arm and
+remain preserved. Japanese-path helpers read JSON explicitly as UTF-8.
+
+These are single bounded observations, not a controlled speedup claim against
+the earlier 14.6877 fps campaign. The trace reached its hard cap before the end of the ON
+run, so the ON/OFF whole-run difference is not a per-frame tracing cost estimate.
+Neither the submission counter nor these checks establish physical scanout.
+
+`trace-analysis-01.json` retains all 512 records and validates their correlation,
+phase bounds, dimensions, stage counts, and monotonic scratch counters. Parent 1
+is excluded as warmup; parent 897 is excluded because the cap cut off its third
+stack record. The adopted sample is 55 complete parents / 165 stacks. All 170 recorded
+stacks succeeded at 2560 x 1600. Runtime 1, at its last observed call 2690, had
+**created 1 / reused 2689 / resized 0**; this is not a lifetime count after the
+last sampled call. Scratch selection was below the trace's 1 microsecond
+resolution on every adopted stack.
+
+| Same-parent phase sum across three stacks | p50 | p95 |
+| --- | ---: | ---: |
+| Entire synchronous stacks | 18.310 ms | 19.401 ms |
+| Map / poll / wait / receive | 9.101 ms | 10.325 ms |
+| CPU unpack / unmap | 6.268 ms | 6.764 ms |
+
+The separately scoped compose span was 7.041 / 7.844 ms p50 / p95. Percentiles
+must not be added to reconstruct a whole frame. The wait bucket includes queue
+completion and host wait; it is not GPU kernel time.
+
+Synchronous stderr writes contaminate enclosing spans. Each span clocks its end
+before writing its line, so layer FX includes stack log writes, the prepare loop
+includes layer log writes, and outer spans include inner log writes. In
+particular, the 23.627 ms FX residual and 11.693 ms prepare-loop residual are
+**not** established product overhead. Trace Display p50 82.456 ms and native
+prepare p50 56.7685 ms also have different boundaries and sample populations;
+their difference cannot be used to subtract an exact observer cost.
+
+Independent review found no P1/P2 issue in the temporary trace and verified
+the evidence interpretation and removal patch. The pinned release ISF test run
+passed **72 tests / 1 ignored** (`isf-regression-takeover-01.log`). Build warnings:
+Rust 0 (baseline 0, delta 0); existing Vite chunk notice 1 (baseline 1, delta 0).
+The measured executable, seven FFmpeg DLLs, three trace sources, and exact patch
+are preserved in `trace-archive/`. Its manifest verifies both tracked Rust files
+returned to HEAD and the temporary trace module was removed. Header layout
+acceptance and the final standard executable are recorded separately in
+[the header checkpoint](TOPBAR_LAYOUT_2026-10-22.md).
+
+The diagnosis rules out repeated scratch recreation in this sampled workload.
+The next bounded performance investigation should buffer records until after
+the Display end timestamp, then separately measure the input
+`Arc::unwrap_or_clone`, shader/control/stage-key preparation, queue retirement,
+and output LastValid clone. Current evidence does not justify changing GPU
+eligibility or LastValid policy. The 60 fps native FX budget remains unresolved.
