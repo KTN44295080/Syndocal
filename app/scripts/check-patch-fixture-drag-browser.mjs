@@ -25,12 +25,13 @@ import {DmxPatchMapPanel} from '/src/components/${baseline?baselineName:'DmxPatc
 const fixture=(id,address,label)=>({id,address,label,universe:1,controls:[{attribute:'Dimmer',offsets:[8]}],manufacturer:'Generic',profile_name:'8ch'});
 const [fixtures,setFixtures]=createSignal([fixture(1,1,'Front'),fixture(2,17,'Back'),fixture(3,65,'Fixed')]);
 const [selected,setSelected]=createSignal(null),[hover,setHover]=createSignal(null),[drag,setDrag]=createSignal(null),[mode,setMode]=createSignal('grid');
+const [revealRequest,setRevealRequest]=createSignal();
 const map=createMemo(()=>({universe:1,used:24,free:488,largestFree:440,segments:fixtures().map(f=>({fixture:f,start:f.address,end:f.address+7,left:(f.address-1)/512*100,width:8/512*100}))}));
 const cells=createMemo(()=>Array.from({length:512},(_,i)=>{const channel=i+1,segment=map().segments.find(s=>channel>=s.start&&channel<=s.end)??null;return{channel,segment,isStart:segment?.start===channel,isSelected:segment?.fixture.id===selected(),plannedIndex:hover()===channel?0:null,plannedStart:hover()===channel,plannedConflict:false}}));
-window.proof={drops:[],starts:[],selected,setSelected,setFixtures,fixtures,mode,setMode,clone:()=>setFixtures(fixtures().map(f=>({...f,controls:[...f.controls]})))};
-render(()=> <div class="panel" style={{width:'100%',height:'850px'}}><DmxPatchMapPanel activeUniverse={1} universeOptions={[1]} viewMode={mode()} nextFreeAddress={25} activeMap={map()} addressCells={cells()} universeMaps={[map()]} fixtureCount={3} selectedFixtureId={selected()}
+window.proof={drops:[],starts:[],selected,setSelected,setFixtures,fixtures,mode,setMode,setRevealRequest,clone:()=>setFixtures(fixtures().map(f=>({...f,controls:[...f.controls]})))};
+render(()=> <div class="panel" style={{width:'100%',height:'850px'}}><DmxPatchMapPanel activeUniverse={1} universeOptions={[1]} viewMode={mode()} revealAddressRequest={revealRequest()} activeMap={map()} addressCells={cells()} universeMaps={[map()]} fixtureCount={3} selectedFixtureId={selected()}
 plannedAddressSummary="" profileDragActive={false} profileDndStatus={null} fixtureDragActive={Boolean(drag())} fixtureDndStatus={hover()===null?null:'valid'}
-onNextFreeAddress={()=>{}} onUniverse={()=>{}} onViewMode={setMode} onSelectFixture={f=>setSelected(f.id)} onAddressCell={c=>setSelected(c.segment?.fixture.id??null)}
+onUniverse={()=>{}} onViewMode={setMode} onSelectFixture={f=>setSelected(f.id)} onAddressCell={c=>setSelected(c.segment?.fixture.id??null)}
 onProfileDragHover={()=>{}} onProfileDragLeave={()=>{}} onProfileDrop={()=>{}}
 onFixtureDragStart={(f,selection)=>{window.proof.starts.push({id:f.id,selection:selection?.map(f=>f.id)});setDrag(f)}} onFixtureDragEnd={()=>{setDrag(null);setHover(null)}} onFixtureDragHover={setHover} onFixtureDragLeave={()=>setHover(null)} onFixtureDrop={channel=>{window.proof.drops.push(channel);setDrag(null);setHover(null)}}/></div>,document.getElementById('root'));
 `);
@@ -80,6 +81,37 @@ onFixtureDragStart={(f,selection)=>{window.proof.starts.push({id:f.id,selection:
   assert.equal(await page.evaluate(()=>window.proof.drops.at(-1)),80);
   result.listMove=true;result.pointerCancelNoApply=true;
   await page.screenshot({path:resolve(artifact,'list.png'),fullPage:true});
+  // Source's sole Next Free action must reveal an off-screen address after
+  // returning from List, and a repeated request must work after manual scroll.
+  await page.evaluate(()=>{
+    document.querySelector('.dmxPatchMap').style.height='260px';
+    window.proof.setRevealRequest({universe:1,address:512});
+    window.proof.setMode('grid');
+  });
+  const addressRevealed=()=>{
+    const grid=document.querySelector('.dmxAddressGrid'),cell=grid?.querySelector('[data-dmx-address="512"]');
+    if(!grid||!cell)return false;
+    const g=grid.getBoundingClientRect(),c=cell.getBoundingClientRect();
+    return grid.scrollHeight>grid.clientHeight&&grid.scrollTop>0&&cell.tabIndex===0
+      &&c.top>=g.top&&c.bottom<=g.bottom&&c.left>=g.left&&c.right<=g.right;
+  };
+  try { await page.waitForFunction(addressRevealed,undefined,{timeout:5000}); }
+  catch(error) {
+    const failure=await page.evaluate(()=>{
+      const map=document.querySelector('.dmxPatchMap'),grid=document.querySelector('.dmxAddressGrid'),cell=grid?.querySelector('[data-dmx-address="512"]');
+      return {map:map?.getBoundingClientRect().toJSON(),grid:grid?.getBoundingClientRect().toJSON(),cell:cell?.getBoundingClientRect().toJSON(),
+        scrollTop:grid?.scrollTop,scrollLeft:grid?.scrollLeft,scrollHeight:grid?.scrollHeight,clientHeight:grid?.clientHeight,tabIndex:cell?.tabIndex};
+    });
+    await writeFile(resolve(artifact,'address-reveal-failure.json'),JSON.stringify(failure,null,2)+'\n');
+    await page.screenshot({path:resolve(artifact,'address-reveal-failure.png'),fullPage:true});
+    throw error;
+  }
+  await page.evaluate(()=>document.querySelector('.dmxAddressGrid').scrollTo({top:0,left:0}));
+  assert.equal(await page.evaluate(addressRevealed),false,'manual scroll hides the requested final address');
+  await page.evaluate(()=>window.proof.setRevealRequest({universe:1,address:512}));
+  await page.waitForFunction(addressRevealed);
+  assert.equal(await page.evaluate(()=>window.proof.drops.length),count+1,'address reveal never applies an extra move');
+  result.repeatedSourceAddressReveal=true;
  }
  assert.deepEqual(errors,[]);
  await writeFile(resolve(artifact,baseline?'baseline.json':'browser.json'),JSON.stringify({baseline,stableAfterSelection,...result,errors},null,2)+'\n');

@@ -38,7 +38,7 @@ function readResponsiveTopbarInPage() {
     ['.topbarBpmValue', 1, 28], ['[data-topbar-tap]', 40], ['[data-window-control="minimize"]', 40],
     ['[data-window-control="maximize"]', 40], ['[data-window-control="close"]', 40],
   ];
-  const controls = expected.map(([selector, minimumWidth, minimumHeight = 40]) => {
+  const controls = expected.filter(([selector]) => !topbar?.querySelector(selector)?.closest('.topbarToolsPopover')).map(([selector, minimumWidth, minimumHeight = 40]) => {
     const element = topbar?.querySelector(selector);
     const box = rect(element);
     const hit = box && document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
@@ -52,14 +52,10 @@ function readResponsiveTopbarInPage() {
     Math.min(left.right, right.right) - Math.max(left.left, right.left) > 1 &&
     Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top) > 1));
   const rows = topbar ? getComputedStyle(topbar).gridTemplateRows.split(/\s+/).map(Number.parseFloat) : [];
-  const narrow = innerWidth <= 1500;
   const rowContract = Boolean(bounds && nav && project && status && windows &&
-    rows.length === (narrow ? 2 : 1) && rows.every((height) => Math.abs(height - 40) <= 0.5) &&
-    Math.abs(bounds.height - (narrow ? 90 : 42)) <= 0.5 &&
-    (narrow
-      ? status.top >= Math.max(nav.bottom, windows.bottom) + 3 && project.bottom <= status.top &&
-        Math.abs(nav.top + nav.height / 2 - windows.top - windows.height / 2) <= 1
-      : Math.abs(nav.top + nav.height / 2 - status.top - status.height / 2) <= 1));
+    rows.length === 1 && Math.abs(rows[0] - 40) <= 0.5 &&
+    Math.abs(bounds.height - 42) <= 0.5 &&
+    [project, status, windows].every(box => Math.abs(nav.top + nav.height / 2 - box.top - box.height / 2) <= 1));
   return {
     rows, rowContract, controls, overlaps,
     contained: [nav, project, status, windows, ...itemRects].every(contained),
@@ -1068,7 +1064,10 @@ async function createCdpClient() {
 }
 
 async function waitForApp(client) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  // A cold Windows Vite transform can exceed eight seconds before any app
+  // script runs. Keep readiness bounded without treating compilation as a
+  // failed geometry assertion; runtime exceptions still fail immediately.
+  for (let attempt = 0; attempt < 300; attempt += 1) {
     if (client.runtimeExceptions.length > 0) {
       throw new Error(`Syndocal runtime exception before app readiness: ${client.runtimeExceptions.join(" | ")}`);
     }
@@ -10662,7 +10661,7 @@ async function measure(client, label) {
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'auto').length,
       visiblePatchPrimaryButtonCount: visibleElements('[data-patch-minimal-form] button.primary')
         .filter((button) => (button.textContent || '').trim().toUpperCase() === 'PATCH').length,
-      visiblePatchNextFreeButtonCount: visibleElements('[data-patch-minimal-form] button')
+      visiblePatchNextFreeButtonCount: visibleElements('.layoutSetup.setupMode-patch button')
         .filter((button) => (button.textContent || '').trim().toLowerCase().startsWith('next free')).length,
       visiblePatchFootprintCount: visibleCount('.footprint'),
       patchMinimalFieldNames: visibleElements('[data-patch-minimal-form] [data-patch-field]')
@@ -13502,7 +13501,7 @@ function hasExpectedSetupSurface(result) {
       result.visibleProfileImportShareRowCount === 0 &&
       result.visibleProfileImportControlCount === 0 &&
       result.visibleDmxAddressGridCount >= 1 &&
-      result.visibleDmxGridUsageCount === 1 &&
+      result.visibleDmxGridUsageCount === 0 &&
       result.dmxGridUsageText.includes("/512") &&
       result.dmxGridUsageText.includes("max free") &&
       result.dmxUniverseDisclosureCount === 1 &&
@@ -13512,7 +13511,7 @@ function hasExpectedSetupSurface(result) {
       result.dmxAddressOccupiedCellCount > 0 &&
       result.dmxAddressPlannedCellCount > 0 &&
       result.visibleDmxFixtureBlockCount > 0 &&
-      result.visibleDmxGridSummaryCount === 1 &&
+      result.visibleDmxGridSummaryCount === 0 &&
       result.visibleFixtureSetupEditorCount === 1 &&
       result.visibleFixtureSetupEmptyStateCount === 0 &&
       result.visibleUseProfileForPatchButtonCount === 0 &&
@@ -18810,15 +18809,21 @@ async function exercisePatchLayoutInPage() {
   const overview = map.querySelector('[data-dmx-universe-disclosure]');
   const summary = overview.querySelector('summary');
   const compact = visible(toggle);
-  const selectAll = [...selection.querySelectorAll('button')].find(el => el.textContent === 'Select All');
-  const clear = [...selection.querySelectorAll('button')].find(el => el.textContent === 'Clear Selection');
-  const move = [...selection.querySelectorAll('button')].find(el => el.textContent === 'Move Selected');
+  const selectAll = selection.querySelector('[data-patch-selection-action="all"]');
+  const clear = selection.querySelector('[data-patch-selection-action="clear"]');
+  const move = selection.querySelector('[data-patch-selection-action="move"]');
   const input = selection.querySelector('input');
   const openSelection = async () => { if (compact && toggle.getAttribute('aria-expanded') !== 'true') { toggle.focus({preventScroll:true}); toggle.click(); await pause(); } };
   const closeSelection = async () => { if (compact && toggle.getAttribute('aria-expanded') === 'true') { toggle.click(); await pause(); } };
   evidence.viewport = { width:innerWidth, height:innerHeight, dpr:devicePixelRatio, scale:getComputedStyle(document.documentElement).getPropertyValue('--ui-scale'), compact };
   evidence.header = [...header.querySelectorAll('button,select,summary')].filter(el => !el.closest('.dmxUniverseOverviewContent') && visible(el)).map(inspect);
-  check('headerControlsReachable', evidence.header.length === (compact ? 6 : 5) && evidence.header.every(reachable));
+  check('headerControlsReachable', evidence.header.length === (compact ? 3 : 4) && evidence.header.every(reachable));
+  const headerHeading=rect(header.querySelector('h3'));
+  check('headerIsOneRow', evidence.header.every(item => Math.abs(item.y+item.height/2-headerHeading.y-headerHeading.height/2)<1.5));
+  check('nextFreeIsUnique', [...document.querySelectorAll('.layoutSetup.setupMode-patch button')].filter(el => /^(Next Free|次の空き)$/.test(el.textContent.trim())).length===1);
+  const sourceHeader=document.querySelector('.patchProfileBrowserHeader'), sourceHeading=rect(sourceHeader.querySelector('h2'));
+  evidence.sourceHeader=[...sourceHeader.querySelectorAll('button')].map(inspect);
+  check('sourceHeaderIsOneRow', evidence.sourceHeader.every(item=>reachable(item)&&Math.abs(item.y+item.height/2-sourceHeading.y-sourceHeading.height/2)<1.5));
   check('headerControlSizesPreserved', evidence.header.every(item => item.fontSize >= 14 && item.offsetHeight >= 24));
   evidence.heading = [...header.querySelectorAll(':scope > h3, :scope > output')].map(el => {
     const range = document.createRange(); range.selectNodeContents(el); const r = range.getBoundingClientRect(), box = rect(el);
@@ -18849,15 +18854,17 @@ async function exercisePatchLayoutInPage() {
   await scrollWithin(input); input.value = '80'; input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:'80'}));
   evidence.moveBeforeClick = await scrollWithin(move); move.click(); await pause(6);
   evidence.moveResult = { status:map.querySelector('[data-patch-dnd-status]')?.getAttribute('data-patch-dnd-status'),
-    guardMessages:document.body.innerText.split('\n').filter(line => /Move rejected:|Project authority is unavailable/.test(line)) };
+    guardMessages:document.body.innerText.split('\n').filter(line => /Move rejected:|Project authority is unavailable|移動.*拒否|プロジェクト.*権限/.test(line)) };
   check('moveSelectedReachesFixtureGuard', evidence.moveBeforeClick.hit && evidence.moveResult.status === 'rejected' && evidence.moveResult.guardMessages.length > 0);
   clear.click(); await pause();
-  check('clearSelectionWorks', clear.disabled && move.disabled && selection.querySelector('output').textContent.trim() === '0 selected');
+  check('clearSelectionWorks', clear.disabled && move.disabled && Number.parseInt(selection.querySelector('output').textContent,10)===0);
   await closeSelection();
   summary.click(); await pause();
   const content = overview.querySelector('.dmxUniverseOverviewContent');
   evidence.overview = { panel:inspect(content), clientHeight:content.clientHeight, scrollHeight:content.scrollHeight, controls:[] };
   check('overviewPanelContained', reachable(evidence.overview.panel));
+  evidence.overview.usage=inspect(content.querySelector('[data-dmx-grid-usage]'));
+  check('usageReadoutReachableInOverview', reachable(evidence.overview.usage));
   const proportionalSegments = [...content.querySelectorAll('.dmxPatchSegment')];
   evidence.overview.proportionalSegments = [];
   for (const el of proportionalSegments) evidence.overview.proportionalSegments.push(await scrollWithin(el));
@@ -18886,12 +18893,17 @@ async function exercisePatchLayoutInPage() {
   check('keyboardEndReveals512', document.activeElement === last && reachable(evidence.keyboardEnd));
   last.dispatchEvent(new KeyboardEvent('keydown',{key:'Home',ctrlKey:true,bubbles:true})); await pause(4);
   check('keyboardHomeReveals1', document.activeElement === first && reachable(inspect(first)));
-  const list = [...header.querySelectorAll('.viewToggle button')].find(el => el.textContent === 'List');
-  const gridButton = [...header.querySelectorAll('.viewToggle button')].find(el => el.textContent === 'Grid');
+  const list = header.querySelector('[data-dmx-view="list"]');
+  const gridButton = header.querySelector('[data-dmx-view="grid"]');
+  if(compact) { summary.click(); await pause(); }
+  evidence.listControl = await scrollWithin(list);
   list.click(); await pause();
-  check('listViewReachable', Boolean(map.querySelector('.dmxPatchList .dmxPatchListItem')) && reachable(inspect(list)));
-  summary.click(); await pause(); check('overviewInListContained', reachable(inspect(content))); summary.click(); await pause();
+  check('listViewReachable', Boolean(map.querySelector('.dmxPatchList .dmxPatchListItem')) && reachable(evidence.listControl));
+  if(!overview.open) { summary.click(); await pause(); }
+  check('overviewInListContained', reachable(inspect(content)));
+  if(!compact) { summary.click(); await pause(); }
   gridButton.click(); await pause(); check('gridViewRestored', map.querySelectorAll('[data-dmx-address]').length === 512);
+  if(overview.open) { summary.click(); await pause(); }
   const search = document.querySelector('[data-patch-profile-search]');
   const importSummary = document.querySelector('[data-profile-import-disclosure] > summary');
   evidence.source = { search:await scrollWithin(search), import:await scrollWithin(importSummary) };
@@ -18909,6 +18921,11 @@ async function exercisePatchLayoutInPage() {
   evidence.source.placementClose = await scrollWithin(placementSummary);
   check('expandedPlacementKeepsSourceAndCloseReachable', reachable(evidence.source.searchWhilePlacementOpen) && reachable(evidence.source.placementClose));
   placementSummary.click(); await pause();
+  const nextFree=document.querySelector('.patchFixtureNextFree');
+  evidence.source.nextFree=await scrollWithin(nextFree); nextFree.click(); await pause(4);
+  const nextAddress=Number(document.querySelector('#patch-fixture-address').value);
+  evidence.source.nextFreeTarget=inspect(map.querySelector(`[data-dmx-address="${nextAddress}"]`));
+  check('nextFreeSetsAddressAndRevealsGrid', !nextFree.disabled&&reachable(evidence.source.nextFree)&&reachable(evidence.source.nextFreeTarget));
   check('outerScrollUnchanged', JSON.stringify(outerScroll()) === JSON.stringify(originalOuter));
   return { checks, failures:Object.keys(checks).filter(name => !checks[name]), evidence };
 }
@@ -18920,13 +18937,14 @@ async function runPatchResponsiveLayoutViewport(client, viewport) {
   await waitForApp(client);
   await seedViewportLocalStorage(client);
   await client.evaluate(`localStorage.setItem('syndocal.uiScale.v1', ${JSON.stringify(String(viewport.scale))})`);
+  await client.evaluate(`localStorage.setItem('syndocal.uiLocale.v1', ${JSON.stringify(viewport.locale ?? 'en')})`);
   await client.send("Page.navigate", { url:fixtureUrl("patch") });
   await waitForApp(client);
   await clickWorkspaceOption(client, "setup");
-  await clickByText(client, "Lighting");
-  await clickByText(client, "Patch");
+  await clickByText(client, viewport.locale==='ja' ? "照明" : "Lighting");
+  await clickByText(client, viewport.locale==='ja' ? "パッチ" : "Patch");
   await sleep(180);
-  const label = `patch-layout-${viewport.width}x${viewport.height}-dpr${viewport.dpr}-scale${viewport.scale}`;
+  const label = `patch-layout-${viewport.width}x${viewport.height}-dpr${viewport.dpr}-scale${viewport.scale}-${viewport.locale??'en'}`;
   const capture = async (suffix) => {
     if (!shouldCaptureViewport(viewport)) return;
     mkdirSync(screenshotDir, { recursive:true });
@@ -18945,7 +18963,7 @@ async function runPatchResponsiveLayoutViewport(client, viewport) {
     })()`);
     await client.send("Emulation.setDeviceMetricsOverride", { ...metrics, width:1280 }); await settle();
     const wideClosed = await state();
-    await client.evaluate(`document.querySelector('[aria-label="Move selected fixtures to address"]').focus({preventScroll:true})`);
+    await client.evaluate(`document.querySelector('.dmxPatchSelectionControls input').focus({preventScroll:true})`);
     await client.send("Emulation.setDeviceMetricsOverride", metrics); await settle();
     const narrowAfterFocusedInput = await state();
     await client.evaluate(`document.querySelector('[data-patch-selection-toggle]').click()`); await settle();
@@ -18959,6 +18977,16 @@ async function runPatchResponsiveLayoutViewport(client, viewport) {
       && !narrowAfterFocusedInput.visible && narrowAfterFocusedInput.triggerFocused && narrowOpen.visible
       && wideAfterOpen.visible && !wideAfterOpen.triggerVisible && narrowStillOpen.visible
       && narrowStillOpen.expanded === 'true' && narrowStillOpen.count === narrowOpen.count;
+    await client.send("Emulation.setDeviceMetricsOverride", { ...metrics, width:1280 }); await settle();
+    await client.evaluate(`document.querySelector('[data-dmx-view="list"]').focus({preventScroll:true})`);
+    await client.send("Emulation.setDeviceMetricsOverride", metrics); await settle();
+    const viewDisclosed = await client.evaluate(`document.activeElement===document.querySelector('[data-dmx-universe-disclosure] > summary')`);
+    await client.evaluate(`document.querySelector('[data-dmx-universe-disclosure]').open=true; document.querySelector('[data-dmx-view="grid"]').focus({preventScroll:true})`);
+    await client.send("Emulation.setDeviceMetricsOverride", { ...metrics, width:1280 }); await settle();
+    const viewInline = await client.evaluate(`document.activeElement===document.querySelector('[data-dmx-view="grid"]') && !document.activeElement.closest('.dmxUniverseOverviewContent')`);
+    result.evidence.viewFocusTransitions = {viewDisclosed,viewInline};
+    result.checks.viewFocusSurvivesWidthChanges = viewDisclosed && viewInline;
+    await client.send("Emulation.setDeviceMetricsOverride", metrics); await settle();
   }
   result.failures = Object.keys(result.checks).filter(name => !result.checks[name]);
   result.label = label;
@@ -20056,8 +20084,7 @@ async function runPatchGdtfShareViewport(client, viewport) {
   await waitForClientCondition(
     client,
     `(() => {
-      const refresh = [...document.querySelectorAll('.patchProfileBrowserHeader button')]
-        .find((button) => (button.textContent || '').trim() === 'Refresh');
+      const refresh = document.querySelector('[data-patch-refresh-profiles]');
       const mock = window.__syndocalPatchGdtfShareMock;
       return document.querySelector('.layout.layoutSetup.setupMode-patch') instanceof HTMLElement &&
         refresh instanceof HTMLButtonElement && !refresh.disabled &&
@@ -20067,8 +20094,7 @@ async function runPatchGdtfShareViewport(client, viewport) {
     "Patch owner registration and cache list after post-mock remount",
   );
   const patchRefreshAdmission = await client.evaluate(`(() => {
-    const refresh = [...document.querySelectorAll('.patchProfileBrowserHeader button')]
-      .find((button) => (button.textContent || '').trim() === 'Refresh');
+    const refresh = document.querySelector('[data-patch-refresh-profiles]');
     const mock = window.__syndocalPatchGdtfShareMock;
     return {
       refreshPresent: refresh instanceof HTMLButtonElement,
@@ -20262,7 +20288,7 @@ async function runPatchGdtfShareViewport(client, viewport) {
     input.value = '';
     input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
   })()`);
-  await clickVisibleByText(client, ".patchProfileBrowserHeader button", "Refresh");
+  await clickVisibleSelector(client, '[data-patch-refresh-profiles]');
   await sleep(80);
   await waitForClientCondition(
     client,
@@ -40228,6 +40254,8 @@ async function main() {
         { width:960,height:752,dpr:2,scale:100 },
         { width:960,height:752,dpr:2,scale:110 },
         { width:1920,height:1080,dpr:1,scale:100 },
+        { width:1280,height:752,dpr:2,scale:110,locale:'ja' },
+        { width:960,height:752,dpr:2,scale:110,locale:'ja' },
       ]) {
         const result = await runPatchResponsiveLayoutViewport(client, viewport);
         patchLayoutResults.push(result);

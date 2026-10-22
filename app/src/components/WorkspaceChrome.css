@@ -1,5 +1,5 @@
-/* Wide windows keep one title row. Constrained windows give the operator
-   controls their own row rather than clipping controls or shrinking labels. */
+/* Navigation and show controls share one row at every supported width.
+   Tools owns the tempo controls and clock details in one stable location. */
 .workspaceChrome:has(> .topbarOrganized) { overflow: visible; }
 .topbar.topbarOrganized {
   grid-template-areas: "navigation project controls window";
@@ -18,16 +18,7 @@
 .topbarOrganized > .status { overflow: visible; }
 .topbarOrganized > .topbarProject { justify-content: flex-start; }
 .topbarOrganized > .status { width: auto; flex-wrap: nowrap; gap: 8px; }
-.topbarReadoutStrip {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.topbarOrganized .topbarTempoCluster,
-.topbarOrganized .topbarStateCluster {
+.topbarOrganized .topbarTempoCluster {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -97,6 +88,9 @@
   background: var(--ui-surface-panel);
   padding: 12px;
   box-shadow: 0 8px 24px rgb(0 0 0 / 40%);
+  max-height: calc(100vh / var(--ui-scale, 1) - 60px);
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 .topbarToolsPopover > section { display: grid; gap: 6px; }
 .topbarToolsPopover > section > strong { color: var(--theme-muted); font-size: var(--fs-text); font-weight: 400; }
@@ -107,30 +101,10 @@
 .topbarLockedOperations .workspaceOperationsButton { width: auto; white-space: nowrap; }
 .topbarOrganized .topbarProject > span { overflow: hidden; text-overflow: ellipsis; }
 
-@media (max-width: 1500px) {
-  .topbar.topbarOrganized {
-    grid-template-areas:
-      "navigation project window"
-      "controls controls controls";
-    grid-template-columns: max-content minmax(0, 1fr) 120px;
-    grid-template-rows: minmax(40px, auto) minmax(40px, auto);
-    row-gap: 4px;
-    padding-bottom: 4px;
-  }
-  .topbarOrganized > .status {
-    flex-wrap: wrap;
-    justify-content: flex-start;
-  }
-  .topbarOrganized > .topbarProject > span { display: block; }
-  .topbarOrganized .topbarReadoutStrip {
-    flex-wrap: wrap;
-    margin-left: auto;
-    max-width: 100%;
-  }
-  .workspaceChrome > .controlLearnPrompt {
-    position: static;
-    justify-self: end;
-  }
+.topbarOrganized > .topbarProject > span { display: block; }
+.workspaceChrome > .controlLearnPrompt {
+  position: static;
+  justify-self: end;
 }
 
 /* Condensed label typography retains the existing label and hit-target sizes. */

@@ -29067,6 +29067,7 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 
 .patchProfileBrowserHeader {
   align-items: center;
+  flex-wrap: nowrap;
 }
 
 .patchProfileBrowserHeader h2 {
@@ -29075,15 +29076,25 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 }
 
 .patchProfileBrowserHeader button {
-  min-height: 24px;
+  min-width: 32px;
+  min-height: 28px;
   padding: 2px 7px;
   font-size: var(--fs-control);
 }
 
+.patchProfileBrowserHeader button svg {
+  display: block;
+  width: var(--ui-icon-size);
+  height: var(--ui-icon-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+
 .patchProfileBrowserHeaderActions {
   display: flex;
-  flex-wrap: wrap;
-  flex: 1 1 0;
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
   justify-content: flex-end;
   gap: 4px;
   min-width: 0;
@@ -29797,12 +29808,13 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 
 .layoutSharedWorkspace.layoutSetup.setupMode-patch .dmxPatchMap > .panelHeader {
   position: relative;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .layoutSharedWorkspace.layoutSetup.setupMode-patch .dmxPatchMap > .panelHeader > .panelHeaderActions {
-  flex: 1 1 380px;
-  justify-content: flex-start;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  margin-left: auto;
 }
 
 .layoutSharedWorkspace.layoutSetup.setupMode-patch .dmxPatchMap > .panelHeader > .panelHeaderActions > * {
@@ -29812,6 +29824,7 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 .dmxPatchMap .dmxPatchSelectionToggle {
   display: none;
   min-height: 28px;
+  white-space: nowrap;
 }
 
 .patchProfileDndStatus {
@@ -29838,12 +29851,9 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 
 .dmxGridUsage {
   min-width: 0;
-  overflow: hidden;
   color: var(--theme-muted);
   font-size: var(--fs-text);
   font-variant-numeric: tabular-nums;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .dmxUniverseOverviewDisclosure {
@@ -29896,12 +29906,11 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 
 .dmxUniverseOverviewMeta {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
-  overflow: hidden;
   color: var(--theme-dim);
   font-size: var(--fs-text);
-  white-space: nowrap;
 }
 
 .dmxUniverseOverviewMeta span {
@@ -29926,33 +29935,6 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 @container dmx-patch-desk (max-width: 450px) {
   .layoutSharedWorkspace.layoutSetup > .setupPatchTopPanel > .setupPatchAddressDesk > .dmxPatchMap {
     grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  .layoutSharedWorkspace.layoutSetup.setupMode-patch .dmxPatchMap > .panelHeader {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .dmxPatchMap > .panelHeader > h3 {
-    grid-column: 1;
-    grid-row: 1 / span 2;
-  }
-
-  .dmxPatchMap > .panelHeader > .dmxPatchAddressReadout {
-    grid-column: 2;
-    grid-row: 1;
-    justify-self: end;
-  }
-
-  .dmxPatchMap > .panelHeader > .dmxGridUsage {
-    grid-column: 2;
-    grid-row: 2;
-    text-align: right;
-  }
-
-  .dmxPatchMap > .panelHeader > .panelHeaderActions {
-    grid-column: 1 / -1;
-    grid-row: 3;
   }
 
   .dmxPatchMap .dmxPatchSelectionToggle {

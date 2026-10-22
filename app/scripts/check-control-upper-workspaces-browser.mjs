@@ -1002,7 +1002,7 @@ const measureTopbarIdentity = (client) => evaluate(client, `(() => {
     ['.topbarTools > summary', 52], ['.topbarBpmValue', 1, 28], ['[data-topbar-tap]', 40],
     ['[data-window-control="minimize"]', 40], ['[data-window-control="maximize"]', 40], ['[data-window-control="close"]', 40],
   ];
-  const controls = required.map(([selector, minimumWidth, minimumHeight = 40]) => {
+  const controls = required.filter(([selector]) => !topbar?.querySelector(selector)?.closest('.topbarToolsPopover')).map(([selector, minimumWidth, minimumHeight = 40]) => {
     const element = topbar?.querySelector(selector);
     const rect = element?.getBoundingClientRect();
     const hit = rect && document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
@@ -1505,16 +1505,14 @@ try {
     const statusBounds = topbarIdentity.status?.rect;
     const windowControlBounds = topbarIdentity.windowControls?.rect;
     const navigationBounds = topbarIdentity.navigation?.rect;
-    const narrowHeader = viewport.width <= 1500;
     assert.ok(projectBounds && brandBounds && brandBounds[0] >= projectBounds[0] - 1 && brandBounds[0] + brandBounds[2] <= projectBounds[0] + projectBounds[2] + 1, `Topbar project identity stays contained at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity)}`);
     assert.ok(statusBounds && statusBounds[2] > 0 && statusBounds[3] > 0 && topbarIdentity.status.display !== "none", `Topbar transport/status controls remain visibly rendered at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity.status)}`);
     assert.ok(windowControlBounds && windowControlBounds[2] > 0 && windowControlBounds[3] > 0 && topbarIdentity.windowControls.display !== "none", `Window controls remain visibly rendered at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity.windowControls)}`);
     assert.ok(topbarBounds && [navigationBounds, projectBounds, statusBounds, windowControlBounds].every((rect) => rect && rect[0] >= topbarBounds[0] - 1 && rect[1] >= topbarBounds[1] - 1 && rect[0] + rect[2] <= topbarBounds[0] + topbarBounds[2] + 1 && rect[1] + rect[3] <= topbarBounds[1] + topbarBounds[3] + 1), `Topbar navigation/project/operator/window groups remain contained at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity)}`);
-    assert.deepEqual(topbarIdentity.rows, narrowHeader ? [40, 40] : [40], `Topbar uses two full-size rows on constrained widths and one on wide desktops at ${viewport.width}x${viewport.height}`);
-    assert.equal(topbarBounds[3], narrowHeader ? 90 : 42, "Responsive header preserves 40px controls and explicit row spacing");
-    assert.ok(narrowHeader
-      ? statusBounds[1] >= Math.max(navigationBounds[1] + navigationBounds[3], windowControlBounds[1] + windowControlBounds[3]) + 3 && projectBounds[1] + projectBounds[3] <= statusBounds[1]
-      : projectBounds[0] + projectBounds[2] <= statusBounds[0] + 1 && statusBounds[0] + statusBounds[2] <= windowControlBounds[0] + 1,
+    assert.deepEqual(topbarIdentity.rows, [40], `Topbar uses one full-size row at ${viewport.width}x${viewport.height}`);
+    assert.equal(topbarBounds[3], 42, "Single-row header preserves 40px controls and borders");
+    assert.ok([projectBounds,statusBounds,windowControlBounds].every(rect => Math.abs(rect[1]+rect[3]/2-navigationBounds[1]-navigationBounds[3]/2)<=1)
+      && projectBounds[0] + projectBounds[2] <= statusBounds[0] + 1 && statusBounds[0] + statusBounds[2] <= windowControlBounds[0] + 1,
     `Topbar groups follow the responsive row contract at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity)}`);
     assert.ok(topbarIdentity.itemsContained && !topbarIdentity.overlaps && topbarIdentity.controls.every((control) => control.visible && control.contained && control.reachable && control.width >= control.minimumWidth && control.height >= control.minimumHeight), `Topbar controls remain visible, hit-testable, full-size and without overlaps at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity)}`);
     assert.ok(topbarIdentity.topbar.clientWidth >= topbarIdentity.topbar.scrollWidth - 1, "Responsive header requires no horizontal scroll");

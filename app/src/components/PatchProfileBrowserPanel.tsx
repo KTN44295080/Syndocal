@@ -614,16 +614,18 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
             onClick={props.onOpenWorkbench}
             disabled={busy() || props.operationBusy}
             title="Create or edit a custom fixture profile."
+            aria-label="Custom profile"
             data-patch-open-workbench
           >
-            Custom profile
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 2h8l4 4v12H4zM12 2v4h4M7 11h6M10 8v6" /></svg>
           </button>
           <button
             type="button"
             onClick={() => void refreshLocalProfiles()}
             disabled={!props.backendAvailable || busy() || props.operationBusy}
+            title="Refresh profiles" aria-label="Refresh profiles" data-patch-refresh-profiles
           >
-            Refresh
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16 7a6.5 6.5 0 1 0 .5 5M16 3v4h-4" /></svg>
           </button>
         </span>
       </header>

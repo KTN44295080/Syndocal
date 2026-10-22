@@ -9,6 +9,9 @@ export function TopbarTools(props: { active: boolean; children: JSX.Element }) {
   };
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "Escape" || !root.open || event.defaultPrevented || document.querySelector("dialog[open]")) return;
+    // BPM owns Escape while editing. Closing Tools first would blur the input
+    // and commit the draft instead of letting the input cancel it.
+    if (event.target instanceof HTMLInputElement && event.target.matches(".topbarBpmInput") && root.contains(event.target)) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     close();
@@ -23,7 +26,13 @@ export function TopbarTools(props: { active: boolean; children: JSX.Element }) {
   return (
     <details ref={root} class="topbarTools" classList={{ active: props.active }}>
       <summary ref={trigger} aria-label="Show tools" title="Playback, control mapping and audio input">Tools</summary>
-      <div class="topbarToolsPopover" role="group" aria-label="Show tools">
+      <div class="topbarToolsPopover" role="group" aria-label="Show tools" onClick={event => {
+        // A Learn choice exposes the controls to map and its instruction row.
+        if (event.target instanceof Element && event.target.closest("[data-control-learn-toggle]")) {
+          close();
+          trigger.focus();
+        }
+      }}>
         {props.children}
       </div>
     </details>

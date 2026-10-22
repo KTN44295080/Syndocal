@@ -104,6 +104,9 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"].filter(Boolean).find(existsSync);
   browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
   const page = await browser.newPage();
+  const openTools = async () => {
+    if (await page.locator('.topbarTools').getAttribute('open') === null) await page.locator('.topbarTools > summary').click();
+  };
   const errors = [];
   page.on("pageerror", error => errors.push(String(error)));
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
@@ -112,7 +115,7 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     const rect = el => { const r=el.getBoundingClientRect(); return {x:r.x,y:r.y,w:r.width,h:r.height,right:r.right,bottom:r.bottom}; };
     const bounds=rect(header);
     const visible = el => el.checkVisibility({checkVisibilityCSS:true}) && el.getBoundingClientRect().width>0 && el.getBoundingClientRect().height>0;
-    const elements=[...header.querySelectorAll('button, .topbarTools > summary, .topbarProject > strong, .topbarProject > span, .topbarStateCluster > span, .topbarSyncSource, .topbarSyncStatus')].filter(visible);
+    const elements=[...header.querySelectorAll('button, .topbarTools > summary, .topbarProject > strong, .topbarProject > span')].filter(el=>visible(el)&&!el.closest('.topbarToolsPopover'));
     const items=elements.map(el=>{
       const r=rect(el), interactive=el.matches('button,summary');
       const hit=document.elementFromPoint(r.x+r.w/2,r.y+r.h/2);
@@ -130,13 +133,15 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     const expected=['[data-workspace-option="setup"]','[data-workspace-option="control"]','[data-workspace-option="touch"]',
       '[data-global-operator-action="back"]','[data-global-operator-action="go"]','[data-global-operator-action="dmx-blackout"]',
       '[data-global-operator-action="video-blackout"]','[data-global-operator-action="all-blackout"]','.topbarTools > summary',
-      '.topbarBpmValue','[data-topbar-tap]','[data-window-control="minimize"]','[data-window-control="maximize"]','[data-window-control="close"]'];
+      '[data-window-control="minimize"]','[data-window-control="maximize"]','[data-window-control="close"]'];
+    const tempo=[...header.querySelectorAll('[data-topbar-tap]')];
+    const tempoDisclosed=Boolean(tempo[0]?.closest('.topbarToolsPopover'));
     const missing = expected.filter(selector=>{const matches=[...header.querySelectorAll(selector)].filter(visible);return matches.length!==1;});
     const sizes=Object.fromEntries(expected.map(selector=>[selector,rect(header.querySelector(selector))]));
     const source=header.querySelector('.topbarSyncSource').getBoundingClientRect(),sync=header.querySelector('.topbarSyncRow').getBoundingClientRect();
     const headerStyle=getComputedStyle(header);
     const rowBoxExtras=['paddingTop','paddingBottom','borderTopWidth','borderBottomWidth'].reduce((sum,key)=>sum+parseFloat(headerStyle[key]),0);
-    return {bounds,items,overlaps,text,missing,sizes,tempoRowsSeparate:source.bottom<=sync.top+1,
+    return {bounds,items,overlaps,text,missing,sizes,tempoDisclosed,tempoCount:tempo.length,bpmCount:header.querySelectorAll('.topbarBpmValue').length,tempoRowsSeparate:source.bottom<=sync.top+1,
       contained:items.every(r=>r.x>=bounds.x-1&&r.right<=bounds.right+1&&r.y>=bounds.y-1&&r.bottom<=bounds.bottom+1),
       horizontalOverflow:header.scrollWidth>header.clientWidth+1,nav:rect(nav),status:rect(header.querySelector('.status')),
       windows:rect(header.querySelector('.windowControls')),project:rect(header.querySelector('.topbarProject')),
@@ -150,28 +155,23 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     assert.equal(geometry.contained,true,`${label}: containment: ${JSON.stringify(geometry)}`);
     assert.equal(geometry.horizontalOverflow,false,`${label}: horizontal overflow`);
     assert.ok(geometry.items.every(item=>item.reachable),`${label}: all visible buttons are hit-testable`);
-    assert.ok(geometry.text.length===4&&geometry.text.every(item=>item.visible&&item.fits),`${label}: clock and sync labels are not clipped: ${JSON.stringify(geometry.text)}`);
-    assert.equal(geometry.tempoRowsSeparate,true,`${label}: source and sync text occupy separate rows`);
+    assert.equal(geometry.tempoDisclosed,true,`${label}: tempo and clock share Tools at every width`);
+    assert.equal(geometry.tempoCount,1,`${label}: one Tap control`);
+    assert.equal(geometry.bpmCount,1,`${label}: one BPM control`);
     assert.ok(geometry.items.every(item=>item.fontSize>=13),`${label}: text size is preserved`);
     for(const [selector,minimumWidth] of [['[data-global-operator-action="back"]',32],['[data-global-operator-action="go"]',48],
       ['[data-global-operator-action="dmx-blackout"]',42],['[data-global-operator-action="video-blackout"]',42],['[data-global-operator-action="all-blackout"]',42],
       ['[data-topbar-tap]',40],['[data-window-control="minimize"]',40],['[data-window-control="maximize"]',40],['[data-window-control="close"]',40]]) {
+      if(selector==='[data-topbar-tap]'&&geometry.tempoDisclosed) continue;
       const size=geometry.sizes[selector];assert.ok(size.w>=minimumWidth&&size.h>=40,`${label}: authored button size ${selector}: ${JSON.stringify(size)}`);
     }
-    if(width<=1500) {
-      if(scale===1) {
-        assert.deepEqual(geometry.rows,[40,40],`${label}: two explicit 40px rows`);
-        assert.equal(geometry.bounds.h,90,`${label}: two rows, row gap and borders`);
-      } else assert.ok(geometry.rows.length===2&&geometry.rows.every(height=>height>=40),`${label}: two full-size rows can grow naturally`);
-      assert.ok(geometry.status.y>=Math.max(geometry.nav.bottom,geometry.windows.bottom)+3,`${label}: operator row follows navigation and window buttons`);
-      assert.ok(geometry.project.w>0&&geometry.project.bottom<=geometry.status.y,`${label}: project identity remains on the first row`);
-    } else {
-      if(scale===1) {
-        assert.deepEqual(geometry.rows,[40],`${label}: wide desktop keeps one 40px row`);
-        assert.equal(geometry.bounds.h,42,`${label}: wide desktop keeps compact chrome`);
-      } else assert.ok(geometry.rows.length===1&&geometry.rows[0]>=40,`${label}: wide row retains its full-size minimum`);
-      assert.ok(Math.abs((geometry.status.y+geometry.status.h/2)-(geometry.nav.y+geometry.nav.h/2))<=1,`${label}: wide controls share the title row`);
-    }
+    assert.equal(geometry.rows.length,1,`${label}: header always has one row`);
+    if(scale===1) {
+      assert.deepEqual(geometry.rows,[40],`${label}: one full-size 40px row`);
+      assert.equal(geometry.bounds.h,42,`${label}: one row plus borders`);
+    } else assert.ok(geometry.rows[0]>=40,`${label}: UI scale retains the authored minimum`);
+    for(const group of [geometry.status,geometry.project,geometry.windows])
+      assert.ok(Math.abs((group.y+group.h/2)-(geometry.nav.y+geometry.nav.h/2))<=1,`${label}: navigation, project, operator and window controls share one row`);
     const expectedHeight=(geometry.rows.reduce((sum,height)=>sum+height,0)+geometry.rowGap*(geometry.rows.length-1)+geometry.rowBoxExtras)*scale;
     assert.ok(Math.abs(geometry.bounds.h-expectedHeight)<0.1,`${label}: rendered height matches grid tracks, gap, padding, borders and UI zoom: ${geometry.bounds.h}/${expectedHeight}`);
   };
@@ -207,8 +207,7 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     const expanded=await measure();
     assertHeader(expanded,width,'safe/dirty/locked');
     const go=expanded.items.find(i=>i.label==='GO');
-    const tap=expanded.items.find(i=>i.label==='Tap');
-    assert.ok(go.w>=48&&go.h>=40&&tap.w>=40&&tap.h>=40, 'existing hit sizes preserved');
+    assert.ok(go.w>=48&&go.h>=40, 'existing GO hit size preserved');
     await page.evaluate(()=>{window.proof.setSafety(false);window.proof.setDirty(false);window.proof.setLock(null);window.proof.setLabel('Untitled.sdc')});
     await page.locator('.workspaceChrome').screenshot({path:resolve(artifactDir,`header-after-${width}.png`)});
     await page.locator('.topbarTools > summary').focus();
@@ -220,16 +219,25 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
           const hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
           return {label:button.getAttribute('aria-label'),hit:hit?.outerHTML.slice(0,150),reachable:r.width>0&&r.height>0&&button.contains(hit)};
         });
+      const texts=[...panel.querySelectorAll('.topbarSyncSource,.topbarSyncStatus,.topbarShowClockStatus > span,.topbarShowClockStatus > strong')].map(el=>{
+        const range=document.createRange();range.selectNodeContents(el);const text=range.getBoundingClientRect(),box=el.getBoundingClientRect();
+        return {label:el.textContent,fits:text.width<=box.width+1&&text.height<=box.height+1&&el.scrollWidth<=el.clientWidth+1};
+      });
+      const tap=panel.querySelector('[data-topbar-tap]')?.getBoundingClientRect();
       return {contained:rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight,
-        buttonsReachable:buttons.every(button=>button.reachable),buttons};
+        buttonsReachable:buttons.every(button=>button.reachable),buttons,texts,tap:tap?{width:tap.width,height:tap.height}:null};
     });
     assert.equal(tools.contained,true,`${width}px Tools popup containment`);
     assert.equal(tools.buttonsReachable,true,`${width}px Tools hit testing: ${JSON.stringify(tools.buttons)}`);
+    assert.ok(tools.texts.length===4&&tools.texts.every(text=>text.fits),`${width}px full clock/source labels in Tools`);
+    if(geometry.tempoDisclosed) assert.ok(tools.tap?.width>=40&&tools.tap?.height>=40,`${width}px disclosed Tap retains its size`);
     if(width===1280) await page.screenshot({path:resolve(artifactDir,'header-tools-1280.png')});
     const learnStates=[];
     if(width===960||width===1280) {
       for(const mode of ['midi','osc','dmx']) {
+        await openTools();
         await page.locator(`[data-control-learn-toggle="${mode}"]`).click();
+        assert.equal(await page.locator('.topbarTools').getAttribute('open'),null,'Learn choice dismisses Tools to expose its targets and instruction');
         const learn=await page.evaluate(()=>{
           const prompt=document.querySelector('.controlLearnPrompt'),r=prompt.getBoundingClientRect();
           const header=document.querySelector('.topbar').getBoundingClientRect();
@@ -245,6 +253,7 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
         assert.ok(learn.belowHeader&&learn.contained&&learn.staticPosition&&!learn.overlaps&&learn.buttons.every(button=>button.reachable),`${width}px ${mode} Learn prompt and controls remain usable: ${JSON.stringify(learn)}`);
         if(mode==='midi') await page.screenshot({path:resolve(artifactDir,`header-learn-${width}.png`)});
         learnStates.push({mode,...learn});
+        await openTools();
         await page.locator(`[data-control-learn-toggle="${mode}"]`).click();
       }
     }
@@ -255,7 +264,6 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
   for (const action of ['back','go']) await page.locator(`[data-global-operator-action="${action}"]`).click();
   await page.locator('.topbarTools > summary').click();
   for (const action of ['fade','timeline','clear-flags']) await page.locator(`[data-global-operator-action="${action}"]`).click();
-  await page.locator('.topbarTools > summary').click();
   await page.locator('[data-topbar-tap]').click();
   assert.deepEqual(await page.evaluate(()=>window.proof.calls), ['back','go','fade','timeline','clear-flags','tap']);
   await page.locator('[data-global-operator-action="dmx-blackout"]').click();
@@ -265,14 +273,17 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
   await page.locator('[data-global-operator-action="all-blackout"]').click();
   await page.locator('.topbarTools > summary').click();
   for(const mode of ['midi','osc','dmx']) {
+    await openTools();
     await page.locator(`[data-control-learn-toggle="${mode}"]`).click();
     assert.equal(await page.locator(`[data-control-learn-toggle="${mode}"]`).getAttribute('aria-pressed'),'true');
     assert.ok(await page.locator('.controlLearnPrompt').evaluate(el=>el.getBoundingClientRect().top>=document.querySelector('.topbar').getBoundingClientRect().bottom), 'learn prompt follows header');
+    await openTools();
     await page.locator(`[data-control-learn-toggle="${mode}"]`).click();
   }
+  await openTools();
   await page.locator('[data-topbar-pulse]').click();
   assert.equal(await page.evaluate(()=>window.proof.calls.at(-1)),'audio-settings');
-  await page.locator('[data-topbar-tap]').click();
+  await page.locator('[data-workspace-option="touch"]').click();
   assert.equal(await page.locator('.topbarTools').getAttribute('open'),null, 'outside pointer dismisses Tools');
   await page.locator('.topbarTools > summary').focus();
   await page.locator('.topbarTools > summary').press('Enter');
@@ -280,12 +291,31 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
   assert.equal(await page.locator('.topbarTools').getAttribute('open'),null);
   assert.equal(await page.locator('.topbarTools > summary').evaluate(el=>document.activeElement===el),true);
   await page.evaluate(()=>window.proof.setBpm(80));
+  await openTools();
   assert.equal(await page.getByRole('button',{name:'Edit BPM'}).textContent(),'80', 'passive tapped tempo changes update the readout without entering edit mode');
   await page.getByRole('button',{name:'Edit BPM'}).click();
   await page.getByRole('spinbutton',{name:'BPM'}).fill('137.5');
+  await page.evaluate(()=>window.editingBpm=document.querySelector('.topbarBpmInput'));
+  evidence.tempoResize=[];
+  for(const width of [960,1280,960]) {
+    await page.setViewportSize({width,height:800});
+    const edit=await page.evaluate(()=>{
+      const input=document.querySelector('.topbarBpmInput'),r=input.getBoundingClientRect();
+      return {sameNode:input===window.editingBpm,focused:document.activeElement===input,value:input.value,bpm:window.proof.bpm,
+        hit:input.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))};
+    });
+    assert.deepEqual(edit,{sameNode:true,focused:true,value:'137.5',bpm:80,hit:true},'resizing retains the focused BPM draft without an implicit commit');
+    evidence.tempoResize.push({width,...edit});
+  }
   await page.getByRole('spinbutton',{name:'BPM'}).press('Enter');
   assert.equal(await page.evaluate(()=>window.proof.bpm),137.5);
   assert.equal(await page.getByRole('button',{name:'Edit BPM'}).textContent(),'138', 'existing rounded BPM readout');
+  await page.getByRole('button',{name:'Edit BPM'}).click();
+  await page.getByRole('spinbutton',{name:'BPM'}).fill('142');
+  await page.getByRole('spinbutton',{name:'BPM'}).press('Escape');
+  assert.equal(await page.evaluate(()=>window.proof.bpm),137.5,'Escape cancels a BPM draft without blur-committing it');
+  assert.equal(await page.locator('.topbarBpmInput').count(),0,'BPM input owns its first Escape');
+  assert.notEqual(await page.locator('.topbarTools').getAttribute('open'),null,'BPM cancellation keeps Tools open');
   await page.getByRole('button',{name:'Project menu',exact:true}).click();
   await page.locator('.workspaceOperationsButton').click();
   assert.equal(await page.getByRole('dialog',{name:'Workspace and operator controls'}).isVisible(),true);
@@ -293,7 +323,7 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
   await page.locator('[data-project-menu-action="save"]').click();
   assert.equal(await page.evaluate(()=>window.proof.calls.at(-1)),'save');
   evidence.presentation=[];
-  for(const width of [1280,1501]) {
+  for(const width of [960,1280,1501]) {
     await page.setViewportSize({width,height:800});
     await page.goto(`${origin}header-proof`);
     await page.locator('.topbar').waitFor();
@@ -307,7 +337,16 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     await page.evaluate(()=>{window.proof.setLock('Partial');window.proof.setLabel('長いプロジェクト名'.repeat(12)+'.sdc *')});
     const expanded=await measure();
     assertHeader(expanded,width,'Japanese, 110% UI scale, locked',1.1);
-    evidence.presentation.push({width,locale:'ja',uiScale:110,geometry,expanded});
+    await openTools();
+    const disclosed=await measure();
+    assert.ok(disclosed.text.length===4&&disclosed.text.every(item=>item.visible&&item.fits),`${width}px Japanese clock details remain fully readable`);
+    const tempoReachable=await page.locator('[data-topbar-tap]').evaluate(el=>{
+      const r=el.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
+      return r.width>=44&&r.height>=44&&el.contains(hit);
+    });
+    assert.equal(tempoReachable,true,`${width}px Japanese 110% tempo remains reachable at scaled full size`);
+    await page.locator('.topbarTools > summary').press('Escape');
+    evidence.presentation.push({width,locale:'ja',uiScale:110,geometry,expanded,disclosed,tempoReachable});
   }
   assert.deepEqual(errors,[]);
   evidence.interactionsPassed=true;

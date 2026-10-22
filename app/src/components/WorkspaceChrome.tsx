@@ -238,6 +238,17 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
 
   const showClockShell = () => summarizeShowClockForShell(props.showClockStatus, props.showClockError);
 
+  const tempoControls = () => (
+    <div class="topbarTempoCluster" role="group" aria-label="Tempo">
+      <TopbarBpmControl bpm={props.bpm} onSetBpm={props.onSetBpm} />
+      <button class="topbarTapButton" type="button" data-topbar-tap
+        title="Tap" aria-label="Tap" onClick={() => void props.onTapBpm()}
+        {...controlMappingTargetData({ action: "TapBpm", label: "Tap BPM" })}>
+        Tap
+      </button>
+    </div>
+  );
+
   const closeProjectMenu = () => setProjectMenuOpen(false);
 
   const updateProgressLabel = () => {
@@ -696,6 +707,16 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
 
           </div>
           <TopbarTools active={Boolean(props.controlLearnMode)}>
+            <section><strong>Tempo and clock</strong>
+              {tempoControls()}
+              <TopbarTempoSync clock={props.clock} uiLocale={props.uiLocale} />
+              <span class={`pill topbarShowClockStatus ${showClockShell().tone}`}
+                data-show-clock-shell-state={showClockShell().state}
+                aria-label={`Show Clock: ${showClockShell().label}`} title={showClockShell().detail}>
+                <span data-no-localize>Clock</span>
+                <strong data-no-localize>{showClockShell().label}</strong>
+              </span>
+            </section>
             <section><strong>Playback</strong><div class="topbarTransportCluster" role="group" aria-label="Additional show controls">
             <button
               type="button"
@@ -818,35 +839,6 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
           </span>
             </section>
           </TopbarTools>
-          <div class="topbarReadoutStrip">
-          <div class="topbarTempoCluster" role="group" aria-label="Tempo and audio input">
-          <TopbarBpmControl bpm={props.bpm} onSetBpm={props.onSetBpm} />
-          <button
-            class="topbarTapButton"
-            type="button"
-            data-topbar-tap
-            title="Tap"
-            aria-label="Tap"
-            onClick={() => void props.onTapBpm()}
-            {...controlMappingTargetData({ action: "TapBpm", label: "Tap BPM" })}
-          >
-            Tap
-          </button>
-          <TopbarTempoSync clock={props.clock} uiLocale={props.uiLocale} />
-          </div>
-          <div class="topbarStateCluster" role="group" aria-label="Show status">
-          <span
-            class={`pill topbarShowClockStatus ${showClockShell().tone}`}
-            data-show-clock-shell-state={showClockShell().state}
-            aria-label={`Show Clock: ${showClockShell().label}`}
-            title={showClockShell().detail}
-          >
-            <span data-no-localize>Clock</span>
-            <strong data-no-localize>{showClockShell().label}</strong>
-          </span>
-
-          </div>
-          </div>
         </div>
         <WindowControls />
       </header>

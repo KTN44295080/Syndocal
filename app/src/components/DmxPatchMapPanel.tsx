@@ -78,7 +78,7 @@ interface DmxPatchMapPanelProps {
   activeUniverse: number;
   universeOptions: number[];
   viewMode: DmxPatchViewMode;
-  nextFreeAddress: number | null;
+  revealAddressRequest?: { universe: number; address: number };
   activeMap: DmxUniverseMap;
   addressCells: DmxAddressCell[];
   universeMaps: DmxUniverseMap[];
@@ -89,7 +89,6 @@ interface DmxPatchMapPanelProps {
   profileDndStatus: PatchProfileDndStatus;
   fixtureDragActive: boolean;
   fixtureDndStatus: PatchProfileDndStatus;
-  onNextFreeAddress: () => void;
   onUniverse: (universe: number) => void;
   onViewMode: (mode: DmxPatchViewMode) => void;
   onSelectFixture: (fixture: PatchedFixtureSummary) => void;
@@ -110,6 +109,7 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
   const [selectedPatchIds, setSelectedPatchIds] = createSignal(new Set<number>());
   const [moveAddress, setMoveAddress] = createSignal(1);
   const [selectionExpanded, setSelectionExpanded] = createSignal(false);
+  const [compactHeader, setCompactHeader] = createSignal(false);
   const selectionControlsId = createUniqueId();
   let selectionAnchor: number | null = null;
   const selectedPatches = () => props.activeMap.segments.map(segment => segment.fixture).filter(fixture => selectedPatchIds().has(fixture.id));
@@ -149,6 +149,7 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
   let patchLayoutResizeFrame = 0;
   let selectionFocusTarget: HTMLElement | undefined;
   let lastRevealedSelectionKey = "";
+  let lastAddressRequest: DmxPatchMapPanelProps["revealAddressRequest"];
   let fixturePointerDrag: FixturePointerDragState | null = null;
   let suppressNextFixtureClick = false;
 
@@ -156,6 +157,19 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
     const pane = patchMap;
     const header = pane?.querySelector<HTMLElement>(":scope > .panelHeader");
     if (!pane || !header || !pane.isConnected) return;
+    const selectionToggle = pane.querySelector<HTMLButtonElement>("[data-patch-selection-toggle]");
+    const nextCompact = Boolean(selectionToggle?.offsetWidth);
+    if (nextCompact !== compactHeader()) {
+      const focusedView = document.activeElement instanceof HTMLElement
+        && header.contains(document.activeElement) ? document.activeElement.dataset.dmxView : undefined;
+      setCompactHeader(nextCompact);
+      if (focusedView) queueMicrotask(() => {
+        const target = nextCompact
+          ? universeOverview?.querySelector<HTMLElement>("summary")
+          : header.querySelector<HTMLElement>(`[data-dmx-view="${focusedView}"]`);
+        target?.focus({ preventScroll: true });
+      });
+    }
 
     const paneStyle = getComputedStyle(pane);
     const paneRect = pane.getBoundingClientRect();
@@ -168,7 +182,6 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
     pane.style.setProperty("--dmx-overview-max-height", `${Math.max(0, (popupBottom - headerRect.bottom) / zoom - 4)}px`);
 
     const selectionControls = pane.querySelector<HTMLElement>(":scope > .dmxPatchSelectionControls");
-    const selectionToggle = pane.querySelector<HTMLButtonElement>("[data-patch-selection-toggle]");
     if (selectionToggle?.offsetWidth) {
       if (!selectionExpanded() && (selectionControls?.contains(document.activeElement)
         || (selectionFocusTarget && selectionControls?.contains(selectionFocusTarget)))) {
@@ -296,6 +309,14 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
     requestAnimationFrame(() => requestAnimationFrame(() => scrollAddressIntoView(channel)));
   };
 
+  createEffect(() => {
+    const request = props.revealAddressRequest;
+    if (!request || request === lastAddressRequest || request.universe !== props.activeUniverse || props.viewMode !== "grid") return;
+    lastAddressRequest = request;
+    setActiveAddress(request.address);
+    revealAddress(request.address);
+  });
+
   const focusAddress = (channel: number) => {
     const nextAddress = Math.min(512, Math.max(1, channel));
     setActiveAddress(nextAddress);
@@ -348,12 +369,6 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
       revealAddress(selectedSegment.start);
     }
   });
-
-  const useNextFreeAddress = () => {
-    const nextFreeAddress = props.nextFreeAddress;
-    props.onNextFreeAddress();
-    if (nextFreeAddress !== null) revealAddress(nextFreeAddress);
-  };
 
   const channelAtPoint = (clientX: number, clientY: number): number | null => {
     const target = document.elementFromPoint(clientX, clientY);
@@ -451,6 +466,16 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
 
   const activeDndStatus = () => props.fixtureDragActive ? props.fixtureDndStatus : props.profileDndStatus;
 
+  const addressReadout = () => <output class="dmxPatchAddressReadout" aria-label="Current DMX address">
+    U{props.activeUniverse} A{inspectedAddress()}
+  </output>;
+  const viewControls = () => <div class="viewToggle" role="group" aria-label="DMX map view">
+    <button data-dmx-view="grid" class={props.viewMode === "grid" ? "active" : ""}
+      onClick={() => props.onViewMode("grid")} aria-pressed={props.viewMode === "grid"}>Grid</button>
+    <button data-dmx-view="list" class={props.viewMode === "list" ? "active" : ""}
+      onClick={() => props.onViewMode("list")} aria-pressed={props.viewMode === "list"}>List</button>
+  </div>;
+
   return (
     <>
       <div class="dmxPatchMap withFixtureSelection" ref={(element) => { patchMap = element; }}
@@ -476,17 +501,9 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
           }
         }}>
         <div class="panelHeader">
-          <h3>DMX Patch Grid</h3>
-          <output class="dmxPatchAddressReadout" aria-label="Current DMX address">
-            U{props.activeUniverse} A{inspectedAddress()}
-          </output>
-          <output class="dmxGridUsage" data-dmx-grid-usage>
-            {props.activeMap.used}/512 used / {props.activeMap.largestFree}ch max free
-          </output>
+          <h3>DMX Patch</h3>
+          <Show when={!compactHeader()}>{addressReadout()}</Show>
           <div class="panelHeaderActions">
-            <button onClick={useNextFreeAddress} disabled={props.nextFreeAddress === null}>
-              Next Free
-            </button>
             <select
               value={props.activeUniverse}
               aria-label="DMX universe"
@@ -498,33 +515,25 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
               }}
             >
               <For each={props.universeOptions}>
-                {(universeId) => <option value={universeId}>Universe {universeId}</option>}
+                {(universeId) => <option value={universeId}>U{universeId}</option>}
               </For>
             </select>
-            <div class="viewToggle" role="group" aria-label="DMX map view">
-              <button
-                class={props.viewMode === "grid" ? "active" : ""}
-                onClick={() => props.onViewMode("grid")}
-                aria-pressed={props.viewMode === "grid"}
-              >
-                Grid
-              </button>
-              <button
-                class={props.viewMode === "list" ? "active" : ""}
-                onClick={() => props.onViewMode("list")}
-                aria-pressed={props.viewMode === "list"}
-              >
-                List
-              </button>
-            </div>
+            <Show when={!compactHeader()}>{viewControls()}</Show>
             <details class="dmxUniverseOverviewDisclosure" data-dmx-universe-disclosure
               ref={(element) => { universeOverview = element; }}
               onToggle={(event) => {
                 if (event.currentTarget.open) setSelectionExpanded(false);
                 schedulePatchLayout();
               }}>
-              <summary>Universe Overview</summary>
+              <summary aria-label="DMX view and universe overview">{compactHeader() ? "View" : "Overview"}</summary>
               <div class="dmxUniverseOverviewContent">
+                <Show when={compactHeader()}>
+                  {viewControls()}
+                  {addressReadout()}
+                </Show>
+                <output class="dmxGridUsage" data-dmx-grid-usage>
+                  {props.activeMap.used}/512 used / {props.activeMap.largestFree}ch max free
+                </output>
                 <div class="dmxUniverseOverviewMeta">
                   <span>{props.universeMaps.length} universe(s)</span>
                   <span>{props.fixtureCount} fixture(s)</span>
@@ -580,23 +589,24 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
               </div>
             </details>
             <button class="dmxPatchSelectionToggle" data-patch-selection-toggle
+              title="Patch selection and move" aria-label="Patch selection and move"
               aria-expanded={selectionExpanded()} aria-controls={selectionControlsId}
               onClick={() => {
                 if (universeOverview) universeOverview.open = false;
                 setSelectionExpanded(!selectionExpanded());
                 schedulePatchLayout();
               }}>
-              Selection and move ({selectedPatches().length})
+              <span>Select</span> ({selectedPatches().length})
             </button>
           </div>
         </div>
         <div class="dmxPatchSelectionControls" classList={{ expanded: selectionExpanded() }}
           id={selectionControlsId} aria-label="Patch selection and move">
           <output>{selectedPatches().length} selected</output>
-          <button onClick={() => setSelectedPatchIds(new Set(props.activeMap.segments.map(segment => segment.fixture.id)))}>Select All</button>
-          <button onClick={() => setSelectedPatchIds(new Set<number>())} disabled={selectedPatches().length === 0}>Clear Selection</button>
+          <button data-patch-selection-action="all" onClick={() => setSelectedPatchIds(new Set(props.activeMap.segments.map(segment => segment.fixture.id)))}>Select All</button>
+          <button data-patch-selection-action="clear" onClick={() => setSelectedPatchIds(new Set<number>())} disabled={selectedPatches().length === 0}>Clear Selection</button>
           <label>Move to address <input type="number" min="1" max="512" value={moveAddress()} aria-label="Move selected fixtures to address" onInput={(event) => setMoveAddress(Number(event.currentTarget.value))} /></label>
-          <button disabled={selectedPatches().length === 0} onClick={() => {
+          <button data-patch-selection-action="move" disabled={selectedPatches().length === 0} onClick={() => {
             const fixtures = selectedPatches();
             const anchor = fixtures.reduce((first, fixture) => fixture.address < first.address ? fixture : first);
             props.onFixtureDragStart(anchor, fixtures); void props.onFixtureDrop(moveAddress());

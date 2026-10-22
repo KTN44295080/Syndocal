@@ -487,3 +487,189 @@ and this QA addition. No blocking finding was identified for this diagnostic
 checkpoint. The tracked runtime files are unchanged; the restored executable
 hash was independently checked. This review does not accept the native frame
 budget or substitute for review of a future runtime optimization.
+
+## Deferred FX input ownership, 2026-10-22 (performance acceptance unresolved)
+
+Base: `cfe8ca56a18873ebd0d967b74d73b337e6f31763`; main/HEAD/origin/main
+matched and the tree was clean at entry. This unit changes `crates/video/src/lib.rs`
+and adds `crates/video/src/isf_borrowed_input_tests.rs`, plus this QA entry.
+No other dirty files or overlapping edits were observed. One independent,
+read-only reviewer inspected the frozen product/test diff and actual test logs.
+There were no blocking product findings. The single P3 documentation finding
+was fixed by moving the previous diagnostic closeout above this section.
+
+The shared-frame FX path now starts with `Cow::Borrowed` and passes it through
+Clip then Layer. A successful ISF operation supplies its own owned output,
+avoiding the previous eager `Arc::unwrap_or_clone` before FX. If the chains
+return the borrowed input (empty/bypassed/disabled or preparation failure),
+ownership conversion occurs only at queue insertion. That fallback still uses
+`Arc::unwrap_or_clone`, so an exclusively owned input can move without copying.
+The existing owned-frame entry point is a thin `Cow::Owned` adapter into the
+same canonical implementation; it returns `into_owned()` at its boundary.
+There is no duplicate hot-path implementation.
+
+ISF runtime internals are unchanged, including their all-runtime-failure return
+and stage-local bypass. All existing cancellation checkpoints, stage preparation,
+fault mapping, FRAMEINDEX/feedback handling and Clip/Layer order remain in place.
+The public VideoFrame/schema/API, GPU eligibility, queue insertion/retirement,
+LastValid policy and input-retention limits were not changed. The source Arc is
+held only for the current loop iteration; no new cache or persistent source
+reference is introduced. Borrowed source pixels/metadata and reference counts
+are checked after both success and failure.
+
+Evidence directory:
+`target/qa/fx-perf-2026-10-22/native/borrowed-input-20261022-033854/`.
+`tests-complete-03.json` and `review-checks-03.json` record the frozen source
+hashes, complete executed test names, log hashes, warning comparison and exe hash.
+All accepted runs use `cargo test -p video --features libav --release FILTER --
+--test-threads=1`, after `vcvars64.bat -vcvars_ver=14.44`. Every accepted log
+verifies the explicit MSVC **14.44.35207** linker pin and matching PATH-first
+`where.exe link.exe` result.
+
+| Final filter / log | Passed | Failed | Ignored | Filtered out | Exit |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `isf`, `isf-03.log` | 76 | 0 | 1 | 280 | 0 |
+| `c1_`, `c1_-03.log` | 27 | 0 | 0 | 330 | 0 |
+| `video_render_cancellation_tests`, corresponding `-03.log` | 4 | 0 | 0 | 353 | 0 |
+
+These are **107 successful test invocations / 105 distinct passing tests**;
+two C1 ISF tests appear in both filters. The sole ignored test is
+`isf_targetless_batch_timing_experiment`, whose existing reason is "explicit
+matched GPU timing experiment; no wall-time assertion". It was not used as
+performance evidence. All four new tests actually ran and passed, including:
+
+- Empty, bypassed, disabled and all-prepare-failed returns: full pixel/metadata
+  equality, stable fault scope/stage identity, borrowed allocation retained and
+  owned-input allocation preserved through the compatibility adapter.
+- All runtime stages failing on invalid DATE: unchanged input pixels, identical
+  faults through owned/borrowed paths, and exactly one FRAMEINDEX consumed before
+  the next successful shader result.
+- A shared-provider integration with noncommuting Clip add-red then Layer invert:
+  expected pixel **235/235/225/255**, later-stage execution after a prepare fault,
+  stable Clip fault identity, no LastValid publication from faulty output and
+  unchanged decoder frame/reference count. A missing Layer projection explicitly
+  keeps the Clip result **20/20/30/255** and the existing Layer resolution fault.
+- Cancellation before processing and after GPU work: Cancelled is propagated,
+  shared pixels remain intact and no queue/LastValid output is published.
+
+The selected existing tests also cover feedback/instance/resize boundaries,
+scratch readback failure, resource eligibility, image bindings, invalid chains,
+prepare-failure clock progression, output fault freshness and cancellation
+without CPU retry or LastValid/black fallback. No new normal-path-only or
+wall-time acceptance assertion was substituted for these contracts.
+
+Failure evidence remains intact. Initial runner preflight (session 68413)
+exited 1 before Cargo because Git could not resolve the intended working
+directory; the runner now derives the repository from its script path.
+The first batch had LF-only endings and was misparsed by cmd, bypassing the
+intended environment setup. That invalid run (54173) was explicitly terminated
+through its exact owned runner PID 39932, exited 1, and executed zero tests;
+its `test.cmd` and `isf-01.log` are retained and are not accepted evidence.
+Process absence was verified before starting a new attempt. The new batch
+copies the existing working harness with CRLF endings (`harness-correction.json`).
+
+The first correctly pinned suite, `isf-02.log` (94224, exit 101), ran **75 passed /
+1 failed / 1 ignored**. The new integration fixture omitted the required matching
+legacy projection for its canonical Layer chain. The existing fail-closed
+resolver therefore rejected Layer, leaving the correct Clip-only pixel.
+The fixture now supplies the matching invert projection; the original expected
+235/235/225 pixel and fault-identity assertions are retained. The missing-projection
+case is also asserted explicitly. The supervisor independently identified the
+same fixture issue. Product resolution policy was not relaxed. The corrected
+full selected suite completed in session **61891, exit 0**; aggregation/source
+hash/exe/diff checks completed in **36934, exit 0**.
+
+Rust warnings: **baseline 0 / current 0 / delta 0** for the release+libav test
+configuration. The baseline is the existing
+`88baa1b5-514c-47d4-8626-21b0729a59e5/isf-regression-takeover-01.log`;
+all three final logs were scanned. Frontend/Vite was not part of those Rust tests.
+The ordinary `target/release/syndocal.exe` was frozen and saved with SHA256:
+`cd4c3a1f8d3048a9407d086de48d44be37c2711295bfd91f48038cd2cc12516c`.
+No measured speed improvement or 60 fps claim follows from these Rust checks.
+
+The user subsequently authorized the native gate, independent review and owned
+commit/push in this lane. Native campaign:
+`target/qa/fx-perf-2026-10-22/native/aa0ed288-4228-4c0e-9879-805cb30f8a5e/`.
+It preserves `original-runtime/` (exe plus seven DLLs), `candidate-source/`,
+`baseline-source/`, per-attempt build/capture logs and process/session records.
+Both variants use one QA-only identifier, the same known silent H264 fixture,
+three layers x three FX, 2560 x 1600 local Display, five seconds warmup and a
+60-second capture request, with trace OFF and `RUST_LOG=off`. Compiler overlap
+is rejected before, during and after capture. The original profile is not used.
+
+Baseline build `01` (session 74730) and capture `baseline01` (26091) exited 0.
+Actual native geometry was 2560 x 1600. Its measurement interval delivered
+1185 frames in 59.6077604 seconds (19.8799618 counter fps); Standby retirement
+took 431.759 ms. Outputs/routes/health were empty afterward, and exact PID 43944
+and the measurement node were absent after the observed native close action
+(process verification 69918, exit 0). Application stdout/stderr were both empty.
+
+Candidate build `01` (71571, native exit 0) is **excluded**, never launched or
+measured: Windows `copyFile` preserved the restored source's 03:41:45 UTC mtime,
+so Cargo reused the baseline `video` rlib despite the correct source hash.
+`invalid-candidate-build-01.json`, that executable and full logs preserve this
+failure of the harness. After its real process exited, repair 26209 (exit 0)
+advanced only the source mtime, verified unchanged bytes, and created attempt
+`02` with an explicit `Compiling video` acceptance check. A session-reader
+`INVALID_ARGUMENT` for 71571 was handled by following PID 5436 and its log;
+the running build was not restarted. Candidate `02` is tracked by session
+49398 / runner PID 38984 and `build-candidate-02-session.json`.
+
+Candidate build `02` (49398) and capture `candidate02` (41578) exited 0.
+Both accepted builds actually recompiled `video`, used the pinned MSVC
+14.44.35207 linker first on PATH, and ran with identical QA configuration.
+The full capture populations and rolling diagnostic windows are distinct:
+
+| Measurement | Baseline `baseline01` | Candidate `candidate02` |
+| --- | ---: | ---: |
+| Complete polling samples | 104 | 102 |
+| Counter interval | 59.6077604 s | 59.299355 s |
+| Delivered frames | 1185 | 1007 |
+| Counter fps | 19.8799618 | 16.9816350 |
+| Dropped-frame counter delta | 2390 | 2548 |
+| Final present / render rolling samples | 599 / 600 | 599 / 600 |
+| Native validation frames / deadline misses | 600 / 600 | 600 / 600 |
+| Native frame-budget pass | false | false |
+| Standby retirement | 431.759 ms | 441.045 ms |
+| Rust warnings / existing Vite large-chunk warning | 0 / 1 | 0 / 1 |
+
+The candidate was slower in this single sequential matched pair; this is
+**not an accepted performance improvement**. Decoder work also differed
+(decode wall time 14,693,155 us / 1317 calls versus 23,618,645 us / 1141 calls;
+lookahead hits 1995 versus 1245), so the observation does not isolate the cause
+to the ownership change. No cross-population percentile arithmetic is used.
+Repeated controlled measurements, memory-pressure behavior and the 60 fps
+budget remain unresolved. Historical 19.8 fps and traced 16.53 fps are not
+an unconditional comparison baseline.
+
+The fixture SHA256 is
+`1ad7bed8a2e59b6e86ae4a23800bb70e5f39554f9991dc9befb697ae9e11dd75`;
+the known silent H264 media SHA256 is
+`53861258351df591b53450228d532c60fd914caa8de1d88b2029e480488e0c2b`.
+Accepted baseline/candidate exe SHA256 values are respectively
+`58693b78a310faba662a7c6973090a047c8f7af76714d7f41fc940f9ec8f0761` and
+`148e27b77afb2515d668a32e0d9cd7b0b6f10479dc9db54038128b01d1430cf3`.
+Both captures used actual 2560 x 1600 Display; decode failures, libav session
+errors and hardware errors were zero. Stop returned Ready/Standby with video
+and lighting disallowed, no live/test window, no active route and empty health.
+Exact candidate PID 45652 and its measurement node were verified absent
+(74517, exit 0). Both applications' stdout/stderr were empty with trace OFF.
+
+Restoration (74913, exit 0) verified all eight original runtime files, including
+the ordinary exe SHA256 `cd4c3a1f8d3048a9407d086de48d44be37c2711295bfd91f48038cd2cc12516c`.
+Candidate source hashes remain the reviewed/tested hashes above. Aggregation
+(26306, exit 0) wrote `comparison-summary.json` and archived the final harness;
+the excluded first candidate build and all failure evidence remain intact.
+Compiler-warning delta is zero (Rust 0 to 0; Vite large-chunk 1 to 1).
+
+The user then prioritized the one-row header / DMX Patch UI correction.
+The ownership candidate and its tests are preserved as unfinished work and
+are not included in a completed performance claim or the UI-only commit.
+Unknown DMX/audio hardware, external output, macOS, physical scanout and
+long-run stability were not exercised. Resume performance investigation from
+the saved source/runtime/fixture hashes and full same-campaign evidence.
+
+The completed UI-priority checkpoint and its isolated native gate are recorded in
+[UI_SINGLE_ROW_2026-10-22.md](UI_SINGLE_ROW_2026-10-22.md). Its normal executable
+contains the UI correction with baseline video code; the candidate Rust source
+was restored as unfinished work and is excluded from that UI commit.

@@ -654,6 +654,11 @@ const japaneseText: Record<string, string> = {
     "インポート後もDMX経路は無効です。Syndocalプロジェクト（.sdc）を作成するには名前を付けて保存してください。",
   "Embedded fixture profiles": "埋め込み灯体プロファイル",
   "DMX patch": "DMXパッチ",
+  "DMX Patch": "DMXパッチ",
+  "DMX view and universe overview": "DMX表示とユニバースの概要",
+  "Overview": "概要",
+  "Tempo and clock": "テンポとクロック",
+  "Refresh profiles": "プロファイルを更新",
   "OUTMODE / FLAG": "OUTMODE / FLAG",
   "Compressed fixture flags are intentionally not converted in DVC-1":
     "圧縮された灯体フラグはDVC-1では意図的に変換しません",

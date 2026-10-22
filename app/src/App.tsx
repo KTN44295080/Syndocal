@@ -2224,6 +2224,7 @@ export default function App() {
   const [mappingMarquee, setMappingMarquee] = createSignal<MappingMarqueeState | null>(null);
   const [mappingViewportPanDrag, setMappingViewportPanDrag] = createSignal<MappingViewportPanDragState | null>(null);
   const [patchGridUniverse, setPatchGridUniverse] = createSignal(0);
+  const [patchGridRevealRequest, setPatchGridRevealRequest] = createSignal<{ universe: number; address: number }>();
   const [dmxPatchViewMode, setDmxPatchViewMode] = createSignal<DmxPatchViewMode>("grid");
   const [patchProfileDragSource, setPatchProfileDragSource] = createSignal<PatchProfileDragItem | null>(null);
   const [patchProfileDragAddress, setPatchProfileDragAddress] = createSignal<number | null>(null);
@@ -10947,6 +10948,7 @@ export default function App() {
     setAddress(nextAddress);
     setPatchGridUniverse(universe());
     setDmxPatchViewMode("grid");
+    setPatchGridRevealRequest({ universe: universe(), address: nextAddress });
   };
 
   const selectFixtureGroupFilter = (groupId: string | null) => {
@@ -28521,7 +28523,7 @@ export default function App() {
             activeUniverse: activePatchGridUniverse(),
             universeOptions: patchGridUniverseOptions(),
             viewMode: dmxPatchViewMode(),
-            nextFreeAddress: nextFreePatchAddress(),
+            revealAddressRequest: patchGridRevealRequest(),
             activeMap: activePatchGridMap(),
             addressCells: dmxAddressCells(),
             universeMaps: dmxUniverseMaps(),
@@ -28532,7 +28534,6 @@ export default function App() {
             profileDndStatus: patchProfileDndStatus(),
             fixtureDragActive: Boolean(patchFixtureDragController.source()),
             fixtureDndStatus: patchFixtureDragController.dndStatus(),
-            onNextFreeAddress: selectNextFreePatchAddress,
             onUniverse: setPatchGridUniverse,
             onViewMode: setDmxPatchViewMode,
             onSelectFixture: selectFixture,
