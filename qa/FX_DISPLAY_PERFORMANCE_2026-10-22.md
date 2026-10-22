@@ -320,3 +320,170 @@ the Display end timestamp, then separately measure the input
 `Arc::unwrap_or_clone`, shader/control/stage-key preparation, queue retirement,
 and output LastValid clone. Current evidence does not justify changing GPU
 eligibility or LastValid policy. The 60 fps native FX budget remains unresolved.
+
+## Buffered host attribution, 2026-10-22
+
+This bounded observation continues from main/HEAD/origin/main
+`491fb3bec909045c639a7891bfa72a1c99b5a3e5`. All three refs were rechecked before
+closeout. The initial working tree was clean; the temporary Rust changes were
+owned by this campaign, and their hashes remained equal to the successful build
+manifest until removal. No product optimization or commit/push was performed.
+
+Campaign: `target/qa/fx-perf-2026-10-22/native/6281a662-d969-45c2-9adc-3de1018d05c2/`.
+The existing native harness, QA-only identifier/profile, and known silent H264
+were reused. The profile identifier ends in this campaign UUID. Local Display
+was 2560 x 1600, with three playing layers and three FX stages per layer; input
+media was 1920 x 1080, 30 fps, 12 seconds, `has_audio: false`. Lighting remained
+denied, with no DMX fixtures or external transport routes. MSVC 14.44.35207 was
+both the explicit linker pin and first `where.exe link.exe` result. The successful
+build was reused after the message-stream retry; neither build nor baseline
+backup was repeated.
+
+| Identity | SHA256 |
+| --- | --- |
+| Original and restored `target/release/syndocal.exe` | `cd4c3a1f8d3048a9407d086de48d44be37c2711295bfd91f48038cd2cc12516c` |
+| Instrumented executable | `ec2db0667b308b79f96677b07ac9bf1419ef8612c214463760ea9990ab88177d` |
+| Campaign `perf-h264-1080-3l-3fx.sdc` | `1ad7bed8a2e59b6e86ae4a23800bb70e5f39554f9991dc9befb697ae9e11dd75` |
+| Known `h264_1080p30.mp4` | `53861258351df591b53450228d532c60fd914caa8de1d88b2029e480488e0c2b` |
+| Complete on02 stderr trace | `4041cb6934fbcc1fe11f71f284b5813c3b10ad187a4151e00db5cb85541ae92e` |
+
+The opt-in `SYNDOCAL_QA_ISF_NATIVE_TRACE=1` implementation records primitive
+values in a thread-local bounded buffer: every 16th parent, at most 96 parents,
+and at most 96 records per parent. The Display preparation span fixes its end
+timestamp before formatting or stderr output. Children share that parent and
+record start/end timestamps; the Display record is last, followed by an envelope
+with record count, overflow flag and flush duration. Preallocation occurs before
+the first sampled root timestamp. Clock/buffer overhead remains inside measured
+spans. Rendering order, GPU eligibility, fault/LastValid behavior and cancel/Stop
+contracts were left intact. The added scopes measure existing operations only.
+
+`on01` failed before capture: Arm returned `forbidden` following a Desktop
+identity/state change and a rejected stale-window input. Its exact rejection is
+preserved; this observation does not establish a lease-expiry cause. The measure
+exit was **1**, health samples **0**, and native stderr **0 bytes**. Its finalizer
+returned Ready/Standby in **408.481 ms**, with no output windows/routes/health.
+The process was closed, then a fresh `on02` process used the same successful
+binary and a new attempt. No rejected invocation was redispatched.
+
+`on02` completed the requested 60-second observation and Stop, exit **0**.
+Evidence is `perf-h264-1080-3l-3fx-on02/evidence.json`, with both attempts' launch
+records, measure logs and exit JSON retained. There are **104 health polls**;
+the first-to-last counter interval is **59.2202822 s**, **979 deliveries**,
+**16.531498 fps**, and **2573 dropped frames** during that interval. Final health
+has 600 render samples and 599 presentation samples. Native validation has
+**600/600 deadline misses**, `frame_budget_pass: false`, zero decoder failures
+and zero lifetime output errors. The evidence `passed` flag covers guarded
+capture and successful retirement only; it is not a frame-budget acceptance.
+
+`buffered-analysis-01.json` validates **3672 span records / 68 complete parent
+envelopes / 204 stacks**, with no buffer overflow or partial parent. All 68
+parents have exactly 54 records: one each of Display/artistic/prepare/queue-sync/
+LastValid/LastValid-clone, three each of layer/stack/chain/input-clone/stage-keys/
+queue-push/queue-publish, and nine each of shader/control/image preparation.
+The first parent is the only warmup exclusion. The adopted population is
+**67 complete parents / 3618 span records / 201 stacks**, all at 2560 x 1600
+with three stages and `status: ok`. Bounds, phase sums, child containment and
+root/envelope end agreement pass. The 96-parent cap was not reached. At the last
+sample, parent 1073, runtime 1 had **3219 calls: created 1 / reused 3218 /
+resized 0**. These counters end at that sample, not at process lifetime end.
+
+Each table row is computed per adopted parent before taking percentiles.
+Multi-layer and multi-stage rows sum only their own records within that parent;
+rows overlap where a span contains another span and must not be added together.
+
+| Same-parent measured operation | p50 ms | p95 ms |
+| --- | ---: | ---: |
+| Entire traced Display preparation | 38.193 | 58.265 |
+| Prepare prefetch | 2.141 | 21.060 |
+| Prepare layer loop | 25.231 | 27.793 |
+| Layer provider/decode access, three layers | 0.017 | 0.023 |
+| Input `Arc::unwrap_or_clone`, three layers | 5.421 | 6.002 |
+| Shader preparation, nine stages | 0.007 | 0.009 |
+| Control preparation, nine stages | 0.000 | 0.002 |
+| Image binding preparation, nine stages | 0.000 | 0.000 |
+| Stage-key preparation, three chains | 0.000 | 0.002 |
+| Entire three FX chains | 16.163 | 19.032 |
+| Entire three synchronous stacks | 16.117 | 18.993 |
+| Stack upload, three stacks | 1.942 | 2.295 |
+| Stack encode, three stacks | 0.560 | 0.684 |
+| Stack submit, three stacks | 0.339 | 0.450 |
+| Stack map/poll/wait/receive, three stacks | 6.427 | 9.446 |
+| Stack CPU unpack/unmap, three stacks | 6.600 | 7.245 |
+| Queue synchronization/retention | 0.011 | 0.013 |
+| Queue push including retirement, three layers | 1.713 | 1.916 |
+| Queue publish, three layers | 0.000 | 0.001 |
+| Compose | 7.005 | 7.583 |
+| Output LastValid lookup/clone/replace | 2.387 | 2.729 |
+| Output LastValid clone alone | 1.779 | 2.031 |
+| Chain runtime residual after contained stacks | 0.009 | 0.011 |
+| Layer residual after decode/input/chain/queue scopes | 1.762 | 2.129 |
+| Prepare-loop residual after contained layers | 0.005 | 0.006 |
+| Post-Display-end trace flush, excluded from root | 221.160 | 241.118 |
+
+Residuals are differences of matched durations for each individual parent,
+followed by percentiles; no independent percentiles were subtracted. The small
+layer provider/access time does not include the separately measured prefetch
+work and is not total decode time. Zero entries are microsecond-resolution
+observations, not proof of zero cost. The wait span includes host waiting and
+queue completion, not isolated GPU kernel time. Input ownership/clone,
+queue retirement and output LastValid have measurable host costs; shader,
+control and stage-key preparation do not dominate this sampled workload.
+The remaining layer residual is still unattributed. This evidence supports a
+later ownership/copy-lifetime investigation, not an unmeasured behavior change.
+
+Synchronous log flush now occurs after the traced root end, but still stalls
+the sampled render iterations. Its p50 **221.160 ms** and p95 **241.118 ms**
+make the observed **16.531498 fps unsuitable for standard-build acceptance or
+a speedup/regression comparison** with the historical approximately 19.8 fps.
+There was no new trace-OFF run in this unit. Native health preparation p50/p95
+was **39.3355 / 257.0376 ms**, with a different boundary/population from the 67
+traced parents. Neither that difference nor earlier trace percentiles are used
+to subtract an observer cost. The traced root is the Display preparation seam,
+not final GPU composition, present completion, or physical scanout.
+
+| Check | Exit / result |
+| --- | --- |
+| Campaign/baseline preparation (session 11597) | 0 |
+| Existing harness fixture preparation and source diff check (39209) | 0 |
+| Analysis helper syntax check | 0 |
+| Pinned native build (27454), `build-buffered-host-01.json/log` | 0 |
+| on01 launch / maximize (19470 / 30605) | 0 / 0 |
+| on01 measure (33359), `measure-on01-exit.json` | 1, Arm rejected before capture |
+| on02 launch / maximize (10437 / 84275) | 0 / 0 |
+| on02 measure (99138), `measure-on02-exit.json` | 0 |
+| Buffered analysis (54252) | 0 |
+| Exact app / measurement-node / compiler absence check (82133) | 0, none found |
+| Archive/removal/exe restoration (40600) | 0 |
+| Hashes, refs, sample counts, warnings, helper archive, diff check (89879) | 0 |
+| Final diff check / Rust diff / status / stat / exe hashes / process absence (56982) | All six exits 0; only this QA file modified |
+
+Build warnings: **Rust 0 (baseline 0, delta 0); existing Vite chunk notice 1
+(baseline 1, delta 0)**. The warning/linker scan also exited 0 (5385). This unit
+did not rerun the earlier 72-test/1-ignored suite, fault injection, or a new
+standard-build runtime acceptance. No independent worker/swarm was used.
+
+Stop on02 returned **Ready/Standby in 413.568 ms**, lighting/video both denied,
+no open live/test-pattern windows, no active routes and no health rows. Both
+PIDs **38672 / 36248** were closed through Discard, Stop and Close. No matching
+app, measurement node or compiler remained. `closeout.json` and
+`final-checks-01.json` preserve restoration checks, all source/executable/helper
+hashes, warnings and sample counts. `buffered-archive/` contains the measured
+exe, seven FFmpeg DLLs, all three temporary Rust sources, exact tracked patch
+and copies of the harness/helpers. Raw capture/build/exit evidence remains in
+the same campaign; the original `baseline/` was preserved unchanged.
+
+The two Rust files match their saved original bytes, `isf_native_trace.rs` has
+been removed, and the standard executable matches the original SHA256 above.
+The final tracked difference is this QA addition only. Git's final diff checks
+also emitted the working-copy LF-to-CRLF conversion notice; this is separate
+from the unchanged build-warning counts above. No other
+machine, unknown DMX/audio device, external output or macOS was exercised.
+Physical scanout, controlled observer overhead, remaining layer residual and
+the 60 fps native FX budget remain unverified or unresolved.
+
+Supervisor closeout review inspected the archived temporary diff and trace
+module, the same-parent analysis implementation and results, the Stop evidence,
+and this QA addition. No blocking finding was identified for this diagnostic
+checkpoint. The tracked runtime files are unchanged; the restored executable
+hash was independently checked. This review does not accept the native frame
+budget or substitute for review of a future runtime optimization.
