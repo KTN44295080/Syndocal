@@ -8167,6 +8167,7 @@ progress {
 }
 
 .dmxPatchMap {
+  position: relative;
   display: grid;
   gap: 8px;
   border: 1px solid var(--theme-line);
@@ -29571,6 +29572,7 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 }
 
 .layoutSharedWorkspace.layoutSetup > .setupPatchTopPanel > .setupPatchAddressDesk {
+  container: dmx-patch-desk / inline-size;
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   min-width: 0;
@@ -29581,7 +29583,7 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 .layoutSharedWorkspace.layoutSetup > .setupPatchTopPanel > .setupPatchAddressDesk > .dmxPatchMap {
   display: grid;
   grid-row: 1;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -29604,6 +29606,15 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
   overflow: visible;
   border-top: 1px solid var(--theme-line);
   padding-top: 5px;
+}
+
+/* The expanded options keep their full control sizes and leave room for the
+   profile browser above the otherwise fixed execution form. */
+.layoutSharedWorkspace.layoutSetup.setupMode-patch > .setupPanel > .patchFixtureFormPanel:has([data-patch-placement-disclosure][open]) {
+  min-height: 0;
+  max-height: 55%;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .patchProfileEmptyState {
@@ -29786,17 +29797,27 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 
 .layoutSharedWorkspace.layoutSetup.setupMode-patch .dmxPatchMap > .panelHeader {
   position: relative;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
 }
 
-.layoutSharedWorkspace.layoutSetup.setupMode-patch .dmxPatchMap {
-  position: relative;
+.layoutSharedWorkspace.layoutSetup.setupMode-patch .dmxPatchMap > .panelHeader > .panelHeaderActions {
+  flex: 1 1 380px;
+  justify-content: flex-start;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-patch .dmxPatchMap > .panelHeader > .panelHeaderActions > * {
+  flex-shrink: 0;
+}
+
+.dmxPatchMap .dmxPatchSelectionToggle {
+  display: none;
+  min-height: 28px;
 }
 
 .patchProfileDndStatus {
   position: absolute;
   z-index: 3;
-  top: 34px;
+  top: var(--dmx-dnd-top, 34px);
   left: 8px;
   pointer-events: none;
   border: 1px solid #3c8351;
@@ -29826,7 +29847,7 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 }
 
 .dmxUniverseOverviewDisclosure {
-  position: relative;
+  position: static;
   min-width: 0;
 }
 
@@ -29861,9 +29882,11 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
   right: 0;
   display: grid;
   gap: 8px;
-  width: min(520px, calc(100vw - 30px));
-  max-height: min(360px, calc(100vh - 190px));
+  width: min(520px, 100%);
+  max-height: min(360px, var(--dmx-overview-max-height, 360px));
+  box-sizing: border-box;
   overflow: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--theme-line-strong);
   border-radius: 2px;
   background: var(--theme-bg);
@@ -29893,6 +29916,71 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 
 .dmxUniverseOverviewContent .dmxUniverseLegend button {
   flex: 0 0 auto;
+}
+
+.dmxUniverseOverviewContent .dmxUniverseTrack {
+  /* The existing 25px segment controls retain 2px inset on each side. */
+  min-height: 31px;
+}
+
+@container dmx-patch-desk (max-width: 450px) {
+  .layoutSharedWorkspace.layoutSetup > .setupPatchTopPanel > .setupPatchAddressDesk > .dmxPatchMap {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .layoutSharedWorkspace.layoutSetup.setupMode-patch .dmxPatchMap > .panelHeader {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .dmxPatchMap > .panelHeader > h3 {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+  }
+
+  .dmxPatchMap > .panelHeader > .dmxPatchAddressReadout {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+  }
+
+  .dmxPatchMap > .panelHeader > .dmxGridUsage {
+    grid-column: 2;
+    grid-row: 2;
+    text-align: right;
+  }
+
+  .dmxPatchMap > .panelHeader > .panelHeaderActions {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+
+  .dmxPatchMap .dmxPatchSelectionToggle {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .dmxPatchMap > .dmxPatchSelectionControls {
+    position: absolute;
+    z-index: 9;
+    top: var(--dmx-selection-top, 8px);
+    right: 8px;
+    left: 8px;
+    display: none;
+    max-height: var(--dmx-selection-max-height, 360px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    border: 1px solid var(--theme-line-strong);
+    border-radius: 2px;
+    background: var(--theme-bg);
+    padding: 8px;
+    box-sizing: border-box;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.34);
+  }
+
+  .dmxPatchMap > .dmxPatchSelectionControls.expanded {
+    display: flex;
+  }
 }
 
 .layoutSharedWorkspace.layoutSetup.setupMode-patch .mappingPersistentWorkspaceBand .mappingGroupStrip,

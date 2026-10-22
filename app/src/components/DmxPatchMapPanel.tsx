@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, Index, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, createUniqueId, For, Index, onCleanup, onMount, Show, untrack } from "solid-js";
 import type { PatchedFixtureSummary } from "../types";
 
 export type DmxPatchViewMode = "grid" | "list";
@@ -109,6 +109,8 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
   const [activeAddress, setActiveAddress] = createSignal(1);
   const [selectedPatchIds, setSelectedPatchIds] = createSignal(new Set<number>());
   const [moveAddress, setMoveAddress] = createSignal(1);
+  const [selectionExpanded, setSelectionExpanded] = createSignal(false);
+  const selectionControlsId = createUniqueId();
   let selectionAnchor: number | null = null;
   const selectedPatches = () => props.activeMap.segments.map(segment => segment.fixture).filter(fixture => selectedPatchIds().has(fixture.id));
   const patchSelected = (id: number) => selectedPatchIds().has(id);
@@ -140,20 +142,60 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
   const fragmentByCell = createMemo(() =>
     new Map(gridFragments().map((fragment) => [`${fragment.row}:${fragment.column}`, fragment] as const)),
   );
+  let patchMap: HTMLDivElement | undefined;
   let addressGrid: HTMLDivElement | undefined;
-  let addressGridResizeObserver: ResizeObserver | undefined;
-  let addressGridResizeFrame = 0;
+  let universeOverview: HTMLDetailsElement | undefined;
+  let patchLayoutResizeObserver: ResizeObserver | undefined;
+  let patchLayoutResizeFrame = 0;
+  let selectionFocusTarget: HTMLElement | undefined;
   let lastRevealedSelectionKey = "";
   let fixturePointerDrag: FixturePointerDragState | null = null;
   let suppressNextFixtureClick = false;
 
-  const updateAddressGridCellSize = () => {
-    const grid = addressGrid;
-    const pane = grid?.parentElement;
+  const updatePatchLayout = () => {
+    const pane = patchMap;
     const header = pane?.querySelector<HTMLElement>(":scope > .panelHeader");
-    if (!grid || !pane || !header || !grid.isConnected) return;
+    if (!pane || !header || !pane.isConnected) return;
 
     const paneStyle = getComputedStyle(pane);
+    const paneRect = pane.getBoundingClientRect();
+    const headerRect = header.getBoundingClientRect();
+    const zoom = pane.offsetWidth > 0 ? paneRect.width / pane.offsetWidth : 1;
+    const paneTop = paneRect.top + cssPixelValue(paneStyle.borderTopWidth) * zoom;
+    const popupTop = Math.max(0, paneTop + cssPixelValue(paneStyle.paddingTop) * zoom);
+    const popupBottom = Math.min(window.innerHeight, paneRect.bottom
+      - (cssPixelValue(paneStyle.borderBottomWidth) + cssPixelValue(paneStyle.paddingBottom)) * zoom);
+    pane.style.setProperty("--dmx-overview-max-height", `${Math.max(0, (popupBottom - headerRect.bottom) / zoom - 4)}px`);
+
+    const selectionControls = pane.querySelector<HTMLElement>(":scope > .dmxPatchSelectionControls");
+    const selectionToggle = pane.querySelector<HTMLButtonElement>("[data-patch-selection-toggle]");
+    if (selectionToggle?.offsetWidth) {
+      if (!selectionExpanded() && (selectionControls?.contains(document.activeElement)
+        || (selectionFocusTarget && selectionControls?.contains(selectionFocusTarget)))) {
+        selectionToggle.focus({ preventScroll: true });
+      }
+    } else if (selectionToggle && selectionFocusTarget === selectionToggle) {
+      selectionControls?.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
+    }
+    if (selectionExpanded() && selectionControls && selectionToggle?.offsetWidth) {
+      const toggleRect = selectionToggle.getBoundingClientRect();
+      const above = Math.max(0, (toggleRect.top - popupTop) / zoom - 4);
+      const below = Math.max(0, (popupBottom - toggleRect.bottom) / zoom - 4);
+      const selectionStyle = getComputedStyle(selectionControls);
+      const naturalHeight = selectionControls.scrollHeight
+        + cssPixelValue(selectionStyle.borderTopWidth) + cssPixelValue(selectionStyle.borderBottomWidth);
+      const opensAbove = below < naturalHeight && above > below;
+      const height = Math.min(360, naturalHeight, opensAbove ? above : below);
+      const top = opensAbove
+        ? (toggleRect.top - paneTop) / zoom - 4 - height
+        : (toggleRect.bottom - paneTop) / zoom + 4;
+      pane.style.setProperty("--dmx-selection-top", `${top}px`);
+      pane.style.setProperty("--dmx-selection-max-height", `${height}px`);
+    }
+
+    const grid = addressGrid;
+    if (!grid?.isConnected) return;
+
     const gridStyle = getComputedStyle(grid);
     const paneInnerWidth = pane.clientWidth
       - cssPixelValue(paneStyle.paddingLeft)
@@ -168,11 +210,12 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
       (paneContentWidth - rowHeaderWidth) / dmxGridColumnCount,
     );
 
-    const selectionControls = pane.querySelector<HTMLElement>(":scope > .dmxPatchSelectionControls");
+    const inlineSelectionHeight = selectionControls && getComputedStyle(selectionControls).position !== "absolute"
+      ? selectionControls.offsetHeight : 0;
     const availableGridHeight = paneInnerHeight
-      - header.getBoundingClientRect().height
-      - (selectionControls?.getBoundingClientRect().height ?? 0)
-      - 2 * cssPixelValue(paneStyle.rowGap);
+      - header.offsetHeight
+      - inlineSelectionHeight
+      - (inlineSelectionHeight > 0 ? 2 : 1) * cssPixelValue(paneStyle.rowGap);
     const gridBlockChrome = cssPixelValue(gridStyle.borderTopWidth)
       + cssPixelValue(gridStyle.borderBottomWidth)
       + cssPixelValue(gridStyle.paddingTop)
@@ -189,29 +232,34 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
       Math.max(dmxGridMinimumCellSize, paneLimitedCellSize),
     );
     grid.style.setProperty("--dmx-cell-size", `${cellSize}px`);
+    // Status overlays the grid without moving a live drag target when it appears.
+    pane.style.setProperty("--dmx-dnd-top", `${grid.offsetTop + 4}px`);
   };
 
-  const scheduleAddressGridCellSize = () => {
-    cancelAnimationFrame(addressGridResizeFrame);
-    addressGridResizeFrame = requestAnimationFrame(updateAddressGridCellSize);
+  const schedulePatchLayout = () => {
+    cancelAnimationFrame(patchLayoutResizeFrame);
+    patchLayoutResizeFrame = requestAnimationFrame(updatePatchLayout);
   };
 
   const attachAddressGrid = (element: HTMLDivElement) => {
     addressGrid = element;
-    addressGridResizeObserver?.disconnect();
-    addressGridResizeObserver = new ResizeObserver(scheduleAddressGridCellSize);
-    const pane = element.parentElement;
-    if (pane) addressGridResizeObserver.observe(pane);
-    const header = pane?.querySelector<HTMLElement>(":scope > .panelHeader");
-    if (header) addressGridResizeObserver.observe(header);
-    const selectionControls = pane?.querySelector<HTMLElement>(":scope > .dmxPatchSelectionControls");
-    if (selectionControls) addressGridResizeObserver.observe(selectionControls);
-    scheduleAddressGridCellSize();
+    schedulePatchLayout();
   };
 
+  onMount(() => {
+    patchLayoutResizeObserver = new ResizeObserver(schedulePatchLayout);
+    const pane = patchMap;
+    if (pane) patchLayoutResizeObserver.observe(pane);
+    const header = pane?.querySelector<HTMLElement>(":scope > .panelHeader");
+    if (header) patchLayoutResizeObserver.observe(header);
+    const selectionControls = pane?.querySelector<HTMLElement>(":scope > .dmxPatchSelectionControls");
+    if (selectionControls) patchLayoutResizeObserver.observe(selectionControls);
+    schedulePatchLayout();
+  });
+
   onCleanup(() => {
-    addressGridResizeObserver?.disconnect();
-    cancelAnimationFrame(addressGridResizeFrame);
+    patchLayoutResizeObserver?.disconnect();
+    cancelAnimationFrame(patchLayoutResizeFrame);
     if (fixturePointerDrag) props.onFixtureDragEnd();
     fixturePointerDrag = null;
   });
@@ -223,20 +271,21 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
 
     const gridRect = grid.getBoundingClientRect();
     const cellRect = cell.getBoundingClientRect();
-    const inset = 4;
-    const visibleLeft = gridRect.left + grid.clientLeft;
-    const visibleTop = gridRect.top + grid.clientTop;
-    const visibleRight = visibleLeft + grid.clientWidth;
-    const visibleBottom = visibleTop + grid.clientHeight;
+    const zoom = grid.offsetWidth > 0 ? gridRect.width / grid.offsetWidth : 1;
+    const inset = 4 * zoom;
+    const visibleLeft = gridRect.left + grid.clientLeft * zoom;
+    const visibleTop = gridRect.top + grid.clientTop * zoom;
+    const visibleRight = visibleLeft + grid.clientWidth * zoom;
+    const visibleBottom = visibleTop + grid.clientHeight * zoom;
     if (cellRect.top < visibleTop + inset) {
-      grid.scrollTop += cellRect.top - visibleTop - inset;
+      grid.scrollTop += (cellRect.top - visibleTop - inset) / zoom;
     } else if (cellRect.bottom > visibleBottom - inset) {
-      grid.scrollTop += cellRect.bottom - visibleBottom + inset;
+      grid.scrollTop += (cellRect.bottom - visibleBottom + inset) / zoom;
     }
     if (cellRect.left < visibleLeft + inset) {
-      grid.scrollLeft += cellRect.left - visibleLeft - inset;
+      grid.scrollLeft += (cellRect.left - visibleLeft - inset) / zoom;
     } else if (cellRect.right > visibleRight - inset) {
-      grid.scrollLeft += cellRect.right - visibleRight + inset;
+      grid.scrollLeft += (cellRect.right - visibleRight + inset) / zoom;
     }
     return true;
   };
@@ -404,7 +453,28 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
 
   return (
     <>
-      <div class="dmxPatchMap withFixtureSelection">
+      <div class="dmxPatchMap withFixtureSelection" ref={(element) => { patchMap = element; }}
+        onFocusIn={(event) => {
+          const target = event.target;
+          selectionFocusTarget = target instanceof HTMLElement
+            && (target.matches("[data-patch-selection-toggle]") || target.closest(".dmxPatchSelectionControls"))
+            ? target : undefined;
+        }}
+        onFocusOut={(event) => {
+          // A responsive display:none may blur before ResizeObserver runs.
+          // Retain that target until its visible counterpart receives focus.
+          if (event.target === selectionFocusTarget && selectionFocusTarget.offsetHeight > 0) {
+            selectionFocusTarget = undefined;
+          }
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && selectionExpanded()) {
+            event.preventDefault();
+            event.stopPropagation();
+            setSelectionExpanded(false);
+            patchMap?.querySelector<HTMLButtonElement>("[data-patch-selection-toggle]")?.focus({ preventScroll: true });
+          }
+        }}>
         <div class="panelHeader">
           <h3>DMX Patch Grid</h3>
           <output class="dmxPatchAddressReadout" aria-label="Current DMX address">
@@ -447,7 +517,12 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
                 List
               </button>
             </div>
-            <details class="dmxUniverseOverviewDisclosure" data-dmx-universe-disclosure>
+            <details class="dmxUniverseOverviewDisclosure" data-dmx-universe-disclosure
+              ref={(element) => { universeOverview = element; }}
+              onToggle={(event) => {
+                if (event.currentTarget.open) setSelectionExpanded(false);
+                schedulePatchLayout();
+              }}>
               <summary>Universe Overview</summary>
               <div class="dmxUniverseOverviewContent">
                 <div class="dmxUniverseOverviewMeta">
@@ -504,9 +579,19 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
                 </For>
               </div>
             </details>
+            <button class="dmxPatchSelectionToggle" data-patch-selection-toggle
+              aria-expanded={selectionExpanded()} aria-controls={selectionControlsId}
+              onClick={() => {
+                if (universeOverview) universeOverview.open = false;
+                setSelectionExpanded(!selectionExpanded());
+                schedulePatchLayout();
+              }}>
+              Selection and move ({selectedPatches().length})
+            </button>
           </div>
         </div>
-        <div class="dmxPatchSelectionControls" aria-label="Patch selection and move">
+        <div class="dmxPatchSelectionControls" classList={{ expanded: selectionExpanded() }}
+          id={selectionControlsId} aria-label="Patch selection and move">
           <output>{selectedPatches().length} selected</output>
           <button onClick={() => setSelectedPatchIds(new Set(props.activeMap.segments.map(segment => segment.fixture.id)))}>Select All</button>
           <button onClick={() => setSelectedPatchIds(new Set<number>())} disabled={selectedPatches().length === 0}>Clear Selection</button>

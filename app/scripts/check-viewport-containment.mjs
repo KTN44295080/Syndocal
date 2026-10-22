@@ -18750,6 +18750,223 @@ async function readPatchZoningState(client) {
   })()`);
 }
 
+async function exercisePatchLayoutInPage() {
+  const pause = async (count = 3) => { for (let n = 0; n < count; n++) await new Promise(resolve => requestAnimationFrame(resolve)); };
+  const map = document.querySelector('.setupPatchAddressDesk > .dmxPatchMap');
+  const checks = {}, evidence = {};
+  const check = (name, value) => { checks[name] = Boolean(value); };
+  const rect = element => { const r = element.getBoundingClientRect(); return { x:r.x, y:r.y, width:r.width, height:r.height, right:r.right, bottom:r.bottom }; };
+  const visible = element => Boolean(element && element.getClientRects().length && getComputedStyle(element).visibility !== 'hidden');
+  const inspect = element => {
+    if (!element) return null;
+    const box = rect(element), style = getComputedStyle(element), clipped = [], clippingDetails = [];
+    const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+    if (box.x < -1.5 || box.right > innerWidth + 1.5 || box.y < -1.5 || box.bottom > innerHeight + 1.5) clipped.push('viewport');
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      const p = rect(parent), s = getComputedStyle(parent), scale = parent.offsetWidth ? p.width / parent.offsetWidth : 1;
+      const left = p.x + parent.clientLeft * scale, top = p.y + parent.clientTop * scale;
+      const right = left + parent.clientWidth * scale, bottom = top + parent.clientHeight * scale;
+      if ((/(hidden|clip|auto|scroll)/.test(s.overflowX) && (box.x < left - 1.5 || box.right > right + 1.5)) ||
+        (/(hidden|clip|auto|scroll)/.test(s.overflowY) && (box.y < top - 1.5 || box.bottom > bottom + 1.5))) {
+        clipped.push(parent.className || parent.tagName);
+        clippingDetails.push({ancestor:parent.className || parent.tagName,left,top,right,bottom,scrollTop:parent.scrollTop,scrollLeft:parent.scrollLeft,clientHeight:parent.clientHeight,scrollHeight:parent.scrollHeight});
+      }
+    }
+    return { label:element.getAttribute('aria-label') || element.textContent.trim(), ...box, clipped, clippingDetails,
+      visible:visible(element), hit:element.contains(hit), hitTarget:hit?.className, fontSize:parseFloat(style.fontSize),
+      minHeight:parseFloat(style.minHeight) || 0, offsetHeight:element.offsetHeight, disabled:Boolean(element.disabled) };
+  };
+  const reachable = item => Boolean(item?.visible && item.hit && !item.clipped.length);
+  const scrollWithin = async element => {
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      if (!/(auto|scroll)/.test(style.overflowY + style.overflowX)) continue;
+      // Re-measure once after scrolling; CSS zoom can round the first move a
+      // couple of pixels short in the nested profile browser scrollports.
+      for (let pass = 0; pass < 2; pass++) {
+        const p = rect(parent), e = rect(element), beforeTop = parent.scrollTop, beforeLeft = parent.scrollLeft;
+        const scale = parent.offsetWidth ? p.width / parent.offsetWidth : 1;
+        const top = p.y + parent.clientTop * scale, left = p.x + parent.clientLeft * scale;
+        const bottom = top + parent.clientHeight * scale, right = left + parent.clientWidth * scale;
+        if (/(auto|scroll)/.test(style.overflowY)) {
+          if (e.y < top + 1) parent.scrollTop += (e.y - top - 1) / scale;
+          else if (e.bottom > bottom - 1) parent.scrollTop += (e.bottom - bottom + 1) / scale;
+        }
+        if (/(auto|scroll)/.test(style.overflowX)) {
+          if (e.x < left + 1) parent.scrollLeft += (e.x - left - 1) / scale;
+          else if (e.right > right - 1) parent.scrollLeft += (e.right - right + 1) / scale;
+        }
+        if (beforeTop === parent.scrollTop && beforeLeft === parent.scrollLeft) break;
+        await pause(1);
+      }
+    }
+    return inspect(element);
+  };
+  const outerScroll = () => [document.documentElement, document.querySelector('.app'), document.querySelector('.layout')].map(el => [el.scrollLeft, el.scrollTop]);
+  const originalOuter = outerScroll();
+  const header = map.querySelector(':scope > .panelHeader');
+  const selection = map.querySelector(':scope > .dmxPatchSelectionControls');
+  const toggle = map.querySelector('[data-patch-selection-toggle]');
+  const overview = map.querySelector('[data-dmx-universe-disclosure]');
+  const summary = overview.querySelector('summary');
+  const compact = visible(toggle);
+  const selectAll = [...selection.querySelectorAll('button')].find(el => el.textContent === 'Select All');
+  const clear = [...selection.querySelectorAll('button')].find(el => el.textContent === 'Clear Selection');
+  const move = [...selection.querySelectorAll('button')].find(el => el.textContent === 'Move Selected');
+  const input = selection.querySelector('input');
+  const openSelection = async () => { if (compact && toggle.getAttribute('aria-expanded') !== 'true') { toggle.focus({preventScroll:true}); toggle.click(); await pause(); } };
+  const closeSelection = async () => { if (compact && toggle.getAttribute('aria-expanded') === 'true') { toggle.click(); await pause(); } };
+  evidence.viewport = { width:innerWidth, height:innerHeight, dpr:devicePixelRatio, scale:getComputedStyle(document.documentElement).getPropertyValue('--ui-scale'), compact };
+  evidence.header = [...header.querySelectorAll('button,select,summary')].filter(el => !el.closest('.dmxUniverseOverviewContent') && visible(el)).map(inspect);
+  check('headerControlsReachable', evidence.header.length === (compact ? 6 : 5) && evidence.header.every(reachable));
+  check('headerControlSizesPreserved', evidence.header.every(item => item.fontSize >= 14 && item.offsetHeight >= 24));
+  evidence.heading = [...header.querySelectorAll(':scope > h3, :scope > output')].map(el => {
+    const range = document.createRange(); range.selectNodeContents(el); const r = range.getBoundingClientRect(), box = rect(el);
+    return { label:el.textContent, fits:r.left >= box.x - 1 && r.right <= box.right + 1 && r.top >= box.y - 1 && r.bottom <= box.bottom + 1 };
+  });
+  check('headerTextFits', evidence.heading.every(item => item.fits));
+  check('selectionDisclosureContract', !compact || (toggle.getAttribute('aria-controls') === selection.id && toggle.getAttribute('aria-expanded') === 'false' && !visible(selection)));
+  await openSelection();
+  evidence.selection = [];
+  for (const el of [selectAll, clear, input, move]) evidence.selection.push(await scrollWithin(el));
+  check('selectionControlsReachable', evidence.selection.every(reachable));
+  check('selectionControlSizesPreserved', evidence.selection.every(item => item.offsetHeight >= 28 && item.fontSize >= 12));
+  selectAll.click(); await pause();
+  check('selectAllWorks', !clear.disabled && !move.disabled && Number.parseInt(selection.querySelector('output').textContent, 10) >= 3);
+  if (compact) {
+    input.focus({preventScroll:true}); input.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); await pause();
+    check('escapeFromSelectionRestoresFocus', !visible(selection) && document.activeElement === toggle && toggle.getAttribute('aria-expanded') === 'false');
+    await openSelection();
+    toggle.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); await pause();
+    check('escapeFromToggleClosesSelection', !visible(selection) && document.activeElement === toggle && toggle.getAttribute('aria-expanded') === 'false');
+    await openSelection();
+    summary.click(); await pause();
+    check('overviewClosesSelection', overview.open && !visible(selection) && toggle.getAttribute('aria-expanded') === 'false' && reachable(inspect(summary)));
+    toggle.click(); await pause();
+    check('selectionClosesOverview', !overview.open && visible(selection) && reachable(inspect(toggle)));
+  }
+  await openSelection();
+  await scrollWithin(input); input.value = '80'; input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:'80'}));
+  evidence.moveBeforeClick = await scrollWithin(move); move.click(); await pause(6);
+  evidence.moveResult = { status:map.querySelector('[data-patch-dnd-status]')?.getAttribute('data-patch-dnd-status'),
+    guardMessages:document.body.innerText.split('\n').filter(line => /Move rejected:|Project authority is unavailable/.test(line)) };
+  check('moveSelectedReachesFixtureGuard', evidence.moveBeforeClick.hit && evidence.moveResult.status === 'rejected' && evidence.moveResult.guardMessages.length > 0);
+  clear.click(); await pause();
+  check('clearSelectionWorks', clear.disabled && move.disabled && selection.querySelector('output').textContent.trim() === '0 selected');
+  await closeSelection();
+  summary.click(); await pause();
+  const content = overview.querySelector('.dmxUniverseOverviewContent');
+  evidence.overview = { panel:inspect(content), clientHeight:content.clientHeight, scrollHeight:content.scrollHeight, controls:[] };
+  check('overviewPanelContained', reachable(evidence.overview.panel));
+  const proportionalSegments = [...content.querySelectorAll('.dmxPatchSegment')];
+  evidence.overview.proportionalSegments = [];
+  for (const el of proportionalSegments) evidence.overview.proportionalSegments.push(await scrollWithin(el));
+  check('overviewTrackControlsNotClipped', evidence.overview.proportionalSegments.every(item => !item.clipped.length && item.offsetHeight >= 25));
+  const overviewControls = [...content.querySelectorAll('.dmxUniverseLegend button')];
+  evidence.overview.legendSelections = [];
+  // The move action selected the first fixture; visit the other legends first
+  // so every click exercises a change of primary selection.
+  for (const el of [...overviewControls.slice(1), overviewControls[0]]) {
+    evidence.overview.controls.push(await scrollWithin(el)); el.click(); await pause();
+    const text = el.textContent.trim(), addressRange = text.match(/^A\d+-\d+/)?.[0];
+    const label = text.replace(/^A\d+-\d+\s+/, '');
+    const editorLabel = document.querySelector('[data-fixture-patch-identity-editor] .panelHeader > span')?.textContent.trim();
+    evidence.overview.legendSelections.push({ label, editorLabel, passed:editorLabel === label
+      && [...content.querySelectorAll('.dmxPatchSegment.selected')].some(segment => segment.title === `${label} ${addressRange}`) });
+  }
+  check('overviewLegendsReachable', evidence.overview.controls.length >= 3 && evidence.overview.controls.every(reachable));
+  check('overviewFixtureSelectionWorks', evidence.overview.legendSelections.every(item => item.passed) && Number.parseInt(selection.querySelector('output').textContent, 10) >= 1);
+  summary.click(); await pause();
+  let grid = map.querySelector('.dmxAddressGrid');
+  evidence.grid = { count:grid.querySelectorAll('[data-dmx-address]').length, box:rect(grid), clientHeight:grid.clientHeight, cellSize:getComputedStyle(grid).getPropertyValue('--dmx-cell-size') };
+  check('populatedGridHasScrollport', evidence.grid.count === 512 && evidence.grid.clientHeight >= 32 && parseFloat(evidence.grid.cellSize) >= 16 && parseFloat(evidence.grid.cellSize) <= 44);
+  const first = grid.querySelector('[data-dmx-address="1"]');
+  first.focus({preventScroll:true}); first.dispatchEvent(new KeyboardEvent('keydown',{key:'End',ctrlKey:true,bubbles:true})); await pause(4);
+  const last = grid.querySelector('[data-dmx-address="512"]'); evidence.keyboardEnd = inspect(last);
+  check('keyboardEndReveals512', document.activeElement === last && reachable(evidence.keyboardEnd));
+  last.dispatchEvent(new KeyboardEvent('keydown',{key:'Home',ctrlKey:true,bubbles:true})); await pause(4);
+  check('keyboardHomeReveals1', document.activeElement === first && reachable(inspect(first)));
+  const list = [...header.querySelectorAll('.viewToggle button')].find(el => el.textContent === 'List');
+  const gridButton = [...header.querySelectorAll('.viewToggle button')].find(el => el.textContent === 'Grid');
+  list.click(); await pause();
+  check('listViewReachable', Boolean(map.querySelector('.dmxPatchList .dmxPatchListItem')) && reachable(inspect(list)));
+  summary.click(); await pause(); check('overviewInListContained', reachable(inspect(content))); summary.click(); await pause();
+  gridButton.click(); await pause(); check('gridViewRestored', map.querySelectorAll('[data-dmx-address]').length === 512);
+  const search = document.querySelector('[data-patch-profile-search]');
+  const importSummary = document.querySelector('[data-profile-import-disclosure] > summary');
+  evidence.source = { search:await scrollWithin(search), import:await scrollWithin(importSummary) };
+  check('sourceSearchAndImportReachable', reachable(evidence.source.search) && reachable(evidence.source.import));
+  const profile = document.querySelector('[data-patch-profile-row][data-profile-source="session"]');
+  evidence.source.profile = await scrollWithin(profile); check('sourceProfileReachable', reachable(evidence.source.profile));
+  profile.click(); await pause();
+  const placement = document.querySelector('[data-patch-placement-disclosure]');
+  const placementSummary = placement.querySelector('summary');
+  evidence.source.placementSummary = await scrollWithin(placementSummary); placementSummary.click(); await pause();
+  evidence.source.placement = [];
+  for (const el of placement.querySelectorAll('input,select,button')) evidence.source.placement.push(await scrollWithin(el));
+  check('placementControlsReachable', evidence.source.placement.length > 5 && evidence.source.placement.every(reachable));
+  evidence.source.searchWhilePlacementOpen = await scrollWithin(search);
+  evidence.source.placementClose = await scrollWithin(placementSummary);
+  check('expandedPlacementKeepsSourceAndCloseReachable', reachable(evidence.source.searchWhilePlacementOpen) && reachable(evidence.source.placementClose));
+  placementSummary.click(); await pause();
+  check('outerScrollUnchanged', JSON.stringify(outerScroll()) === JSON.stringify(originalOuter));
+  return { checks, failures:Object.keys(checks).filter(name => !checks[name]), evidence };
+}
+
+async function runPatchResponsiveLayoutViewport(client, viewport) {
+  const metrics = { width:viewport.width, height:viewport.height, deviceScaleFactor:viewport.dpr, mobile:false };
+  await client.send("Emulation.setDeviceMetricsOverride", metrics);
+  await client.send("Page.navigate", { url:fixtureUrl("patch") });
+  await waitForApp(client);
+  await seedViewportLocalStorage(client);
+  await client.evaluate(`localStorage.setItem('syndocal.uiScale.v1', ${JSON.stringify(String(viewport.scale))})`);
+  await client.send("Page.navigate", { url:fixtureUrl("patch") });
+  await waitForApp(client);
+  await clickWorkspaceOption(client, "setup");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
+  await sleep(180);
+  const label = `patch-layout-${viewport.width}x${viewport.height}-dpr${viewport.dpr}-scale${viewport.scale}`;
+  const capture = async (suffix) => {
+    if (!shouldCaptureViewport(viewport)) return;
+    mkdirSync(screenshotDir, { recursive:true });
+    const screenshot = await client.send("Page.captureScreenshot", { format:"png", fromSurface:true });
+    writeFileSync(join(screenshotDir, `${label}-${suffix}.png`), screenshot.data, "base64");
+  };
+  await capture("closed");
+  const result = await evaluatePageFunction(client, exercisePatchLayoutInPage);
+  await capture("checked");
+  if (viewport.width === 960 && viewport.scale === 110) {
+    const settle = () => client.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+    const state = () => client.evaluate(`(() => {
+      const body=document.querySelector('.dmxPatchSelectionControls'), trigger=document.querySelector('[data-patch-selection-toggle]');
+      return { visible:Boolean(body.offsetHeight), triggerVisible:Boolean(trigger.offsetHeight), expanded:trigger.getAttribute('aria-expanded'),
+        triggerFocused:document.activeElement===trigger, count:body.querySelector('output').textContent };
+    })()`);
+    await client.send("Emulation.setDeviceMetricsOverride", { ...metrics, width:1280 }); await settle();
+    const wideClosed = await state();
+    await client.evaluate(`document.querySelector('[aria-label="Move selected fixtures to address"]').focus({preventScroll:true})`);
+    await client.send("Emulation.setDeviceMetricsOverride", metrics); await settle();
+    const narrowAfterFocusedInput = await state();
+    await client.evaluate(`document.querySelector('[data-patch-selection-toggle]').click()`); await settle();
+    const narrowOpen = await state();
+    await client.send("Emulation.setDeviceMetricsOverride", { ...metrics, width:1280 }); await settle();
+    const wideAfterOpen = await state();
+    await client.send("Emulation.setDeviceMetricsOverride", metrics); await settle();
+    const narrowStillOpen = await state();
+    result.evidence.transitions = { wideClosed,narrowAfterFocusedInput,narrowOpen,wideAfterOpen,narrowStillOpen };
+    result.checks.selectionStateAndFocusSurviveWidthChanges = wideClosed.visible && !wideClosed.triggerVisible
+      && !narrowAfterFocusedInput.visible && narrowAfterFocusedInput.triggerFocused && narrowOpen.visible
+      && wideAfterOpen.visible && !wideAfterOpen.triggerVisible && narrowStillOpen.visible
+      && narrowStillOpen.expanded === 'true' && narrowStillOpen.count === narrowOpen.count;
+  }
+  result.failures = Object.keys(result.checks).filter(name => !result.checks[name]);
+  result.label = label;
+  result.passed = result.failures.length === 0;
+  if (shouldCaptureViewport(viewport)) writeFileSync(join(screenshotDir, `${label}.json`), JSON.stringify(result,null,2)+'\n');
+  return result;
+}
+
 async function checkPatchZoning(client) {
   const initial = await readPatchZoningState(client);
 
@@ -40004,6 +40221,18 @@ async function main() {
         patchEmptyStateResults.push(emptyStateResult);
         console.log(patchEmptyStateLogLine(emptyStateResult));
       }
+      const patchLayoutResults = [];
+      for (const viewport of [
+        { width:1280,height:752,dpr:2,scale:100 },
+        { width:1280,height:752,dpr:2,scale:110 },
+        { width:960,height:752,dpr:2,scale:100 },
+        { width:960,height:752,dpr:2,scale:110 },
+        { width:1920,height:1080,dpr:1,scale:100 },
+      ]) {
+        const result = await runPatchResponsiveLayoutViewport(client, viewport);
+        patchLayoutResults.push(result);
+        console.log(`${result.passed ? "pass" : "fail"} ${result.label} failed=${JSON.stringify(result.failures)}`);
+      }
       const responsiveScaling = largePatchGridScalingChecks(
         patchResults.map((result) => result.containment),
       );
@@ -40022,10 +40251,11 @@ async function main() {
         dndFailures.length > 0 ||
         gdtfShareFailures.length > 0 ||
         emptyStateFailures.length > 0 ||
+        patchLayoutResults.some(result => !result.passed) ||
         !responsiveScaling.passed
       ) {
         throw new Error(
-          `Continuous PATCH viewport failed: ${JSON.stringify({ failures, dndFailures, gdtfShareFailures, emptyStateFailures, responsiveScaling })}`,
+          `Continuous PATCH viewport failed: ${JSON.stringify({ failures, dndFailures, gdtfShareFailures, emptyStateFailures, patchLayoutFailures:patchLayoutResults.filter(result => !result.passed), responsiveScaling })}`,
         );
       }
       return;
