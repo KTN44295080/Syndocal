@@ -185,6 +185,24 @@ fn clear_image(encoder: &mut wgpu::CommandEncoder, image: &GpuImage) {
     });
 }
 
+fn copy_rgba_readback(
+    mapped: &[u8],
+    row_bytes: usize,
+    padded_row_bytes: usize,
+    expected_len: usize,
+) -> Vec<u8> {
+    // Aligned rows already form one packed frame. One contiguous copy avoids
+    // a separate Vec length/capacity check and copy for every scanline.
+    if row_bytes == padded_row_bytes {
+        return mapped[..expected_len].to_vec();
+    }
+    let mut data = Vec::with_capacity(expected_len);
+    for row in mapped.chunks_exact(padded_row_bytes) {
+        data.extend_from_slice(&row[..row_bytes]);
+    }
+    data
+}
+
 impl IsfGpuRuntime {
     pub(super) fn render_pass_stack(
         &mut self,
@@ -554,10 +572,12 @@ impl IsfGpuRuntime {
             .map_err(|error| runtime_error(format!("ISF readback failed: {error}")))?;
         self.last_stack_render_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
         let mapped = readback.slice(..).get_mapped_range();
-        let mut data = Vec::with_capacity(expected_len);
-        for row in mapped.chunks_exact(padded_bytes_per_row as usize) {
-            data.extend_from_slice(&row[..(frame.width * 4) as usize]);
-        }
+        let data = copy_rgba_readback(
+            &mapped,
+            (frame.width * 4) as usize,
+            padded_bytes_per_row as usize,
+            expected_len,
+        );
         drop(mapped);
         readback.unmap();
         // Commit feedback ownership only after the entire submitted stack has
