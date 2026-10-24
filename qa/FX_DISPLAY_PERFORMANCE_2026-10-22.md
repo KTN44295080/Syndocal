@@ -490,6 +490,10 @@ budget or substitute for review of a future runtime optimization.
 
 ## Deferred FX input ownership, 2026-10-22 (performance acceptance unresolved)
 
+This section records the **unadopted 2026-10-22 checkpoint**. Its contrary
+measurement remains evidence; the separate 2026-10-24 source-adoption decision
+and its limits are recorded at the end of this document.
+
 Base: `cfe8ca56a18873ebd0d967b74d73b337e6f31763`; main/HEAD/origin/main
 matched and the tree was clean at entry. This unit changes `crates/video/src/lib.rs`
 and adds `crates/video/src/isf_borrowed_input_tests.rs`, plus this QA entry.
@@ -635,9 +639,10 @@ The full capture populations and rolling diagnostic windows are distinct:
 
 The candidate was slower in this single sequential matched pair; this is
 **not an accepted performance improvement**. Decoder work also differed
-(decode wall time 14,693,155 us / 1317 calls versus 23,618,645 us / 1141 calls;
-lookahead hits 1995 versus 1245), so the observation does not isolate the cause
-to the ownership change. No cross-population percentile arithmetic is used.
+(lifetime end totals, including warmup: decode wall time 14,693,155 us / 1317
+calls versus 23,618,645 us / 1141 calls; lookahead hits 1995 versus 1245).
+These are not first-to-last capture deltas and do not isolate the cause to the
+ownership change. No cross-population percentile arithmetic is used.
 Repeated controlled measurements, memory-pressure behavior and the 60 fps
 budget remain unresolved. Historical 19.8 fps and traced 16.53 fps are not
 an unconditional comparison baseline.
@@ -673,3 +678,182 @@ The completed UI-priority checkpoint and its isolated native gate are recorded i
 [UI_SINGLE_ROW_2026-10-22.md](UI_SINGLE_ROW_2026-10-22.md). Its normal executable
 contains the UI correction with baseline video code; the candidate Rust source
 was restored as unfinished work and is excluded from that UI commit.
+
+## Adopted borrowed-input copy reduction, 2026-10-24
+
+This is a limited **source-adoption checkpoint** on
+`6d5aeb9e7215d0ba96502988e1eb05d10af772ce`. It integrates the already reviewed
+Cow implementation described above without further product changes. Successful
+ISF processing borrows the shared input and supplies a new owned frame; ownership
+conversion is deferred until needed. The owned-input API delegates to the same
+canonical processing path. Public API/schema, decoder-owned pixels, Clip then
+Layer ordering, stage-local faults/bypass, failure returns, FRAMEINDEX/feedback,
+LastValid, queue/GPU eligibility, input-retention and cancellation policies are
+unchanged. The frozen source SHA256 values are:
+
+- `crates/video/src/lib.rs`:
+  `6a672620ecc25a06a72fbfe9f64a69091268c4409fa5c0cfd851138701a12430`
+- `crates/video/src/isf_borrowed_input_tests.rs`:
+  `029c77acd5a8a5997734ba5983b1f6f0801fb8ae180967730ada776c33d89ca3`
+
+The earlier single pair, **A 19.8799618 / B 16.9816350 fps on 2026-10-22**,
+is retained above and was not accepted as an improvement. Neither that pair,
+the separate October 22 `b01`, the traced 16.53 fps run nor the composed
+readback capture below is included in the following four-run population.
+
+### Fresh archived-executable comparison
+
+Campaigns under `target/qa/fx-perf-2026-10-22/native/` are
+`ownership-pair-20261024-root02` (B then A) and
+`ownership-pair-20261024-root03` (A then B). Their saved manifests identify
+**old binary base `cfe8ca56...`**, with the same UI, old readback implementation,
+FFmpeg DLLs and QA configuration; their checkout guard is current `6d5aeb9e...`.
+The archived source comparison differs only in the ownership candidate.
+Both accepted exe hashes remain A `58693b78...` and B `148e27b7...` (full values
+above). All archived runtime bytes were rehashed. The UI manifests match across
+457 build entries and the seven DLL hashes match; the QA configuration was the
+same saved invocation, not a new independent extraction from the PE resources.
+
+Both orders used the same known silent 1920 x 1080 H264, three layers x three
+stages, local Display at actual **2560 x 1600**, log/trace OFF, five seconds
+warmup and a 60-second capture request. Fixture/media hashes are those above;
+the common harness SHA256 is
+`13f111d649ed0eb4ef133081de7c776af0e3f2c7962292a1bc8428c5c75af05b`.
+The maximized native window records have CSS viewport 1280 x 752, DPR 2.
+The analysis uses all **411/411 saved polls**, with **zero exclusions**.
+
+| Chronological run | Polls | First-to-last s | Delivered frames | Counter fps | Decode wall delta us | Decode calls | Mean ms/call |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| root02 B, PID 33892 | 102 | 59.1885421 | 1669 | 28.1980251715 | 7187281 | 1669 | 4.3063397244 |
+| root02 A, PID 44124 | 103 | 59.2233549 | 1214 | 20.4986698584 | 13230388 | 1214 | 10.8981779242 |
+| root03 A, PID 32444 | 103 | 59.5619650 | 1213 | 20.3653455691 | 13487846 | 1213 | 11.1194113768 |
+| root03 B, PID 41248 | 103 | 59.5972254 | 1748 | 29.3302244906 | 6393446 | 1748 | 3.6575778032 |
+
+| Same-interval decoder delta | root02 B | root02 A | root03 A | root03 B |
+| --- | ---: | ---: | ---: | ---: |
+| Requests | 5007 | 3642 | 3639 | 5244 |
+| Lookahead decode | 4827 | 3633 | 3630 | 4995 |
+| Lookahead hit | 4296 | 1920 | 1875 | 4599 |
+| Lookahead discard | 0 | 0 | 0 | 0 |
+| Session reset | 15 | 15 | 15 | 15 |
+| Frame reuse | 180 | 3 | 3 | 249 |
+| Sequential continue | 4812 | 3624 | 3621 | 4980 |
+| Hardware frames | 5343 | 5337 | 5376 | 5376 |
+| Decode/session/hardware errors | 0 | 0 | 0 | 0 |
+
+FPS is delivered-frame delta divided by monotonic elapsed time between each
+run's first and last saved poll. Decoder counters use those exact endpoint
+polls; mean decode time is delta wall time / delta calls, not a subtraction of
+percentiles. All polls have health/window records, monotonically increasing
+time and nondecreasing cumulative counters, stable incarnation/epochs and
+2560 x 1600 output. Health, window and ownership queries within a poll are
+sequential rather than an atomic, frame-aligned snapshot.
+
+For trends, each run is partitioned at saved polls nearest 10/20/30/40/50 seconds
+from its first poll. Adjacent bins share endpoints, cover every adjacent interval
+once and sum to the full frame and decoder deltas; no interpolation is used.
+Approximate 10-second FPS ranges are root02 B **26.54-28.65**, root02 A
+**19.42-21.37**, root03 A **20.03-20.85**, root03 B **28.96-29.60**.
+The complete bins and all normalized polls are retained in
+`target/qa/ownership-pair-analysis-20261024/adoption/four-run-analysis.json`.
+
+Both fresh orders show higher candidate FPS and less synchronous decode waiting
+in this archived workload. Initial playback positions nevertheless differ:
+root02 B/A **8007/9024 ms**, root03 A/B **10299/6931 ms**; these snapshots precede
+the first counter poll by about 322-360 ms. Lookahead hits and reuse change with
+FPS and decode waiting. The observations therefore do not isolate ownership-only
+time savings, establish a general improvement percentage or guarantee incremental
+FPS on current main with the newer readback implementation. All four final
+rolling validation windows have **600/600 deadline misses, budget pass=false**;
+these are bounded diagnostic windows, not the 411-poll capture population.
+**60 fps remains unmet.**
+
+All four capture exits are 0. Stop command times in chronological order are
+**616.5856 / 579.7110 / 624.9473 / 583.6411 ms**, each returning Ready/Standby,
+video/lighting disallowed, no live/test output and empty routes/health. Saved
+normal-close records verify each exact application plus six child processes
+gone (seven total), no QA listener and no compiler; stdout/stderr are empty.
+These are saved termination observations, not newly launched process checks.
+Root02 and root03 restored all eight protected normal runtime files at
+**2026-10-24 04:46:22.854 UTC** and **04:51:56.704 UTC**, respectively.
+Their protected archives and the present `target/release` bytes were rehashed
+8/8 against the saved manifests; the normal exe is still
+`232eb5c3a817475e93485ebcc7c9496a54a7c3746a7b847944f6a2c7bea35fe0`.
+
+The separate failed `ownership-pair-20261024-01` remains preserved: Arm was
+forbidden, B/PID 18976 produced **0 samples**, session 30823 exited 1, Stop
+took 411.6034 ms, all seven owned processes closed and all eight normal runtime
+files were restored. No A capture was made. This failed attempt is not a fifth
+performance observation and no product guard was relaxed.
+
+### Existing contract and composed-native evidence
+
+No Rust tests, GPU tests, build or native run were repeated for this adoption.
+The raw logs, complete test names, exit records and source hashes were checked:
+
+| Actual date (UTC) / evidence | Passed | Failed | Ignored | Exit | Source basis |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 2026-10-22, `c1_-03.log` | 27 | 0 | 0 | 0 | `cfe8ca56...` plus the identical Cow hashes |
+| 2026-10-22, `video_render_cancellation_tests-03.log` | 4 | 0 | 0 | 0 | Same historical candidate |
+| 2026-10-24, readback `workspace-01.log`, including ignored GPU cases | 4 | 0 | 0 | 0 | Current UI + committed readback bytes + identical Cow hashes |
+| 2026-10-24, readback `isf-01.log` | 76 | 0 | 2 | 0 | Same composed source bytes |
+
+The historical October 22 ISF 76/0/1 run and the corrected fixture failure are
+also retained above. The October 24 records were produced while HEAD still
+read `693182041ea1d52cd0afa48bc5899bf7f9407b16`, before the readback commit;
+their before/after hashes match both readback files committed at `6d5aeb9e...`
+and the two unchanged Cow files. They verify that source composition, not a
+test invocation made after the commit. The older C1/cancel runs are explicitly
+historical evidence and are not described as fresh 6d runs.
+
+The 76-test ISF run executed all four borrowed-input contract tests, including
+failure pixels/fault identity, noncommuting Clip/Layer order, missing-projection
+fail-closed behavior, shared-input immutability and cancellation. Its two ignored
+tests are `isf_targetless_batch_timing_experiment` (explicit matched GPU timing;
+no wall-time assertion) and `mapped_readback_copy_timing_experiment` (explicit
+matched mapped-copy timing; no wall-time assertion). The latter actually ran
+within the separate four-test GPU run, which includes failed readback, rejected
+inputs, scratch reuse/pixels/odd pitch/resize and the timing experiment. These
+filter totals are not asserted to be distinct tests across filters. All accepted
+logs verify MSVC **14.44.35207** pinned and first on PATH; Rust warnings are **0**,
+with **0 delta** against the recorded baseline.
+
+The existing composed native gate is documented separately in
+[ISF_READBACK_COPY_2026-10-24.md](ISF_READBACK_COPY_2026-10-24.md), campaign
+`target/qa/isf-readback-copy-2026-10-24/fb2a460b-1788-4bcb-a637-bc6fd1cec9ac/`.
+Its isolated current-UI + readback + identical-Cow build exited 0, with exe
+SHA256 `76c60a6102820bef8c989d5f80c80bb0719c6bc2a6173a263b988ab7d164d6bb`.
+The same silent H264 3-layer/3-stage workload at 2560 x 1600 produced **103 polls,
+1715 frames / 59.6843671 s = 28.7344925 fps**, zero decode/output errors and
+**600/600 misses**. PID 46544 Stop was **707.6515 ms**, followed by Standby,
+empty routes/health and saved disappearance of that app, six children and port
+9273. This establishes the existing composed native/Stop gate; it is not a
+matched before/after comparison or part of the four archived-exe observations.
+The then-live separate PID 19836 was outside that close record and was retired
+in the subsequent restoration unit. Build warnings were Rust **0**, existing
+Vite large-chunk **1**, with recorded warning delta **0**. There is no new
+compiler-warning measurement in this adoption-only unit.
+
+The original source review (`independent-review.json`, reviewer
+`/root/review_borrowed_fx`) has no blockers and its source hashes still match;
+the subsequent readback/composed review is recorded in the readback QA.
+The four raw captures were independently recomputed by
+`/root/verify_archived_pair` (session **40738, exit 0**), agreeing with the
+integration verifier (**17354, exit 0**) on all polls, endpoint deltas, trends,
+saved Stop/close records and runtime hashes. Verification details, input hashes,
+the original Cow diff and final integration records are retained under
+`target/qa/ownership-pair-analysis-20261024/adoption/`.
+
+The adoption preflight first exited 1 (session 69900) because its helper sorted
+porcelain status lines before normalizing leading whitespace. It reported the
+same expected three paths in a different order and stopped before any Git
+mutation. Correcting only that helper comparison passed in **17545, exit 0**:
+base/index/ownership guards, protected source/runtime hashes and `git diff
+--check` all passed. This was not a product/test failure or a repeated build.
+
+Only the two frozen Cow files and this QA file belong to the adoption commit.
+Normal runtime bytes and the separate ignored row-composition draft are
+preserved. The accepted change removes an unnecessary normal-success input
+copy; overall performance, memory-pressure behavior, long-run stability,
+physical scanout, other workloads/platforms and the 60 fps goal remain open.
+Unknown DMX/audio hardware and external outputs were not exercised.

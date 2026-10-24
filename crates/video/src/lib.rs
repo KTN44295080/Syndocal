@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
@@ -6357,10 +6358,13 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     self.runtime.push_shared_frame(frame);
                     continue;
                 }
-                let frame = Arc::unwrap_or_clone(frame);
+                // Keep the decoder's shared input borrowed until a stage
+                // produces an owned output or the queue needs a fallback.
+                let input_frame = frame;
+                let frame = Cow::Borrowed(input_frame.as_ref());
                 let (frame, clip_faults) = match clip_chain {
                     Some(Ok(Some(chain))) => self
-                        .apply_resolved_effect_chain_to_frame_with_cancellation(
+                        .apply_resolved_effect_chain_cow_with_cancellation(
                             &chain,
                             frame,
                             None,
@@ -6377,7 +6381,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 }
                 let (frame, layer_faults) = match layer_chain {
                     Ok(Some(chain)) => self
-                        .apply_resolved_effect_chain_to_frame_with_cancellation(
+                        .apply_resolved_effect_chain_cow_with_cancellation(
                             &chain,
                             frame,
                             None,
@@ -6392,6 +6396,10 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                         effect_faults.push(fault);
                     }
                 }
+                let frame = match frame {
+                    Cow::Owned(rendered) => rendered,
+                    Cow::Borrowed(_) => Arc::unwrap_or_clone(input_frame),
+                };
                 self.runtime.push_frame(frame);
             }
             self.publish_isf_layer_frame(
@@ -6506,6 +6514,22 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         render_input_key: Option<protocol::VideoRenderInputKey>,
         cancellation: Option<&dyn VideoRenderCancellation>,
     ) -> Result<(VideoFrame, Vec<VideoEffectStageFault>), VideoRuntimeError> {
+        self.apply_resolved_effect_chain_cow_with_cancellation(
+            chain,
+            Cow::Owned(frame),
+            render_input_key,
+            cancellation,
+        )
+        .map(|(frame, faults)| (frame.into_owned(), faults))
+    }
+
+    fn apply_resolved_effect_chain_cow_with_cancellation<'frame>(
+        &mut self,
+        chain: &ResolvedVideoEffectChain,
+        frame: Cow<'frame, VideoFrame>,
+        render_input_key: Option<protocol::VideoRenderInputKey>,
+        cancellation: Option<&dyn VideoRenderCancellation>,
+    ) -> Result<(Cow<'frame, VideoFrame>, Vec<VideoEffectStageFault>), VideoRuntimeError> {
         check_runtime_cancellation(cancellation)?;
         if !resolved_chain_executes(chain) {
             return Ok((frame, Vec::new()));
@@ -6652,7 +6676,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 error.to_string(),
             ));
         }
-        Ok((rendered, faults))
+        Ok((Cow::Owned(rendered), faults))
     }
 
     fn apply_isf_effect_to_frame_for_input(
@@ -10359,6 +10383,11 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    mod isf_borrowed_input_tests {
+        use super::*;
+        include!("isf_borrowed_input_tests.rs");
+    }
+
     mod isf_layer_binding_tests {
         use super::*;
         include!("isf_layer_binding_tests.rs");
