@@ -1,7 +1,7 @@
 //! Pass scheduling and GPU resource ownership for the ISF runtime.
 //! Every named buffer has separate read/write textures. Feedback is owned by
 //! an effect instance, never by a compiled shader or by a control value.
-use std::{borrow::Cow, collections::BTreeMap, sync::mpsc};
+use std::{borrow::Cow, collections::BTreeMap};
 use wgpu::util::DeviceExt;
 
 use super::{
@@ -16,7 +16,13 @@ const MAX_CACHED_RESOURCE_BYTES: u64 = 512 * 1024 * 1024;
 
 #[path = "isf_stack_workspace.rs"]
 mod stack_workspace;
+pub(super) use stack_workspace::queue_upload_pitch;
 use stack_workspace::StackWorkspace;
+
+#[path = "isf_stack_transaction.rs"]
+mod stack_transaction;
+pub(super) use stack_transaction::IndependentStack;
+use stack_transaction::PendingStack;
 
 #[cfg(test)]
 #[path = "isf_stack_phase_timing.rs"]
@@ -24,11 +30,24 @@ mod phase_timing;
 
 #[derive(Default)]
 pub(super) struct IsfResourcePool {
+    pub(super) queue_upload_pitch: Option<u64>,
     entries: BTreeMap<IsfInstanceKey, StageResources>,
     clock: u64,
     workspace: Option<StackWorkspace>,
+    batch_workspaces: Vec<StackWorkspace>,
+    poisoned_transaction: Option<stack_transaction::PoisonedStackTransaction>,
     #[cfg(test)]
     phase_timing: Option<phase_timing::StackPhaseTiming>,
+    #[cfg(test)]
+    phase_timing_suppressed: bool,
+    #[cfg(test)]
+    phase_sequence: u64,
+    #[cfg(test)]
+    independent_batch_count: u64,
+    #[cfg(test)]
+    stack_upload_count: u64,
+    #[cfg(test)]
+    stack_submit_count: u64,
 }
 
 #[derive(Clone)]
@@ -210,87 +229,23 @@ fn copy_rgba_readback(
 }
 
 impl IsfGpuRuntime {
-    pub(super) fn render_pass_stack(
+    /// One encoder for ordinary single stacks and independent batch tickets.
+    /// `batch_reservation` includes every live scratch/input/output in the group;
+    /// its preflight has already proved that feedback eviction is unnecessary.
+    fn encode_pass_stack(
         &mut self,
+        pending: &mut PendingStack,
         frame: &VideoFrame,
         stages: &[IsfStageInputs<'_>],
-        time_seconds: f32,
-        time_delta_seconds: f32,
-        frame_index: u32,
-        date: [f32; 4],
-        keys: &[IsfInstanceKey],
-    ) -> Result<VideoFrame, IsfRuntimeError> {
-        self.last_stack_stage_count = stages.len();
-        self.last_stack_render_us = 0;
-        if stages.is_empty() {
-            return Ok(frame.clone());
-        }
-        #[cfg(test)]
-        {
-            let sequence = self.resources.phase_timing.as_ref().map_or(1, |timing| timing.sequence + 1);
-            self.resources.phase_timing = Some(phase_timing::StackPhaseTiming::new(sequence));
-        }
-        self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        #[cfg(test)]
-        self.resources.phase_timing.as_mut().unwrap().mark(0);
-        // An in-flight or failed stack cannot expose reusable scratch buffers.
-        // Only the outer transaction, after both GPU scopes, can return them.
-        let workspace = self.resources.workspace.take();
-        let result = self.render_pass_stack_inner(
-            frame,
-            stages,
+        batch_reservation: Option<u64>,
+    ) -> Result<(), IsfRuntimeError> {
+        let keys = pending.keys.as_ref();
+        let stack_transaction::StackClocks {
             time_seconds,
             time_delta_seconds,
             frame_index,
             date,
-            keys,
-            workspace,
-        );
-        // Failed validation can leave write_texture staging uploads pending.
-        // Submit and drain them so repeated failures cannot retain unbounded uploads.
-        let cleanup_failure = if result.is_err() {
-            self.queue.submit(std::iter::empty::<wgpu::CommandBuffer>());
-            self.device.poll(wgpu::PollType::wait()).err()
-        } else {
-            None
-        };
-        // Always balance both scopes, including a failed cleanup wait.
-        let validation = pollster::block_on(self.device.pop_error_scope());
-        let allocation = pollster::block_on(self.device.pop_error_scope());
-        #[cfg(test)]
-        self.resources.phase_timing.as_mut().unwrap().mark(8);
-        if let Some(error) = validation.or(allocation) {
-            for key in keys {
-                self.resources.entries.remove(key);
-            }
-            return Err(runtime_error(format!("ISF GPU pass failed: {error}")));
-        }
-        if let Some(error) = cleanup_failure {
-            for key in keys {
-                self.resources.entries.remove(key);
-            }
-            return Err(runtime_error(format!(
-                "ISF GPU upload cleanup failed: {error}"
-            )));
-        }
-        result.map(|(frame, workspace)| {
-            self.resources.workspace = Some(workspace);
-            frame
-        })
-    }
-
-    fn render_pass_stack_inner(
-        &mut self,
-        frame: &VideoFrame,
-        stages: &[IsfStageInputs<'_>],
-        time_seconds: f32,
-        time_delta_seconds: f32,
-        frame_index: u32,
-        date: [f32; 4],
-        keys: &[IsfInstanceKey],
-        workspace: Option<StackWorkspace>,
-    ) -> Result<(VideoFrame, StackWorkspace), IsfRuntimeError> {
+        } = pending.clocks;
         if keys.len() != stages.len() {
             return Err(runtime_error(
                 "ISF stage ownership key count does not match the stack",
@@ -300,13 +255,16 @@ impl IsfGpuRuntime {
         let padded_bytes_per_row = StackWorkspace::bytes_per_row(frame.width);
         // The encoder retains each intermediate allocation until submission.
         // Reserve upload, ping/pong and padded readback before creating them.
-        let baseline_bytes = StackWorkspace::required_bytes(frame.width, frame.height);
+        let baseline_bytes = batch_reservation
+            .unwrap_or_else(|| StackWorkspace::required_bytes(frame.width, frame.height));
         if baseline_bytes > MAX_CACHED_RESOURCE_BYTES {
             return Err(runtime_error(
                 "ISF pass size exceeds the GPU buffer memory budget",
             ));
         }
-        self.evict_resources_for(baseline_bytes);
+        if batch_reservation.is_none() {
+            self.evict_resources_for(baseline_bytes);
+        }
         let expected_len = frame.width as usize * frame.height as usize * 4;
         // Upload borrows RGBA bytes; only format conversion owns a temporary.
         let rgba = if frame.format == VideoPixelFormat::Rgba8 {
@@ -321,26 +279,39 @@ impl IsfGpuRuntime {
         }
         // filter drops a mismatched old allocation before creating its
         // replacement; scratch is never retained per layer or per resolution.
-        let workspace = workspace
-            .filter(|workspace| workspace.matches(frame.width, frame.height))
-            .unwrap_or_else(|| StackWorkspace::new(&self.device, frame.width, frame.height));
+        pending.workspace = Some(
+            pending
+                .workspace
+                .take()
+                .filter(|workspace| workspace.matches(frame.width, frame.height))
+                .unwrap_or_else(|| StackWorkspace::new(&self.device, frame.width, frame.height)),
+        );
+        let workspace = pending.workspace.as_ref().unwrap();
         let input = &workspace.input;
         let ping = &workspace.ping;
         let pong = &workspace.pong;
         let sampler = &workspace.sampler;
         let readback = &workspace.readback;
         #[cfg(test)]
-        self.resources.phase_timing.as_mut().unwrap().mark(1);
+        if let Some(timing) = self.resources.phase_timing.as_mut() {
+            timing.mark(1);
+        }
         input.upload_rgba(&self.queue, &rgba.data);
         #[cfg(test)]
-        self.resources.phase_timing.as_mut().unwrap().mark(2);
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        {
+            self.resources.stack_upload_count += 1;
+        }
+        #[cfg(test)]
+        if let Some(timing) = self.resources.phase_timing.as_mut() {
+            timing.mark(2);
+        }
+        pending.encoder = Some(self.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor {
                 label: Some("Syndocal ISF pass stack encoder"),
-            });
+            },
+        ));
+        let encoder = pending.encoder.as_mut().unwrap();
         let mut current = input.clone();
-        let mut pending_states = Vec::new();
         let mut pending_bytes = baseline_bytes;
         for (stage_index, (stage, key)) in stages.iter().zip(keys).enumerate() {
             let shader = stage.shader;
@@ -406,14 +377,24 @@ impl IsfGpuRuntime {
                     Ok(rgba)
                 })
                 .collect::<Result<Vec<_>, IsfRuntimeError>>()?;
-            let mut state = self.take_stage_resources(
+            let mut local_state = self.take_stage_resources(
                 shader,
                 controls,
                 frame,
                 key,
                 pending_bytes,
                 dynamic_bytes,
+                batch_reservation.is_some(),
             )?;
+            // Taking cached feedback transfers ownership to the ticket before
+            // later validation/encoding can fail. Cleanup retains that owner.
+            let state = if local_state.bytes != 0 {
+                pending.states.push((key.clone(), local_state));
+                &mut pending.states.last_mut().unwrap().1
+            } else {
+                // Resource-free metadata has no GPU owner to retain.
+                &mut local_state
+            };
             let dynamic_images = dynamic_rgba
                 .iter()
                 .map(|rgba| {
@@ -428,11 +409,13 @@ impl IsfGpuRuntime {
                     gpu
                 })
                 .collect::<Vec<_>>();
+            pending.images.extend(dynamic_images.iter().cloned());
             let transparent = needs_transparent.then(|| {
                 let image = GpuImage::new(&self.device, 1, 1, false, "Syndocal ISF unbound image");
                 image.upload_rgba(&self.queue, &[0, 0, 0, 0]);
                 image
             });
+            pending.images.extend(transparent.iter().cloned());
             let audio_identity = self
                 .audio_frame
                 .as_ref()
@@ -447,7 +430,7 @@ impl IsfGpuRuntime {
             }
             for target in &state.targets {
                 if !target.persistent || !state.has_history {
-                    clear_image(&mut encoder, &target.images[target.front]);
+                    clear_image(encoder, &target.images[target.front]);
                 }
             }
             let stage_output = if stage_index % 2 == 0 { ping } else { pong };
@@ -464,13 +447,15 @@ impl IsfGpuRuntime {
                 } else if width == frame.width && height == frame.height && !pass.float {
                     stage_output.clone()
                 } else {
-                    GpuImage::new(
+                    let image = GpuImage::new(
                         &self.device,
                         width,
                         height,
                         pass.float,
                         "Syndocal ISF unnamed pass",
-                    )
+                    );
+                    pending.images.push(image.clone());
+                    image
                 };
                 let mut sampled = Vec::with_capacity(texture_count);
                 for (index, name) in shader.image_input_names.iter().enumerate() {
@@ -510,14 +495,7 @@ impl IsfGpuRuntime {
                     date,
                     controls,
                 );
-                self.encode_pass(
-                    &mut encoder,
-                    &shader.wgsl,
-                    &sampled,
-                    sampler,
-                    &uniforms,
-                    &output,
-                );
+                self.encode_pass(encoder, &shader.wgsl, &sampled, sampler, &uniforms, &output);
                 if let Some(index) = target_index {
                     state.targets[index].front = 1 - state.targets[index].front;
                 }
@@ -538,7 +516,7 @@ impl IsfGpuRuntime {
                     &[],
                 );
                 self.encode_pass(
-                    &mut encoder,
+                    encoder,
                     BLIT_SHADER,
                     &[&current.view],
                     sampler,
@@ -549,9 +527,6 @@ impl IsfGpuRuntime {
             }
             state.has_history = true;
             pending_bytes += state.bytes + state.transient_bytes;
-            if state.bytes != 0 {
-                pending_states.push((key.clone(), state));
-            }
         }
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
@@ -575,67 +550,10 @@ impl IsfGpuRuntime {
             },
         );
         #[cfg(test)]
-        self.resources.phase_timing.as_mut().unwrap().mark(3);
-        let started = std::time::Instant::now();
-        self.queue.submit(Some(encoder.finish()));
-        #[cfg(test)]
-        self.resources.phase_timing.as_mut().unwrap().mark(4);
-        let (sender, receiver) = mpsc::sync_channel(1);
-        readback
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = sender.send(result.map_err(|error| error.to_string()));
-            });
-        self.device
-            .poll(wgpu::PollType::wait())
-            .map_err(|error| runtime_error(format!("ISF GPU wait failed: {error}")))?;
-        receiver
-            .recv()
-            .map_err(|error| runtime_error(format!("ISF readback channel failed: {error}")))?
-            .map_err(|error| runtime_error(format!("ISF readback failed: {error}")))?;
-        #[cfg(test)]
-        self.resources.phase_timing.as_mut().unwrap().mark(5);
-        self.last_stack_render_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
-        let mapped = readback.slice(..).get_mapped_range();
-        let data = copy_rgba_readback(
-            &mapped,
-            (frame.width * 4) as usize,
-            padded_bytes_per_row as usize,
-            expected_len,
-        );
-        drop(mapped);
-        readback.unmap();
-        #[cfg(test)]
-        self.resources.phase_timing.as_mut().unwrap().mark(6);
-        // Commit feedback ownership only after the entire submitted stack has
-        // produced a readable result. A failed stage cannot publish history.
-        for (key, state) in pending_states {
-            self.resources.entries.insert(key, state);
+        if let Some(timing) = self.resources.phase_timing.as_mut() {
+            timing.mark(3);
         }
-        while self.resources.entries.len() > RESOURCE_CACHE_CAPACITY {
-            let oldest = self
-                .resources
-                .entries
-                .iter()
-                .min_by_key(|(_, state)| state.last_used)
-                .map(|(key, _)| key.clone())
-                .expect("nonempty resource pool exceeds its capacity");
-            self.resources.entries.remove(&oldest);
-        }
-        #[cfg(test)]
-        self.resources.phase_timing.as_mut().unwrap().mark(7);
-        Ok((
-            VideoFrame {
-                layer_id: frame.layer_id,
-                width: frame.width,
-                height: frame.height,
-                pts_ms: frame.pts_ms,
-                duration_ms: frame.duration_ms,
-                format: VideoPixelFormat::Rgba8,
-                data,
-            },
-            workspace,
-        ))
+        Ok(())
     }
 
     fn dynamic_image_bytes(
@@ -746,6 +664,7 @@ impl IsfGpuRuntime {
         key: &IsfInstanceKey,
         pending_bytes: u64,
         dynamic_bytes: u64,
+        preserve_cache: bool,
     ) -> Result<StageResources, IsfRuntimeError> {
         let mut sizes = Vec::with_capacity(shader.passes.len());
         let mut bytes = 0_u64;
@@ -796,7 +715,21 @@ impl IsfGpuRuntime {
             .remove(key)
             .filter(|state| state.fingerprint == shader.fingerprint && state.sizes == sizes);
         // A cache hit still allocates anonymous pass textures on this frame.
-        self.evict_resources_for(pending_bytes + bytes + transient_bytes);
+        if preserve_cache {
+            let cached_bytes = self
+                .resources
+                .entries
+                .values()
+                .map(|state| state.bytes)
+                .sum::<u64>();
+            if cached_bytes + pending_bytes + bytes + transient_bytes > MAX_CACHED_RESOURCE_BYTES {
+                return Err(runtime_error(
+                    "ISF independent stack reservation changed during encoding",
+                ));
+            }
+        } else {
+            self.evict_resources_for(pending_bytes + bytes + transient_bytes);
+        }
         if let Some(mut state) = reusable {
             state.last_used = last_used;
             state.transient_bytes = transient_bytes;

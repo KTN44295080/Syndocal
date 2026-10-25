@@ -36,6 +36,7 @@ mod gpu_display_composition_tests;
 mod gpu_surface;
 mod hap_decoder;
 mod isf_layer_inputs;
+mod isf_chain_execution;
 mod isf_runtime;
 #[cfg(test)]
 mod isf_tempo_sync_tests;
@@ -2223,6 +2224,7 @@ fn format_video_isf_stage_error(error: &VideoIsfStageError, layer_label: Option<
     }
 }
 
+#[derive(Clone)]
 struct VideoEffectFaultContext {
     scope: VideoEffectScope,
     chain_id: Option<VideoEffectChainId>,
@@ -6177,16 +6179,19 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             );
         }
         let mut effect_faults = Vec::new();
+        // Keep callback-bearing paths sequential. Dependent layer images and
+        // transitions also retain their established publication boundaries.
+        let independent_layers = cancellation.is_none()
+            && self.isf_frame_inputs.sampled_layers.is_empty()
+            && transition_runtime.map_or(true, |runtime| runtime.buses.is_empty());
+        let mut pending_layers = isf_runtime::StackBatch::Empty;
 
         for layer_id in requested_layer_ids {
             check_render_cancellation(cancellation)?;
-            let layer = snapshot
-                .layers
-                .iter()
-                .find(|layer| layer.id == *layer_id)
-                .ok_or(VideoPreviewError::MissingLayer {
-                    layer_id: *layer_id,
-                })?;
+            let Some(layer) = snapshot.layers.iter().find(|layer| layer.id == *layer_id) else {
+                self.flush_independent_layer_chains(&mut pending_layers, &mut effect_faults);
+                return Err(VideoPreviewError::MissingLayer { layer_id: *layer_id });
+            };
             let layer_fault_start = effect_faults.len();
             let runtime_layer = clip_runtime
                 .layers
@@ -6194,6 +6199,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 .find(|runtime| runtime.layer_id == layer.id);
             if let Some(transition) = runtime_layer.and_then(|runtime| runtime.transition.as_ref())
             {
+                self.flush_independent_layer_chains(&mut pending_layers, &mut effect_faults);
                 let outgoing = video_render_input_for_clip_slot(
                     snapshot,
                     layer,
@@ -6318,15 +6324,25 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             // The live path takes shared frames: a layer without effects
             // queues the decoder's frame itself, so a frame reused from one
             // tick to the next is never copied.
-            let frames: Vec<Arc<VideoFrame>> = match cancellation {
+            let frames = match cancellation {
                 Some(cancellation) => self
                     .frame_provider
                     .frames_for_layer_shared_with_cancellation(layer, width, height, cancellation),
                 None => self
                     .frame_provider
                     .frames_for_layer_shared(layer, width, height),
-            }
-            .map_err(VideoPreviewError::from)?;
+            };
+            let frames = match frames {
+                Ok(frames) => frames,
+                Err(error) => {
+                    let error = VideoPreviewError::from(error);
+                    if !error.is_cancelled() {
+                        self.flush_independent_layer_chains(&mut pending_layers, &mut effect_faults);
+                    }
+                    // A provider cancellation must not start deferred GPU work.
+                    return Err(error);
+                }
+            };
             let produced_frame = !frames.is_empty();
             for frame in frames {
                 check_render_cancellation(cancellation)?;
@@ -6345,6 +6361,23 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     )
                 });
                 let layer_chain = resolve_effective_layer_chain(snapshot, layer);
+                let clip_idle = match &clip_chain {
+                    Some(Ok(Some(chain))) => !resolved_chain_executes(chain),
+                    Some(Err(_)) => false,
+                    _ => true,
+                };
+                if independent_layers && clip_idle
+                    && layer_chain.as_ref().ok().and_then(|chain| chain.as_ref())
+                        .is_some_and(resolved_chain_executes)
+                {
+                    if let Ok(Some(chain)) = layer_chain {
+                        self.defer_independent_layer_chain(
+                            &mut pending_layers, frame, chain, &mut effect_faults,
+                        ).map_err(VideoPreviewError::Runtime)?;
+                        continue;
+                    }
+                }
+                self.flush_independent_layer_chains(&mut pending_layers, &mut effect_faults);
                 if !matches!(clip_chain, Some(Ok(Some(_)))) && !matches!(layer_chain, Ok(Some(_))) {
                     let clip_fault = match clip_chain {
                         Some(Err(fault)) => Some(*fault),
@@ -6412,6 +6445,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     .map(|fault| fault.message.as_str()),
             );
         }
+        self.flush_independent_layer_chains(&mut pending_layers, &mut effect_faults);
         self.last_render_input_isf_stage_errors.clear();
         Ok(effect_faults)
     }
@@ -6531,153 +6565,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         render_input_key: Option<protocol::VideoRenderInputKey>,
         cancellation: Option<&dyn VideoRenderCancellation>,
     ) -> Result<(Cow<'frame, VideoFrame>, Vec<VideoEffectStageFault>), VideoRuntimeError> {
-        check_runtime_cancellation(cancellation)?;
-        if !resolved_chain_executes(chain) {
-            return Ok((frame, Vec::new()));
-        }
-        let bpm = self.frame_provider.bpm();
-        let mut prepared_stages = Vec::new();
-        let mut faults = Vec::new();
-        for (stage_index, stage) in chain.stages.iter().enumerate() {
-            check_runtime_cancellation(cancellation)?;
-            if !stage.enabled {
-                continue;
-            }
-            let prepared = self
-                .cached_isf_shader(
-                    &stage.effect.source,
-                    stage.effect.source_path.as_deref(),
-                    &stage.effect.image_bindings,
-                )
-                .map_err(|error| error.to_string())
-                .and_then(|shader| {
-                    let controls = resolved_isf_control_values_from_controls(
-                        &shader,
-                        &stage.effect.controls,
-                        bpm,
-                    );
-                    let images = self
-                        .isf_frame_inputs
-                        .resolve_layer_images(&stage.effect.image_bindings)?;
-                    Ok((shader, controls, images))
-                });
-            match prepared {
-                Ok((shader, controls, images)) => {
-                    prepared_stages.push((stage_index, shader, controls, images));
-                }
-                Err(error) => faults.push(video_effect_fault(
-                    VideoEffectFaultContext {
-                        scope: chain.scope.clone(),
-                        chain_id: chain.chain_id,
-                        stage_id: stage.stage_id,
-                        effect_id: stage.effect_id,
-                        render_input_key,
-                        stage_index: Some(stage_index),
-                        stage_label: Some(stage.label.clone()),
-                    },
-                    error.to_string(),
-                )),
-            }
-        }
-        let stage_keys = prepared_stages
-            .iter()
-            .map(|(stage_index, _, _, _)| {
-                let stage = &chain.stages[*stage_index];
-                isf_runtime::IsfInstanceKey {
-                    namespace: self.isf_render_namespace,
-                    scope: Some(chain.scope.clone()),
-                    input: render_input_key,
-                    chain_id: chain.chain_id,
-                    stage_id: stage.stage_id,
-                    effect_id: stage.effect_id,
-                    legacy_stage_index: if stage.stage_id.is_some() {
-                        0
-                    } else {
-                        *stage_index
-                    },
-                    layer_id: frame.layer_id,
-                }
-            })
-            .collect::<Vec<_>>();
-        if self.isf_runtime.is_none() {
-            self.isf_runtime = Some(IsfGpuRuntime::new());
-        }
-        let runtime = match self.isf_runtime.as_mut().expect("ISF runtime initialized") {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                for (stage_index, _, _, _) in &prepared_stages {
-                    let stage = &chain.stages[*stage_index];
-                    faults.push(video_effect_fault(
-                        VideoEffectFaultContext {
-                            scope: chain.scope.clone(),
-                            chain_id: chain.chain_id,
-                            stage_id: stage.stage_id,
-                            effect_id: stage.effect_id,
-                            render_input_key,
-                            stage_index: Some(*stage_index),
-                            stage_label: Some(stage.label.clone()),
-                        },
-                        error.to_string(),
-                    ));
-                }
-                return Ok((frame, faults));
-            }
-        };
-        if prepared_stages.is_empty() {
-            runtime.advance_stage_local_chain_without_prepared_stages();
-            return Ok((frame, faults));
-        }
-        check_runtime_cancellation(cancellation)?;
-        let image_refs = prepared_stages
-            .iter()
-            .map(|(_, _, _, images)| {
-                images
-                    .iter()
-                    .map(|(name, frame)| isf_runtime::IsfImageInput {
-                        name,
-                        frame: frame.as_ref(),
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        let stage_refs = prepared_stages
-            .iter()
-            .zip(&image_refs)
-            .map(
-                |((_, shader, controls, _), images)| isf_runtime::IsfStageInputs {
-                    shader: shader.as_ref(),
-                    controls: controls.as_slice(),
-                    images: images.as_slice(),
-                },
-            )
-            .collect::<Vec<_>>();
-        runtime.set_audio_frame(self.isf_audio_frame.as_ref());
-        let (rendered, runtime_failures) = runtime.apply_stack_stage_local_with_inputs_and_keys(
-            &frame,
-            &stage_refs,
-            frame.pts_ms as f32 / 1_000.0,
-            frame.duration_ms as f32 / 1_000.0,
-            self.isf_frame_inputs.date,
-            &stage_keys,
-        );
-        check_runtime_cancellation(cancellation)?;
-        for (prepared_index, error) in runtime_failures {
-            let stage_index = prepared_stages[prepared_index].0;
-            let stage = &chain.stages[stage_index];
-            faults.push(video_effect_fault(
-                VideoEffectFaultContext {
-                    scope: chain.scope.clone(),
-                    chain_id: chain.chain_id,
-                    stage_id: stage.stage_id,
-                    effect_id: stage.effect_id,
-                    render_input_key,
-                    stage_index: Some(stage_index),
-                    stage_label: Some(stage.label.clone()),
-                },
-                error.to_string(),
-            ));
-        }
-        Ok((Cow::Owned(rendered), faults))
+        self.execute_effect_chain_cow(chain, frame, render_input_key, cancellation)
     }
 
     fn apply_isf_effect_to_frame_for_input(
@@ -10400,6 +10288,11 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    mod isf_independent_layer_tests {
+        use super::*;
+        include!("isf_independent_layer_tests.rs");
+    }
+
     mod isf_borrowed_input_tests {
         use super::*;
         include!("isf_borrowed_input_tests.rs");

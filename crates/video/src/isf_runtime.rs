@@ -33,8 +33,11 @@ pub const ISF_MAX_IMAGE_INPUTS: usize = 4;
 mod date;
 pub use date::{isf_date_from_system_time, isf_date_now};
 
+#[path = "isf_independent_runtime.rs"]
+mod independent;
 #[path = "isf_pass_runtime.rs"]
 mod pass_runtime;
+pub(crate) use independent::{IndependentChain, StackBatch};
 #[path = "isf_resources.rs"]
 mod resources;
 
@@ -141,7 +144,7 @@ impl IsfStageInputs<'_> {
     /// Only the shared host upload and ping/pong may be live. Combining stages
     /// with additional textures would increase their simultaneous reservation
     /// and could evict another stage's feedback sooner than singleton renders.
-    fn can_share_host_buffers(&self) -> bool {
+    pub(crate) fn can_share_host_buffers(&self) -> bool {
         self.images.is_empty()
             && self.shader.image_input_names.len() <= 1
             && self.shader.image_binding_names.is_empty()
@@ -218,6 +221,8 @@ impl IsfGpuRuntime {
             ..Default::default()
         }))
         .map_err(|error| runtime_error(format!("ISF GPU device unavailable: {error}")))?;
+        let mut resources = pass_runtime::IsfResourcePool::default();
+        resources.queue_upload_pitch = pass_runtime::queue_upload_pitch(&adapter);
         let vertex_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Syndocal ISF full-screen vertex shader"),
             source: wgpu::ShaderSource::Wgsl(ISF_VERTEX_SHADER.into()),
@@ -229,7 +234,7 @@ impl IsfGpuRuntime {
             adapter_info: adapter.get_info(),
             vertex_shader,
             pipelines: HashMap::new(),
-            resources: pass_runtime::IsfResourcePool::default(),
+            resources,
             audio_frame: None,
             frame_index: 0,
             last_stack_stage_count: 0,
@@ -399,8 +404,35 @@ impl IsfGpuRuntime {
         date: [f32; 4],
         keys: &[IsfInstanceKey],
     ) -> (VideoFrame, Vec<(usize, IsfRuntimeError)>) {
-        let started = std::time::Instant::now();
         let frame_index = self.frame_index;
+        let result = self.apply_stack_stage_local_at_frame_index(
+            frame,
+            stages,
+            time_seconds,
+            time_delta_seconds,
+            date,
+            keys,
+            frame_index,
+        );
+        if !stages.is_empty() {
+            self.frame_index = self.frame_index.wrapping_add(1);
+        }
+        result
+    }
+
+    // Recovery and ordinary calls use one stage-local implementation. The
+    // caller owns the logical clock commit; retrying GPU work cannot tick it.
+    fn apply_stack_stage_local_at_frame_index(
+        &mut self,
+        frame: &VideoFrame,
+        stages: &[IsfStageInputs<'_>],
+        time_seconds: f32,
+        time_delta_seconds: f32,
+        date: [f32; 4],
+        keys: &[IsfInstanceKey],
+        frame_index: u32,
+    ) -> (VideoFrame, Vec<(usize, IsfRuntimeError)>) {
+        let started = std::time::Instant::now();
         let mut current = Cow::Borrowed(frame);
         let mut failures = Vec::new();
         let mut index = 0;
@@ -460,12 +492,10 @@ impl IsfGpuRuntime {
             }
             index = end;
         }
-        if !stages.is_empty() {
-            self.frame_index = self.frame_index.wrapping_add(1);
-        }
+        let rendered = current.into_owned();
         self.last_stack_stage_count = stages.len();
         self.last_stack_render_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
-        (current.into_owned(), failures)
+        (rendered, failures)
     }
 
     /// Consumes one host frame for a non-empty stage-local chain whose stages
@@ -494,7 +524,6 @@ impl IsfGpuRuntime {
         self.last_stack_stage_count = 0;
         self.last_stack_render_us = 0;
     }
-
 }
 
 pub fn resolved_isf_control_values(
