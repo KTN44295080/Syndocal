@@ -654,3 +654,218 @@ fn axis_aligned_composite_ineligible_adjustments_retain_generic() {
         }
     }
 }
+
+// Exact indexed sampling loop from the checkpoint before contiguous-row dispatch.
+fn indexed_axis_aligned_reference(params: BlendTransformedRgba8Params<'_>, bands: Option<usize>) {
+    let BlendTransformedRgba8Params {
+        destination,
+        frame,
+        width,
+        height,
+        opacity,
+        blend_mode,
+        transform,
+        ..
+    } = params;
+    if opacity <= 0.0 {
+        return;
+    }
+    let Some(sampling) = AxisAlignedSampling::new(transform) else {
+        return;
+    };
+    let source_columns = (0..width)
+        .map(|x| {
+            sampling
+                .column(x, width, frame.width)
+                .map(|column| column as usize * 4)
+        })
+        .collect::<Vec<_>>();
+    let covered_columns = source_columns
+        .iter()
+        .filter(|column| column.is_some())
+        .count();
+    let row_covered = |y: u32| sampling.row(y, height, frame.height).is_some();
+    let Some(first_covered_row) = (0..height).find(|&y| row_covered(y)) else {
+        return;
+    };
+    if covered_columns == 0 {
+        return;
+    }
+    let last_covered_row = (first_covered_row..height)
+        .rev()
+        .find(|&y| row_covered(y))
+        .unwrap_or(first_covered_row);
+    let covered_rows = last_covered_row - first_covered_row + 1;
+    let covered_pixels = covered_columns.saturating_mul(covered_rows as usize);
+    // An opaque source pixel over Normal at full opacity is a plain copy;
+    // `blend_pixel` would produce the same bytes. Other opaque source pixels
+    // of a large layer go through the lookup table.
+    let copy_opaque = opacity == 1.0 && *blend_mode == VideoBlendMode::Normal;
+    let opaque_table = (!copy_opaque && covered_pixels >= BLEND_TABLE_MIN_PIXELS)
+        .then(|| OpaqueSourceBlendTable::new(opacity, blend_mode))
+        .flatten();
+    let bands = bands.unwrap_or_else(|| blend_band_count(covered_pixels, covered_rows));
+    let rows = first_covered_row..last_covered_row + 1;
+    for_each_row_band(destination, width, rows, bands, |band, first_row| {
+        for y in band_rows(band.len(), width, height, first_row) {
+            let Some(source_y) = sampling.row(y, height, frame.height) else {
+                continue;
+            };
+            let source_row = source_y as usize * frame.width as usize * 4;
+            let destination_row = (y - first_row) as usize * width as usize * 4;
+            for (x, source_x) in source_columns.iter().enumerate() {
+                let Some(source_x) = source_x else {
+                    continue;
+                };
+                let source = &frame.data[source_row + source_x..source_row + source_x + 4];
+                let target = &mut band[destination_row + x * 4..destination_row + x * 4 + 4];
+                if source[3] != 255 {
+                    blend_pixel(target, source, opacity, blend_mode);
+                } else if copy_opaque {
+                    target.copy_from_slice(source);
+                } else if let Some(table) = &opaque_table {
+                    table.apply(target, source);
+                } else {
+                    blend_pixel(target, source, opacity, blend_mode);
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn contiguous_rows_match_generic_for_partial_alpha_and_clipped_bands() {
+    for (width, height) in [(1, 1), (65, 9), (513, 257)] {
+        for alpha_case in 0..4 {
+            let mut source = frame(width, height, true);
+            for y in 0..height as usize {
+                let x = match alpha_case {
+                    0 => continue,
+                    1 => 0,
+                    2 => width as usize / 2,
+                    _ => width as usize - 1,
+                };
+                source.data[(y * width as usize + x) * 4 + 3] = [0, 1, 127, 254][y % 4];
+            }
+            for transform in [
+                Transform2D::default(),
+                Transform2D {
+                    x: 8.0 / width as f32,
+                    ..Default::default()
+                },
+                Transform2D {
+                    crop_left: 0.13,
+                    crop_right: 0.07,
+                    ..Default::default()
+                },
+            ] {
+                for blend_mode in &BLEND_MODES {
+                    if width >= 513
+                        && !matches!(blend_mode, VideoBlendMode::Normal | VideoBlendMode::Screen)
+                    {
+                        continue;
+                    }
+                    for opacity in [1.0, 0.7, f32::NAN] {
+                        let mut expected = frame(width, height, false).data;
+                        run(
+                            &mut expected,
+                            &source,
+                            width,
+                            height,
+                            &transform,
+                            opacity,
+                            blend_mode,
+                            true,
+                        );
+                        for bands in [1, 3, 8] {
+                            let mut actual = frame(width, height, false).data;
+                            blend_transformed_rgba8_in_bands(
+                                BlendTransformedRgba8Params {
+                                    destination: &mut actual,
+                                    frame: &source,
+                                    width,
+                                    height,
+                                    opacity,
+                                    blend_mode,
+                                    transform: &transform,
+                                    color: &VideoColorAdjust::default(),
+                                    fx: &VideoFxAdjust::default(),
+                                },
+                                Some(bands),
+                            );
+                            assert!(actual == expected, "{width}x{height}, alpha={alpha_case}, {transform:?}, {blend_mode:?}@{opacity}, bands={bands}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "explicit matched CPU compositor experiment; no wall-time assertion"]
+fn axis_aligned_contiguous_row_cost() {
+    let (width, height) = (2560, 1600);
+    let transform = Transform2D::default();
+    for (alpha_case, opacity, blend_mode) in [
+        ("opaque", 0.7, VideoBlendMode::Normal),
+        ("opaque", 1.0, VideoBlendMode::Normal),
+        ("opaque", 0.5, VideoBlendMode::Add),
+        ("mixed", 0.7, VideoBlendMode::Normal),
+        ("late-partial", 1.0, VideoBlendMode::Normal),
+    ] {
+        let mut source = frame(width, height, alpha_case != "mixed");
+        if alpha_case == "late-partial" {
+            for row in source.data.chunks_exact_mut(width as usize * 4) {
+                *row.last_mut().unwrap() = 254;
+            }
+        }
+        let initial = frame(width, height, false).data;
+        let mut destination = initial.clone();
+        let mut expected = None;
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        for iteration in 0..12 {
+            for optimized in [false, true, true, false] {
+                destination.copy_from_slice(&initial);
+                let started = std::time::Instant::now();
+                for _ in 0..3 {
+                    let params = BlendTransformedRgba8Params {
+                        destination: &mut destination,
+                        frame: &source,
+                        width,
+                        height,
+                        opacity,
+                        blend_mode: &blend_mode,
+                        transform: &transform,
+                        color: &VideoColorAdjust::default(),
+                        fx: &VideoFxAdjust::default(),
+                    };
+                    if optimized {
+                        blend_transformed_rgba8_in_bands(params, None);
+                    } else {
+                        indexed_axis_aligned_reference(params, None);
+                    }
+                }
+                let elapsed = started.elapsed().as_micros();
+                if let Some(expected) = &expected {
+                    assert_eq!(&destination, expected);
+                } else {
+                    expected = Some(destination.clone());
+                }
+                std::hint::black_box(&destination);
+                if iteration >= 2 {
+                    if optimized {
+                        after.push(elapsed);
+                    } else {
+                        before.push(elapsed);
+                    }
+                }
+            }
+        }
+        before.sort_unstable();
+        after.sort_unstable();
+        let p95 = (before.len() * 95).div_ceil(100) - 1;
+        eprintln!("CPU_CONTIGUOUS_ROWS size={width}x{height} layers=3 alpha={alpha_case} blend={blend_mode:?} opacity={opacity} samples={} before_p50_us={} before_p95_us={} after_p50_us={} after_p95_us={}", before.len(), before[before.len()/2], before[p95], after[after.len()/2], after[p95]);
+    }
+}

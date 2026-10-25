@@ -45,6 +45,7 @@ mod layer_group_composition_tests;
 mod layer_thumbnail_render;
 mod libav_decoder;
 mod live_source;
+mod rgba_row_copy;
 mod show_spout_aspect_fit;
 mod video_render_cancellation;
 
@@ -9683,6 +9684,7 @@ fn blend_axis_aligned_identity_adjustments(
     let opaque_table = (!copy_opaque && covered_pixels >= BLEND_TABLE_MIN_PIXELS)
         .then(|| OpaqueSourceBlendTable::new(opacity, blend_mode))
         .flatten();
+    let contiguous_span = rgba_row_copy::contiguous_rgba_span(&source_columns);
     let bands = bands.unwrap_or_else(|| blend_band_count(covered_pixels, covered_rows));
     let rows = first_covered_row..last_covered_row + 1;
     for_each_row_band(destination, width, rows, bands, |band, first_row| {
@@ -9692,6 +9694,21 @@ fn blend_axis_aligned_identity_adjustments(
             };
             let source_row = source_y as usize * frame.width as usize * 4;
             let destination_row = (y - first_row) as usize * width as usize * 4;
+            if let Some(span) = &contiguous_span {
+                let source = &frame.data[source_row + span.source_start
+                    ..source_row + span.source_start + span.byte_len];
+                let target = &mut band[destination_row + span.destination_start
+                    ..destination_row + span.destination_start + span.byte_len];
+                rgba_row_copy::blend_contiguous_rgba_row(
+                    target,
+                    source,
+                    opacity,
+                    blend_mode,
+                    copy_opaque,
+                    opaque_table.as_ref(),
+                );
+                continue;
+            }
             for (x, source_x) in source_columns.iter().enumerate() {
                 let Some(source_x) = source_x else {
                     continue;
