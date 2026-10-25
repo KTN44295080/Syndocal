@@ -15,8 +15,8 @@ export const allowedClassifications = Object.freeze([
   "Out of scope",
 ]);
 export const allowedSourceKinds = Object.freeze(["Open", "Deferred", "Complete"]);
-export const expectedStatusCounts = Object.freeze({ Open: 23, Deferred: 8, Complete: 27 });
-export const expectedSectionCounts = Object.freeze({ "6": 37, "7": 6, "8": 9, "9": 6 });
+export const expectedStatusCounts = Object.freeze({ Open: 29, Deferred: 12, Complete: 27 });
+export const expectedSectionCounts = Object.freeze({ "6": 38, "7": 6, "8": 17, "9": 7 });
 
 const markerPattern = /<!--\s*completion-ledger:\s*(Open|Deferred|Complete):\s*([A-Z0-9-]+)\s*-->/gu;
 const stableIdPattern = /^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d{3}$/u;
@@ -145,7 +145,7 @@ export function validateCompletionLedger({
       && typeof ledger.expected_section_counts === "object"
       && requiredSections.every((section) => ledger.expected_section_counts[section] === expectedSectionCounts[section])
       && Object.keys(ledger.expected_section_counts).length === Object.keys(expectedSectionCounts).length,
-    "completion ledger expected_section_counts must be exactly 6=37, 7=6, 8=9, and 9=6.",
+    "completion ledger expected_section_counts must be exactly 6=38, 7=6, 8=17, and 9=7.",
   );
   assert(Array.isArray(ledger.items) && ledger.items.length > 0, "completion ledger must contain authority rows.");
 

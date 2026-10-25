@@ -3,8 +3,8 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 23, "Deferred": 8, "Complete": 27 },
-  "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
+  "expected_status_counts": { "Open": 29, "Deferred": 12, "Complete": 27 },
+  "expected_section_counts": { "6": 38, "7": 6, "8": 17, "9": 7 },
   "items": [
     {
       "id": "COMP-Q1-Q4-001",
@@ -351,8 +351,8 @@
       "source": { "section": "6", "kind": "Open" },
       "classification": "Supported",
       "owner": "Migration and recovery owner",
-      "dependency": "Version-support decisions and durable recovery/save boundaries",
-      "nonclaim": "Does not claim the supported version matrix, migration corpus, hostile-input, fuzz, or backup proof is complete.",
+      "dependency": "Supported version/migration matrix, corrupt-input preservation and explicit manual restore from backup; automatic fallback split to MIGRATION-AUTO-FALLBACK-001",
+      "nonclaim": "Does not claim corruption, upgrade, or manual recovery acceptance; automatic repair/fallback is not offered in 1.2.0.",
       "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/MIGRATION_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/MCP_PROJECT_OPEN_CANONICAL_2026-10-05.md", "qa/MIGRATION_WHOLE_PROJECT_GOLDENS_2026-10-03.md", "qa/AUTHORED_CONTROL_PROJECT_PERSISTENCE_2026-10-03.md", "qa/PROJECT_JSON_INGRESS_2026-10-03.md", "qa/PROJECT_BACKUP_JSON_2026-10-03.md", "qa/PROJECT_INPUT_DIAGNOSTICS_2026-10-03.md", "qa/RECOVERY_STORAGE_PRESERVATION_2026-10-04.md", "qa/RECOVERY_STORAGE_NATIVE_2026-10-04.md", "qa/USB_DMX_MACOS_ALPHA71_2026-10-10.md", "qa/USB_DMX_BLACKOUT_ALPHA73_2026-10-12.md"],
       "status": "Open"
     },
@@ -381,8 +381,8 @@
       "source": { "section": "7", "kind": "Open" },
       "classification": "External acceptance",
       "owner": "ASIO product and licensing owner",
-      "dependency": "Explicit GPLv3-separated artifact or Steinberg SDK decision",
-      "nonclaim": "Does not claim an ASIO distribution license, notices, or installer separation is approved.",
+      "dependency": "Separate optional GPLv3 component selected; bridge GPL-3.0-only; corresponding source/notices and package review required; proprietary SDK agreement signed/emailed 2026-10-25, countersignature pending; NDI disabled in GPL-ASIO",
+      "nonclaim": "Does not claim GPL distribution obligations are satisfied, proprietary countersignature/approval exists, or NDI may load/use in the GPL-ASIO profile.",
       "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/ASIO_INPUT_ACCEPTANCE.md", "qa/ASIO_LICENSE_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
@@ -421,8 +421,8 @@
       "source": { "section": "7", "kind": "Open" },
       "classification": "External acceptance",
       "owner": "ASIO latency acceptance owner",
-      "dependency": "ASIO device stream and matched TouchDesigner test environment",
-      "nonclaim": "Does not claim physical input-to-pixel latency or TouchDesigner trials were measured.",
+      "dependency": "Exact candidate, physical own-product input-to-pixel proof and five matched TouchDesigner trials only where a permitted free edition/license allows them; paid-only subclaim split to COMPARE-PAID-001",
+      "nonclaim": "Does not claim physical latency, free-edition comparison results or superiority; paid-only comparison is Deferred, own-product latency/safety acceptance remains Open.",
       "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/ASIO_INPUT_ACCEPTANCE.md", "qa/ASIO_LATENCY_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
@@ -441,8 +441,8 @@
       "source": { "section": "8", "kind": "Open" },
       "classification": "External acceptance",
       "owner": "Lighting hardware acceptance owner",
-      "dependency": "F2 output ownership and real Art-Net/sACN nodes and fixtures",
-      "nonclaim": "Does not claim physical fixture addressing, controls, reconnect, topology, or 44 Hz continuity passed.",
+      "dependency": "F2 ownership and real nodes/fixtures, direct-connected Art-Net; switch topology split to DMX-SWITCH-TOPOLOGY-001",
+      "nonclaim": "Does not claim direct-connected addressing, controls, reconnect or 44 Hz continuity passed; no switch topology acceptance is claimed.",
       "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/DMX_ARTNET_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/FX_UNIVERSES_ALPHA81_2026-10-14.md"],
       "status": "Open"
     },
@@ -451,8 +451,8 @@
       "source": { "section": "8", "kind": "Open" },
       "classification": "External acceptance",
       "owner": "DMX and RDM hardware acceptance owner",
-      "dependency": "F2 output ownership, Enttec/DMXKing hardware, and analyzer capture",
-      "nonclaim": "Does not claim USB DMX long-run timing, Open DMX analysis, or RDM/TOD physical behavior passed.",
+      "dependency": "Stable original compound ID retained for supported OpenDMX payload/long-run/reconnect/Blackout/ownership safety only; excluded USB PRO, RDM and waveform portions have separate Deferred IDs",
+      "nonclaim": "Does not claim OpenDMX physical acceptance; does not claim Enttec USB PRO/DMXKing support, RDM physical behavior or measured Break/MAB waveform timing.",
       "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/DMX_USB_RDM_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/USB_DMX_MACOS_ALPHA71_2026-10-10.md", "qa/USB_DMX_BLACKOUT_ALPHA73_2026-10-12.md", "qa/EXTENSIONS_MIDI_BLACKOUT_ALPHA78_2026-10-13.md"],
       "status": "Open"
     },
@@ -471,8 +471,8 @@
       "source": { "section": "8", "kind": "Open" },
       "classification": "External acceptance",
       "owner": "DJ Link peer and hardware acceptance owner",
-      "dependency": "DJ Link setup, physical Pedal/DJ-PC/Agent topology, and exact mapping evidence",
-      "nonclaim": "Does not claim live Pedal, rekordbox Agent, Loop, Release, disconnect, State Sync, or ACK acceptance.",
+      "dependency": "Experimental OFF-by-default DJ-Link actual-peer minimum: restart OFF/no listener/output; explicit opt-in/pair; wrong/stale/replay/non-playing rejection; mapped play/Release with ACK/idempotence; disconnect/local operation; reconnect StateSync; disable/credential handling (HW-AUTOMATION-01 section 4.4). Full HW4 split to DJ-LINK-FULL-MATRIX-001",
+      "nonclaim": "Does not claim minimal physical acceptance or full HW4 twelve-case/production DJ integration.",
       "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md", "qa/DJ_LINK_HARDWARE_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
@@ -481,8 +481,8 @@
       "source": { "section": "8", "kind": "Open" },
       "classification": "External acceptance",
       "owner": "Video hardware acceptance owner",
-      "dependency": "F2 ownership, real display topology, and capture/output devices",
-      "nonclaim": "Does not claim physical display, NDI, Spout, camera, capture-fault, or one-hour video acceptance.",
+      "dependency": "Windows offered-profile display/camera/screen/Spout physical matrices; normal-profile NDI legal/native/hardware acceptance if offered; GPL-ASIO rejects NDI load/use",
+      "nonclaim": "Does not claim physical video fault/soak acceptance, GPL-ASIO NDI availability or macOS/Syphon acceptance.",
       "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md", "qa/VIDEO_PHYSICAL_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
@@ -501,8 +501,8 @@
       "source": { "section": "8", "kind": "Open" },
       "classification": "External acceptance",
       "owner": "Venue performance acceptance owner",
-      "dependency": "Integrated video, lighting, output, and recording paths plus venue GPU",
-      "nonclaim": "Does not claim the maximum-condition venue GPU one-hour run or resource logs passed.",
+      "dependency": "Required 60fps: H264 1080p, 3 layers x 3 ISF stages, actual Display 2560x1600; ADR-01 fixed performance gates plus integrated one-hour venue soak on exact candidate",
+      "nonclaim": "Does not claim 60fps or venue soak passed; missing mandatory 60fps is a release blocker, not a known limitation.",
       "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md", "qa/VENUE_SOAK_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
@@ -511,8 +511,8 @@
       "source": { "section": "8", "kind": "Open" },
       "classification": "External acceptance",
       "owner": "ShowClock venue acceptance owner",
-      "dependency": "ShowClock implementation, witness/fence decision, and two-machine topology",
-      "nonclaim": "Does not claim real-switch crash, partition, rejoin, device-loss, or zero-simultaneous-output rehearsal.",
+      "dependency": "Exact candidate, direct-wired two-PC topology, manual failover only after physical old-output stop confirmation and explicit Re-arm; automatic failover and switch topology split to Deferred IDs",
+      "nonclaim": "Does not claim manual zero-overlap physical acceptance, automatic failover/fence guarantees or real-switch topology proof.",
       "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md", "qa/SHOWCLOCK_VENUE_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
@@ -521,69 +521,169 @@
       "source": { "section": "8", "kind": "Open" },
       "classification": "External acceptance",
       "owner": "Comparative acceptance owner",
-      "dependency": "Pinned comparison versions, licenses, hardware, content, and exact Syndocal artifact",
-      "nonclaim": "Does not claim Daslight, SynapseRack, or TouchDesigner parity from counts or loopback.",
+      "dependency": "Pinned legally permitted free-edition Daslight/TouchDesigner versions/content and existing hardware; paid-only trials and cancelled Synapse performance split to Deferred IDs",
+      "nonclaim": "Does not claim parity or superiority from unmeasured/free-excluded tasks, counts or loopback; cancelled Synapse performance is not reopened.",
       "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md", "qa/COMPARE_PINNED_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
       "id": "DIST-PLATFORM-PACKAGE-001",
-      "source": { "section": "9", "kind": "Deferred" },
-      "classification": "Out of scope",
+      "source": { "section": "9", "kind": "Open" },
+      "classification": "External acceptance",
       "owner": "Distribution owner",
-      "dependency": "A future distribution product goal and supported artifact matrix",
-      "nonclaim": "Does not claim a platform/package matrix is accepted or in the active Windows-local denominator.",
+      "dependency": "Windows NSIS only, offered normal MIT/WASAPI and separate optional GPL-ASIO component/profile with exact OS/CPU/DLL/features; GPL-ASIO NDI disabled; MSI/portable split to DIST-MSI-PORTABLE-001",
+      "nonclaim": "Does not claim any final NSIS/profile package acceptance or supported MSI/portable distribution.",
       "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md", "qa/DEVELOPMENT_INSTALLERS_ALPHA70_2026-10-08.md", "qa/DEVELOPMENT_INSTALLERS_ALPHA72_2026-10-11.md", "qa/EXTENSIONS_MIDI_BLACKOUT_ALPHA78_2026-10-13.md", "qa/MSI_EXTENSIONS_ALPHA80_2026-10-13.md", "qa/artifacts/extensions-midi-alpha78/cross-platform-ci.json"],
-      "status": "Deferred"
+      "status": "Open"
     },
     {
       "id": "DIST-SIGNING-001",
-      "source": { "section": "9", "kind": "Deferred" },
-      "classification": "Out of scope",
+      "source": { "section": "9", "kind": "Open" },
+      "classification": "External acceptance",
       "owner": "Distribution signing owner",
-      "dependency": "A future distribution product goal and signing credentials/policy",
-      "nonclaim": "Does not claim Authenticode or Apple signing is configured or accepted.",
+      "dependency": "Free SignPath Foundation first; approval pending; if unavailable at 2026-11-01 freeze, owner-approved unsigned branch requires Deferred status/count update and explicit SmartScreen note; no paid certificate",
+      "nonclaim": "Does not claim SignPath approval, Authenticode signing or SmartScreen reputation; updater cryptographic verification remains mandatory even if Authenticode is Deferred.",
       "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md"],
-      "status": "Deferred"
+      "status": "Open"
     },
     {
       "id": "DIST-NOTICES-001",
-      "source": { "section": "9", "kind": "Deferred" },
-      "classification": "Out of scope",
+      "source": { "section": "9", "kind": "Open" },
+      "classification": "External acceptance",
       "owner": "Distribution legal owner",
-      "dependency": "A future distribution product goal and license/SBOM disposition",
-      "nonclaim": "Does not claim BOM, SBOM, notices, or legal obligations are accepted.",
+      "dependency": "Windows NSIS profile-specific BOM/SBOM/license/notice/corresponding-source/provenance, including GPL-ASIO and any normal-profile NDI obligations",
+      "nonclaim": "Does not claim distribution legal/source/notice obligations are accepted; countersignature remains pending.",
       "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md"],
-      "status": "Deferred"
+      "status": "Open"
     },
     {
       "id": "DIST-CLEAN-MACHINE-001",
-      "source": { "section": "9", "kind": "Deferred" },
-      "classification": "Out of scope",
+      "source": { "section": "9", "kind": "Open" },
+      "classification": "External acceptance",
       "owner": "Distribution acceptance owner",
-      "dependency": "A future distribution product goal and signed installation artifacts",
-      "nonclaim": "Does not claim clean-machine installation, upgrade, uninstall, or repair acceptance.",
+      "dependency": "Exact frozen Windows NSIS in selected signed/unsigned state, clean install/launch/upgrade/repair/uninstall/reboot, data preservation, manual backup restore and rollback",
+      "nonclaim": "Does not claim clean-machine lifecycle or manual recovery acceptance from development packages.",
       "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md", "qa/USB_DMX_BLACKOUT_ALPHA73_2026-10-12.md", "qa/FIXTURE_PUBLICATION_ALPHA75_2026-10-12.md", "qa/EXTENSIONS_MIDI_BLACKOUT_ALPHA78_2026-10-13.md", "qa/MSI_EXTENSIONS_ALPHA80_2026-10-13.md", "qa/artifacts/msi-extensions-alpha80/windows-hosted-lifecycle.json", "qa/artifacts/msi-extensions-alpha80/mac-installer-lifecycle.json"],
-      "status": "Deferred"
+      "status": "Open"
     },
     {
       "id": "DIST-UPDATER-001",
-      "source": { "section": "9", "kind": "Deferred" },
-      "classification": "Out of scope",
+      "source": { "section": "9", "kind": "Open" },
+      "classification": "External acceptance",
       "owner": "Updater and distribution owner",
-      "dependency": "A future distribution product goal, signed manifests, and update service",
-      "nonclaim": "Does not claim a signed updater is enabled, published, or accepted.",
+      "dependency": "Production-key updater signatures, actual N to N+1, exact channel/variant and wrong-key/downgrade/corruption/offline refusal plus backup recovery; no Authenticode exemption for updater crypto",
+      "nonclaim": "Does not claim production signed-updater or actual upgrade/recovery acceptance.",
       "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/UPDATE_RELEASE_RUNBOOK.md"],
-      "status": "Deferred"
+      "status": "Open"
     },
     {
       "id": "DIST-PUBLICATION-001",
+      "source": { "section": "9", "kind": "Open" },
+      "classification": "External acceptance",
+      "owner": "Release publication owner",
+      "dependency": "All required exact-candidate acceptance, immutable build-source tag/archive, exact accepted bytes/checksums/notes/evidence manifest and public-download verification",
+      "nonclaim": "Does not claim a final tag/artifact publication exists; no release before required acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md"],
+      "status": "Open"
+    },
+    {
+      "id": "MIGRATION-AUTO-FALLBACK-001",
+      "source": { "section": "6", "kind": "Deferred" },
+      "classification": "Out of scope",
+      "owner": "Migration and recovery owner",
+      "dependency": "Owner-approved 1.2.0 scope change, product owner, 2026-10-26; qa/RELEASE_1.2.0_SCOPE_2026-10-26.md. Manual backup restore only; automatic corrupt-project repair or verified older-generation fallback remains unimplemented/unaccepted.",
+      "nonclaim": "Does not claim automatic repair, restore or fallback in 1.2.0.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Deferred"
+    },
+    {
+      "id": "DMX-USB-PRO-001",
+      "source": { "section": "8", "kind": "Deferred" },
+      "classification": "Out of scope",
+      "owner": "DMX hardware acceptance owner",
+      "dependency": "Owner-approved 1.2.0 scope change, product owner, 2026-10-26; qa/RELEASE_1.2.0_SCOPE_2026-10-26.md. OpenDMX only; Enttec USB PRO and DMXKing product-output support excluded.",
+      "nonclaim": "Does not claim USB PRO/DMXKing support or long-run acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Deferred"
+    },
+    {
+      "id": "DMX-RDM-PHYSICAL-001",
+      "source": { "section": "8", "kind": "Deferred" },
+      "classification": "Out of scope",
+      "owner": "DMX and RDM hardware acceptance owner",
+      "dependency": "Owner-approved 1.2.0 scope change, product owner, 2026-10-26; qa/RELEASE_1.2.0_SCOPE_2026-10-26.md. No RDM devices; no purchases. Reopen with actual gateway/responders and physical discovery/TOD/correlation/timeout/cancel/removal evidence; simulation cannot close it.",
+      "nonclaim": "Does not claim physical RDM/TOD acceptance or a supported physical RDM claim in 1.2.0.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Deferred"
+    },
+    {
+      "id": "DMX-WAVEFORM-001",
+      "source": { "section": "8", "kind": "Deferred" },
+      "classification": "Out of scope",
+      "owner": "DMX timing acceptance owner",
+      "dependency": "Owner-approved 1.2.0 scope change, product owner, 2026-10-26; qa/RELEASE_1.2.0_SCOPE_2026-10-26.md. No oscilloscope/logic analyzer; no purchases. Reopen with real RS-485 waveform evidence for Break 176 us, MAB 16 us and frame period/failure.",
+      "nonclaim": "Does not claim measured Break/MAB/waveform timing; simulation or visible output cannot close it.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Deferred"
+    },
+    {
+      "id": "DMX-SWITCH-TOPOLOGY-001",
+      "source": { "section": "8", "kind": "Deferred" },
+      "classification": "Out of scope",
+      "owner": "Network hardware acceptance owner",
+      "dependency": "Owner-approved 1.2.0 scope change, product owner, 2026-10-26; qa/RELEASE_1.2.0_SCOPE_2026-10-26.md. No network switch; no purchases. Direct connection accepted for Art-Net/two-PC; switch topology physical proof remains.",
+      "nonclaim": "Does not claim network switch topology acceptance from direct wiring or simulation.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Deferred"
+    },
+    {
+      "id": "DJ-LINK-FULL-MATRIX-001",
+      "source": { "section": "8", "kind": "Deferred" },
+      "classification": "Out of scope",
+      "owner": "DJ Link peer and hardware acceptance owner",
+      "dependency": "Owner-approved 1.2.0 scope change, product owner, 2026-10-26; qa/RELEASE_1.2.0_SCOPE_2026-10-26.md. Experimental OFF-by-default minimum only; full HW4 twelve-case/advanced integration remains.",
+      "nonclaim": "Does not claim full HW4 or production DJ integration from minimal acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Deferred"
+    },
+    {
+      "id": "SHOWCLOCK-AUTO-FAILOVER-001",
+      "source": { "section": "8", "kind": "Deferred" },
+      "classification": "Out of scope",
+      "owner": "ShowClock architecture owner",
+      "dependency": "Owner-approved 1.2.0 scope change, product owner, 2026-10-26; qa/RELEASE_1.2.0_SCOPE_2026-10-26.md. Manual failover only; automatic takeover and automatic fence/split-brain guarantees require a future accepted witness/interlock tranche.",
+      "nonclaim": "Does not claim automatic two-PC failover or automatic fence confirmation.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Deferred"
+    },
+    {
+      "id": "COMPARE-PAID-001",
+      "source": { "section": "8", "kind": "Deferred" },
+      "classification": "Out of scope",
+      "owner": "Comparative acceptance owner",
+      "dependency": "Owner-approved 1.2.0 scope change, product owner, 2026-10-26; qa/RELEASE_1.2.0_SCOPE_2026-10-26.md. Zero spending; paid-only competitor editions/licenses/hardware and unpermitted free-tier trials remain excluded, including paid-only TouchDesigner matched trials. Reopen with permitted free access or new owner scope.",
+      "nonclaim": "Does not claim parity or latency superiority for excluded or unmeasured trials.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Deferred"
+    },
+    {
+      "id": "COMPARE-SYNAPSE-PERF-001",
+      "source": { "section": "8", "kind": "Deferred" },
+      "classification": "Out of scope",
+      "owner": "Comparative acceptance owner",
+      "dependency": "Owner-approved 1.2.0 scope change, product owner, 2026-10-26; qa/RELEASE_1.2.0_SCOPE_2026-10-26.md. Previously cancelled SynapseRack performance comparison remains withdrawn (GAP-01 section 9); no restart authorized.",
+      "nonclaim": "Does not claim SynapseRack performance/parity or authorize revival of the cancelled comparison.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "status": "Deferred"
+    },
+    {
+      "id": "DIST-MSI-PORTABLE-001",
       "source": { "section": "9", "kind": "Deferred" },
       "classification": "Out of scope",
-      "owner": "Release publication owner",
-      "dependency": "A future distribution product goal, immutable tag, artifacts, and evidence manifest",
-      "nonclaim": "Does not claim a public tag, artifact, or evidence publication exists.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md"],
+      "owner": "Distribution owner",
+      "dependency": "Owner-approved 1.2.0 scope change, product owner, 2026-10-26; qa/RELEASE_1.2.0_SCOPE_2026-10-26.md. NSIS only for 1.2.0; MSI and portable supported install/update forms remain future work.",
+      "nonclaim": "Does not claim supported MSI/portable delivery from historical development artifacts.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
       "status": "Deferred"
     }
   ]

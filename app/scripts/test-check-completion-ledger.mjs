@@ -18,10 +18,10 @@ const fixtureOptions = {
 };
 
 const result = validateCompletionLedger({ ledger, sourceDocument, repoRoot: workspaceRoot });
-assert.equal(result.itemCount, 58);
+assert.equal(result.itemCount, 68);
 assert.deepEqual(result.sections, ["6", "7", "8", "9"]);
-assert.deepEqual(result.statusCounts, { Open: 23, Deferred: 8, Complete: 27 });
-assert.deepEqual(result.sectionCounts, { "6": 37, "7": 6, "8": 9, "9": 6 });
+assert.deepEqual(result.statusCounts, { Open: 29, Deferred: 12, Complete: 27 });
+assert.deepEqual(result.sectionCounts, { "6": 38, "7": 6, "8": 17, "9": 7 });
 
 function expectFailure(name, mutate, pattern, options = {}) {
   const candidate = clone(ledger);
@@ -109,13 +109,13 @@ expectFailure(
 );
 
 expectFailure(
-  "reopening a frozen distribution row fails closed",
+  "freezing a reopened distribution row without updating its marker fails closed",
   () => {},
-  /unmapped authoritative open row/u,
+  /unmapped authoritative deferred row/u,
   {
     sourceDocument: sourceDocument.replace(
+      "- [ ] Windows NSIS platform/package matrix: normal MIT/WASAPI and separate optional",
       "- **Frozen / out of scope for the current Windows-local completion target:** Platform/package matrix.",
-      "- [ ] Platform/package matrix.",
     ),
   },
 );

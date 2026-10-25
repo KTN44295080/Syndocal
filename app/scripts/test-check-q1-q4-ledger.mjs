@@ -27,8 +27,8 @@ const realResult = validateQ1Q4Ledger({
 assert.equal(realResult.q1Rows, 32);
 assert.equal(realResult.domainsCovered, 29);
 assert.equal(realResult.sourceContractsCovered, 10);
-assert.equal(realResult.flowMarkersReferenced, 58);
-assert.deepEqual(realResult.flowMarkerCounts, { Open: 23, Deferred: 8, Complete: 27 });
+assert.equal(realResult.flowMarkersReferenced, 68);
+assert.deepEqual(realResult.flowMarkerCounts, { Open: 29, Deferred: 12, Complete: 27 });
 console.log("ok - real-repository baseline passes end to end");
 
 function byId(collection, id) {

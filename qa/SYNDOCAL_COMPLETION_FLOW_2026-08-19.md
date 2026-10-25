@@ -1,5 +1,7 @@
 # Syndocal completion flow — active dependency-ordered work authority
 
+Current release contract (owner decisions, 2026-10-25/26): [1.2.0 scope and schedule](RELEASE_1.2.0_SCOPE_2026-10-26.md), Windows NSIS, 2026-11-12; acceptance and publication remain pending.
+
 ## 2026-10-14 alpha.82 native dispatch repair candidate
 
 Current development metadata is `1.2.0-alpha.82`. Native binary-search dispatch ordering and distribution checks are tracked in [the checkpoint](NETWORK_DISPATCH_ALPHA82_2026-10-14.md). Alpha.81 is superseded; distributed bytes remain immutable. This is not full Recording completion. Parallel hardening, macOS warning cleanup, MIDI feedback visibility, UI stage 1 and the normal Windows native gate for this candidate are recorded in [the integration checkpoint](PARALLEL_HARDENING_2026-10-14.md).
@@ -1497,6 +1499,14 @@ residual selected through the current handoff.
 
 ## 2. Completion decision
 
+For 1.2.0, the owner's 2026-10-25/26 contract fixes completion at **2026-11-12**,
+Windows only. The linked scope page overrides older broader claims only for the
+explicitly split/deferred items below; it does not accept any implementation or
+physical result. macOS/Linux remain Deferred. Required FX Display performance is
+60fps with H264 1080p, 3 layers x 3 ISF stages and actual Display 2560x1600;
+failure is a release blocker, never a known limitation. No new hardware,
+certificates, competitor licenses or substitute paid services are purchased.
+
 Syndocal is complete only when all of the following are true for one frozen tag and
 the exact artifacts built from it:
 
@@ -1510,6 +1520,17 @@ the exact artifacts built from it:
    release notes, and evidence manifest agree;
 6. Q1 traceability, Q2 decisions, Q3 risks, Q4 evidence, and Q5 completion query in
    the master roadmap are current and point to that tag/artifact set.
+
+The frozen build-source commit/tag and manifest identify the actual candidate
+bytes (EXE, optional bridge, runtime DLLs, resources, configuration, signing
+state, NSIS and updater signature). Later evidence/ledger-only commits identify
+those same hashes and the build-source tag separately; they do not imply a new
+build or substitute a different HEAD for the build-source identity. Any change to
+candidate inputs or bytes creates a new candidate and reruns affected acceptance.
+All remaining required gates must pass before publication. Under the approved
+unsigned branch only Authenticode is deferred, with a SmartScreen note;
+cryptographic updater verification, legal, clean-machine and publication gates
+remain mandatory. No unaccepted External row is closed by reclassification.
 
 Do not report one ambiguous overall percentage. Report at least software
 implementation, automated proof, native/hardware proof, distribution/legal
@@ -1529,8 +1550,8 @@ review and evidence required for the behavior the current task consumes.
 
 ### 4.1 Current release train
 
-The product metadata is `1.2.0-alpha.70` for the 2026-10-08 development
-installer distribution; full product acceptance is pending. Verify Cargo, frontend and
+The current development metadata is `1.2.0-alpha.82`; the 2026-10-08
+`alpha.70` installer is historical. Full product acceptance is pending. Verify Cargo, frontend and
 Tauri metadata before producing a new artifact. A branch name, past PID or older
 handoff is not a current artifact identity. The dated alpha.68 record above is
 historical build evidence; it is not a fresh native or physical acceptance run.
@@ -1564,12 +1585,26 @@ artifact filenames, and embedded metadata.
 - Move to `beta.1` only at feature freeze with all planned implementation present.
 - Move to `rc.1` only after first-party warnings are zero and no P0-Code/P1 remains;
   later RC fixes increment the RC ordinal.
-- Remove the prerelease suffix only after all P0-Release hardware, legal, signing,
-  clean-machine, update, and publication gates pass.
+- Normally remove the prerelease suffix only after all P0-Release hardware, legal,
+  signing, clean-machine, update, and publication gates pass. **Owner-approved
+  1.2.0 exception (2026-10-26):** by **2026-11-01**, build and freeze the
+  unpublished publishable candidate with its final `1.2.0` version and exact
+  bytes, including its chosen signed/unsigned state. This advances final-version
+  assignment only, so the 11/2-11/8 physical sessions test the actual bytes to be
+  published rather than an RC that would be rebuilt as stable on 11/9. It grants
+  no acceptance or permission to publish before all applicable gates pass.
 - PATCH is backward-compatible correction, MINOR adds compatible product behavior,
   and MAJOR permits an intentionally migrated incompatible product contract.
 - Tags are immutable. A rebuilt artifact receives a new version; it never replaces
   bytes under an existing tag/version.
+
+For the 1.2.0 exception, unreleased attempts use distinct candidate identities and
+manifests and may carry the planned final version before any public tag/artifact
+exists. A changed candidate requires a new identity and affected reacceptance;
+never overwrite an attempt or reuse its evidence for changed bytes. Once a
+version/tag is published, the normal new-version rule applies without exception.
+An unsigned candidate freezes unsigned: late signing is a new candidate and
+requires affected reacceptance, not an in-place replacement.
 
 Product SemVer is independent from `.sdc`, template, registry, command, API, ABI,
 checkpoint, and cache schema versions. A schema version changes only when its own
@@ -1577,8 +1612,8 @@ compatibility contract requires it, with migration/golden/future-version rejecti
 tests. A product bump never authorizes an untested schema bump, and a schema bump
 never substitutes for advancing the product version.
 
-`tools/asio-bridge/Cargo.toml` currently uses `1.0.0` as the bridge package/ABI
-line, not the Syndocal product version. It is not permitted to label a distributed
+`tools/asio-bridge/Cargo.toml` uses bridge package `3.0.0`, compatible ABI 2-3,
+not the Syndocal product version. It is not permitted to label a distributed
 Syndocal artifact. Before ASIO distribution, the release manifest and
 `check:release` must map the exact product version to the separately versioned bridge
 ABI/package, DLL hash, SDK/license decision, and compatible app loader. A bridge ABI
@@ -1685,9 +1720,11 @@ blocked every job, so no CI/platform claim is derived from that run.
 ## 6. Dependency-ordered remaining implementation
 
 `qa/SYNDOCAL_COMPLETION_LEDGER.json` is the machine-readable completion index for
-sections 6 through 9. It currently records 23 `Open` current checkboxes, 8
-`Deferred` rows, and 27 `Complete` current checkboxes: the two explicit platform
-deferrals plus the six frozen distribution rows remain deferred. Each indexed
+sections 6 through 9. It records 29 `Open`, 12 `Deferred`, and 27 `Complete`
+rows (68 total): six distribution rows reopen for Windows NSIS and ten split
+remaining items join the two platform deferrals. Signing remains Open while the
+free-service decision is pending; the unsigned branch requires a documented
+Deferred status/count update before final acceptance. Each indexed
 row carries one stable trailing `completion-ledger` marker whose `Open`,
 `Deferred`, or `Complete` kind is checked against the ledger. The index is
 additive: it records dependencies, evidence paths, and non-claims without
@@ -1838,7 +1875,12 @@ Exit: maximum-condition one-hour A/V/Lighting/recording proof meets fixed budget
 - [ ] N Remote/Touch LAN/TLS exposure, pairing, Origin/Host, grants, rate/size bounds, <!-- completion-ledger: Open: REMOTE-SECURITY-001 -->
   RDM/TOD cancellation/ownership, parser/path/archive fuzz, dependency/SBOM/redaction.
 - [ ] O supported `.sdc`/template/cache/protocol version matrix, golden migration <!-- completion-ledger: Open: MIGRATION-COMPATIBILITY-001 -->
-  corpus, hostile/corrupt input, fuzz, backup/recovery/upgrade compatibility.
+  corpus, hostile/corrupt input, fuzz, backup/recovery/upgrade compatibility;
+  corrupt projects are rejected and preserved, with explicit manual restore from
+  backup. Native/clean-machine manual recovery acceptance remains required.
+- **Deferred outside the Windows target:** Automatic fallback to an older verified backup generation. <!-- completion-ledger: Deferred: MIGRATION-AUTO-FALLBACK-001 -->
+  1.2.0 scope change, product owner, 2026-10-26: manual restore only; removes
+  automatic corruption repair/restore claims, not preservation or refusal checks.
 - [ ] P generation-stamped status, redacted diagnostic bundle, updater wrong-channel/ <!-- completion-ledger: Open: OBSERVABILITY-SUPPORT-001 -->
   downgrade/signature/corruption/offline/rollback behavior, and operator/support
   startup/failure/takeover/recovery/shutdown runbooks.
@@ -1855,8 +1897,11 @@ accepted strongly consistent witness/fence or physical interlock.
 ASIO is a Windows product-release requirement while remaining a separately licensed,
 non-default artifact from MIT/WASAPI.
 
-- [ ] Select GPLv3-separated artifact or Steinberg proprietary SDK agreement; package <!-- completion-ledger: Open: ASIO-LICENSE-001 -->
-  notices/source obligations and approve installer/updater separation.
+- [ ] Package the selected separate optional GPLv3 ASIO component (bridge GPL-3.0-only), <!-- completion-ledger: Open: ASIO-LICENSE-001 -->
+  corresponding source/notices and installer/updater separation. The owner signed
+  and emailed the proprietary SDK agreement to Steinberg on 2026-10-25;
+  countersignature is pending, not approval. GPL-ASIO disables NDI, including load
+  and use; default MIT/WASAPI remains separate. Selection does not close licensing.
 - [x] Pass a second vendor's working driver (HOTONE 44.1 kHz / 2-channel / i32 /
   128-frame, 100 exact Start/Stop/Free cycles with no fallback).
 - [ ] Pass advertised 44.1/48/96 kHz, 64/128/256 frames, format, mono/stereo/channel <!-- completion-ledger: Open: ASIO-FORMAT-MATRIX-001 -->
@@ -1866,56 +1911,102 @@ non-default artifact from MIT/WASAPI.
 - [ ] Pass matched one-hour ASIO and WASAPI soak with overrun 0, callback p99 below <!-- completion-ledger: Open: ASIO-SOAK-001 -->
   20% and max below 50% of buffer duration, capture-to-engine p95 <= 40 ms, and
   loss-to-zero <= 250 ms.
-- [ ] Measure physical input-to-pixel latency and five matched TouchDesigner trials. <!-- completion-ledger: Open: ASIO-LATENCY-001 -->
+- [ ] Measure physical input-to-pixel latency and five matched TouchDesigner trials <!-- completion-ledger: Open: ASIO-LATENCY-001 -->
+  only within a permitted free edition/license; otherwise the comparison subclaim
+  remains under COMPARE-PAID-001. Own-product latency/safety budgets remain required.
 - [ ] Verify selection persistence, stale/ambiguous device lock, native UI telemetry, <!-- completion-ledger: Open: ASIO-PERSISTENCE-PACKAGE-001 -->
   artifact feature identity, and absence of fallback in the final package.
 
-Exit: every checkbox in `qa/ASIO_INPUT_ACCEPTANCE.md` is checked with exact artifact,
-driver/device, raw logs, operator, date, and measurement source.
+Exit: every in-scope input acceptance checkbox has exact artifact, driver/device,
+raw logs, operator, date and measurement source. The explicit paid-comparison
+deferral above is no substitute for own-product physical ASIO acceptance.
 
 ## 8. External hardware, comparative, platform, and venue acceptance
 
 - [ ] Real Art-Net/sACN nodes and fixtures: addressing, RGB/wheel, Pan/Tilt, intensity, <!-- completion-ledger: Open: DMX-ARTNET-001 -->
-  strobe, Blackout, reconnect, multi-universe, switch topology, and 44 Hz continuity.
-- [ ] Enttec USB PRO/DMXKing long run; Open DMX logic-analyzer Break 176 us, MAB 16 us, <!-- completion-ledger: Open: DMX-USB-RDM-001 -->
-  frame period/failure; RDM/TOD discovery/correlation/timeout/cancel/removal.
+  strobe, Blackout, reconnect, multi-universe and 44 Hz continuity; direct-connected
+  Art-Net is the accepted topology, pending actual physical evidence.
+- [ ] OpenDMX supported USB output: long run, payload, reconnect, Blackout and <!-- completion-ledger: Open: DMX-USB-RDM-001 -->
+  ownership/failure safety on the exact candidate. The retained compound ID now
+  owns OpenDMX only; the following stable IDs retain its excluded subclaims.
+- **Deferred outside the Windows target:** Enttec USB PRO / DMXKing product output. <!-- completion-ledger: Deferred: DMX-USB-PRO-001 -->
+  Product owner, 2026-10-26: unsupported in 1.2.0; removes PRO/DMXKing support
+  claims. OpenDMX must not be mistaken for those protocols.
+- **Deferred outside the Windows target:** Physical RDM/TOD discovery, correlation, timeout/cancel/removal. <!-- completion-ledger: Deferred: DMX-RDM-PHYSICAL-001 -->
+  Product owner, 2026-10-26: no RDM devices and no purchases; removes 1.2.0 RDM
+  physical-acceptance claims. Simulations cannot close this remaining item.
+- **Deferred outside the Windows target:** DMX Break 176 us / MAB 16 us and frame waveform timing. <!-- completion-ledger: Deferred: DMX-WAVEFORM-001 -->
+  Product owner, 2026-10-26: no oscilloscope/logic analyzer and no purchases;
+  removes measured-waveform claims. Visible output and simulation are insufficient.
+- **Deferred outside the Windows target:** Network switch topology acceptance. <!-- completion-ledger: Deferred: DMX-SWITCH-TOPOLOGY-001 -->
+  Product owner, 2026-10-26: no network switch and no purchases; removes switch
+  topology claims for DMX and two-PC rehearsal; direct wiring remains required.
 - [ ] Physical MIDI Note/CC/Clock/MTC/feedback/All Notes Off; OSC and TouchOSC/iPad/ <!-- completion-ledger: Open: INPUT-PHYSICAL-001 -->
   Android Remote over wired/Wi-Fi with p50/p95/p99/max latency.
-- [ ] Physical DJ-PC Pedal -> `rekordbox-DJ-Link-ForPCDJ` local MIDI plus wired <!-- completion-ledger: Open: DJ-LINK-HARDWARE-001 -->
-  Agent -> Syndocal acceptance: preload/non-playing non-trigger, exact any-deck Track start,
-  absolute repeated Loop divisions, Filter isolation, idempotent Release, local
-  operation during disconnect, State Sync, ACK, and next-use readiness, with exact
-  device/software/repository/NIC/mapping/timestamp evidence.
+- [ ] DJ-Link experimental, OFF by default: minimal opt-in/disable, authentication, <!-- completion-ledger: Open: DJ-LINK-HARDWARE-001 -->
+  restart OFF with no listener/output, explicit opt-in/pairing, wrong/stale/replay
+  and non-playing event rejection, one mapped play/Release with ACK/idempotence,
+  disconnect/local operation, reconnect StateSync and disable/credential handling
+  on the actual peer (HW-AUTOMATION-01 section 4.4), with exact
+  device/software/NIC/mapping/timestamp evidence. Missing hardware stays Open.
+- **Deferred outside the Windows target:** DJ-Link full HW4 twelve-case matrix and advanced integration. <!-- completion-ledger: Deferred: DJ-LINK-FULL-MATRIX-001 -->
+  Product owner, 2026-10-26: experimental minimum only; removes full HW4/production
+  DJ integration claims. Minimal physical acceptance is not full matrix completion.
 - [ ] Dual display/HDMI/fullscreen/DPI/refresh/unplug/reorder/GPU reset; NDI/Spout/ <!-- completion-ledger: Open: VIDEO-PHYSICAL-001 -->
-  Syphon, camera, and screen-capture fault and one-hour matrices.
+  camera and screen-capture fault and one-hour matrices for the Windows profile;
+  GPL-ASIO must reject NDI load/use. Normal-profile NDI legal/native/physical gates
+  remain if offered; Syphon/macOS remains in the platform deferral.
 - **Deferred outside the Windows target:** macOS/Linux real-machine display, <!-- completion-ledger: Deferred: PLATFORM-MAC-LINUX-001 -->
   media, audio, project save/reload, and package acceptance.
 - [ ] Venue GPU maximum ISF/layer/Preview/Program/output/recording one-hour run with <!-- completion-ledger: Open: VENUE-SOAK-001 -->
-  frame/drop/CPU/GPU/RAM/VRAM/operator-response logs.
-- [ ] Two-machine real-switch crash/restart/partition/rejoin/device-loss rehearsal <!-- completion-ledger: Open: SHOWCLOCK-VENUE-001 -->
-  with zero simultaneous output and operator runbook.
-- [ ] Pinned Daslight/SynapseRack/TouchDesigner version/license/hardware/content task <!-- completion-ledger: Open: COMPARE-PINNED-001 -->
-  comparisons, preserving first failures, unmeasured rows, timings, operations, and
-  synchronized output evidence. Never infer parity from counts or loopback.
+  frame/drop/CPU/GPU/RAM/VRAM/operator-response logs. REQUIRED: H264 1080p,
+  3 layers x 3 ISF stages, actual Display 2560x1600 at 60fps (ADR-01 acceptance);
+  no resolution/stage/threshold reduction or known-limitation waiver.
+- [ ] Two-machine direct-wired crash/restart/partition/rejoin/device-loss rehearsal <!-- completion-ledger: Open: SHOWCLOCK-VENUE-001 -->
+  with manual failover only, operator confirmation that the old physical output
+  stopped, explicit Re-arm, zero simultaneous output and an operator runbook.
+- **Deferred outside the Windows target:** Automatic two-PC failover/fence confirmation. <!-- completion-ledger: Deferred: SHOWCLOCK-AUTO-FAILOVER-001 -->
+  Product owner, 2026-10-26: manual failover only; removes automatic takeover and
+  automatic split-brain/fence guarantees, not manual zero-overlap safety.
+- [ ] Pinned permitted free-edition Daslight/TouchDesigner task comparisons with <!-- completion-ledger: Open: COMPARE-PINNED-001 -->
+  license/hardware/content identity, first failures, unmeasured rows, timings,
+  operations and synchronized output evidence. Never infer parity from counts or
+  loopback; unavailable paid-only portions are separate remaining items below.
+- **Deferred outside the Windows target:** Comparisons requiring paid editions, licenses or purchased hardware. <!-- completion-ledger: Deferred: COMPARE-PAID-001 -->
+  Product owner, 2026-10-26: zero spending, permitted free editions only;
+  removes parity/latency superiority claims for excluded trials, including paid-only
+  TouchDesigner matched trials. Reopen only with permitted free access or new scope.
+- **Deferred outside the Windows target:** Previously cancelled SynapseRack performance comparison. <!-- completion-ledger: Deferred: COMPARE-SYNAPSE-PERF-001 -->
+  Product owner cancellation retained, 2026-10-26: GAP-01 section 9 records this
+  withdrawn subclaim; no Synapse performance/parity claim or restart is authorized.
 
-## 9. Distribution, legal, clean-machine, and publication — deferred
+## 9. Distribution, legal, clean-machine, and publication — Windows NSIS reopened
 
-The six former completion checkboxes in this section are outside the active
-Windows-local target: platform/package matrix, Authenticode/Apple signing,
-BOM/SBOM and notices, clean-machine install/upgrade/uninstall, signed updater,
-and public tag/artifact/evidence publication. Reopen them only when distribution
-becomes a product goal; they are not counted in the active 71-item denominator.
+The product owner reopened the six stable distribution IDs on 2026-10-26 for
+public 1.2.0 Windows NSIS delivery. The old Windows-local exemption and 71-item
+denominator do not govern this release. No distribution row is accepted here.
 
-The following retain those six frozen rows as individually addressable
-`Deferred`/out-of-scope items. They do not reopen distribution work; their
-markers are deliberately checked by the completion-ledger gate.
-
-- **Frozen / out of scope for the current Windows-local completion target:** Platform/package matrix. <!-- completion-ledger: Deferred: DIST-PLATFORM-PACKAGE-001 -->
-- **Frozen / out of scope for the current Windows-local completion target:** Authenticode/Apple signing. <!-- completion-ledger: Deferred: DIST-SIGNING-001 -->
-- **Frozen / out of scope for the current Windows-local completion target:** BOM/SBOM and notices. <!-- completion-ledger: Deferred: DIST-NOTICES-001 -->
-- **Frozen / out of scope for the current Windows-local completion target:** Clean-machine install/upgrade/uninstall. <!-- completion-ledger: Deferred: DIST-CLEAN-MACHINE-001 -->
-- **Frozen / out of scope for the current Windows-local completion target:** Signed updater. <!-- completion-ledger: Deferred: DIST-UPDATER-001 -->
-- **Frozen / out of scope for the current Windows-local completion target:** Public tag/artifact/evidence publication. <!-- completion-ledger: Deferred: DIST-PUBLICATION-001 -->
+- [ ] Windows NSIS platform/package matrix: normal MIT/WASAPI and separate optional <!-- completion-ledger: Open: DIST-PLATFORM-PACKAGE-001 -->
+  GPL-ASIO component/profile, OS/CPU and exact DLL/feature inventory; NDI disabled
+  in GPL-ASIO. Each offered profile has its own exact manifest and acceptance.
+- [ ] Seek free SignPath Foundation Authenticode signing and verify actual results. <!-- completion-ledger: Open: DIST-SIGNING-001 -->
+  Approval is pending, not promised. If unavailable by the 11/1 freeze, use the
+  owner's approved unsigned branch, record this ID as Deferred with reason/date/
+  owner and a SmartScreen note, and update both ledgers/mirror/count fixtures.
+  Reopen signing for a new candidate/version once free signing is available.
+  Apple signing remains outside the macOS/Linux scope.
+- [ ] BOM/SBOM, licenses, notices, corresponding source and provenance for every <!-- completion-ledger: Open: DIST-NOTICES-001 -->
+  offered profile, including FFmpeg/ASIO and any normal-profile NDI obligations.
+- [ ] Exact NSIS clean-machine install/launch/upgrade/repair/uninstall/reboot, data <!-- completion-ledger: Open: DIST-CLEAN-MACHINE-001 -->
+  preservation, manual backup restore and rollback, in its frozen signing state.
+- [ ] Production-key cryptographically signed updater, real N to N+1, channel/variant, <!-- completion-ledger: Open: DIST-UPDATER-001 -->
+  wrong-key/downgrade/corruption/offline rejection and backup recovery; Authenticode
+  unsigned never disables updater signature verification.
+- [ ] Immutable source tag/archive, exact accepted bytes, checksums, release notes, <!-- completion-ledger: Open: DIST-PUBLICATION-001 -->
+  evidence manifest and public-download verification; publish only after acceptance.
+- **Deferred outside the Windows target:** MSI and portable distribution forms. <!-- completion-ledger: Deferred: DIST-MSI-PORTABLE-001 -->
+  Product owner, 2026-10-26: NSIS only for 1.2.0; removes supported MSI/portable
+  install/update claims. Historical development packages are not release acceptance.
 
 ## 10. Warning cleanup workstream
 
@@ -1939,8 +2030,16 @@ for domain acceptance.
 
 ## 11. Final integrated verification and stop condition
 
-After every phase above is committed and its per-tranche native/hardware gate is
-closed, execute master roadmap section 22.2 without omission against one release tag:
+For 1.2.0, execute master roadmap section 22.2 for the explicit scope in section 2
+against the frozen build-source tag and exact candidate manifest. The owner
+approved this sequencing change on 2026-10-26: by 11/1 freeze the final-version
+candidate; 11/2-11/8 collect physical/native acceptance on those exact bytes;
+11/9-11/11 perform final integrated verification and evidence review; 11/12 is
+the fixed completion/publication target, conditional on every required gate.
+No automatic 11/9 stable rebuild or re-sign is permitted. Physical sessions may
+precede final evidence/ledger commits, which must retain the distinct build-source
+identity and exact hashes; changed source/artifacts require a new candidate and
+affected reacceptance. Every applicable gate remains required:
 
 1. Rust format, focused tests, workspace tests/check/clippy warning-free;
 2. TypeScript, every static/localization/viewport gate, diff/link checks;
@@ -1948,13 +2047,16 @@ closed, execute master roadmap section 22.2 without omission against one release
 4. exact-process native release build, one responsive maximized window, full native
    UI/accessibility workflows;
 5. physical K/ASIO matrix, cold/warm performance and extended soak;
-6. distributed ShowClock/two-PC fault matrix;
-7. Windows migration/corruption/security matrices;
-8. pinned commercial benchmarks against the verified Windows executable;
+6. direct-wired ShowClock/two-PC fault matrix with manual failover/physical stop confirmation;
+7. Windows migration/corruption/security matrices including preserved corrupt input and manual restore;
+8. pinned permitted free-edition comparisons against the verified Windows executable;
 9. Q5 query against the exact Windows checkpoint, logs, and evidence manifest.
 
-Distribution signing/updater/clean-machine/publication and macOS/Linux rows are
-explicitly deferred by the Windows-only scope above and are not final-stop gates.
+Windows NSIS package/legal/clean-machine/updater/publication gates are reopened.
+Only the documented unsigned Authenticode branch may defer DIST-SIGNING-001;
+macOS/Linux and the ten explicitly split remaining items stay Deferred. Physical
+RDM, waveform timing and switch topology cannot be closed by simulation. Required
+60fps, ASIO, native/physical safety and all offered-profile gates remain blockers.
 
 Stop and report rather than claiming completion if any command selects zero tests,
 any warning is unowned, any artifact differs from the evidence hash, any external

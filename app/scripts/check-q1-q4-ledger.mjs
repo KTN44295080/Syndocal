@@ -748,7 +748,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = runQ1Q4LedgerCheck();
   console.log(
     `q1-q4 coverage ledger ok; ${result.q1Rows} Q1 rows cover ${result.domainsCovered}/29 Q0 domains and `
-      + `${result.sourceContractsCovered}/10 source contracts; ${result.flowMarkersReferenced}/58 Flow markers referenced `
+      + `${result.sourceContractsCovered}/10 source contracts; ${result.flowMarkersReferenced}/68 Flow markers referenced `
       + `(${result.flowMarkerCounts.Open} Open + ${result.flowMarkerCounts.Deferred} Deferred + ${result.flowMarkerCounts.Complete} Complete); `
       + `${result.q2Decisions} decisions, ${result.q3Risks} risks, ${result.q4Evidence} evidence records linked; `
       + "master mirror parity verified",
