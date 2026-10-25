@@ -186,6 +186,8 @@ impl std::error::Error for IsfRuntimeError {}
 pub struct IsfGpuRuntime {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    #[cfg(test)]
+    adapter_info: wgpu::AdapterInfo,
     vertex_shader: wgpu::ShaderModule,
     pipelines: HashMap<(u64, bool, usize), IsfGpuPipeline>,
     resources: pass_runtime::IsfResourcePool,
@@ -223,6 +225,8 @@ impl IsfGpuRuntime {
         Ok(Self {
             device,
             queue,
+            #[cfg(test)]
+            adapter_info: adapter.get_info(),
             vertex_shader,
             pipelines: HashMap::new(),
             resources: pass_runtime::IsfResourcePool::default(),

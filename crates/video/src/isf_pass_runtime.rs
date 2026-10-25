@@ -18,11 +18,17 @@ const MAX_CACHED_RESOURCE_BYTES: u64 = 512 * 1024 * 1024;
 mod stack_workspace;
 use stack_workspace::StackWorkspace;
 
+#[cfg(test)]
+#[path = "isf_stack_phase_timing.rs"]
+mod phase_timing;
+
 #[derive(Default)]
 pub(super) struct IsfResourcePool {
     entries: BTreeMap<IsfInstanceKey, StageResources>,
     clock: u64,
     workspace: Option<StackWorkspace>,
+    #[cfg(test)]
+    phase_timing: Option<phase_timing::StackPhaseTiming>,
 }
 
 #[derive(Clone)]
@@ -219,8 +225,15 @@ impl IsfGpuRuntime {
         if stages.is_empty() {
             return Ok(frame.clone());
         }
+        #[cfg(test)]
+        {
+            let sequence = self.resources.phase_timing.as_ref().map_or(1, |timing| timing.sequence + 1);
+            self.resources.phase_timing = Some(phase_timing::StackPhaseTiming::new(sequence));
+        }
         self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        #[cfg(test)]
+        self.resources.phase_timing.as_mut().unwrap().mark(0);
         // An in-flight or failed stack cannot expose reusable scratch buffers.
         // Only the outer transaction, after both GPU scopes, can return them.
         let workspace = self.resources.workspace.take();
@@ -245,6 +258,8 @@ impl IsfGpuRuntime {
         // Always balance both scopes, including a failed cleanup wait.
         let validation = pollster::block_on(self.device.pop_error_scope());
         let allocation = pollster::block_on(self.device.pop_error_scope());
+        #[cfg(test)]
+        self.resources.phase_timing.as_mut().unwrap().mark(8);
         if let Some(error) = validation.or(allocation) {
             for key in keys {
                 self.resources.entries.remove(key);
@@ -314,7 +329,11 @@ impl IsfGpuRuntime {
         let pong = &workspace.pong;
         let sampler = &workspace.sampler;
         let readback = &workspace.readback;
+        #[cfg(test)]
+        self.resources.phase_timing.as_mut().unwrap().mark(1);
         input.upload_rgba(&self.queue, &rgba.data);
+        #[cfg(test)]
+        self.resources.phase_timing.as_mut().unwrap().mark(2);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -555,8 +574,12 @@ impl IsfGpuRuntime {
                 depth_or_array_layers: 1,
             },
         );
+        #[cfg(test)]
+        self.resources.phase_timing.as_mut().unwrap().mark(3);
         let started = std::time::Instant::now();
         self.queue.submit(Some(encoder.finish()));
+        #[cfg(test)]
+        self.resources.phase_timing.as_mut().unwrap().mark(4);
         let (sender, receiver) = mpsc::sync_channel(1);
         readback
             .slice(..)
@@ -570,6 +593,8 @@ impl IsfGpuRuntime {
             .recv()
             .map_err(|error| runtime_error(format!("ISF readback channel failed: {error}")))?
             .map_err(|error| runtime_error(format!("ISF readback failed: {error}")))?;
+        #[cfg(test)]
+        self.resources.phase_timing.as_mut().unwrap().mark(5);
         self.last_stack_render_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
         let mapped = readback.slice(..).get_mapped_range();
         let data = copy_rgba_readback(
@@ -580,6 +605,8 @@ impl IsfGpuRuntime {
         );
         drop(mapped);
         readback.unmap();
+        #[cfg(test)]
+        self.resources.phase_timing.as_mut().unwrap().mark(6);
         // Commit feedback ownership only after the entire submitted stack has
         // produced a readable result. A failed stage cannot publish history.
         for (key, state) in pending_states {
@@ -595,6 +622,8 @@ impl IsfGpuRuntime {
                 .expect("nonempty resource pool exceeds its capacity");
             self.resources.entries.remove(&oldest);
         }
+        #[cfg(test)]
+        self.resources.phase_timing.as_mut().unwrap().mark(7);
         Ok((
             VideoFrame {
                 layer_id: frame.layer_id,
