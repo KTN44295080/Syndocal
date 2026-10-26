@@ -47,25 +47,41 @@ commands initialized and verified against the exact paths above.
 
 ## Pinned normal Windows FFmpeg SDK
 
-Use the LGPL shared 8.1 branch build recorded in
+Use the LGPL shared 8.1 build recorded in
 [FFMPEG_WINDOWS_RUNTIME_INVENTORY.json](FFMPEG_WINDOWS_RUNTIME_INVENTORY.json)
-(schema 2, exact provenance, configure line and seven DLL identities):
+(schema 2, exact provenance, configure line and seven DLL identities). It is a
+Syndocal self-build of the pinned BtbN FFmpeg-Builds recipe with the GPL-only
+Chromaprint/FFTW3 recipes removed (`tools/ffmpeg-sdk/`, workflow
+`.github/workflows/ffmpeg-lgpl-sdk.yml`):
 
-- Version: `n8.1.3-9-g29e619e767-20260930` (BtbN).
-- Archive: <https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip>.
-- SHA-256: `3e47bda1607740550141e37c0e49d1e5182b34699f15adfd137ee266d346811a`.
+- Version: `n8.1.3-9-g29e619e767-20260930-syndocal-r40366564270` (the DLLs
+  self-report `n8.1.3-9-g29e619e767-20260930`).
+- Archive: `ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip` inside the
+  Actions artifact
+  <https://github.com/KTN44295080/Syndocal/actions/runs/40366564270/artifacts/12674399245>
+  (`gh run download 40366564270 -R KTN44295080/Syndocal`). The artifact expires
+  2027-01-24 and is **not** durable hosting; a durable URL is an owner decision.
+- SHA-256: `81587fa070a9fa2da3d8ff3e63beb9654729782bc8e9899ee951baf5fc5d9f1a`.
 - Archive root: `ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1`.
 - Exact source: <https://github.com/FFmpeg/FFmpeg/archive/29e619e767cde9045a75c29bc9a8278ae7b3a98b.tar.gz>.
-- Pinned build recipes/dependency locators:
-  <https://github.com/BtbN/FFmpeg-Builds/tree/6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b>.
+- Pinned build recipe: BtbN
+  <https://github.com/BtbN/FFmpeg-Builds/tree/6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b>
+  plus the Syndocal patch, rav1e lock and pinned image digests at
+  <https://github.com/KTN44295080/Syndocal/tree/7d0af757f73231fc0c6006d6c21c72c14cb4a31a/tools/ffmpeg-sdk>.
+
+The previous BtbN `autobuild-2026-09-30-13-08` archive
+(`3e47bda1607740550141e37c0e49d1e5182b34699f15adfd137ee266d346811a`) statically
+contains Chromaprint and FFTW3 in `avformat-62.dll` and must not be used or
+shipped; the resolver and runtime staging reject its DLL hashes.
 
 Download and verify the archive hash before extraction. Set `FFMPEG_DIR` to
 that extracted root (containing `include`, `lib`, `bin`) and prepend its `bin`
 to the process-local `PATH` before the MSVC/Cargo invocation. Do not substitute
-the floating `latest` URL, the previous Gyan GPL DLLs or an arbitrary PATH SDK.
+the floating `latest` URL, the previous BtbN Chromaprint archive, the previous
+Gyan GPL DLLs or an arbitrary PATH SDK.
 The two native acceptance harnesses use only this checkout-relative fallback
 when `FFMPEG_DIR` is unset:
-`target/qa/ffmpeg-lgpl-20261026/sdk/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1`.
+`target/qa/ffmpeg-selfbuild-20261027/sdk/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1`.
 Their shared resolver verifies all seven pinned DLL sizes, SHA-256 hashes and
 PE identities, plus required nonempty headers and MSVC import libraries.
 Explicit `FFMPEG_DIR` overrides pass the same checks; invalid overrides fail

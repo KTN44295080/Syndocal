@@ -11,7 +11,7 @@ import {
   workspaceRoot,
 } from "./windows-runtime-inventory.mjs";
 
-export const pinnedFfmpegSdkRelativeRoot = "target/qa/ffmpeg-lgpl-20261026/sdk/"
+export const pinnedFfmpegSdkRelativeRoot = "target/qa/ffmpeg-selfbuild-20261027/sdk/"
   + "ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1";
 
 // No executable or DLL is loaded: the same independently anchored bytes and PE

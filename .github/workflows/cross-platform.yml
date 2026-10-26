@@ -60,6 +60,15 @@ jobs:
             xvfb \
             ffmpeg
 
+      # TODO(ffmpeg-sdk-hosting): FAIL-CLOSED INTERIM. This step still downloads
+      # the previous BtbN archive (3E47BDA1...), whose avformat-62.dll statically
+      # contains GPL Chromaprint + FFTW3. The pinned inventory now names the
+      # Syndocal self-built LGPL SDK (archive 81587fa0..., Actions run
+      # 40366564270), which has no durable download URL yet; hosting is an owner
+      # decision. Until this URI/hash are switched to that durable archive, the
+      # inventory-anchored "Stage Windows runtime libraries" step rejects these
+      # DLLs and the release-packaging guard below refuses the old avformat SHA,
+      # so no Windows bundle can ship the Chromaprint DLLs.
       - name: Install Windows video SDK
         if: runner.os == 'Windows'
         shell: pwsh
@@ -367,6 +376,36 @@ jobs:
               }
             }
           }
+
+      - name: Reject Chromaprint FFmpeg DLLs before release packaging
+        # TODO(ffmpeg-sdk-hosting): keep until the SDK download above points at
+        # the durable self-built LGPL archive; then keep it as a regression guard.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # avformat-62.dll of BtbN autobuild-2026-09-30-13-08 (static Chromaprint + FFTW3).
+          $rejected = 'BCF514A394DC5EC43FE64E4F1624BA63B23E9C25967081EA2D03D95B0DC359EF'
+          $candidates = @(
+            (Join-Path $env:GITHUB_WORKSPACE 'target/release/avformat-62.dll'),
+            (Join-Path $env:FFMPEG_DIR 'bin/avformat-62.dll')
+          )
+          foreach ($path in $candidates) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Release packaging guard cannot verify missing $path." }
+            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+            if ([StringComparer]::OrdinalIgnoreCase.Equals($hash, $rejected)) {
+              throw "Refusing release packaging: $path is the GPL Chromaprint/FFTW3 BtbN avformat-62.dll. Switch CI to the hosted self-built LGPL SDK (TODO ffmpeg-sdk-hosting)."
+            }
+          }
+          $inventory = Get-Content -LiteralPath 'qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json' -Raw | ConvertFrom-Json
+          foreach ($runtime in $inventory.runtime_dlls) {
+            $staged = Join-Path $env:GITHUB_WORKSPACE (Join-Path 'target/release' $runtime.filename)
+            $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($staged))
+            if ($text -match '(?i)chromaprint|fftw') {
+              throw "Refusing release packaging: $staged contains Chromaprint/FFTW strings."
+            }
+          }
+          Write-Host 'Staged FFmpeg DLLs are not the Chromaprint/FFTW3 build.'
 
       - name: Bundle Windows installers
         if: runner.os == 'Windows'

@@ -531,8 +531,10 @@ process was terminated. The first build attempt failed before native output
 because `FFMPEG_DIR` was unset and `ffmpeg-sys-next` rejected its unavailable
 pkg-config fallback; it is invalid as acceptance evidence. For this historical build, the then-existing
 FFmpeg 8.1.2 shared SDK, LLVM, and ASIO SDK paths were explicitly supplied. The
-current normal SDK pin is BtbN LGPL `n8.1.3-9-g29e619e767-20260930` (archive
-SHA-256 `3e47bda1607740550141e37c0e49d1e5182b34699f15adfd137ee266d346811a`); see
+current normal SDK pin is the Syndocal self-built LGPL
+`n8.1.3-9-g29e619e767-20260930-syndocal-r40366564270` without Chromaprint/FFTW3
+(archive SHA-256 `81587fa070a9fa2da3d8ff3e63beb9654729782bc8e9899ee951baf5fc5d9f1a`;
+durable hosting pending); see
 [the current build instructions](qa/WINDOWS_NATIVE_BUILD.md). For the historical build, exact
 Community MSVC `14.44.35207` remained first and absolutely pinned, and
 `pnpm --dir app tauri build --no-bundle` passed in `5m29s`, first-party warnings

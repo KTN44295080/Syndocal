@@ -735,3 +735,206 @@ this checkpoint. The built artifact and observed window are evidence for the
 stable owned bridge change, not acceptance of those later UI edits or the
 entire final shared working tree. No rebase, stash, reset, checkout, unrelated
 staging, hardware output, paid dependency or publication was performed.
+
+## Task 56 - LGPL self-built FFmpeg SDK without Chromaprint/FFTW3 - 2026-10-27
+
+Closes the Task 55 Part B binary blocker for the **local pin**. Codex built the
+candidate (`f23cc7e2`, `7d0af757`); Claude completed verification and the pin
+switch after Codex hit its usage limit. Evidence is retained under
+`target/qa/ffmpeg-selfbuild-20261027/` and the downloaded artifact under
+`%LOCALAPPDATA%\SyndocalDev\ffmpeg-lgpl-selfbuild-40366564270\`.
+
+### Workflow runs
+
+| Run | Commit | Result |
+| --- | --- | --- |
+| [40366564270](https://github.com/KTN44295080/Syndocal/actions/runs/40366564270) | `7d0af757` | Build **succeeded** (1h05m). Wine inspection and the seven-DLL `chromaprint\|fftw` scan passed; the step then failed only on `grep -F 'LGPL' license.txt`, because `ffmpeg -L` prints "GNU Lesser General Public License". Artifact `ffmpeg-lgpl-sdk-7d0af757...-40366564270` (id 12674399245, 116,996,507 bytes, expires 2027-01-24) uploaded |
+| [40377168832](https://github.com/KTN44295080/Syndocal/actions/runs/40377168832) | `3e390aae` | Rerun after the licence-check fix (see "Rerun status" below) |
+
+`3e390aae` makes `inspect-candidate.sh` fail on any `GNU General Public License`,
+`nonfree` or `not legally redistributable` wording, then require the
+Lesser GPL grant and `either version (2.1|3) of the License`. It was tested
+against the real run-40366564270 `license.txt` (exit 0) and a GPL-substituted
+copy (exit 1).
+
+### Candidate identity (adopted pin)
+
+- Inventory version `n8.1.3-9-g29e619e767-20260930-syndocal-r40366564270`;
+  `av_version_info()` reports `n8.1.3-9-g29e619e767-20260930` (fixed
+  `--extra-version`), `git describe` of the built source `n8.1.3-9-g29e619e767`.
+- SDK ZIP `ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip`,
+  79,353,186 bytes, SHA-256
+  `81587fa070a9fa2da3d8ff3e63beb9654729782bc8e9899ee951baf5fc5d9f1a`
+  (equal in the CI receipt and recomputed locally).
+- FFmpeg source tarball SHA-256
+  `8e4699bcb6a311772e8f513cc72ce27328891b82a598b82e7cff3dfe580875a0` (pinned).
+- Recipe: BtbN `6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b` plus
+  `tools/ffmpeg-sdk/0001-lgpl-without-chromaprint-fftw.patch`; base images
+  `base@sha256:91eaaaf3...` and `base-win64@sha256:8a3d189e...`
+  (created 2026-10-17); mingw GCC 16.2.0, rustc 1.99.1; built rav1e lock equals
+  the committed `rav1e.Cargo.lock`.
+
+| DLL | Old BtbN bytes | Candidate bytes | Candidate SHA-256 |
+| --- | ---: | ---: | --- |
+| `avcodec-62.dll` | 90,992,128 | 90,940,416 | `0954bd519a2c7a1dbe596440b8d84abfd0de45472143612a9a4ad72c3ca672d1` |
+| `avdevice-62.dll` | 4,947,456 | 4,947,456 | `69a0646a626b1c60b25f2435c42cd62bd9266264235a72de252a9931367e482e` |
+| `avfilter-11.dll` | 31,212,544 | 31,212,544 | `bec4350bb5bc9196a344fcdccec095017b2d28f4bf3439cf00fe325fee75bac5` |
+| `avformat-62.dll` | 22,722,560 | 19,531,264 | `6dc37e85d82a112bef743b7d07e965723250c17a4407068cb80cf05beaa3166b` |
+| `avutil-60.dll` | 3,014,144 | 3,013,632 | `df1408834ab806417f2314400c12287af875c07a1c74a2c3f29fd32c6e6bcf1c` |
+| `swresample-6.dll` | 734,720 | 734,720 | `235ef70cc3d9faa72a42504ae7c1deef39bded6ba4af5cb247886ac57f1a60c8` |
+| `swscale-9.dll` | 12,900,864 | 12,900,864 | `19873bf3978f3891c5c92f278115ea444a4dbf7502881127d6f37b953f472070` |
+
+All seven are PE32+ AMD64 DLLs with the anchored identity (characteristics
+0x222e). avformat shrinks by 3,191,296 bytes (Chromaprint + FFTW3 payload).
+The small avcodec/avutil differences come from rebuilding all dependencies with
+the newer digest-pinned toolchain image; byte-identical reproduction of the
+BtbN pin was not a goal and is not claimed.
+
+### Absence proof (native Windows, `tools/ffmpeg-sdk/verify-candidate.py`)
+
+`verify-candidate.py` (committed with this checkpoint) probes each SDK in its
+own Python process via `ctypes`, runs the SDK CLI, and fails closed on any
+mismatch. It exited **0** (`status: PASS`). Evidence: `evidence/`.
+
+- Configure (`avcodec_configuration()` == `avformat_configuration()` ==
+  `-buildconf`): identical to the old pin except `--enable-chromaprint` removed;
+  no `--enable-gpl`, `--enable-nonfree` or `--enable-chromaprint`; nothing added.
+- `avutil_license()` = `avformat_license()` = `LGPL version 3 or later`;
+  `ffmpeg -L` states the GNU Lesser General Public License, version 3 or later.
+- Muxers: 184 to 183; only `chromaprint` removed (CLI and `av_muxer_iterate()`).
+- Strings: **0** case-insensitive ASCII and **0** UTF-16LE `chromaprint|fftw`
+  matches in each of the seven DLLs; also 0 in `ffmpeg.exe`, `ffprobe.exe`,
+  `ffplay.exe`, `include/` and `lib/`. Old pin for contrast: avformat 1,034
+  ASCII matches, each other DLL 1 (the configure string). The CI scan agrees.
+
+### Decoder / hwaccel diff
+
+- Decoders: 541 old, 541 candidate; **none removed, none added**. Required
+  `h264`, `hevc`, `hap`, `dxv`, `prores`, `vp9`, `av1`, `libdav1d` present.
+- Per-decoder `avcodec_get_hw_config()` (device, methods, pix_fmt): **equal**
+  for every decoder.
+- `-hwaccels`: identical, `cuda vaapi dxva2 qsv d3d11va opencl vulkan d3d12va amf`.
+- No Chromaprint-related decoder exists, so the only capability change is the
+  muxer above.
+
+### Regressions (isolated)
+
+Source: `git archive 3e390aae` into
+`target/qa/ffmpeg-selfbuild-20261027/src-3e390aae/` (excludes the concurrent
+uncommitted video-test edits). `CARGO_TARGET_DIR` =
+`target/qa/ffmpeg-selfbuild-20261027/cargo-target`; vcvars64
+`-vcvars_ver=14.44` with the absolute MSVC **14.44.35207** linker first in
+`where.exe link.exe`; `FFMPEG_DIR` = the candidate SDK, its `bin` prepended to
+the process PATH. Every run executed
+`cargo-target\release\deps\video-18d7cd16daf234a5.exe` (SHA-256
+`a1dc916255bc21eb74739691dd881997624f741db0c932bc04386114514e7094`, 600 tests),
+as printed by Cargo in each log (`tests/*.log`, `tests/results.json`).
+
+| `cargo test -p video --features libav --release --lib ...` | Exit | Passed | Failed | Ignored |
+| --- | ---: | ---: | ---: | ---: |
+| `libav_` | 0 | 44 | 0 | 6 |
+| `hap` | 0 | 13 | 0 | 1 |
+| `parallel_decode_tests` | 0 | 18 | 0 | 1 |
+| `hardware` | 0 | 4 | 0 | 3 |
+| `real_ -- --ignored` (H.264 1080p30 fixture, real D3D11VA GPU) | 0 | 5 | 0 | 0 |
+| `real_ -- --ignored` (HEVC 1080p30 fixture, real D3D11VA GPU) | 0 | 5 | 0 | 0 |
+| `d3d11va_invalid_adapter -- --ignored` (adapter 2147483647) | 0 | 1 | 0 | 0 |
+
+The real-GPU runs skip only `task20_decode_demand_benchmark` and the separately
+run invalid-adapter test, as in Task 53. They cover catch-up two-output
+cadence, fifty in-place loop rewinds, D3D11VA seek/reuse/teardown, seek
+projection against the eager oracle and output-preview session reuse. GPU
+fixtures are the Task 53 `gpu-h264-1080p30-8s.mp4` (SHA-256 `3a5907c8...`) and
+`gpu-hevc-1080p30-8s.mp4` (`b5cb26f7...`).
+
+DLL provenance: no FFmpeg DLL exists in the Cargo target or System32. The same
+test binary run with PATH = candidate `bin`;System32;Windows passed `libav_`
+44/0/6; with PATH = System32;Windows only, it exited `0xC0000135`
+(`STATUS_DLL_NOT_FOUND`). The tests therefore loaded the candidate DLLs
+(`tests/dll-provenance.txt`).
+
+### Framecrc equivalence
+
+The 11 Task 53 fixtures (`decode-equivalence-v2/`, fixture SHA-256s verified)
+were decoded with `-threads 1 -map 0:v:0 -f framecrc` by the old pin and the
+candidate: **11/11 identical**, 60 frame records each (DXV DXT1, HAP, HAP Alpha,
+HAP Q, ProRes HQ, H.264 OpenH264, H.264 x264, HEVC x265, HEVC 10-bit x265, VP9,
+AV1); all decodes exited 0. Both outputs also match the Task 53 old-pin
+`.old.framecrc` records byte-for-byte (22/22).
+
+### Pin decision: switched (local)
+
+All acceptance gates passed, so the local pin now names the candidate:
+
+- `qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json` and the independent anchors in
+  `app/scripts/windows-runtime-inventory.mjs` (provenance, configure, seven DLL
+  sizes/SHA-256, notice resource identities). `archive_url` is the Actions
+  artifact URL, an interim locator.
+- `app/scripts/resolve-pinned-ffmpeg-sdk.mjs` default root
+  `target/qa/ffmpeg-selfbuild-20261027/sdk/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1`.
+  The old Chromaprint SDK is now rejected as an `FFMPEG_DIR` override (exit 1).
+- `qa/WINDOWS_NATIVE_BUILD.md`, `THIRD_PARTY_NOTICES.md` (6,899 bytes,
+  `e94a15bc2bcdd46626873a5227ce0b58b1f96174a6c32c5acb3011c8fda93f11`),
+  `RELEASE_STATUS.md` pin sentence and `tools/ffmpeg-sdk/README.md`.
+- `generate-ffmpeg-dependency-notices.py` excludes the deleted `chromaprint` and
+  `fftw3` recipes (fail-closed if their receipts are not exactly present) and
+  records them in `excluded_disabled_recipes`; limitations updated for the
+  removed recipes and the locked rav1e build. Regenerated aggregate: sources
+  104 to 102, notices 1,399 to 1,390, `licenses/FFmpeg-DEPENDENCIES.txt`
+  2,692,678 to 2,662,745 bytes, SHA-256
+  `dc70e08c2a19eb52b3a7e5b6faf6ac1d9ab30bd44e72f7936f28e8d1c8ef8875`; no
+  Chromaprint/FFTW text remains apart from the header limitation.
+- `target/release` was restaged from the candidate with
+  `pnpm --dir app run prepare:runtime-libs` (exit 0, MSVC 14.44 environment).
+- CI (`.github/workflows/cross-platform.yml`) still downloads the old BtbN
+  archive because the candidate has no durable URL. A
+  `TODO(ffmpeg-sdk-hosting)` block marks it. The new "Reject Chromaprint FFmpeg
+  DLLs before release packaging" step refuses the old avformat SHA-256
+  (`bcf514a3...`) in `target/release` or `FFMPEG_DIR`, and any
+  `chromaprint|fftw` string in the seven staged DLLs, before
+  `Bundle Windows installers`. Because the anchors changed, the old SDK already
+  fails earlier at `Stage Windows runtime libraries`. **The hosted Windows job
+  is therefore expected to fail closed until CI downloads the hosted
+  candidate.** No GitHub release or tag was created.
+
+### Checks
+
+| Check | Exit | Observed |
+| --- | ---: | --- |
+| `verify-candidate.py` (capabilities + 11 framecrc) | 0 | PASS |
+| `python app/scripts/generate-ffmpeg-dependency-notices.py --check` | 0 | 102 sources, 577 crates, 1,390 notices, 0 unresolved |
+| `node app/scripts/resolve-pinned-ffmpeg-sdk.mjs` (FFMPEG_DIR unset) | 0 | resolves the candidate root |
+| same, `FFMPEG_DIR` = old BtbN SDK | 1 | rejected (expected) |
+| `node app/scripts/test-resolve-pinned-ffmpeg-sdk.mjs` | 0 | 23 checks |
+| `node app/scripts/check-asio-packaging.mjs` | 0 | 175 assertions |
+| `node app/scripts/check-windows-release-artifacts.mjs --self-test` | 0 | 160 + 4 assertions |
+| `pnpm --dir app run prepare:runtime-libs` (candidate `FFMPEG_DIR`) | 0 | seven candidate DLLs staged |
+| `npm --prefix app run check:release` | 0 | 55 package scripts; ends `release metadata ok: Syndocal 1.2.0-alpha.82`; verifies the seven staged candidate DLLs and new notice identities. Run on the shared working tree, which also held uncommitted UI-lane edits |
+
+The user environment sets a global `FFMPEG_DIR` to an unrelated
+`ffmpeg-n8.1-latest` SDK; the resolver correctly rejects it, so the checks
+above unset it or point it at the candidate explicitly.
+
+### Rerun status
+
+Run 40377168832 was still building when this checkpoint was committed and was
+not awaited. The adopted pin rests on the run-40366564270 artifact verified
+natively above; the rerun only proves the corrected inspection step end to end.
+Its result belongs in the next checkpoint.
+
+### Remaining work
+
+1. **Durable hosting** of the candidate ZIP and its corresponding source
+   (owner decision). Then switch the CI download URI/hash and `archive_url`,
+   and keep the release-packaging guard as a regression check. The Actions
+   artifact expires 2027-01-24; copy it before then.
+2. Until (1), the hosted Windows CI job fails closed; local builds use the
+   candidate.
+3. Task 54 limitations still apply: exact binary dependency closure, crate
+   notices for the rav1e lock deltas (cc 1.10.0, find-msvc-tools, shlex),
+   embedded per-file notices, OpenH264 patent policy, and complete
+   corresponding-source preservation. Byte-reproducibility of the self-build is
+   not demonstrated.
+4. A native `tauri build` and launch with the candidate DLLs beside the
+   executable were not repeated in this task; the video-crate regressions and
+   framecrc matrix are the acceptance evidence.

@@ -32,9 +32,17 @@ and upstream recipe references to named source tags still require provenance
 review. The digest-pinned base image is not independently reconstructed here.
 This is not complete corresponding-source/license closure or publication approval.
 
-Download only this workflow's successful run, verify ZIP/DLL identities and
-capabilities against the current pin, then run isolated Windows regressions
-and the Task 53 fixture matrix before considering adoption. Workflow artifacts
-expire and are not an approved durable SDK download URL. Keep inventory,
-resolver, notices and CI on the existing pin until hosting permits one clean,
-consistent switch; record the verified candidate identity in the QA checkpoint.
+Download only this workflow's run, verify ZIP/DLL identities and capabilities
+against the current pin with `verify-candidate.py` (separate Python processes
+per DLL set; it also runs the Task 53 framecrc matrix), then run isolated
+Windows regressions before adoption. Workflow artifacts expire and are not an
+approved durable SDK download URL.
+
+Run 40366564270 (commit `7d0af757`) produced the adopted candidate, archive
+SHA-256 `81587fa070a9fa2da3d8ff3e63beb9654729782bc8e9899ee951baf5fc5d9f1a`.
+Its build and DLL scan passed; the step failed only on the literal `LGPL`
+grep, fixed in `inspect-candidate.sh`. The local inventory, resolver, notices
+and build documentation now name this SDK. CI still downloads the previous
+BtbN archive until durable hosting exists; that SDK fails closed at runtime
+staging and at the release-packaging guard (`TODO(ffmpeg-sdk-hosting)` in
+`.github/workflows/cross-platform.yml`).

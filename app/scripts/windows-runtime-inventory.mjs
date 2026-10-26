@@ -43,32 +43,33 @@ export const anchoredAmd64PeIdentity = Object.freeze({
   optional_magic: 0x20b,
 });
 
-// Measured from the hash-verified monthly LGPL shared archive; independent of inventory edits.
+// Measured from the hash-verified Syndocal self-built LGPL shared archive (Actions run
+// 40366564270, Chromaprint/FFTW3 recipes removed); independent of inventory edits.
 export const canonicalPinnedFfmpegBuild = Object.freeze({
-  "version": "n8.1.3-9-g29e619e767-20260930",
-  "archive_url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip",
-  "archive_sha256": "3e47bda1607740550141e37c0e49d1e5182b34699f15adfd137ee266d346811a",
+  "version": "n8.1.3-9-g29e619e767-20260930-syndocal-r40366564270",
+  "archive_url": "https://github.com/KTN44295080/Syndocal/actions/runs/40366564270/artifacts/12674399245",
+  "archive_sha256": "81587fa070a9fa2da3d8ff3e63beb9654729782bc8e9899ee951baf5fc5d9f1a",
   "license": "LGPL version 3 or later",
-  "configure": "--prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-config --cross-prefix=x86_64-w64-mingw32- --arch=x86_64 --target-os=mingw32 --enable-version3 --disable-debug --enable-shared --disable-static --disable-w32threads --enable-pthreads --enable-iconv --enable-zlib --enable-libxml2 --enable-libvmaf --enable-fontconfig --enable-libharfbuzz --enable-libfreetype --enable-libfribidi --enable-vulkan --enable-libshaderc --enable-libdav1d --enable-libvorbis --enable-librav1e --enable-librsvg --disable-libxcb --disable-xlib --disable-libpulse --enable-gmp --enable-lzma --enable-liblcevc-dec --enable-opencl --enable-amf --enable-libaom --disable-avisynth --enable-chromaprint --disable-libdavs2 --disable-libdvdread --disable-libdvdnav --disable-libfdk-aac --enable-ffnvcodec --enable-cuda-llvm --disable-frei0r --enable-libgme --enable-libkvazaar --enable-libaribb24 --enable-libaribcaption --enable-libass --enable-libbluray --enable-libjxl --enable-libmp3lame --enable-libopus --enable-libplacebo --enable-librist --enable-libssh --enable-libtheora --enable-libvpx --enable-libwebp --enable-libzmq --enable-lv2 --enable-libvpl --enable-openal --enable-liboapv --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenh264 --enable-libopenjpeg --enable-libopenmpt --disable-librubberband --enable-schannel --enable-sdl2 --enable-libsnappy --enable-libsoxr --enable-libsrt --enable-libsvtav1 --enable-libtwolame --enable-libuavs3d --disable-libdrm --enable-vaapi --disable-libvidstab --enable-libvvenc --disable-whisper --disable-libx264 --disable-libx265 --disable-libxavs2 --disable-libxvid --enable-libzimg --enable-libzvbi --extra-cflags=-DLIBTWOLAME_STATIC --extra-cxxflags= --extra-libs=-lgomp --extra-ldflags=-pthread --extra-ldexeflags= --cc=x86_64-w64-mingw32-gcc --cxx=x86_64-w64-mingw32-g++ --ar=x86_64-w64-mingw32-gcc-ar --ranlib=x86_64-w64-mingw32-gcc-ranlib --nm=x86_64-w64-mingw32-gcc-nm --extra-version=20260930",
+  "configure": "--prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-config --cross-prefix=x86_64-w64-mingw32- --arch=x86_64 --target-os=mingw32 --enable-version3 --disable-debug --enable-shared --disable-static --disable-w32threads --enable-pthreads --enable-iconv --enable-zlib --enable-libxml2 --enable-libvmaf --enable-fontconfig --enable-libharfbuzz --enable-libfreetype --enable-libfribidi --enable-vulkan --enable-libshaderc --enable-libdav1d --enable-libvorbis --enable-librav1e --enable-librsvg --disable-libxcb --disable-xlib --disable-libpulse --enable-gmp --enable-lzma --enable-liblcevc-dec --enable-opencl --enable-amf --enable-libaom --disable-avisynth --disable-libdavs2 --disable-libdvdread --disable-libdvdnav --disable-libfdk-aac --enable-ffnvcodec --enable-cuda-llvm --disable-frei0r --enable-libgme --enable-libkvazaar --enable-libaribb24 --enable-libaribcaption --enable-libass --enable-libbluray --enable-libjxl --enable-libmp3lame --enable-libopus --enable-libplacebo --enable-librist --enable-libssh --enable-libtheora --enable-libvpx --enable-libwebp --enable-libzmq --enable-lv2 --enable-libvpl --enable-openal --enable-liboapv --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenh264 --enable-libopenjpeg --enable-libopenmpt --disable-librubberband --enable-schannel --enable-sdl2 --enable-libsnappy --enable-libsoxr --enable-libsrt --enable-libsvtav1 --enable-libtwolame --enable-libuavs3d --disable-libdrm --enable-vaapi --disable-libvidstab --enable-libvvenc --disable-whisper --disable-libx264 --disable-libx265 --disable-libxavs2 --disable-libxvid --enable-libzimg --enable-libzvbi --extra-cflags=-DLIBTWOLAME_STATIC --extra-cxxflags= --extra-libs=-lgomp --extra-ldflags=-pthread --extra-ldexeflags= --cc=x86_64-w64-mingw32-gcc --cxx=x86_64-w64-mingw32-g++ --ar=x86_64-w64-mingw32-gcc-ar --ranlib=x86_64-w64-mingw32-gcc-ranlib --nm=x86_64-w64-mingw32-gcc-nm --extra-version=20260930",
   "source_url": "https://github.com/FFmpeg/FFmpeg/archive/29e619e767cde9045a75c29bc9a8278ae7b3a98b.tar.gz",
-  "build_recipe_url": "https://github.com/BtbN/FFmpeg-Builds/tree/6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b"
+  "build_recipe_url": "https://github.com/KTN44295080/Syndocal/tree/7d0af757f73231fc0c6006d6c21c72c14cb4a31a/tools/ffmpeg-sdk"
 });
 
 export const canonicalPinnedRuntimeIdentity = Object.freeze(new Map([
-  ["avcodec-62.dll", Object.freeze({ byte_size: 90992128, sha256: "4f817870cfaeaced3e34a083c50a1b4be0389202d7fb821632d47cf9b3f4d82a" })],
-  ["avdevice-62.dll", Object.freeze({ byte_size: 4947456, sha256: "34bc695cfdd3106de29551c6868f1c2cdc0fa36903494506f1708251e6a3075e" })],
-  ["avfilter-11.dll", Object.freeze({ byte_size: 31212544, sha256: "28e202431dc0643af97c307dc6437da13f8c08aa016fc28d1f9ec8fd0336e172" })],
-  ["avformat-62.dll", Object.freeze({ byte_size: 22722560, sha256: "bcf514a394dc5ec43fe64e4f1624ba63b23e9c25967081ea2d03d95b0dc359ef" })],
-  ["avutil-60.dll", Object.freeze({ byte_size: 3014144, sha256: "481620c7b5cd8e831a50762fae55699c821091e96c42226d04fee725a4aae2f5" })],
-  ["swresample-6.dll", Object.freeze({ byte_size: 734720, sha256: "3baad8ac0c8f0050cfd5742f5104603a27127397521409bf7d1742e6d02f955b" })],
-  ["swscale-9.dll", Object.freeze({ byte_size: 12900864, sha256: "d217a08bcd92b3a4b7ecb02e841724460a5c94a103d957370cfe75e892ac3dc2" })],
+  ["avcodec-62.dll", Object.freeze({ byte_size: 90940416, sha256: "0954bd519a2c7a1dbe596440b8d84abfd0de45472143612a9a4ad72c3ca672d1" })],
+  ["avdevice-62.dll", Object.freeze({ byte_size: 4947456, sha256: "69a0646a626b1c60b25f2435c42cd62bd9266264235a72de252a9931367e482e" })],
+  ["avfilter-11.dll", Object.freeze({ byte_size: 31212544, sha256: "bec4350bb5bc9196a344fcdccec095017b2d28f4bf3439cf00fe325fee75bac5" })],
+  ["avformat-62.dll", Object.freeze({ byte_size: 19531264, sha256: "6dc37e85d82a112bef743b7d07e965723250c17a4407068cb80cf05beaa3166b" })],
+  ["avutil-60.dll", Object.freeze({ byte_size: 3013632, sha256: "df1408834ab806417f2314400c12287af875c07a1c74a2c3f29fd32c6e6bcf1c" })],
+  ["swresample-6.dll", Object.freeze({ byte_size: 734720, sha256: "235ef70cc3d9faa72a42504ae7c1deef39bded6ba4af5cb247886ac57f1a60c8" })],
+  ["swscale-9.dll", Object.freeze({ byte_size: 12900864, sha256: "19873bf3978f3891c5c92f278115ea444a4dbf7502881127d6f37b953f472070" })],
 ]));
 
 export const canonicalPinnedCommonResourceIdentity = Object.freeze(new Map([
-  ["../../THIRD_PARTY_NOTICES.md\0THIRD_PARTY_NOTICES.md", Object.freeze({ byte_size: 6424, sha256: "cc23de6fc1ba0a3d5d47a80df76f02abbafd71e55e1e9fb1953049c3bd9cfe28" })],
+  ["../../THIRD_PARTY_NOTICES.md\0THIRD_PARTY_NOTICES.md", Object.freeze({ byte_size: 6899, sha256: "e94a15bc2bcdd46626873a5227ce0b58b1f96174a6c32c5acb3011c8fda93f11" })],
   ["../../licenses/FFmpeg-LGPL-3.0.txt\0licenses/FFmpeg-LGPL-3.0.txt", Object.freeze({ byte_size: 7652, sha256: "97628afebc60f026f5c2b25d7491c46a5c4ee61f693e7cfa07fbd2c03605979b" })],
   ["../../licenses/GPL-3.0.txt\0licenses/GPL-3.0.txt", Object.freeze({ byte_size: 35147, sha256: "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903" })],
-  ["../../licenses/FFmpeg-DEPENDENCIES.txt\0licenses/FFmpeg-DEPENDENCIES.txt", Object.freeze({ byte_size: 2692678, sha256: "0f2facc3e4f3e388a6ccafc5c3e568424e8e9338be250f53f5fd301d3f34ec26" })],
+  ["../../licenses/FFmpeg-DEPENDENCIES.txt\0licenses/FFmpeg-DEPENDENCIES.txt", Object.freeze({ byte_size: 2662745, sha256: "dc70e08c2a19eb52b3a7e5b6faf6ac1d9ab30bd44e72f7936f28e8d1c8ef8875" })],
   ["../../licenses/Spout2-BSD-2-Clause.txt\0licenses/Spout2-BSD-2-Clause.txt", Object.freeze({ byte_size: 2726, sha256: "04514504b4636462450722a84452b6fe5f671d1f74f22d68867256267f3030f6" })],
   ["../../licenses/bcdec_rs-MIT.txt\0licenses/bcdec_rs-MIT.txt", Object.freeze({ byte_size: 1060, sha256: "0194fa871df6d82a26d58f3b6e035bed033afdc413e2a6ac0ae2f15b7becbb20" })],
 ]));

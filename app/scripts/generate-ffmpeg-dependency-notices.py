@@ -11,11 +11,15 @@ import json
 import pathlib
 
 RECIPE = "6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b"
-BUILD = "n8.1.3-9-g29e619e767-20260930"
+BUILD = "n8.1.3-9-g29e619e767-20260930-syndocal-r40366564270"
+# Syndocal commit whose tools/ffmpeg-sdk patch and workflow built the pinned SDK.
+RECIPE_PATCH = "7d0af757f73231fc0c6006d6c21c72c14cb4a31a:tools/ffmpeg-sdk/0001-lgpl-without-chromaprint-fftw.patch"
+# Recipes deleted by RECIPE_PATCH; their sources are not built or linked.
+DISABLED_RECIPES = ("chromaprint", "fftw3")
 LIMITATIONS = [
     "Publication blocked: source-candidate collection is not exact binary dependency closure.",
-    "Pinned chromaprint recipe selects -DFFT_LIB=fftw3 and -lfftw3; pinned FFTW3 COPYRIGHT grants GPL-2.0-or-later. Reconcile this with the DLL LGPL self-description before distribution.",
-    "rav1e recipe runs cargo update cc without a version. The final build Cargo.lock, resolved Cargo features, target-filtered graph, link map and build image digest are not retained.",
+    "The Chromaprint and FFTW3 recipes are deleted by the Syndocal recipe patch, and the final configure omits --enable-chromaprint. Their notices are deliberately omitted. A scan of all seven pinned DLLs found zero ASCII or UTF-16LE chromaprint/fftw strings; this does not by itself prove complete binary closure.",
+    "The rav1e recipe now builds with the committed tools/ffmpeg-sdk/rav1e.Cargo.lock (--locked; cc 1.10.0, adds find-msvc-tools 0.1.15 and shlex 2.0.1), and the base images are digest-pinned. Crate candidates below were collected from the original pinned locks and are not regenerated for those lock deltas. Resolved Cargo features, the target-filtered graph and link maps are not retained.",
     "All 577 registry package versions in the two pinned source Cargo.lock files are conservative candidates, including build/dev/other-platform dependencies. Cargo.lock membership is not proof of linkage. Crate archives are verified against the lockfile SHA-256 checksum.",
     "Pinned source candidates include unlinked documentation/tests/build tooling and SDK variants. Source-tree notices are deliberately overinclusive and do not assert that every described license applies to the DLLs.",
     "The original collector has no supported archive endpoint for several pinned repositories; this is a collector limitation, not proof the sources are unavailable. Missing texts are explicit in unresolved_sources. Provenance URLs do not replace notice text.",
@@ -27,8 +31,8 @@ LIMITATIONS = [
 ]
 HEADER = """FFmpeg dependency notices - bounded pinned-source collection
 ======================================================================
-Build: BtbN {build}, win64 LGPL shared 8.1.
-Recipe: {recipe}.
+Build: {build}, win64 LGPL shared 8.1.
+Recipe: BtbN FFmpeg-Builds {recipe} with Syndocal patch {patch}.
 
 PUBLICATION BLOCKED. This file reproduces available full license texts and
 notices from pinned source candidates. It does not establish exact binary
@@ -63,6 +67,11 @@ def build(evidence: pathlib.Path) -> tuple[bytes, bytes]:
     # Linux-only recipes are explicitly excluded by their ffbuild_enabled guards.
     excluded = [s for s in sources if s["name"] in ("libpciaccess", "libdrm")]
     sources = [s for s in sources if s["name"] not in ("libpciaccess", "libdrm")]
+    # The pinned SDK is built without these recipes; see RECIPE_PATCH.
+    disabled = [s for s in sources if s["name"] in DISABLED_RECIPES]
+    if sorted(s["name"] for s in disabled) != sorted(DISABLED_RECIPES):
+        raise ValueError("Disabled recipe receipts are not exactly " + ", ".join(DISABLED_RECIPES))
+    sources = [s for s in sources if s["name"] not in DISABLED_RECIPES]
     # The recipe's pinned gnulib mirror was fetched successfully as a supplement.
     sources = [s for s in sources if s["name"] != "libiconv-loader"]
     raw_receipt = evidence / "missing-source-receipts.json"
@@ -71,12 +80,13 @@ def build(evidence: pathlib.Path) -> tuple[bytes, bytes]:
         resolved_names = {s["name"] for s in resolved}
         sources = [s for s in sources if s["name"] not in resolved_names] + resolved
     crates = json.loads((evidence / "crate-receipts.json").read_text(encoding="utf-8"))
-    intro = HEADER.format(build=BUILD, recipe=RECIPE, limits="\n".join("- " + x for x in LIMITATIONS))
+    intro = HEADER.format(build=BUILD, recipe=RECIPE, patch=RECIPE_PATCH, limits="\n".join("- " + x for x in LIMITATIONS))
     sections = [intro]
     shared_texts = {}
-    manifest = {"schema_version": 1, "build": BUILD, "recipe_commit": RECIPE,
+    manifest = {"schema_version": 1, "build": BUILD, "recipe_commit": RECIPE, "recipe_patch": RECIPE_PATCH,
                 "closure_status": "incomplete-publication-blocked", "limitations": LIMITATIONS,
-                "sources": [], "excluded_linux_only_recipes": excluded, "registry_crate_candidates": [], "unresolved_sources": [],
+                "sources": [], "excluded_linux_only_recipes": excluded,
+                "excluded_disabled_recipes": [{k: v for k, v in s.items() if k != "files"} for s in disabled], "registry_crate_candidates": [], "unresolved_sources": [],
                 "crate_archives_without_license_documents": [], "sources_without_license_documents": [], "notice_count": 0}
     for kind, items in (("source", sources), ("crate", crates)):
         for source in sorted(items, key=lambda x: (x["name"], x.get("version", ""))):

@@ -2,15 +2,18 @@
 
 Syndocal dynamically links FFmpeg shared libraries for video decoding, including
 H.264, H.265, HAP, DXV, ProRes, VP9 and AV1. The normal Windows variant uses
-BtbN FFmpeg `n8.1.3-9-g29e619e767-20260930`, reporting LGPL version 3 or later.
-Its measured configure line enables shared libraries and version 3 licensing,
-and contains neither `--enable-gpl` nor `--enable-nonfree`.
-The upstream LGPL self-description is not a completed license audit:
-the pinned Chromaprint recipe selects GPL-2.0-or-later FFTW3, and rav1e's
-build updates Rust dependencies without a final archived build lockfile.
-Publication is blocked until actual build inputs/linkage and the resulting
-license obligations are reconciled; the collected notices do not grant release
-clearance or establish exact binary dependency closure.
+FFmpeg `n8.1.3-9-g29e619e767`, self-built by Syndocal's GitHub Actions workflow
+from the BtbN FFmpeg-Builds recipe with the Chromaprint and FFTW3 recipes
+removed (inventory version `n8.1.3-9-g29e619e767-20260930-syndocal-r40366564270`;
+the DLLs self-report `n8.1.3-9-g29e619e767-20260930`), reporting LGPL version 3
+or later. Its measured configure line enables shared libraries and version 3
+licensing, and contains neither `--enable-gpl`, `--enable-nonfree` nor
+`--enable-chromaprint`; none of the seven DLLs contains a Chromaprint or FFTW
+string. The upstream LGPL self-description is not a completed license audit.
+Publication is blocked until the exact SDK archive has durable hosting and the
+actual build inputs/linkage and resulting license obligations are reconciled;
+the collected notices do not grant release clearance or establish exact binary
+dependency closure.
 
 - Project: FFmpeg
 - Copyright (c) 2000-2026 the FFmpeg developers
@@ -18,10 +21,13 @@ clearance or establish exact binary dependency closure.
 - License texts: `licenses/FFmpeg-LGPL-3.0.txt` and `licenses/GPL-3.0.txt`
   (the LGPLv3 incorporates the GPLv3 terms)
 - Dependency license texts and source provenance: `licenses/FFmpeg-DEPENDENCIES.txt`
-- Exact Windows binary archive: https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip
-- Archive SHA-256: `3e47bda1607740550141e37c0e49d1e5182b34699f15adfd137ee266d346811a`
+- Exact Windows binary archive: `ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip`
+  inside workflow artifact https://github.com/KTN44295080/Syndocal/actions/runs/40366564270/artifacts/12674399245
+  (interim, expires 2027-01-24; durable hosting is pending)
+- Archive SHA-256: `81587fa070a9fa2da3d8ff3e63beb9654729782bc8e9899ee951baf5fc5d9f1a`
 - Exact FFmpeg source: https://github.com/FFmpeg/FFmpeg/archive/29e619e767cde9045a75c29bc9a8278ae7b3a98b.tar.gz
 - Build recipes, dependency source revisions and patches: https://github.com/BtbN/FFmpeg-Builds/tree/6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b
+  with the Syndocal patch, lock and workflow at https://github.com/KTN44295080/Syndocal/tree/7d0af757f73231fc0c6006d6c21c72c14cb4a31a/tools/ffmpeg-sdk
 - Full measured configuration and per-DLL identities:
   `qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json` in the Syndocal source distribution
 
