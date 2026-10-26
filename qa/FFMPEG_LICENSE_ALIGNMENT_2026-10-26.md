@@ -1,6 +1,11 @@
 # FFmpeg license alignment - Task 53 - 2026-10-26
 
-Status: pin switched to the BtbN LGPL 8.1 shared build and committed. Focused
+Current status (Task 54, 2026-10-27): **publication blocked**. The pinned
+Chromaprint recipe selects GPL FFTW3; the DLL LGPL self-description is not
+proof of the transitive license boundary. Exact Rust build lockfiles are also
+unavailable. See the Task 54 checkpoint below.
+
+Task 53 historical status: pin switched to the BtbN LGPL 8.1 shared build and committed. Focused
 decode regressions pass on an isolated `git archive HEAD` copy built against the
 new SDK; real D3D11VA cases pass on the local GPU; the notice/inventory checks
 pass. The release-wide gates that still fail (`check-release-metadata`,
@@ -361,3 +366,171 @@ Exactly the eight owned files were staged and committed. Remaining owners:
 Do not change other owners' work or the protected normal exe/DLLs.
 Isolated installer resource paths need separate proof: the regular bundling hook
 still stages target/release; no-bundle trial does not exercise it.
+
+
+## Task 54 - release notices and checker drift - 2026-10-27
+
+Original checkout `main`, initial base `0a40de3e3c3b69700dcae119d34d2645ba376882`.
+Owned work: common license resources and exact byte anchors; two native harness
+SDK resolvers; release checker drift; current SDK clarification in release status.
+Concurrent video/UI files remain outside this task. No codec, product version,
+Cargo feature, encoder selection or normal executable change. The seven normal
+staged DLLs were refreshed to the existing pin for release checks after
+confirming no Syndocal process was running; prior DLLs/hashes are preserved in
+`target/qa/task54-release-notices/normal-runtime-before/` and its JSON receipt.
+Local evidence: `target/qa/task54-release-notices/`.
+
+The GPLv3 full text comes verbatim from `COPYING.GPLv3` in the hash-verified
+FFmpeg source archive at `29e619e767cde9045a75c29bc9a8278ae7b3a98b`:
+35,147 bytes, SHA-256 `8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903`.
+It accompanies LGPLv3 under section 4(b). The dependency notice collection is a
+bounded collection of pinned source candidates, with full license texts and
+provenance; it is explicitly **not** an exact binary SBOM or publication clearance.
+Collection: 104 source candidates and 577 Cargo.lock-checksum-verified crate
+candidates; 1,399 notice records, 522 unique full documents and 877 in-file
+references to identical texts. Aggregate: 2,692,678 bytes, SHA-256
+`0f2facc3e4f3e388a6ccafc5c3e568424e8e9338be250f53f5fd301d3f34ec26`.
+The source-only JSON records per-source revisions and hashes.
+`generate-ffmpeg-dependency-notices.py --check` deterministically verifies the
+retained evidence offline. Both license texts are common Tauri resources,
+pinned by independent code/inventory identities
+and LF Git attributes. Common resources increase from four to six; runtime DLLs
+remain the same seven. Artifact tests require both new files and reject missing
+or same-size corrupted copies.
+
+### Blocking findings and publication policy
+
+- P1, transitive GPL conflict: pinned recipe
+  [`50-chromaprint.sh`](https://github.com/BtbN/FFmpeg-Builds/blob/6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b/scripts.d/50-chromaprint.sh)
+  enables Chromaprint on FFmpeg >=6, builds it with `-DFFT_LIB=fftw3`, and adds
+  `-lfftw3`. [`25-fftw3.sh`](https://github.com/BtbN/FFmpeg-Builds/blob/6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b/scripts.d/25-fftw3.sh)
+  selects `93ed4c786934aec9946f8dda4b4e3eb08f8be41c`, static-only.
+  That source grants GPL-2.0-or-later. This supports a blocking provenance/license
+  conflict, not proof of every actual linker input. Do not claim that avutil's
+  `LGPL version 3 or later` string resolves it. Obtain the actual build link map
+  and inputs or select and reaccept a demonstrably suitable SDK in a separate
+  authorized change. Merely shipping GPL text does not resolve the boundary.
+- P1, exact dependency attribution remains pending: rav1e's pinned recipe runs
+  `cargo update cc`; the final build lockfiles and link map are unavailable.
+  Source-tree licenses can include unused code. Four source candidates have no
+  named license document (three NV codec headers plus simd_helpers). Sixteen
+  crate archives have no named license document; pinned upstream supplements
+  cover eight, while `block`, `difflib`, `malloc_buf`, `objc-foundation`,
+  `objc_id`, `simd_helpers` and both winapi GNU archive crates remain unresolved.
+  Embedded source-header notice closure is also pending. Preserve exact binary/source
+  inputs, dependency sources, patches, toolchain/build images and notices before
+  publication; the recipe's moving image tags do not prove reproducibility.
+- Policy: the recipe compiles OpenH264 from source. Cisco's
+  [FAQ](https://www.openh264.org/faq.html) limits Cisco-paid AVC patent royalties
+  to its own distributed binary module under its conditions, and excludes
+  third-party source-built redistribution. Release owner must resolve applicable
+  patent policy before publication. No codec was changed by this task.
+- `DIST-NOTICES-001` stays open: this is the FFmpeg portion only; whole-product
+  BOM/SBOM, ASIO/NDI boundaries, corresponding-source hosting and final artifact
+  license/extraction verification are separate required evidence.
+
+### Harness and checker behavior
+
+Both PowerShell harnesses now delegate to one shared SDK resolver. When
+`FFMPEG_DIR` is unset, only the exact pinned SDK root under
+`target/qa/ffmpeg-lgpl-20261026/sdk/` is eligible. Explicit roots pass the same
+seven DLL SHA-256/size/PE checks and required nonempty headers/import libraries.
+Missing, incomplete, GPL, changed or unverifiable SDKs fail closed, with a link
+to `WINDOWS_NATIVE_BUILD.md`; no WinGet, Gyan, arbitrary directory or PATH SDK
+fallback remains. The inherited floating local SDK is rejected as intended.
+
+`9a6836f1` intentionally added the macOS-only Syphon bridge/default feature.
+The checker and explicit-feature approval set now include Syphon; Cargo defaults
+are untouched and NDI/unknown feature rejection remains. `git log -S` traces
+`query_video_authoring_lease_authority_v1` and `replace_video_authoring_lease_v1`
+to `2907a2ea` (authoritative lease turnover after project Open). They are valid
+read/runtime-mutation routes, so AI0 now expects 513 with explicit presence
+assertions and its existing exact registration/uniqueness checks.
+
+### Validation and first safe resume
+
+All tests below use stable notice bytes. No installer, source offer, publication,
+clean-machine, hardware or 60fps acceptance is claimed.
+
+| Final command | Exit | Observed evidence |
+| --- | --- | --- |
+| `node app/scripts/check-release-metadata.mjs` | 0 | Full current metadata and seven staged pinned DLLs |
+| `node app/scripts/test-check-release-metadata.mjs` | 0 | 147 assertion groups |
+| `node app/scripts/check-windows-release-artifacts.mjs --self-test` | 0 | 160 + extractor 43 + materialization 4 assertions |
+| `node app/scripts/prepare-release-runtime.mjs --self-test` | 0 | 99 assertions |
+| `node app/scripts/check-ai0-source-coverage.mjs --self-test` | 0 | 3 parser/duplicate cases |
+| `node app/scripts/test-resolve-pinned-ffmpeg-sdk.mjs` | 0 | 23 checks, including 3 PowerShell parses; independently rerun |
+| `npm --prefix app run check:strict-json` | 0 | 130 duplicate-key assertions; source-only dependency JSON separately strict-parsed |
+| `python app/scripts/generate-ffmpeg-dependency-notices.py --check` | 0 | All retained source/notice hashes and deterministic outputs |
+| `node app/scripts/prepare-release-runtime.mjs` | 0 | Seven exact pinned DLLs staged; prior bytes retained |
+| `npm --prefix app run check:release` | 1 | Stops at AI4 -> Agent Bridge projection equality; see below |
+
+The two requested checker drifts are fixed. The final release run gets past
+completion/Q1-Q4, AI0 (Tauri 593, Engine 287, Remote 116, MIDI/OSC/DMX 240,
+Frontend 513, Keyboard 33, UI literal invokes 349; six authority gates), AI1
+and AI2. It then exposes another HEAD drift: Agent Bridge's Rust operation
+inventory is 75, TypeScript 76, Node MCP 72. The checker count now correctly
+pins 75 with explicit T33 operation assertions. `ad5fe649` introduced the three
+external-add/configure/remove operations, which Node MCP still lacks.
+TypeScript alone contains `syndocal.query.video.ndi_sources.v1` from `d8befdc3`.
+Exact equality assertions remain enforced. Resolving product projections is
+outside this task's checker/resource ownership; the release aggregate remains
+**pending**, and no later chained gates are claimed to have run.
+
+Preliminary attempts are excluded from final evidence: a no-bundle build began
+before the in-progress dependency text existed and failed at that missing
+resource; the complete resource set was then used for the rerun. The runtime
+preparation wrapper initially rejected inherited
+`CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS` as an unknown NDI-named environment
+signal (the substring in ENDINGS). Final runtime preparation/release checks
+unset only this unrelated key in the process environment; the fail-closed
+product guard was not weakened. No persistent environment was changed.
+
+Independent reviews accepted the bounded notice/resource propagation, SDK
+resolver and checker drift, while explicitly withholding exact-closure and
+publication approval. No compiler runs in the script-only checks, so they have
+no compiler-warning measurement. Native build/window evidence follows below.
+
+
+Native gate: `pnpm --dir app tauri build --no-bundle`, exit 0; release Cargo
+phase 5m34s (Vite 14.79s). Wrapper initialized Build Tools vcvars64 with
+`-vcvars_ver=14.44`, pinned
+`C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`,
+and printed/verified that exact linker first. `FFMPEG_DIR` selected the exact
+pinned SDK; its bin was first on process-local PATH. Absolute isolated target:
+`target/qa/ffmpeg-lgpl-20261026/cargo-target`, reusing the Task 53 build cache.
+This is an internal no-bundle acceptance artifact, not a distributed prerelease.
+
+Executable: Product/FileVersion `1.2.0-alpha.82`, 74,898,432 bytes, SHA-256
+`e4581465bd9462596b7a296be6c91926e8e4278286f6468a39dda3fe610a9961`.
+Seven actual DLLs and all six actual common resources in that output directory
+match their inventory size/SHA-256 identities (`native-artifact-identities.json`).
+Exactly one responsive `Syndocal` window, PID 67084, HWND 4003236, was verified
+against that exact executable path, observed rendered and maximized (native
+Restore control), then closed cleanly. Five loaded FFmpeg DLLs were observed
+from the isolated directory: avcodec, avformat, avutil, swscale and swresample
+(`native-window-final.json`). No hardware controls were exercised.
+
+The Computer Use launch resolver initially opened the installed
+`C:\Program Files\Syndocal\syndocal.exe` instead of the requested path.
+That task-opened instance was identified and closed without product interaction;
+it is excluded from acceptance. Direct absolute-path launch then established
+the isolated artifact identity above. Native-window inspection used the
+`computer-use:computer-use` skill
+through the available CUA runtime; the installed tool path is environment-owned,
+not a repository dependency.
+
+Final native compiler warning count: 0. No pre-change native warning baseline
+was compiled in Task 54, so numeric delta is unavailable. Git line-ending
+advisories and the preliminary failed-build summary are not compiler warnings.
+The normal `target/release/syndocal.exe` SHA-256 remains
+`232eb5c3a817475e93485ebcc7c9496a54a7c3746a7b847944f6a2c7bea35fe0`.
+The staged normal runtime DLLs now match the existing pin; their previous bytes
+are retained locally as described above.
+
+Stop boundary: pending exact binary/source/license closure and Agent Bridge
+projection reconciliation. First safe resume is to resolve those owner decisions
+and evidence, then rerun `check:release` and affected package/source checks.
+Do not infer publication readiness from the passing notice, native smoke or
+individual metadata checks. No installer/publication or product version bump
+was performed; unrelated video test dirty markers were preserved.

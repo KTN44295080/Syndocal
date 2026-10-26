@@ -626,6 +626,39 @@ try {
 
   validateStaticReleaseMetadata(readRepoFile);
   assertions += 1;
+  const approvedDefaults = 'default = ["libav", "spout", "asio", "syphon"]';
+  pass(
+    readRepoFile("app/src-tauri/Cargo.toml").includes(approvedDefaults),
+    "approved default bundle preserves target-gated Syphon output",
+  );
+  for (const [defaults, label] of [
+    ['default = ["libav", "spout", "asio"]', "retired defaults without Syphon"],
+    ['default = ["libav", "spout", "asio", "syphon", "ndi"]', "NDI-enabled defaults"],
+    ['default = ["libav", "spout", "asio", "syphon", "unapproved"]', "unapproved default feature"],
+  ]) {
+    staticRejects(
+      (files) => {
+        files.set("app/src-tauri/Cargo.toml", replaceOnce(files.get("app/src-tauri/Cargo.toml"), approvedDefaults, defaults));
+      },
+      /must remain exactly libav \+ spout \+ asio \+ syphon/,
+      `${label} are rejected`,
+    );
+  }
+  for (const path of ["app/package.json", ".github/workflows/cross-platform.yml"]) {
+    staticRejects(
+      (files) => {
+        if (path === "app/package.json") {
+          const packageManifest = JSON.parse(readRepoFile(path));
+          packageManifest.scripts["bundle:ndi-fixture"] = "tauri build --features ndi";
+          files.set(path, JSON.stringify(packageManifest));
+        } else {
+          files.set(path, `${readRepoFile(path)}\n      - run: pnpm tauri build --features ndi\n`);
+        }
+      },
+      /NDI-enabled bundling is forbidden/,
+      `${path} cannot bypass the NDI distribution boundary with explicit features`,
+    );
+  }
   for (const requiredLine of pinnedCommonResourceAttributeLines) {
     const repositoryRelativePath = requiredLine.slice(0, -" text eol=lf".length);
     staticRejects(
@@ -658,7 +691,7 @@ try {
   assertions += 1;
   assert.throws(
     () => assertEffectivePinnedCommonResourceLineEndings("malformed\0output\0"),
-    /expected exactly 8/,
+    new RegExp(`expected exactly ${pinnedCommonResourceAttributeLines.length * 2}`),
     "malformed git check-attr output fails closed",
   );
   assertions += 1;

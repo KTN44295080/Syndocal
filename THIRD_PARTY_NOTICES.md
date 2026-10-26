@@ -5,11 +5,19 @@ H.264, H.265, HAP, DXV, ProRes, VP9 and AV1. The normal Windows variant uses
 BtbN FFmpeg `n8.1.3-9-g29e619e767-20260930`, reporting LGPL version 3 or later.
 Its measured configure line enables shared libraries and version 3 licensing,
 and contains neither `--enable-gpl` nor `--enable-nonfree`.
+The upstream LGPL self-description is not a completed license audit:
+the pinned Chromaprint recipe selects GPL-2.0-or-later FFTW3, and rav1e's
+build updates Rust dependencies without a final archived build lockfile.
+Publication is blocked until actual build inputs/linkage and the resulting
+license obligations are reconciled; the collected notices do not grant release
+clearance or establish exact binary dependency closure.
 
 - Project: FFmpeg
 - Copyright (c) 2000-2026 the FFmpeg developers
 - License: GNU Lesser General Public License version 3 or later
-- License text: `licenses/FFmpeg-LGPL-3.0.txt`
+- License texts: `licenses/FFmpeg-LGPL-3.0.txt` and `licenses/GPL-3.0.txt`
+  (the LGPLv3 incorporates the GPLv3 terms)
+- Dependency license texts and source provenance: `licenses/FFmpeg-DEPENDENCIES.txt`
 - Exact Windows binary archive: https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip
 - Archive SHA-256: `3e47bda1607740550141e37c0e49d1e5182b34699f15adfd137ee266d346811a`
 - Exact FFmpeg source: https://github.com/FFmpeg/FFmpeg/archive/29e619e767cde9045a75c29bc9a8278ae7b3a98b.tar.gz
@@ -19,7 +27,9 @@ and contains neither `--enable-gpl` nor `--enable-nonfree`.
 
 FFmpeg includes code derived from the Independent JPEG Group's software.
 FFmpeg and its dependencies retain their respective copyrights and licenses;
-consult the pinned source and build recipes for individual notices. Syndocal
+their collected license texts and notices are reproduced in
+`licenses/FFmpeg-DEPENDENCIES.txt`, with the exact-binary provenance limitations
+identified there. Syndocal
 makes no modifications to these supplied DLLs. Source and dependency archives,
 patches and applicable notices must accompany the final distribution through
 its corresponding-source download; the locators above are provenance and do

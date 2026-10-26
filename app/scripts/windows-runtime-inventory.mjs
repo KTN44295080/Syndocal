@@ -30,6 +30,8 @@ export const canonicalWindowsFfmpegRuntimeDllNames = Object.freeze([
 export const canonicalCommonBundleResources = Object.freeze([
   Object.freeze({ source: "../../THIRD_PARTY_NOTICES.md", destination: "THIRD_PARTY_NOTICES.md" }),
   Object.freeze({ source: "../../licenses/FFmpeg-LGPL-3.0.txt", destination: "licenses/FFmpeg-LGPL-3.0.txt" }),
+  Object.freeze({ source: "../../licenses/GPL-3.0.txt", destination: "licenses/GPL-3.0.txt" }),
+  Object.freeze({ source: "../../licenses/FFmpeg-DEPENDENCIES.txt", destination: "licenses/FFmpeg-DEPENDENCIES.txt" }),
   Object.freeze({ source: "../../licenses/Spout2-BSD-2-Clause.txt", destination: "licenses/Spout2-BSD-2-Clause.txt" }),
   Object.freeze({ source: "../../licenses/bcdec_rs-MIT.txt", destination: "licenses/bcdec_rs-MIT.txt" }),
 ]);
@@ -63,8 +65,10 @@ export const canonicalPinnedRuntimeIdentity = Object.freeze(new Map([
 ]));
 
 export const canonicalPinnedCommonResourceIdentity = Object.freeze(new Map([
-  ["../../THIRD_PARTY_NOTICES.md\0THIRD_PARTY_NOTICES.md", Object.freeze({ byte_size: 5750, sha256: "6eb708d0392132a3783e65939bc6f2afc2d3d4f8b6047c0c76a689b224f59194" })],
+  ["../../THIRD_PARTY_NOTICES.md\0THIRD_PARTY_NOTICES.md", Object.freeze({ byte_size: 6424, sha256: "cc23de6fc1ba0a3d5d47a80df76f02abbafd71e55e1e9fb1953049c3bd9cfe28" })],
   ["../../licenses/FFmpeg-LGPL-3.0.txt\0licenses/FFmpeg-LGPL-3.0.txt", Object.freeze({ byte_size: 7652, sha256: "97628afebc60f026f5c2b25d7491c46a5c4ee61f693e7cfa07fbd2c03605979b" })],
+  ["../../licenses/GPL-3.0.txt\0licenses/GPL-3.0.txt", Object.freeze({ byte_size: 35147, sha256: "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903" })],
+  ["../../licenses/FFmpeg-DEPENDENCIES.txt\0licenses/FFmpeg-DEPENDENCIES.txt", Object.freeze({ byte_size: 2692678, sha256: "0f2facc3e4f3e388a6ccafc5c3e568424e8e9338be250f53f5fd301d3f34ec26" })],
   ["../../licenses/Spout2-BSD-2-Clause.txt\0licenses/Spout2-BSD-2-Clause.txt", Object.freeze({ byte_size: 2726, sha256: "04514504b4636462450722a84452b6fe5f671d1f74f22d68867256267f3030f6" })],
   ["../../licenses/bcdec_rs-MIT.txt\0licenses/bcdec_rs-MIT.txt", Object.freeze({ byte_size: 1060, sha256: "0194fa871df6d82a26d58f3b6e035bed033afdc413e2a6ac0ae2f15b7becbb20" })],
 ]));

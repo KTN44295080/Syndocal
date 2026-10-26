@@ -1244,8 +1244,8 @@ function selfTest() {
     );
     const cleanResult = assertExtractedWindowsArtifactContents(clean, "clean extracted artifact", cleanInventory);
     pass(
-      cleanResult.fileCount === 12 && cleanResult.ffmpegRuntimeCount === 7 && cleanResult.commonResourceCount === 4,
-      "clean materialized artifact passes the exact approved twelve-file tree",
+      cleanResult.fileCount === 14 && cleanResult.ffmpegRuntimeCount === 7 && cleanResult.commonResourceCount === 6,
+      "clean materialized artifact passes the exact approved fourteen-file tree",
     );
 
     const notices = cleanInventory.common_resources.find((resource) => resource.destination === "THIRD_PARTY_NOTICES.md");
@@ -1278,6 +1278,26 @@ function selfTest() {
       /common resource THIRD_PARTY_NOTICES\.md SHA-256 does not match pinned inventory/,
     );
     writeFileSync(noticesPath, commonResourceBytes.get(notices.destination));
+
+    for (const destination of ["licenses/GPL-3.0.txt", "licenses/FFmpeg-DEPENDENCIES.txt"]) {
+      const resource = cleanInventory.common_resources.find((entry) => entry.destination === destination);
+      assert.ok(resource, `required FFmpeg license resource is inventoried: ${destination}`);
+      const resourcePath = join(clean, destination);
+      const original = commonResourceBytes.get(destination);
+      rmSync(resourcePath);
+      rejects(
+        () => assertExtractedWindowsArtifactContents(clean, "missing FFmpeg license artifact", cleanInventory),
+        /missing approved artifact file:/,
+      );
+      const corrupt = Buffer.from(original);
+      corrupt[0] ^= 0x01;
+      writeFileSync(resourcePath, corrupt, { flag: "wx" });
+      rejects(
+        () => assertExtractedWindowsArtifactContents(clean, "corrupt FFmpeg license artifact", cleanInventory),
+        /SHA-256 does not match pinned inventory/,
+      );
+      writeFileSync(resourcePath, original);
+    }
 
     const extraFile = join(clean, "unapproved", "nested.txt");
     mkdirSync(dirname(extraFile), { recursive: true });
@@ -1681,7 +1701,7 @@ function selfTest() {
       /artifact SHA-256 mismatch/,
     );
     writeFileSync(candidateArtifactPaths.nsis, candidateArtifactBytes.nsis);
-    pass(inventory.runtime_dlls.length === 7 && inventory.common_resources.length === 4, "inventory carries exact Windows normal-bundle entries");
+    pass(inventory.runtime_dlls.length === 7 && inventory.common_resources.length === 6, "inventory carries exact Windows normal-bundle entries");
 
     // P2 stale-exe closure: manual three-root mode must never accept syndocal.exe on PE shape alone.
     const authorityProductVersion = "1.2.3-rc.4";
@@ -2013,7 +2033,7 @@ function main(argv = process.argv.slice(2)) {
       + summary.executableSha256
       + ", and AMD64 PE32+ identity (inspector "
       + summary.inspectorKind
-      + "); plus the exact approved file tree with 7 pinned FFmpeg DLLs and 4 pinned common resources per artifact.",
+      + "); plus the exact approved file tree with 7 pinned FFmpeg DLLs and 6 pinned common resources per artifact.",
   );
 }
 

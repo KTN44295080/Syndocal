@@ -63,6 +63,16 @@ Download and verify the archive hash before extraction. Set `FFMPEG_DIR` to
 that extracted root (containing `include`, `lib`, `bin`) and prepend its `bin`
 to the process-local `PATH` before the MSVC/Cargo invocation. Do not substitute
 the floating `latest` URL, the previous Gyan GPL DLLs or an arbitrary PATH SDK.
+The two native acceptance harnesses use only this checkout-relative fallback
+when `FFMPEG_DIR` is unset:
+`target/qa/ffmpeg-lgpl-20261026/sdk/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1`.
+Their shared resolver verifies all seven pinned DLL sizes, SHA-256 hashes and
+PE identities, plus required nonempty headers and MSVC import libraries.
+Explicit `FFMPEG_DIR` overrides pass the same checks; invalid overrides fail
+without falling back. No WinGet/Gyan, arbitrary directory or PATH SDK discovery
+is allowed. These byte checks do not resolve the Task 54 transitive-license
+and exact-source blockers in the alignment evidence; publication stays blocked.
+
 `avcodec_configuration()` must match the inventory; `avutil_license()` reports
 `LGPL version 3 or later`, without `--enable-gpl` or `--enable-nonfree`.
 `prepare-release-runtime.mjs` verifies the exact seven DLLs; it never bundles

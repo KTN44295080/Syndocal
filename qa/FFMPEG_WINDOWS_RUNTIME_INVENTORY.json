@@ -93,14 +93,26 @@
     {
       "source": "../../THIRD_PARTY_NOTICES.md",
       "destination": "THIRD_PARTY_NOTICES.md",
-      "byte_size": 5750,
-      "sha256": "6eb708d0392132a3783e65939bc6f2afc2d3d4f8b6047c0c76a689b224f59194"
+      "byte_size": 6424,
+      "sha256": "cc23de6fc1ba0a3d5d47a80df76f02abbafd71e55e1e9fb1953049c3bd9cfe28"
     },
     {
       "source": "../../licenses/FFmpeg-LGPL-3.0.txt",
       "destination": "licenses/FFmpeg-LGPL-3.0.txt",
       "byte_size": 7652,
       "sha256": "97628afebc60f026f5c2b25d7491c46a5c4ee61f693e7cfa07fbd2c03605979b"
+    },
+    {
+      "source": "../../licenses/GPL-3.0.txt",
+      "destination": "licenses/GPL-3.0.txt",
+      "byte_size": 35147,
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    },
+    {
+      "source": "../../licenses/FFmpeg-DEPENDENCIES.txt",
+      "destination": "licenses/FFmpeg-DEPENDENCIES.txt",
+      "byte_size": 2692678,
+      "sha256": "0f2facc3e4f3e388a6ccafc5c3e568424e8e9338be250f53f5fd301d3f34ec26"
     },
     {
       "source": "../../licenses/Spout2-BSD-2-Clause.txt",

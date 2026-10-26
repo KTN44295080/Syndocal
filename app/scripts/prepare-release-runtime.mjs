@@ -139,7 +139,7 @@ export function assertNoNdiEnabledBundling(environment = process.env) {
   }
 }
 
-const approvedDefaultFeatureTokens = Object.freeze(new Set(["libav", "spout", "asio"]));
+const approvedDefaultFeatureTokens = Object.freeze(new Set(["libav", "spout", "asio", "syphon"]));
 const knownCargoSubcommands = Object.freeze(new Set([
   "add",
   "bench",
@@ -666,6 +666,7 @@ const selfTestBenignCommands = Object.freeze([
   "run: |\n  bash app/scripts/bundle-macos-runtime.sh \\\n    target/release/bundle/macos/Syndocal.app \\\n    target/release/bundle/dmg\n",
   "run: cargo test --no-default-features -p video --locked\n",
   "env:\n  CARGO_FEATURES: libav,spout\nrun: cargo build\n",
+  "run: pnpm --dir app tauri build --features libav,spout,asio,syphon\n",
   "run: >\n  sudo apt-get install -y --no-install-recommends\n  build-essential libudev-dev xvfb ffmpeg\n",
   "run: |\n  $sdkRoots = @(Get-ChildItem -LiteralPath $packageRoot -Directory)\n  \"FFMPEG_DIR=$sdk\" >> $env:GITHUB_ENV\n",
   "run: tar -xf \"$archive\" -C \"$RUNNER_TEMP\"\n",
