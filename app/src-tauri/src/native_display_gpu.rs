@@ -1,21 +1,69 @@
-//! I2 bootstrap preparation for native Display; production routing stays off.
+//! I3 startup selection for native Display; resident routing stays unavailable.
 //!
-//! The adapter owns the window/surface, shared GPU owner/context, runtime,
-//! history, cache fence and the one Stop token. This module creates no window,
-//! device, thread or physical present. main.rs registers it only for tests until
-//! the C4 consumers are joined. The default gate returns the existing owner
-//! without invoking a backend; only tests can currently mint an enabled gate.
+//! main.rs consults the immutable QA opt-in after its existing Stop/authority
+//! checks and before creating a surface or renderer. OFF keeps the existing
+//! route. An explicit request fails closed until the real C4 adapter is joined;
+//! it cannot silently fall back or manufacture a resident success.
+//! The bootstrap ownership policy below remains test-only. Its adapter owns
+//! the window/surface, shared GPU owner/context, runtime, history, cache fence
+//! and the one Stop token. This module creates no window, device or thread.
 //! A prepared bundle is NOT presentation authority: the real adapter must still
 //! use the existing native permit, full authority/Stop fence and present path.
+
+use std::ffi::{OsStr, OsString};
+use std::sync::OnceLock;
+
+const QA_NATIVE_GPU_ENV: &str = "SYNDOCAL_QA_NATIVE_GPU";
+const RESIDENT_ROUTE_UNAVAILABLE: &str = "SYNDOCAL_QA_NATIVE_GPU=1 requested the native GPU route, but the C4 adapter is not joined; native Display was not started";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeDisplayStartupRoute {
+    Existing,
+    ResidentRequested,
+}
+
+impl NativeDisplayStartupRoute {
+    fn from_opt_in(value: Option<&OsStr>) -> Self {
+        if value == Some(OsStr::new("1")) {
+            Self::ResidentRequested
+        } else {
+            Self::Existing
+        }
+    }
+
+    fn require_available(self) -> Result<(), &'static str> {
+        match self {
+            Self::Existing => Ok(()),
+            Self::ResidentRequested => Err(RESIDENT_ROUTE_UNAVAILABLE),
+        }
+    }
+}
+
+fn capture_startup_route(
+    decision: &OnceLock<NativeDisplayStartupRoute>,
+    read_opt_in: impl FnOnce() -> Option<OsString>,
+) -> NativeDisplayStartupRoute {
+    *decision.get_or_init(|| NativeDisplayStartupRoute::from_opt_in(read_opt_in().as_deref()))
+}
+
+/// Capture the process-wide choice at its first authorized Display startup.
+/// Re-arming/starting another output cannot change it, and frame rendering
+/// never reads the environment. This gate does not grant output authority.
+pub(crate) fn validate_native_display_startup_route() -> Result<(), &'static str> {
+    static DECISION: OnceLock<NativeDisplayStartupRoute> = OnceLock::new();
+    capture_startup_route(&DECISION, || std::env::var_os(QA_NATIVE_GPU_ENV)).require_available()
+}
 
 /// Integration availability only, never native authority or a present permit.
 /// C4 must add a real constructor bound to the joined G/P/I adapter owners;
 /// changing an environment variable or a saved bool cannot enable this route.
+#[cfg(test)]
 #[derive(Default)]
 pub(crate) struct BootstrapRouteGate {
     joined: bool,
 }
 
+#[cfg(test)]
 impl BootstrapRouteGate {
     /// Simulated joined adapters for headless policy tests, not C4 evidence.
     #[cfg(test)]
@@ -26,6 +74,7 @@ impl BootstrapRouteGate {
 
 /// OFF returns the input owner untouched, so the existing caller retains its
 /// own cancellation/error semantics and executes the existing route once.
+#[cfg(test)]
 pub(crate) enum BootstrapDispatch<B: BootstrapBackend> {
     Existing {
         backend: B,
@@ -34,6 +83,7 @@ pub(crate) enum BootstrapDispatch<B: BootstrapBackend> {
     Resident(Result<PreparedBootstrap<B>, RetainedBootstrapFailure<B>>),
 }
 
+#[cfg(test)]
 pub(crate) fn dispatch_native_display<B: BootstrapBackend>(
     gate: BootstrapRouteGate,
     backend: B,
@@ -45,24 +95,28 @@ pub(crate) fn dispatch_native_display<B: BootstrapBackend>(
     BootstrapDispatch::Resident(prepare_joined_native_display(backend, geometry))
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LogicalExtent {
     pub width: u32,
     pub height: u32,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PhysicalExtent {
     pub width: u32,
     pub height: u32,
 }
 
+#[cfg(test)]
 impl PhysicalExtent {
     fn is_zero(self) -> bool {
         self.width == 0 || self.height == 0
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BootstrapGeometry {
     Hidden {
@@ -75,6 +129,7 @@ pub(crate) enum BootstrapGeometry {
     },
 }
 
+#[cfg(test)]
 impl BootstrapGeometry {
     fn render_extent(self) -> PhysicalExtent {
         match self {
@@ -86,6 +141,7 @@ impl BootstrapGeometry {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BootstrapCheckpoint {
     Initial,
@@ -95,6 +151,7 @@ pub(crate) enum BootstrapCheckpoint {
     BeforeHandoff,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BootstrapOperation {
     InitializeUnconfigured,
@@ -104,6 +161,7 @@ pub(crate) enum BootstrapOperation {
     Configure,
 }
 
+#[cfg(test)]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum BootstrapRejection<E> {
     Cancelled {
@@ -135,6 +193,7 @@ pub(crate) enum BootstrapRejection<E> {
 /// self on error. initialize_unconfigured must not configure/acquire/present.
 /// prepare_once must return a completed, cache-committed Ready or an error;
 /// GPU completion/cache policy itself belongs to the video-side I/G/P modules.
+#[cfg(test)]
 pub(crate) trait BootstrapBackend: Send + 'static {
     type Ready: Send + 'static;
     type Error: Send + 'static;
@@ -163,6 +222,7 @@ pub(crate) trait BootstrapBackend: Send + 'static {
 /// Affine preparation result, deliberately neither Clone nor Copy.
 /// Move this whole value to the next owner. Splitting it transfers BOTH the
 /// backend bundle and Ready; it does not publish a worker or authorize present.
+#[cfg(test)]
 #[must_use]
 pub(crate) struct PreparedBootstrap<B: BootstrapBackend> {
     ready: B::Ready,
@@ -171,6 +231,7 @@ pub(crate) struct PreparedBootstrap<B: BootstrapBackend> {
     geometry: BootstrapGeometry,
 }
 
+#[cfg(test)]
 impl<B: BootstrapBackend> PreparedBootstrap<B> {
     pub(crate) fn extent(&self) -> PhysicalExtent {
         self.extent
@@ -188,6 +249,7 @@ impl<B: BootstrapBackend> PreparedBootstrap<B> {
 /// Failed/suspended preparation still owns all created resources and any Ready.
 /// The caller must transfer these to its existing cleanup/retirement owner.
 /// Dropping this metadata is not a cleanup ACK, GPU drain, or successful Stop.
+#[cfg(test)]
 #[must_use]
 pub(crate) struct RetainedBootstrapFailure<B: BootstrapBackend> {
     reason: BootstrapRejection<B::Error>,
@@ -195,6 +257,7 @@ pub(crate) struct RetainedBootstrapFailure<B: BootstrapBackend> {
     backend: B,
 }
 
+#[cfg(test)]
 impl<B: BootstrapBackend> RetainedBootstrapFailure<B> {
     pub(crate) fn reason(&self) -> &BootstrapRejection<B::Error> {
         &self.reason
@@ -209,6 +272,7 @@ impl<B: BootstrapBackend> RetainedBootstrapFailure<B> {
     }
 }
 
+#[cfg(test)]
 fn guard<B: BootstrapBackend>(
     backend: &mut B,
     at: BootstrapCheckpoint,
@@ -224,6 +288,7 @@ fn guard<B: BootstrapBackend>(
     authority.map_err(|error| BootstrapRejection::Authority { at, error })
 }
 
+#[cfg(test)]
 fn classify_backend_error<B: BootstrapBackend>(
     backend: &B,
     operation: BootstrapOperation,
@@ -238,6 +303,7 @@ fn classify_backend_error<B: BootstrapBackend>(
     }
 }
 
+#[cfg(test)]
 fn verify_extent<E>(
     expected: PhysicalExtent,
     observed: PhysicalExtent,
@@ -254,6 +320,7 @@ fn verify_extent<E>(
 /// One bounded bootstrap attempt. No loop, re-decode or second FX execution.
 /// Hidden logical geometry cannot become the render size; declared physical
 /// geometry is required. Every error returns the same owned backend bundle.
+#[cfg(test)]
 fn prepare_joined_native_display<B: BootstrapBackend>(
     mut backend: B,
     geometry: BootstrapGeometry,

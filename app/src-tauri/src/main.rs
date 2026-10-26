@@ -103,7 +103,6 @@ use video_monitor_snapshot::capture_video_monitor_snapshot;
 mod live_video_monitor_packet;
 mod live_video_output_health;
 mod native_display_lease_boundary;
-#[cfg(test)]
 mod native_display_gpu;
 mod video_output_pacer;
 mod output_owner_retirement;
@@ -85389,6 +85388,9 @@ fn start_native_video_live_output(
         );
         return Err(error);
     }
+    // OFF leaves the existing Display startup below unchanged. Explicit QA
+    // opt-in cannot create a surface/renderer until the C4 adapter is joined.
+    native_display_gpu::validate_native_display_startup_route().map_err(str::to_string)?;
     let mut initial_size = match initial_size_override {
         Some((width, height)) => (width.max(1), height.max(1)),
         None => {

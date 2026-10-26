@@ -1,4 +1,4 @@
-//! Conformance examples for the test-gated bootstrap policy, using owned mocks.
+//! Conformance examples for startup selection and the test-gated bootstrap.
 //! These tests do not exercise a GPU, window, cleanup ACK or physical present.
 use super::*;
 use std::sync::{
@@ -300,6 +300,138 @@ fn assert_complete_drop(witness: &Witness, with_ready: bool) {
         actual, expected,
         "every owned mock resource is released exactly once"
     );
+}
+
+#[test]
+fn control_plane_native_gpu_startup_requires_the_exact_explicit_opt_in() {
+    assert_eq!(
+        NativeDisplayStartupRoute::from_opt_in(None),
+        NativeDisplayStartupRoute::Existing,
+    );
+    for value in [
+        "", "0", "true", "TRUE", "yes", "on", "01", "1 ", " 1", "1\n",
+    ] {
+        assert_eq!(
+            NativeDisplayStartupRoute::from_opt_in(Some(OsStr::new(value))),
+            NativeDisplayStartupRoute::Existing,
+            "only the exact QA value may request the resident route",
+        );
+    }
+    assert_eq!(
+        NativeDisplayStartupRoute::from_opt_in(Some(OsStr::new("1"))),
+        NativeDisplayStartupRoute::ResidentRequested,
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn control_plane_native_gpu_startup_non_unicode_value_does_not_opt_in() {
+    use std::os::windows::ffi::OsStringExt;
+    let invalid = OsString::from_wide(&[0xD800]);
+    assert_eq!(
+        NativeDisplayStartupRoute::from_opt_in(Some(invalid.as_os_str())),
+        NativeDisplayStartupRoute::Existing,
+    );
+}
+
+#[test]
+fn control_plane_native_gpu_startup_selection_is_captured_once_for_rearm() {
+    use std::cell::Cell;
+    for initial in [None, Some(OsString::from("1"))] {
+        let decision = OnceLock::new();
+        let reads = Cell::new(0);
+        let expected = NativeDisplayStartupRoute::from_opt_in(initial.as_deref());
+        assert_eq!(
+            capture_startup_route(&decision, || {
+                reads.set(reads.get() + 1);
+                initial
+            }),
+            expected,
+        );
+        let captured = capture_startup_route(&decision, || {
+            reads.set(reads.get() + 1);
+            // The opposite setting must never replace an already-captured one.
+            match expected {
+                NativeDisplayStartupRoute::Existing => Some(OsString::from("1")),
+                NativeDisplayStartupRoute::ResidentRequested => None,
+            }
+        });
+        assert_eq!(captured, expected);
+        assert_eq!(
+            reads.get(),
+            1,
+            "re-arm must not read a new environment value"
+        );
+    }
+}
+
+#[test]
+fn control_plane_native_gpu_startup_entry_keeps_its_process_choice() {
+    // Exercise the production entry without modifying process environment or
+    // requesting a backend. Either configured choice is stable for this process.
+    let first = validate_native_display_startup_route();
+    assert_eq!(validate_native_display_startup_route(), first);
+    match first {
+        Ok(()) => {}
+        Err(message) => assert_eq!(message, RESIDENT_ROUTE_UNAVAILABLE),
+    }
+}
+
+#[test]
+fn control_plane_native_gpu_startup_off_preserves_existing_owner_and_hooks() {
+    for value in [None, Some(OsStr::new("0")), Some(OsStr::new(""))] {
+        for geometry in [
+            hidden(),
+            BootstrapGeometry::Visible {
+                observed_physical: EXPECTED,
+            },
+        ] {
+            let route = NativeDisplayStartupRoute::from_opt_in(value);
+            route.require_available().unwrap();
+            let (mut backend, witness) = FakeBackend::new();
+            backend.authority_error = Some(Check::Initial);
+            backend.fail_operation = Some(Op::InitializeUnconfigured);
+            witness.stop.store(true, Ordering::Release);
+            let BootstrapDispatch::Existing {
+                backend,
+                geometry: returned,
+            } = dispatch_native_display(BootstrapRouteGate::default(), backend, geometry)
+            else {
+                panic!("OFF cannot enter resident bootstrap");
+            };
+            assert_eq!(returned, geometry);
+            assert_eq!(backend.owned_names(), vec!["window", "stop"]);
+            assert!(backend.is_stopped());
+            assert!(witness.events.lock().unwrap().is_empty());
+            witness.assert_retained();
+        }
+    }
+}
+
+#[test]
+fn control_plane_native_gpu_startup_opt_in_is_unavailable_before_backend_hooks() {
+    let route = NativeDisplayStartupRoute::from_opt_in(Some(OsStr::new("1")));
+    let (backend, witness) = FakeBackend::new();
+    let mut untouched = Some(backend);
+    let outcome = (|| {
+        route.require_available()?;
+        let backend = untouched.take().expect("same unconsumed startup owner");
+        Ok::<_, &'static str>(dispatch_native_display(
+            BootstrapRouteGate::default(),
+            backend,
+            hidden(),
+        ))
+    })();
+    match outcome {
+        Err(message) => assert_eq!(message, RESIDENT_ROUTE_UNAVAILABLE),
+        Ok(_) => panic!("an unavailable resident route cannot continue with a CPU fallback"),
+    }
+    assert_eq!(
+        untouched.as_ref().unwrap().owned_names(),
+        vec!["window", "stop"],
+    );
+    assert!(witness.events.lock().unwrap().is_empty());
+    witness.assert_retained();
 }
 
 #[test]

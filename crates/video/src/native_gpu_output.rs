@@ -4,6 +4,11 @@
 
 use protocol::{VideoOutputId, VideoOutputMapping};
 
+#[path = "native_gpu_output_shared.rs"]
+pub(crate) mod shared;
+#[path = "native_gpu_output_cpu.rs"]
+pub(crate) mod cpu;
+
 use crate::native_gpu_context::ResolvedGpuPhase;
 use crate::native_gpu_contract::*;
 use crate::native_gpu_result::IsfValidatedReceipt;
