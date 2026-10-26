@@ -1,27 +1,77 @@
-//! C0 shared vocabulary for INTERFACE-01 v1.
+//! Shared vocabulary for INTERFACE-01 v1.1 (I2 authoritative history scope).
 //!
-//! This module is test-gated until the G/P/I production consumers are integrated.
+//! HistoryEntryId is used by the production CPU queue policy. GPU-only items
+//! remain test-gated until their G/P/I production consumers are integrated.
 //! It contains no GPU backend, cache implementation, or successful production
 //! stub. IDs and descriptors are metadata, never evidence of GPU completion.
-//! Proof/receipt construction below is explicitly test-only even after the
-//! module gate is removed. Production minting must require validated owners.
+//! Synthetic proof/receipt builders stay test-only. The cache receipt adapter
+//! consumes I's validated publication owner; its GPU consumers remain gated.
 
-use protocol::{VideoLayerId, VideoOutputId, VideoRenderInputKey};
+use protocol::VideoRenderInputKey;
+#[cfg(test)]
+use protocol::{VideoLayerId, VideoOutputId};
 
+#[cfg(test)]
 use crate::{VideoFrame, VideoOutputLastValidKey, VideoPixelFormat, VideoRenderCancellation};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg(test)]
 pub(crate) struct GpuContextId {
     pub owner_id: u64,
     pub device_generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg(test)]
 pub(crate) struct NativeFrameId {
     pub output_id: VideoOutputId,
     pub project_epoch: u64,
     pub request_sequence: u64,
     pub geometry_generation: u64,
+}
+
+/// Fixed output/history incarnation, captured from authoritative output state
+/// before any incoming layer result is considered. Request sequence is excluded:
+/// older requests remain valid historical candidates within this scope.
+/// This is matching metadata, never authority or completion proof.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct NativeHistoryFrameScope {
+    output_id: VideoOutputId,
+    project_epoch: u64,
+    geometry_generation: u64,
+}
+
+#[cfg(test)]
+impl NativeFrameId {
+    pub(crate) fn history_scope(self) -> NativeHistoryFrameScope {
+        NativeHistoryFrameScope {
+            output_id: self.output_id,
+            project_epoch: self.project_epoch,
+            geometry_generation: self.geometry_generation,
+        }
+    }
+}
+
+#[cfg(test)]
+impl NativeHistoryFrameScope {
+    pub(crate) fn matches(self, frame: NativeFrameId) -> bool {
+        frame.output_id == self.output_id
+            && frame.project_epoch == self.project_epoch
+            && frame.geometry_generation == self.geometry_generation
+    }
+
+    /// Compatibility with NativeHistory::new(context, frame_scope: NativeFrameId,
+    /// input, layer_id, queue_epoch, source_generation, extent). The caller chooses
+    /// the request, but cannot change the fixed authoritative history incarnation.
+    pub(crate) fn at_request(self, request_sequence: u64) -> NativeFrameId {
+        NativeFrameId {
+            output_id: self.output_id,
+            project_epoch: self.project_epoch,
+            request_sequence,
+            geometry_generation: self.geometry_generation,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -32,6 +82,7 @@ pub(crate) struct HistoryEntryId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg(test)]
 pub(crate) struct GpuSubmissionId {
     pub context: GpuContextId,
     pub sequence: u64,
@@ -39,6 +90,7 @@ pub(crate) struct GpuSubmissionId {
 
 /// Context-qualified view of G's allocation identity, not a second allocator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg(test)]
 pub(crate) struct GpuAllocationId {
     pub context: GpuContextId,
     pub sequence: u64,
@@ -47,6 +99,7 @@ pub(crate) struct GpuAllocationId {
 /// Only FRAMEINDEX wraps (u32); owner/request/queue sequences are checked u64s.
 /// Floating-point bits preserve the original TIME/TIMEDELTA/DATE on replay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct FrozenChainClocks {
     pub frame_index: u32,
     pub time_seconds_bits: u32,
@@ -55,6 +108,7 @@ pub(crate) struct FrozenChainClocks {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum LayerOrigin {
     Executed(FrozenChainClocks),
     /// Existing post-FX CPU history has no invented FRAMEINDEX.
@@ -62,6 +116,7 @@ pub(crate) enum LayerOrigin {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct LayerResultIdentity {
     pub context: GpuContextId,
     pub frame: NativeFrameId,
@@ -78,6 +133,7 @@ pub(crate) struct LayerResultIdentity {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum GpuPhase {
     Initialize,
     IsfBatch,
@@ -88,6 +144,7 @@ pub(crate) enum GpuPhase {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum GpuOwnerState {
     Active,
     Retiring,
@@ -98,6 +155,7 @@ pub(crate) enum GpuOwnerState {
 
 /// Eligibility reasons before admission; none imply a runtime GPU fault.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum UnsupportedNativeFx {
     EmptyChain,
     UnsupportedJobCount,
@@ -112,6 +170,7 @@ pub(crate) enum UnsupportedNativeFx {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum NativeGpuDecline {
     UnsupportedChain {
         reason: UnsupportedNativeFx,
@@ -129,6 +188,7 @@ pub(crate) enum NativeGpuDecline {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum NativeGpuFaultKind {
     DeviceLost,
     OutOfMemory,
@@ -144,6 +204,7 @@ pub(crate) enum NativeGpuFaultKind {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct NativeGpuFault {
     pub context: GpuContextId,
     pub frame: Option<NativeFrameId>,
@@ -154,6 +215,7 @@ pub(crate) struct NativeGpuFault {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum PresentRejection {
     Cancelled,
     Revoked,
@@ -165,6 +227,7 @@ pub(crate) enum PresentRejection {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum SnapshotCommitRejection {
     Cancelled,
     StaleRequest,
@@ -176,6 +239,7 @@ pub(crate) enum SnapshotCommitRejection {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum CompletionProgress<T, E> {
     Pending,
     Cancelled,
@@ -184,12 +248,14 @@ pub(crate) enum CompletionProgress<T, E> {
 
 /// Lookup identity only. The retirement registry must retain the strong owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg(test)]
 pub(crate) struct RetirementId {
     pub context: GpuContextId,
     pub sequence: u64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum MaterializationFailure {
     Cancelled {
         retirement: Option<RetirementId>,
@@ -202,6 +268,7 @@ pub(crate) enum MaterializationFailure {
 
 /// A terminal poll must not be repeated. On Cancelled/fault the pending owner
 /// stays intact until explicitly consumed into retirement; no detached cleanup.
+#[cfg(test)]
 pub(crate) trait GpuCompletionPort {
     type Pending;
     type Completed;
@@ -217,6 +284,7 @@ pub(crate) trait GpuCompletionPort {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum PresentOutcome<R, P> {
     Presented(P),
     NotPresented {
@@ -227,6 +295,7 @@ pub(crate) enum PresentOutcome<R, P> {
 
 /// Ready/Permit are consumed. Only Presented is delivery evidence, not GPU
 /// completion; the implementation must separately retain submitted resources.
+#[cfg(test)]
 pub(crate) trait NativePresentSink {
     type Ready;
     type Permit;
@@ -241,6 +310,7 @@ pub(crate) trait NativePresentSink {
 
 /// Read-only matching data, not an unforgeable completion token.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct MaterializationDescriptor {
     pub layer: LayerResultIdentity,
     /// Source post-FX GPU allocation, not the readback buffer or CPU Vec.
@@ -251,10 +321,12 @@ pub(crate) struct MaterializationDescriptor {
 
 /// Affine proof. G will mint production proofs only from validated completion.
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) struct MaterializationProof {
     descriptor: MaterializationDescriptor,
 }
 
+#[cfg(test)]
 impl MaterializationProof {
     pub(crate) fn descriptor(&self) -> &MaterializationDescriptor {
         &self.descriptor
@@ -269,11 +341,13 @@ impl MaterializationProof {
 
 /// Pixels and proof cannot be independently replaced while paired.
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) struct ExactCpuLayer {
     frame: VideoFrame,
     proof: MaterializationProof,
 }
 
+#[cfg(test)]
 impl ExactCpuLayer {
     pub(crate) fn frame(&self) -> &VideoFrame {
         &self.frame
@@ -295,6 +369,7 @@ impl ExactCpuLayer {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct CachePublicationFence {
     pub request_sequence: u64,
     pub blackout_generation: u64,
@@ -303,6 +378,7 @@ pub(crate) struct CachePublicationFence {
 
 /// Identity of one premapping snapshot; it does not prove copy/unmap success.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct SnapshotIdentity {
     pub frame: NativeFrameId,
     /// Premapping GPU composition source, not the map buffer or CPU Vec.
@@ -318,6 +394,7 @@ pub(crate) struct SnapshotIdentity {
 
 /// The existing CPU key is reused unchanged; output mapping is not part of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct CacheCommitDescriptor {
     pub key: VideoOutputLastValidKey,
     pub snapshot: SnapshotIdentity,
@@ -326,11 +403,23 @@ pub(crate) struct CacheCommitDescriptor {
 
 /// Affine cache publication receipt, not constructible in production C0.
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) struct CacheCommitReceipt {
     descriptor: CacheCommitDescriptor,
 }
 
+#[cfg(test)]
 impl CacheCommitReceipt {
+    /// Consume evidence from I's actual cache mutation; bare metadata is not a
+    /// publication capability. GPU production gating remains unchanged in I2.
+    pub(crate) fn from_publication(
+        publication: crate::native_gpu_output::PublishedSnapshot,
+    ) -> Self {
+        Self {
+            descriptor: publication.into_descriptor(),
+        }
+    }
+
     pub(crate) fn descriptor(&self) -> &CacheCommitDescriptor {
         &self.descriptor
     }
@@ -347,6 +436,7 @@ impl CacheCommitReceipt {
 /// The adapter must already own the validated snapshot identity and phase
 /// proofs, and bind the returned receipt to them. A bare VideoFrame or matching
 /// metadata alone is insufficient to mint a production CacheCommitReceipt.
+#[cfg(test)]
 pub(crate) trait CpuSnapshotCommit {
     fn commit(
         &mut self,

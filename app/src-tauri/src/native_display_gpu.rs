@@ -1,10 +1,50 @@
-//! Unwired I1 bootstrap policy for native Display.
+//! I2 bootstrap preparation for native Display; production routing stays off.
 //!
 //! The adapter owns the window/surface, shared GPU owner/context, runtime,
 //! history, cache fence and the one Stop token. This module creates no window,
-//! device, thread or physical present, and is not registered in main.rs.
-//! A prepared bundle is NOT presentation authority: the C1 adapter must still
+//! device, thread or physical present. main.rs registers it only for tests until
+//! the C4 consumers are joined. The default gate returns the existing owner
+//! without invoking a backend; only tests can currently mint an enabled gate.
+//! A prepared bundle is NOT presentation authority: the real adapter must still
 //! use the existing native permit, full authority/Stop fence and present path.
+
+/// Integration availability only, never native authority or a present permit.
+/// C4 must add a real constructor bound to the joined G/P/I adapter owners;
+/// changing an environment variable or a saved bool cannot enable this route.
+#[derive(Default)]
+pub(crate) struct BootstrapRouteGate {
+    joined: bool,
+}
+
+impl BootstrapRouteGate {
+    /// Simulated joined adapters for headless policy tests, not C4 evidence.
+    #[cfg(test)]
+    pub(crate) fn for_test_joined() -> Self {
+        Self { joined: true }
+    }
+}
+
+/// OFF returns the input owner untouched, so the existing caller retains its
+/// own cancellation/error semantics and executes the existing route once.
+pub(crate) enum BootstrapDispatch<B: BootstrapBackend> {
+    Existing {
+        backend: B,
+        geometry: BootstrapGeometry,
+    },
+    Resident(Result<PreparedBootstrap<B>, RetainedBootstrapFailure<B>>),
+}
+
+pub(crate) fn dispatch_native_display<B: BootstrapBackend>(
+    gate: BootstrapRouteGate,
+    backend: B,
+    geometry: BootstrapGeometry,
+) -> BootstrapDispatch<B> {
+    if !gate.joined {
+        return BootstrapDispatch::Existing { backend, geometry };
+    }
+    BootstrapDispatch::Resident(prepare_joined_native_display(backend, geometry))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LogicalExtent {
     pub width: u32,
@@ -214,7 +254,7 @@ fn verify_extent<E>(
 /// One bounded bootstrap attempt. No loop, re-decode or second FX execution.
 /// Hidden logical geometry cannot become the render size; declared physical
 /// geometry is required. Every error returns the same owned backend bundle.
-pub(crate) fn prepare_native_display<B: BootstrapBackend>(
+fn prepare_joined_native_display<B: BootstrapBackend>(
     mut backend: B,
     geometry: BootstrapGeometry,
 ) -> Result<PreparedBootstrap<B>, RetainedBootstrapFailure<B>> {

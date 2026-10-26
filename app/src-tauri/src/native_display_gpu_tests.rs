@@ -1,4 +1,4 @@
-//! Conformance examples for the unwired bootstrap policy, using owned mocks.
+//! Conformance examples for the test-gated bootstrap policy, using owned mocks.
 //! These tests do not exercise a GPU, window, cleanup ACK or physical present.
 use super::*;
 use std::sync::{
@@ -24,8 +24,8 @@ fn hidden() -> BootstrapGeometry {
     BootstrapGeometry::Hidden {
         declared_physical: EXPECTED,
         observed_logical: LogicalExtent {
-            width: 1280,
-            height: 800,
+            width: 1920,
+            height: 1080,
         },
     }
 }
@@ -252,6 +252,13 @@ impl BootstrapBackend for FakeBackend {
 
 type Attempt = Result<PreparedBootstrap<FakeBackend>, RetainedBootstrapFailure<FakeBackend>>;
 
+fn prepare_native_display(backend: FakeBackend, geometry: BootstrapGeometry) -> Attempt {
+    match dispatch_native_display(BootstrapRouteGate::for_test_joined(), backend, geometry) {
+        BootstrapDispatch::Resident(attempt) => attempt,
+        BootstrapDispatch::Existing { .. } => panic!("joined fixture did not select bootstrap"),
+    }
+}
+
 fn success(attempt: Attempt) -> PreparedBootstrap<FakeBackend> {
     match attempt {
         Ok(prepared) => prepared,
@@ -293,6 +300,52 @@ fn assert_complete_drop(witness: &Witness, with_ready: bool) {
         actual, expected,
         "every owned mock resource is released exactly once"
     );
+}
+
+#[test]
+fn control_plane_native_gpu_bootstrap_default_gate_retains_existing_route_without_side_effects() {
+    let geometries = [
+        hidden(),
+        BootstrapGeometry::Visible {
+            observed_physical: EXPECTED,
+        },
+        BootstrapGeometry::Hidden {
+            declared_physical: PhysicalExtent {
+                width: 0,
+                height: 0,
+            },
+            observed_logical: LogicalExtent {
+                width: 1920,
+                height: 1080,
+            },
+        },
+    ];
+    for geometry in geometries {
+        for stopped in [false, true] {
+            let (mut backend, witness) = FakeBackend::new();
+            // Neither a failed authority nor a failing resident initializer is
+            // consulted while C4 is unavailable. The original route owns both.
+            backend.authority_error = Some(Check::Initial);
+            backend.fail_operation = Some(Op::InitializeUnconfigured);
+            witness.stop.store(stopped, Ordering::Release);
+            let outcome = dispatch_native_display(BootstrapRouteGate::default(), backend, geometry);
+            let BootstrapDispatch::Existing {
+                backend,
+                geometry: returned_geometry,
+            } = outcome
+            else {
+                panic!("the default gate must not enter resident bootstrap");
+            };
+            assert_eq!(returned_geometry, geometry);
+            assert_eq!(backend.owned_names(), vec!["window", "stop"]);
+            assert_eq!(backend.is_stopped(), stopped);
+            assert!(witness.events.lock().unwrap().is_empty());
+            assert_eq!(witness.preparations(), 0);
+            witness.assert_retained();
+            drop(backend);
+            assert_eq!(*witness.dropped.lock().unwrap(), vec!["window", "stop"]);
+        }
+    }
 }
 
 #[test]

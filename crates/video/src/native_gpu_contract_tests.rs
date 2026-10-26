@@ -20,6 +20,44 @@ fn frame_id() -> NativeFrameId {
         geometry_generation: 5,
     }
 }
+
+#[test]
+fn c1_native_contract_authoritative_history_scope_excludes_request_sequence() {
+    let authoritative = frame_id();
+    let scope = authoritative.history_scope();
+    for request_sequence in [0, 1, authoritative.request_sequence, u64::MAX] {
+        let later = NativeFrameId {
+            request_sequence,
+            ..authoritative
+        };
+        assert!(scope.matches(later));
+        assert_eq!(later.history_scope(), scope);
+        assert_eq!(scope.at_request(request_sequence), later);
+    }
+    // The scope is captured before inspecting incoming results; a foreign
+    // result cannot replace the authoritative output/epoch/geometry identity.
+    let changes: &[fn(&mut NativeFrameId)] = &[
+        |value| value.output_id += 1,
+        |value| value.project_epoch += 1,
+        |value| value.geometry_generation += 1,
+    ];
+    for change in changes {
+        let mut foreign = authoritative;
+        change(&mut foreign);
+        assert!(!scope.matches(foreign));
+        assert_ne!(foreign.history_scope(), scope);
+        assert_eq!(
+            scope.at_request(authoritative.request_sequence),
+            authoritative
+        );
+    }
+    let later = scope.at_request(authoritative.request_sequence + 1);
+    assert_ne!(
+        later, authoritative,
+        "a history scope is not a frame receipt"
+    );
+}
+
 fn entry_id() -> HistoryEntryId {
     HistoryEntryId {
         input: VideoRenderInputKey {

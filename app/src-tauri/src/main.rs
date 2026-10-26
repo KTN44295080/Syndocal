@@ -103,6 +103,8 @@ use video_monitor_snapshot::capture_video_monitor_snapshot;
 mod live_video_monitor_packet;
 mod live_video_output_health;
 mod native_display_lease_boundary;
+#[cfg(test)]
+mod native_display_gpu;
 mod video_output_pacer;
 mod output_owner_retirement;
 use live_video_monitor_packet::*;

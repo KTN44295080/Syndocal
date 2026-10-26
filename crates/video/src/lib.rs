@@ -28,6 +28,9 @@ mod builtin_isf;
 #[path = "decode_ahead_tests.rs"]
 mod decode_ahead_tests;
 mod ffmpeg_cancellable_process;
+#[cfg(test)]
+#[path = "frame_queue_policy_tests.rs"]
+mod frame_queue_policy_tests;
 mod generator;
 mod gpu_compositor;
 #[cfg(test)]
@@ -49,7 +52,6 @@ mod libav_decoder;
 pub mod native_frame_timing;
 #[cfg(feature = "qa-native-frame-timing")]
 use native_frame_timing::{span as native_span, Phase as NativePhase};
-#[cfg(test)]
 pub(crate) mod native_gpu_contract;
 #[cfg(test)]
 pub(crate) mod native_gpu_output;
@@ -61,7 +63,6 @@ pub(crate) mod native_gpu_result;
 pub(crate) mod native_gpu_budget;
 #[cfg(test)]
 pub(crate) mod isf_native_gpu;
-#[cfg(test)]
 pub(crate) mod frame_history_policy;
 #[cfg(test)]
 pub(crate) mod native_gpu_history;
@@ -262,8 +263,28 @@ pub struct FrameQueue {
     /// Frames are shared so composition can read them without copying the
     /// pixels out of the queue every tick.
     slots: Vec<Option<Arc<VideoFrame>>>,
-    start: usize,
     len: usize,
+    /// A private slot projection for the canonical policy. Its IDs never leave
+    /// this queue and are not native history entries or authored frame clocks.
+    policy: Vec<frame_history_policy::HistoryMeta>,
+    policy_revision: u64,
+}
+
+/// Prepared metadata retains exact source owners until it is applied or dropped.
+/// The revision belongs only to this CPU policy transaction.
+struct PreparedFrameQueuePush {
+    policy: frame_history_policy::HistoryPlan,
+    sources: Vec<Option<Arc<VideoFrame>>>,
+    incoming: Arc<VideoFrame>,
+    next_revision: u64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FrameQueuePlanError {
+    StaleRevision,
+    SourceMismatch,
+    IncomingMismatch,
+    InvalidPlan,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1301,7 +1322,7 @@ pub struct VideoRuntimeConfig {
 impl Default for VideoRuntimeConfig {
     fn default() -> Self {
         Self {
-            frame_queue_capacity: 8,
+            frame_queue_capacity: frame_history_policy::NATIVE_HISTORY_CAPACITY,
             preview_width: 320,
             preview_height: 180,
         }
@@ -2648,8 +2669,9 @@ impl FrameQueue {
             key,
             layer_id,
             slots: vec![None; capacity],
-            start: 0,
             len: 0,
+            policy: Vec::with_capacity(capacity),
+            policy_revision: 0,
         }
     }
 
@@ -2679,34 +2701,172 @@ impl FrameQueue {
 
     /// `push` of a shared frame: the queue keeps the same frame rather than a
     /// copy of it.
-    fn push_shared(&mut self, mut frame: Arc<VideoFrame>) -> FrameQueuePush {
+    fn push_shared(&mut self, frame: Arc<VideoFrame>) -> FrameQueuePush {
+        let prepared = self.prepare_push(frame);
+        self.apply_prepared_push(prepared)
+            .expect("fresh frame queue policy plan must match its source")
+    }
+
+    fn next_policy_revision(&self) -> u64 {
+        self.policy_revision
+            .checked_add(1)
+            .expect("frame queue policy revision exhausted")
+    }
+
+    fn slot_meta(&self, slot: usize, frame: &VideoFrame) -> frame_history_policy::HistoryMeta {
+        frame_history_policy::HistoryMeta {
+            id: native_gpu_contract::HistoryEntryId {
+                input: self.key,
+                queue_epoch: 0,
+                sequence: slot as u64,
+            },
+            pts_ms: frame.pts_ms,
+            duration_ms: frame.duration_ms,
+        }
+    }
+
+    fn prepare_push(&self, mut frame: Arc<VideoFrame>) -> PreparedFrameQueuePush {
+        // No queue or payload mutation occurs before the overflow check.
+        let next_revision = self.next_policy_revision();
         if frame.layer_id != self.layer_id {
             Arc::make_mut(&mut frame).layer_id = self.layer_id;
         }
-        if let Some(index) = (0..self.len)
-            .map(|offset| (self.start + offset) % self.capacity())
-            .find(|index| {
-                self.slots[*index]
-                    .as_ref()
-                    .is_some_and(|existing| existing.pts_ms == frame.pts_ms)
-            })
-        {
-            self.slots[index] = Some(frame);
-            return FrameQueuePush::Inserted;
+        // Existing entries use slot [0, len); capacity is a distinct incoming
+        // marker for this plan. No public/native sequence is issued here.
+        let incoming = self.slot_meta(self.capacity(), &frame);
+        let policy = frame_history_policy::plan_history_update(
+            &self.policy,
+            &[incoming],
+            self.capacity(),
+            frame.pts_ms,
+        )
+        .expect("frame queue metadata must satisfy the canonical policy")
+        .bind_revision(self.policy_revision);
+        PreparedFrameQueuePush {
+            policy,
+            sources: self
+                .iter_shared()
+                .map(|frame| Some(Arc::clone(frame)))
+                .collect(),
+            incoming: frame,
+            next_revision,
         }
-        let result = if self.len == self.capacity() {
-            let index = self.start;
-            self.slots[index] = Some(frame);
-            self.start = (self.start + 1) % self.capacity();
-            FrameQueuePush::DroppedOldest
-        } else {
-            let index = (self.start + self.len) % self.capacity();
-            self.slots[index] = Some(frame);
-            self.len += 1;
-            FrameQueuePush::Inserted
+    }
+
+    fn apply_prepared_push(
+        &mut self,
+        prepared: PreparedFrameQueuePush,
+    ) -> Result<FrameQueuePush, FrameQueuePlanError> {
+        let PreparedFrameQueuePush {
+            policy,
+            mut sources,
+            incoming,
+            next_revision,
+        } = prepared;
+        if policy.expected_revision() != self.policy_revision
+            || self.policy_revision.checked_add(1) != Some(next_revision)
+        {
+            return Err(FrameQueuePlanError::StaleRevision);
+        }
+        if policy.current() != self.policy.as_slice()
+            || sources.len() != self.len
+            || !sources
+                .iter()
+                .zip(self.iter_shared())
+                .all(|(source, current)| {
+                    source
+                        .as_ref()
+                        .is_some_and(|source| Arc::ptr_eq(source, current))
+                })
+        {
+            return Err(FrameQueuePlanError::SourceMismatch);
+        }
+        let incoming_meta = self.slot_meta(self.capacity(), &incoming);
+        if incoming.layer_id != self.layer_id
+            || policy.incoming() != [incoming_meta]
+            || policy.selected() != Some(incoming_meta.id)
+        {
+            return Err(FrameQueuePlanError::IncomingMismatch);
+        }
+        if policy.survivors().len() > self.capacity() || policy.pushes().len() != 1 {
+            return Err(FrameQueuePlanError::InvalidPlan);
+        }
+        let mut incoming_count = 0;
+        for meta in policy.survivors() {
+            if meta.id == incoming_meta.id {
+                if *meta != incoming_meta {
+                    return Err(FrameQueuePlanError::InvalidPlan);
+                }
+                incoming_count += 1;
+            } else {
+                let index = usize::try_from(meta.id.sequence)
+                    .map_err(|_| FrameQueuePlanError::InvalidPlan)?;
+                if policy.current().get(index) != Some(meta) {
+                    return Err(FrameQueuePlanError::InvalidPlan);
+                }
+            }
+        }
+        if incoming_count != 1 {
+            return Err(FrameQueuePlanError::InvalidPlan);
+        }
+        let replaced = policy
+            .current()
+            .iter()
+            .find(|meta| meta.pts_ms == incoming_meta.pts_ms);
+        let result = match policy.pushes()[0] {
+            frame_history_policy::HistoryPushKind::Inserted => {
+                if replaced.is_some()
+                    || self.len == self.capacity()
+                    || policy.survivors().len() != self.len + 1
+                {
+                    return Err(FrameQueuePlanError::InvalidPlan);
+                }
+                FrameQueuePush::Inserted
+            }
+            frame_history_policy::HistoryPushKind::Replaced { old } => {
+                if replaced.map(|meta| meta.id) != Some(old)
+                    || policy.survivors().len() != self.len
+                    || policy.survivors().iter().any(|meta| meta.id == old)
+                {
+                    return Err(FrameQueuePlanError::InvalidPlan);
+                }
+                FrameQueuePush::Inserted
+            }
+            frame_history_policy::HistoryPushKind::DroppedOldest { old } => {
+                if replaced.is_some()
+                    || self.len != self.capacity()
+                    || policy.survivors().len() != self.capacity()
+                    || policy.current().first().map(|meta| meta.id) != Some(old)
+                    || policy.survivors().iter().any(|meta| meta.id == old)
+                {
+                    return Err(FrameQueuePlanError::InvalidPlan);
+                }
+                FrameQueuePush::DroppedOldest
+            }
         };
-        self.sort_by_pts();
-        result
+
+        // All checks precede mutation. Move the retained Arc owners according
+        // to the plan; no packed pixels are copied or cloned.
+        let mut incoming = Some(incoming);
+        self.policy.clear();
+        for (index, meta) in policy.survivors().iter().enumerate() {
+            let frame = if meta.id == incoming_meta.id {
+                incoming.take().expect("one incoming survivor")
+            } else {
+                sources[meta.id.sequence as usize]
+                    .take()
+                    .expect("validated source owner")
+            };
+            let current_meta = self.slot_meta(index, &frame);
+            self.policy.push(current_meta);
+            self.slots[index] = Some(frame);
+        }
+        self.len = self.policy.len();
+        for slot in &mut self.slots[self.len..] {
+            *slot = None;
+        }
+        self.policy_revision = next_revision;
+        Ok(result)
     }
 
     pub fn nearest(&self, target_ms: u64) -> Option<&VideoFrame> {
@@ -2719,25 +2879,42 @@ impl FrameQueue {
     }
 
     fn nearest_shared(&self, target_ms: u64) -> Option<&Arc<VideoFrame>> {
-        self.iter_shared()
-            .min_by_key(|frame| frame.pts_ms.abs_diff(target_ms))
+        let selected = frame_history_policy::select_nearest(&self.policy, target_ms)?;
+        self.slots[selected.sequence as usize].as_ref()
     }
 
     fn frame_at_or_before_shared(&self, target_ms: u64) -> Option<&Arc<VideoFrame>> {
-        self.iter_shared()
+        let selected =
+            frame_history_policy::select_at_or_before_or_nearest(&self.policy, target_ms)?;
+        // The public CPU predecessor method deliberately has no nearest fallback.
+        self.slots[selected.sequence as usize]
+            .as_ref()
             .filter(|frame| frame.pts_ms <= target_ms)
-            .max_by_key(|frame| frame.pts_ms)
     }
 
     pub fn drop_before(&mut self, target_ms: u64) -> usize {
-        let original_len = self.len;
-        let mut frames = self
-            .drain_frames()
-            .into_iter()
-            .filter(|frame| frame.pts_ms >= target_ms)
-            .collect::<Vec<_>>();
-        let removed = original_len.saturating_sub(frames.len());
-        self.rebuild_from_sorted(&mut frames);
+        if self
+            .policy
+            .first()
+            .is_none_or(|meta| meta.pts_ms >= target_ms)
+        {
+            return 0;
+        }
+        let next_revision = self.next_policy_revision();
+        let removed = frame_history_policy::drop_before(&mut self.policy, target_ms);
+        // Ascending PTS means this is a prefix removal. Each source slot is at
+        // or after its destination, so moving the survivors needs no scratch Vec.
+        for index in 0..self.policy.len() {
+            let source = self.policy[index].id.sequence as usize;
+            let frame = self.slots[source].take().expect("canonical retained owner");
+            self.policy[index] = self.slot_meta(index, &frame);
+            self.slots[index] = Some(frame);
+        }
+        self.len = self.policy.len();
+        for slot in &mut self.slots[self.len..] {
+            *slot = None;
+        }
+        self.policy_revision = next_revision;
         removed
     }
 
@@ -2746,39 +2923,7 @@ impl FrameQueue {
     }
 
     fn iter_shared(&self) -> impl Iterator<Item = &Arc<VideoFrame>> {
-        (0..self.len).filter_map(|offset| {
-            let index = (self.start + offset) % self.capacity();
-            self.slots[index].as_ref()
-        })
-    }
-
-    fn sort_by_pts(&mut self) {
-        let mut frames = self.drain_frames();
-        self.rebuild_from_sorted(&mut frames);
-    }
-
-    fn drain_frames(&mut self) -> Vec<Arc<VideoFrame>> {
-        let frames = (0..self.len)
-            .filter_map(|offset| {
-                let index = (self.start + offset) % self.capacity();
-                self.slots[index].take()
-            })
-            .collect::<Vec<_>>();
-        self.start = 0;
-        self.len = 0;
-        frames
-    }
-
-    fn rebuild_from_sorted(&mut self, frames: &mut Vec<Arc<VideoFrame>>) {
-        frames.sort_by_key(|frame| frame.pts_ms);
-        for slot in &mut self.slots {
-            *slot = None;
-        }
-        self.start = 0;
-        self.len = frames.len().min(self.capacity());
-        for (index, frame) in frames.drain(..self.len).enumerate() {
-            self.slots[index] = Some(frame);
-        }
+        self.slots[..self.len].iter().filter_map(Option::as_ref)
     }
 }
 

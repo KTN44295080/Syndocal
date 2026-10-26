@@ -1,11 +1,13 @@
-//! I lane: mock-first output ownership and publication policy (INTERFACE-01 sections 6 and 9).
-//! The lib.rs gate remains test-only. Backend adapters, native wiring, and proof
-//! minting from real G/P receipts are deferred to C1; the policy never calls a
-//! test-only success builder.
+//! I lane: output ownership and cache publication (INTERFACE-01 sections 6 and 9).
+//! G's resolved ISF/composition receipts and P's copied/unmapped snapshot are
+//! joined here before cache publication. Native routing stays test-only until C4.
 
 use protocol::{VideoOutputId, VideoOutputMapping};
 
+use crate::native_gpu_context::ResolvedGpuPhase;
 use crate::native_gpu_contract::*;
+use crate::native_gpu_result::IsfValidatedReceipt;
+use crate::native_gpu_snapshot::{CacheBoundSnapshot, CompletedPremappingSnapshot};
 use crate::{
     VideoFrame, VideoOutputLastValidKey, VideoOutputMappingIdentity, VideoOutputRenderEvidence,
     VideoOutputRenderFreshness, VideoPixelFormat, VideoRenderCancellation,
@@ -312,72 +314,64 @@ impl<I> PreparedNativeOutput<I> {
     }
 }
 
-/// Metadata inside an adapter's validated phase result. This is not itself a
-/// production minting capability; Completed has only a test fixture constructor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct OutputPhaseIdentity {
-    pub frame: NativeFrameId,
-    pub submission: GpuSubmissionId,
-    pub phase: GpuPhase,
+/// Each state retains the affine GPU owner. In particular, a failed P cache
+/// handoff must not drop that owner before the driver's retirement path sees it.
+enum OutputSnapshotOwnership<G> {
+    Copied(CompletedPremappingSnapshot<G>),
+    Bound(CacheBoundSnapshot<G>),
+    Retained { _gpu: G },
 }
 
 pub(crate) struct CompletedNativeOutput<G> {
-    gpu: G,
-    gpu_identity: SnapshotIdentity,
-    snapshot_identity: SnapshotIdentity,
-    pixels: Option<VideoFrame>,
-    isf: Result<OutputPhaseIdentity, NativeGpuFault>,
-    composition: Result<OutputPhaseIdentity, NativeGpuFault>,
-    copied_unmapped: bool,
+    isf: IsfValidatedReceipt,
+    composition: ResolvedGpuPhase,
+    descriptor: CacheCommitDescriptor,
+    snapshot: Option<OutputSnapshotOwnership<G>>,
 }
 
 impl<G> CompletedNativeOutput<G> {
-    /// Negative fixtures may deliberately disagree. Real construction will need
-    /// G/P-owned phase proofs plus a completed copy/unmap owner at C1.
-    #[cfg(test)]
-    pub(crate) fn for_test(
-        gpu: G,
-        gpu_identity: SnapshotIdentity,
-        snapshot_identity: SnapshotIdentity,
-        pixels: VideoFrame,
-        isf: Result<OutputPhaseIdentity, NativeGpuFault>,
-        composition: Result<OutputPhaseIdentity, NativeGpuFault>,
-        copied_unmapped: bool,
+    /// Construction requires real G proofs and P's completed copy/unmap owner.
+    /// The policy still validates their common transaction, frame, and binding.
+    pub(crate) fn new(
+        isf: IsfValidatedReceipt,
+        composition: ResolvedGpuPhase,
+        descriptor: CacheCommitDescriptor,
+        snapshot: CompletedPremappingSnapshot<G>,
     ) -> Self {
         Self {
-            gpu,
-            gpu_identity,
-            snapshot_identity,
-            pixels: Some(pixels),
             isf,
             composition,
-            copied_unmapped,
+            descriptor,
+            snapshot: Some(OutputSnapshotOwnership::Copied(snapshot)),
         }
     }
 
+    pub(crate) fn descriptor(&self) -> &CacheCommitDescriptor {
+        &self.descriptor
+    }
+
     fn validate_phases(&self, request: &NativeOutputRequest) -> Result<(), NativeGpuFault> {
-        for (result, phase) in [
-            (&self.isf, GpuPhase::IsfBatch),
+        let isf = self.isf.phase();
+        for (resolved, expected_phase) in [
+            (isf, GpuPhase::IsfBatch),
             (&self.composition, GpuPhase::CompositionSnapshot),
         ] {
-            match result {
-                Err(error) => return Err(copy_fault(error)),
-                Ok(identity)
-                    if identity.frame == request.frame
-                        && identity.submission.context == request.context
-                        && identity.phase == phase => {}
-                Ok(_) => {
-                    return Err(fault(request, phase, NativeGpuFaultKind::IdentityMismatch));
-                }
+            resolved.validation().map_err(copy_fault)?;
+            if resolved.context() != request.context
+                || resolved.phase() != expected_phase
+                || !request.frame.history_scope().matches(resolved.frame())
+                || resolved.frame().request_sequence != request.frame.request_sequence
+            {
+                return Err(fault(
+                    request,
+                    expected_phase,
+                    NativeGpuFaultKind::IdentityMismatch,
+                ));
             }
         }
-        let isf = self.isf.as_ref().expect("validated ISF result");
-        let composition = self
-            .composition
-            .as_ref()
-            .expect("validated composition result");
-        if composition.submission != self.snapshot_identity.completed_submission
-            || isf.submission.sequence >= composition.submission.sequence
+        if isf.transaction() != self.composition.transaction()
+            || isf.submission().sequence >= self.composition.submission().sequence
+            || self.composition.submission() != self.descriptor.snapshot.completed_submission
         {
             return Err(fault(
                 request,
@@ -389,17 +383,9 @@ impl<G> CompletedNativeOutput<G> {
     }
 
     fn validate_snapshot(&self, request: &NativeOutputRequest) -> Result<(), NativeGpuFault> {
-        let identity = self.snapshot_identity;
-        let pixels_match = self.pixels.as_ref().is_some_and(|pixels| {
-            pixels.layer_id == 0
-                && pixels.width == identity.width
-                && pixels.height == identity.height
-                && pixels.pts_ms == identity.pts_ms
-                && pixels.duration_ms == identity.duration_ms
-                && pixels.format == identity.format
-                && Some(pixels.data.len()) == packed_len(identity.width, identity.height)
-        });
-        if self.gpu_identity != identity
+        let identity = self.descriptor.snapshot;
+        if self.descriptor.key != request.key
+            || self.descriptor.fence != request.fence
             || identity.frame != request.frame
             || identity.allocation.context != request.context
             || identity.completed_submission.context != request.context
@@ -408,7 +394,7 @@ impl<G> CompletedNativeOutput<G> {
             || identity.pts_ms != request.pts_ms
             || identity.duration_ms != request.duration_ms
             || identity.format != VideoPixelFormat::Rgba8
-            || !pixels_match
+            || packed_len(identity.width, identity.height).is_none()
         {
             return Err(fault(
                 request,
@@ -417,6 +403,52 @@ impl<G> CompletedNativeOutput<G> {
             ));
         }
         Ok(())
+    }
+
+    /// This is the only Ready constructor. A copied snapshot alone cannot enter
+    /// it: P must already have bound the same snapshot to an actual cache receipt.
+    fn into_ready(
+        mut self,
+        request: NativeOutputRequest,
+    ) -> Result<ReadyNativeGpuOutput<G>, (OutputRejection, Self)> {
+        if let Err(error) = self
+            .validate_phases(&request)
+            .and_then(|()| self.validate_snapshot(&request))
+        {
+            return Err((OutputRejection::Fault(error), self));
+        }
+        if !matches!(self.snapshot, Some(OutputSnapshotOwnership::Bound(_))) {
+            return Err((
+                OutputRejection::Fault(fault(
+                    &request,
+                    GpuPhase::CompositionSnapshot,
+                    NativeGpuFaultKind::StateMismatch,
+                )),
+                self,
+            ));
+        }
+        let Some(OutputSnapshotOwnership::Bound(bound)) = self.snapshot.take() else {
+            unreachable!("bound ownership checked before Ready handoff");
+        };
+        let (gpu, receipt) = bound.into_parts();
+        if receipt.descriptor() != &self.descriptor {
+            self.snapshot = Some(OutputSnapshotOwnership::Retained { _gpu: gpu });
+            return Err((
+                OutputRejection::Fault(fault(
+                    &request,
+                    GpuPhase::CompositionSnapshot,
+                    NativeGpuFaultKind::IdentityMismatch,
+                )),
+                self,
+            ));
+        }
+        Ok(ReadyNativeGpuOutput {
+            gpu,
+            snapshot: self.descriptor.snapshot,
+            request,
+            receipt,
+            retry_remaining: true,
+        })
     }
 }
 
@@ -431,6 +463,8 @@ pub(crate) trait BoundSnapshotCache: CpuSnapshotCommit {
         &mut self,
         binding: ValidatedSnapshotBinding,
     ) -> Result<(), SnapshotCommitRejection>;
+    /// Clear a one-attempt binding even if P rejects before calling commit.
+    fn discard_binding(&mut self);
 }
 
 pub(crate) struct PendingNativeGpuOutput<P> {
@@ -492,13 +526,12 @@ impl<P> PendingNativeGpuOutput<P> {
                 let result =
                     complete_and_commit(&self.request, &mut completed, cache, authority, cancel);
                 match result {
-                    Ok(receipt) => PolledNativeOutput::Ready(ReadyNativeGpuOutput {
-                        gpu: completed.gpu,
-                        request: self.request,
-                        snapshot: completed.snapshot_identity,
-                        receipt,
-                        retry_remaining: true,
-                    }),
+                    Ok(()) => match completed.into_ready(self.request) {
+                        Ok(ready) => PolledNativeOutput::Ready(ready),
+                        Err((reason, completed)) => PolledNativeOutput::Retiring(
+                            RetiringNativeOutput::new(reason, driver.retire_completed(completed)),
+                        ),
+                    },
                     Err(reason) => PolledNativeOutput::Retiring(RetiringNativeOutput::new(
                         reason,
                         driver.retire_completed(completed),
@@ -515,17 +548,17 @@ fn complete_and_commit<G>(
     cache: &mut impl BoundSnapshotCache,
     authority: &impl NativeOutputAuthority,
     cancel: &dyn VideoRenderCancellation,
-) -> Result<CacheCommitReceipt, OutputRejection> {
+) -> Result<(), OutputRejection> {
     guard(request, OutputBoundary::AfterPoll, authority, cancel)?;
     completed
         .validate_phases(request)
-        .map_err(OutputRejection::Fault)?;
+        .map_err(|error| cancelled_or_fault(error, cancel))?;
     guard(request, OutputBoundary::PhasesResolved, authority, cancel)?;
-    if !completed.copied_unmapped {
+    if !matches!(completed.snapshot, Some(OutputSnapshotOwnership::Copied(_))) {
         return Err(OutputRejection::Fault(fault(
             request,
             GpuPhase::CompositionSnapshot,
-            NativeGpuFaultKind::SnapshotCopy,
+            NativeGpuFaultKind::StateMismatch,
         )));
     }
     guard(
@@ -536,38 +569,36 @@ fn complete_and_commit<G>(
     )?;
     completed
         .validate_snapshot(request)
-        .map_err(OutputRejection::Fault)?;
+        .map_err(|error| cancelled_or_fault(error, cancel))?;
     guard(
         request,
         OutputBoundary::BeforeCacheCommit,
         authority,
         cancel,
     )?;
-    let descriptor = CacheCommitDescriptor {
-        key: request.key.clone(),
-        snapshot: completed.snapshot_identity,
-        fence: request.fence,
-    };
-    cache
-        .bind_validated(ValidatedSnapshotBinding {
-            descriptor: descriptor.clone(),
-        })
-        .map_err(|reason| cancelled_or_cache(reason, cancel))?;
-    let pixels = completed.pixels.take().expect("validated owned snapshot");
-    let receipt = cache
-        .commit(&request.key, request.frame, pixels, request.fence)
-        .map_err(|reason| cancelled_or_cache(reason, cancel))?;
-    guard(request, OutputBoundary::AfterCacheCommit, authority, cancel)?;
-    // A buggy adapter must not be able to seed Ready with a foreign cache token.
-    if receipt.descriptor() != &descriptor {
-        return Err(OutputRejection::Fault(fault(
-            request,
-            GpuPhase::CompositionSnapshot,
-            NativeGpuFaultKind::IdentityMismatch,
-        )));
+    if let Err(reason) = cache.bind_validated(ValidatedSnapshotBinding {
+        descriptor: completed.descriptor.clone(),
+    }) {
+        cache.discard_binding();
+        return Err(cancelled_or_cache(reason, cancel));
     }
+    let Some(OutputSnapshotOwnership::Copied(snapshot)) = completed.snapshot.take() else {
+        unreachable!("copy ownership checked before binding");
+    };
+    let publication = snapshot.commit(cache, &completed.descriptor, cancel);
+    // P can reject the current descriptor or Stop without invoking cache.commit.
+    // A one-attempt binding must never survive to a later completion.
+    cache.discard_binding();
+    match publication {
+        Ok(bound) => completed.snapshot = Some(OutputSnapshotOwnership::Bound(bound)),
+        Err(failure) => {
+            completed.snapshot = Some(OutputSnapshotOwnership::Retained { _gpu: failure.gpu });
+            return Err(cancelled_or_cache(failure.reason, cancel));
+        }
+    }
+    guard(request, OutputBoundary::AfterCacheCommit, authority, cancel)?;
     guard(request, OutputBoundary::BeforeReady, authority, cancel)?;
-    Ok(receipt)
+    Ok(())
 }
 
 /// Non-Clone. There is no public/test constructor from Pending or metadata.
@@ -816,8 +847,8 @@ pub(crate) enum CacheFenceError {
     SequenceExhausted,
 }
 
-/// CPU publication policy only, independent of a GPU backend. A future cache
-/// adapter converts PublishedSnapshot into the shared opaque cache receipt.
+/// CPU publication policy, independent of a GPU backend. Its one-attempt writer
+/// mints the shared receipt only after commit_bound moves pixels into this cache.
 pub(crate) struct NativeOutputCache {
     output_id: VideoOutputId,
     target: Option<(VideoOutputLastValidKey, NativeFrameId)>,
@@ -832,12 +863,75 @@ pub(crate) struct PublishedSnapshot {
     descriptor: CacheCommitDescriptor,
 }
 impl PublishedSnapshot {
-    pub(crate) fn descriptor(&self) -> &CacheCommitDescriptor {
-        &self.descriptor
+    pub(crate) fn into_descriptor(self) -> CacheCommitDescriptor {
+        self.descriptor
+    }
+}
+
+/// Short mutable borrow of the actual cache. It cannot accept unbound metadata
+/// or carry a previous attempt's binding across a failed snapshot handoff.
+pub(crate) struct NativeCacheWriter<'a> {
+    cache: &'a mut NativeOutputCache,
+    cancel: &'a dyn VideoRenderCancellation,
+    binding: Option<ValidatedSnapshotBinding>,
+}
+
+impl BoundSnapshotCache for NativeCacheWriter<'_> {
+    fn bind_validated(
+        &mut self,
+        binding: ValidatedSnapshotBinding,
+    ) -> Result<(), SnapshotCommitRejection> {
+        if self.binding.take().is_some() {
+            return Err(SnapshotCommitRejection::SnapshotIdentityMismatch);
+        }
+        self.binding = Some(binding);
+        Ok(())
+    }
+
+    fn discard_binding(&mut self) {
+        self.binding = None;
+    }
+}
+
+impl CpuSnapshotCommit for NativeCacheWriter<'_> {
+    fn commit(
+        &mut self,
+        key: &VideoOutputLastValidKey,
+        frame: NativeFrameId,
+        snapshot: VideoFrame,
+        fence: CachePublicationFence,
+    ) -> Result<CacheCommitReceipt, SnapshotCommitRejection> {
+        let binding = self
+            .binding
+            .take()
+            .ok_or(SnapshotCommitRejection::SnapshotIdentityMismatch)?;
+        self.cache
+            .commit_bound(binding, key, frame, snapshot, fence, self.cancel)
+            .map(CacheCommitReceipt::from_publication)
+    }
+
+    fn invalidate_output(&mut self, output_id: VideoOutputId) {
+        if self.cache.output_id == output_id {
+            self.discard_binding();
+            // Overflow also clears/revokes the target and poisons future writes.
+            // This trait has no success receipt to misreport on that path.
+            let _ = self.cache.blackout();
+        }
     }
 }
 
 impl NativeOutputCache {
+    pub(crate) fn writer<'a>(
+        &'a mut self,
+        cancel: &'a dyn VideoRenderCancellation,
+    ) -> NativeCacheWriter<'a> {
+        NativeCacheWriter {
+            cache: self,
+            cancel,
+            binding: None,
+        }
+    }
+
     pub(crate) fn new(output_id: VideoOutputId) -> Self {
         Self {
             output_id,
