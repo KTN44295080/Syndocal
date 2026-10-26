@@ -40622,8 +40622,8 @@ button.timelineExternalSourceCard:active,
   }
 }
 
-.dmxPatchSelectionControls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.dmxPatchSelectionControls label { display: flex; align-items: center; gap: 8px; }
+.dmxPatchSelectionControls { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 2px; }
+.dmxPatchSelectionControls label { display: flex; align-items: center; gap: 4px; }
 .dmxPatchSelectionControls input { width: 90px; }
 .dmxPatchSelectionControls > span { color: var(--muted); }
 
@@ -40974,9 +40974,12 @@ body.outputBody, body.outputBody #root { background: #000; color: #fff; }
   font-size: 14px;
 }
 .app .layout .layout > .panel > .panelHeader { min-height: 44px; }
-/* The Patch source pane is the tightest column at 1366x768: the 44px title block already fills its
-   header, so the header takes no extra padding and the profile list keeps its rows. */
-.app .patchProfileBrowserPanel > .profileLoadHeader { padding-block: 0; }
+/* These two Patch headers use their existing controls to set the row height.
+   Keep the shared pane typography and every control's dimensions unchanged. */
+.app .layout .dmxPatchMap > .panelHeader,
+.app .layout .patchProfileBrowserPanel > .patchProfileBrowserHeader { padding-block: 0; }
+.app .layout .dmxPatchMap > .panelHeader > h3,
+.app .layout .patchProfileBrowserPanel > .patchProfileBrowserHeader > h2 { min-height: 28px; align-self: center; }
 .app .patchProfileBrowserPanel { gap: 4px; }
 
 /* Band left header: the Groups ribbon is the pane header of the Stage pane. */
