@@ -421,9 +421,19 @@ struct PhaseRecord<D: CompletionDriver> {
     complete: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FrameRecordStage {
+    Recording,
+    Sealed,
+    // Only the final, separate mapping/present submission may release the
+    // logical output slot. All strong owners and its reservation stay here.
+    PresentRetirement,
+}
+
 struct FrameRecord<D: CompletionDriver> {
     id: RetirementId,
     frame: NativeFrameId,
+    stage: FrameRecordStage,
     marker: Arc<AtomicU8>,
     reservation: Option<FrameReservation>,
     resources: Vec<Arc<dyn Any + Send + Sync>>,
@@ -492,7 +502,7 @@ impl<D: CompletionDriver> BrokerCore<D> {
         reservation: FrameReservation,
     ) -> Result<RetirementId, NativeGpuFault> {
         let admission = self.active().and_then(|()| {
-            if !self.frames.is_empty() {
+            if self.has_logical_frame() {
                 return Err(self.fault(
                     Some(frame),
                     GpuPhase::Initialize,
@@ -525,6 +535,7 @@ impl<D: CompletionDriver> BrokerCore<D> {
         self.frames.push(FrameRecord {
             id,
             frame,
+            stage: FrameRecordStage::Recording,
             marker: Arc::new(AtomicU8::new(ACTIVE_TOKEN)),
             reservation: Some(reservation),
             resources: Vec::new(),
@@ -536,6 +547,34 @@ impl<D: CompletionDriver> BrokerCore<D> {
             queued_write: false,
         });
         Ok(id)
+    }
+
+    fn has_logical_frame(&self) -> bool {
+        self.frames
+            .iter()
+            .any(|frame| frame.stage != FrameRecordStage::PresentRetirement)
+    }
+
+    fn seal(&mut self, index: usize) {
+        let frame = &mut self.frames[index];
+        // Do not detach ISF, snapshot, replay, initialization or mixed work.
+        // A submitted phase alone is insufficient: the transaction must be
+        // finished, its scope stack closed, and no cancellation/fault known.
+        // Scope completion and GPU completion still belong to this record.
+        frame.stage = if self.state == GpuOwnerState::Active
+            && frame.marker.load(Ordering::Acquire) == ACTIVE_TOKEN
+            && frame.open.is_none()
+            && !frame.queued_write
+            && frame.open_failure.is_none()
+            && frame.phases.len() == 1
+            && frame.phases[0].phase == GpuPhase::MappingPresent
+            && frame.phases[0].execution_failure.is_none()
+            && !matches!(frame.phases[0].scope_result, Some(Err(_)))
+        {
+            FrameRecordStage::PresentRetirement
+        } else {
+            FrameRecordStage::Sealed
+        };
     }
 
     fn index(&self, id: RetirementId) -> Result<usize, NativeGpuFault> {
@@ -555,14 +594,32 @@ impl<D: CompletionDriver> BrokerCore<D> {
     fn open(&mut self, id: RetirementId, phase: GpuPhase) -> Result<(), NativeGpuFault> {
         self.active()?;
         let index = self.index(id)?;
-        if self.frames[index].marker.load(Ordering::Acquire) != ACTIVE_TOKEN
+        if self.frames[index].stage != FrameRecordStage::Recording
+            || self.frames[index].marker.load(Ordering::Acquire) != ACTIVE_TOKEN
             || self.frames[index].open.is_some()
         {
             return Err(self.fault(
                 Some(self.frames[index].frame),
                 phase,
                 NativeGpuFaultKind::StateMismatch,
-                "cancelled transaction or unsealed phase",
+                "sealed or cancelled transaction, or unsealed phase",
+            ));
+        }
+        // At most one present retirement plus one logical output may be live.
+        // In particular, an alias-only present cannot grow an uncharged queue
+        // or overwrite pooled mapping resources before their previous use.
+        // Check before the caller pushes scopes, allocates or issues writes.
+        if phase == GpuPhase::MappingPresent
+            && self
+                .frames
+                .iter()
+                .any(|frame| frame.stage == FrameRecordStage::PresentRetirement)
+        {
+            return Err(self.fault(
+                Some(self.frames[index].frame),
+                phase,
+                NativeGpuFaultKind::StateMismatch,
+                "previous present must retire before another mapping phase",
             ));
         }
         self.frames[index].open = Some(phase);
@@ -1033,12 +1090,12 @@ impl NativeGpuOwner {
             .validate_unused_exact_plan(&reservation, plan)
             .and_then(|()| self.check_device())
             .and_then(|()| {
-                if !self.core.frames.is_empty() {
+                if self.core.has_logical_frame() {
                     return Err(self.core.fault(
                         Some(plan.frame()),
                         GpuPhase::IsfBatch,
                         NativeGpuFaultKind::StateMismatch,
-                        "serial CPU admission requires a drained GPU owner",
+                        "serial CPU admission requires a free logical output slot",
                     ));
                 }
                 Ok(())
@@ -1053,13 +1110,13 @@ impl NativeGpuOwner {
         &mut self,
         reservation: FrameReservation,
     ) -> Result<(), (NativeGpuFault, FrameReservation)> {
-        if !self.core.frames.is_empty() {
+        if self.core.has_logical_frame() {
             return Err((
                 self.core.fault(
                     Some(reservation.frame()),
                     GpuPhase::IsfBatch,
                     NativeGpuFaultKind::StateMismatch,
-                    "cannot discard a reservation while a frame is pending",
+                    "cannot discard a reservation while a logical frame is pending",
                 ),
                 reservation,
             ));
@@ -1503,6 +1560,7 @@ impl NativeGpuFrameTxn<'_> {
         if self.owner.core.frames[index].open.is_some() {
             self.owner.abandon_phase(self.id);
         }
+        self.owner.core.seal(index);
         PendingGpuTransaction {
             id: self.id,
             marker: Arc::clone(&self.owner.core.frames[index].marker),

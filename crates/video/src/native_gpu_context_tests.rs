@@ -773,3 +773,716 @@ fn native_gpu_cancel_port_keeps_registry_when_caller_consumes_ticket() {
     assert_eq!(owner.budget_snapshot().reservation_count, 0);
     assert_eq!(owner.budget_snapshot().managed_bytes(), 0);
 }
+
+// The scripted driver makes GPU progress controllable. These tests distinguish
+// a released logical slot from a completed/reaped present submission.
+#[test]
+fn native_gpu_g3_sealed_present_admits_one_next_isf_without_poll_or_early_release() {
+    let mut core = scripted();
+    let reservation = reserve(&mut core, 1, 32);
+    let old = core.begin(frame(1), reservation).unwrap();
+    let old_owner = retained(&mut core, old, 32);
+    let present = phase(&mut core, old, GpuPhase::MappingPresent, Ok(()));
+
+    let premature = reserve(&mut core, 2, 64);
+    assert_eq!(
+        core.begin(frame(2), premature).unwrap_err().kind,
+        NativeGpuFaultKind::StateMismatch,
+        "submit alone must not release the logical slot"
+    );
+    assert_eq!(core.budget.snapshot().managed_bytes(), 32);
+    core.seal(core.index(old).unwrap());
+    assert_eq!(core.frames[0].stage, FrameRecordStage::PresentRetirement);
+    assert_eq!(core.frames[0].marker.load(Ordering::Acquire), ACTIVE_TOKEN);
+
+    let next_reservation = reserve(&mut core, 2, 64);
+    let next = core.begin(frame(2), next_reservation).unwrap();
+    let next_owner = retained(&mut core, next, 64);
+    let isf = phase(&mut core, next, GpuPhase::IsfBatch, Ok(()));
+    core.seal(core.index(next).unwrap());
+    assert_eq!(core.driver.polls, 0);
+    assert_eq!(core.driver.completed, 0);
+    assert_eq!(core.frames.len(), 2);
+    assert_eq!(isf.submission().sequence, present.submission().sequence + 1);
+    assert_ne!(
+        core.frames[core.index(old).unwrap()].owned_allocations[0],
+        core.frames[core.index(next).unwrap()].owned_allocations[0],
+        "pending-present capacity cannot become the next allocation"
+    );
+    assert!(old_owner.upgrade().is_some());
+    assert!(next_owner.upgrade().is_some());
+    assert_eq!(core.budget.snapshot().managed_bytes(), 96);
+
+    let speculative = reserve(&mut core, 3, 1);
+    assert_eq!(
+        core.begin(frame(3), speculative).unwrap_err().kind,
+        NativeGpuFaultKind::StateMismatch
+    );
+    assert_eq!(core.budget.snapshot().managed_bytes(), 96);
+
+    core.driver.scope_ready = true;
+    core.driver.completed = isf.submission().sequence;
+    core.progress().unwrap();
+    // Resolve N+1 first: Vec removal must leave the old receipt and owners valid.
+    let mut resolved_next = core.finish_record(core.index(next).unwrap()).unwrap();
+    let foreign_receipt = PendingPhaseReceipt {
+        transaction: old,
+        frame: frame(1),
+        phase: GpuPhase::MappingPresent,
+        submission: present.submission(),
+    };
+    assert_eq!(
+        resolved_next
+            .take_phase(foreign_receipt)
+            .err()
+            .unwrap()
+            .kind,
+        NativeGpuFaultKind::IdentityMismatch
+    );
+    assert!(resolved_next.take_phase(isf).unwrap().validation().is_ok());
+    assert!(next_owner.upgrade().is_none());
+    assert!(old_owner.upgrade().is_some());
+    assert_eq!(core.frames.len(), 1);
+    assert_eq!(core.frames[0].id, old);
+    assert_eq!(core.budget.snapshot().managed_bytes(), 32);
+    let mut resolved_old = core.finish_record(core.index(old).unwrap()).unwrap();
+    assert!(resolved_old
+        .take_phase(present)
+        .unwrap()
+        .validation()
+        .is_ok());
+    assert!(old_owner.upgrade().is_none());
+    assert_eq!(core.budget.snapshot().managed_bytes(), 0);
+}
+
+#[test]
+fn native_gpu_g3_only_a_separate_single_present_phase_releases_the_logical_slot() {
+    let phase_sets: &[&[GpuPhase]] = &[
+        &[],
+        &[GpuPhase::Initialize],
+        &[GpuPhase::IsfBatch],
+        &[GpuPhase::CompositionSnapshot],
+        &[GpuPhase::HistoricalReplay],
+        &[GpuPhase::Retirement],
+        &[GpuPhase::IsfBatch, GpuPhase::MappingPresent],
+        &[GpuPhase::CompositionSnapshot, GpuPhase::MappingPresent],
+        &[GpuPhase::MappingPresent, GpuPhase::MappingPresent],
+    ];
+    for phases in phase_sets {
+        let mut core = scripted();
+        let reservation = reserve(&mut core, 1, 0);
+        let id = core.begin(frame(1), reservation).unwrap();
+        for gpu_phase in *phases {
+            phase(&mut core, id, *gpu_phase, Ok(()));
+        }
+        core.seal(core.index(id).unwrap());
+        assert_eq!(
+            core.frames[0].stage,
+            FrameRecordStage::Sealed,
+            "phase set {phases:?}"
+        );
+        assert!(core.has_logical_frame());
+        assert_eq!(
+            core.open(id, GpuPhase::IsfBatch).unwrap_err().kind,
+            NativeGpuFaultKind::StateMismatch,
+            "a sealed transaction cannot reopen"
+        );
+        let reservation = reserve(&mut core, 2, 1);
+        assert_eq!(
+            core.begin(frame(2), reservation).unwrap_err().kind,
+            NativeGpuFaultKind::StateMismatch,
+            "phase set {phases:?}"
+        );
+        assert_eq!(core.driver.polls, 0);
+        assert_eq!(core.budget.snapshot().managed_bytes(), 0);
+    }
+}
+
+#[test]
+fn native_gpu_g3_unfinished_cancelled_or_faulted_present_stays_in_the_logical_slot() {
+    for condition in [
+        "open",
+        "queued-write",
+        "cancelled",
+        "encode-fault",
+        "scope-fault",
+        "stopping",
+    ] {
+        let mut core = scripted();
+        let reservation = reserve(&mut core, 1, 32);
+        let id = core.begin(frame(1), reservation).unwrap();
+        let resource = retained(&mut core, id, 32);
+        phase(&mut core, id, GpuPhase::MappingPresent, Ok(()));
+        match condition {
+            "open" => core.open(id, GpuPhase::CompositionSnapshot).unwrap(),
+            "queued-write" => core.frames[0].queued_write = true,
+            "cancelled" => core.retire(id).unwrap(),
+            "encode-fault" => {
+                core.frames[0].phases[0].execution_failure = Some(DriverFailure {
+                    kind: NativeGpuFaultKind::Validation,
+                    message: "known mapping encode failure".into(),
+                });
+            }
+            "scope-fault" => {
+                core.frames[0].phases[0].scope_result = Some(Err(DriverFailure {
+                    kind: NativeGpuFaultKind::Validation,
+                    message: "already resolved invalid mapping scope".into(),
+                }));
+            }
+            "stopping" => {
+                core.stop();
+            }
+            _ => unreachable!(),
+        }
+        core.seal(core.index(id).unwrap());
+        assert_eq!(
+            core.frames[0].stage,
+            FrameRecordStage::Sealed,
+            "{condition}"
+        );
+        let reservation = reserve(&mut core, 2, 1);
+        assert_eq!(
+            core.begin(frame(2), reservation).unwrap_err().kind,
+            NativeGpuFaultKind::StateMismatch,
+            "{condition}"
+        );
+        assert!(resource.upgrade().is_some(), "{condition}");
+        assert_eq!(core.budget.snapshot().managed_bytes(), 32);
+        assert_eq!(core.driver.polls, 0);
+    }
+}
+
+#[test]
+fn native_gpu_g3_second_present_is_rejected_before_scope_or_submission() {
+    let mut core = scripted();
+    let reservation = reserve(&mut core, 1, 0);
+    let old = core.begin(frame(1), reservation).unwrap();
+    phase(&mut core, old, GpuPhase::MappingPresent, Ok(()));
+    core.seal(core.index(old).unwrap());
+    assert_eq!(
+        core.open(old, GpuPhase::MappingPresent).unwrap_err().kind,
+        NativeGpuFaultKind::StateMismatch,
+        "the detached record cannot be reused as an encoder"
+    );
+    let reservation = reserve(&mut core, 2, 0);
+    let next = core.begin(frame(2), reservation).unwrap();
+    let submission_before = core.next_submission;
+    assert_eq!(
+        core.open(next, GpuPhase::MappingPresent).unwrap_err().kind,
+        NativeGpuFaultKind::StateMismatch
+    );
+    let index = core.index(next).unwrap();
+    assert!(core.frames[index].open.is_none());
+    assert!(core.frames[index].phases.is_empty());
+    assert!(!core.frames[index].queued_write);
+    assert_eq!(core.next_submission, submission_before);
+    assert_eq!(core.driver.polls, 0);
+    assert_eq!(core.frames.len(), 2);
+    assert_eq!(core.budget.snapshot().managed_bytes(), 0);
+    // No capacity is charged here: a byte budget alone cannot bound this queue.
+    phase(&mut core, next, GpuPhase::IsfBatch, Ok(()));
+    assert_eq!(core.next_submission, submission_before + 1);
+}
+
+#[test]
+fn native_gpu_g3_stop_retains_present_and_next_frame_until_scopes_and_external_owner_release() {
+    let mut core = scripted();
+    let reservation = reserve(&mut core, 1, 32);
+    let old = core.begin(frame(1), reservation).unwrap();
+    let old_weak = retained(&mut core, old, 32);
+    let external = old_weak.upgrade().unwrap();
+    let present = phase(&mut core, old, GpuPhase::MappingPresent, Ok(()));
+    core.seal(core.index(old).unwrap());
+    let reservation = reserve(&mut core, 2, 64);
+    let next = core.begin(frame(2), reservation).unwrap();
+    let next_weak = retained(&mut core, next, 64);
+    let isf = phase(&mut core, next, GpuPhase::IsfBatch, Ok(()));
+    core.seal(core.index(next).unwrap());
+
+    core.stop();
+    assert_eq!(core.state, GpuOwnerState::Retiring);
+    assert!(core
+        .frames
+        .iter()
+        .all(|record| record.marker.load(Ordering::Acquire) == CANCELLED_TOKEN));
+    assert_eq!(
+        core.retirement().unwrap(),
+        RetirementProgress::Pending {
+            transactions: 2,
+            allocations: 2
+        }
+    );
+    core.driver.completed = present.submission().sequence;
+    assert_eq!(
+        core.retirement().unwrap(),
+        RetirementProgress::Pending {
+            transactions: 2,
+            allocations: 2
+        },
+        "GPU completion is insufficient while scope pop is pending"
+    );
+    assert!(old_weak.upgrade().is_some());
+    assert!(next_weak.upgrade().is_some());
+    assert_eq!(core.budget.snapshot().managed_bytes(), 96);
+    core.driver.scope_ready = true;
+    assert_eq!(
+        core.retirement().unwrap(),
+        RetirementProgress::Pending {
+            transactions: 1,
+            allocations: 2
+        }
+    );
+    assert_eq!(core.frames[0].id, next);
+    core.driver.completed = isf.submission().sequence;
+    assert_eq!(
+        core.retirement().unwrap(),
+        RetirementProgress::Pending {
+            transactions: 0,
+            allocations: 1
+        }
+    );
+    assert!(next_weak.upgrade().is_none());
+    assert!(old_weak.upgrade().is_some());
+    assert_eq!(core.budget.snapshot().managed_bytes(), 32);
+    assert_eq!(
+        core.budget
+            .snapshot()
+            .for_kind(ChargeKind::IsfScratch)
+            .retired_bytes,
+        32
+    );
+    drop(external);
+    assert_eq!(core.retirement().unwrap(), RetirementProgress::Reaped);
+    assert!(old_weak.upgrade().is_none());
+    assert_eq!(core.budget.snapshot().managed_bytes(), 0);
+    assert_eq!(core.budget.snapshot().reservation_count, 0);
+}
+
+#[test]
+fn native_gpu_g3_loss_or_poison_quarantines_both_records_despite_late_completion() {
+    for kind in [
+        NativeGpuFaultKind::DeviceLost,
+        NativeGpuFaultKind::ScopeDrain,
+    ] {
+        for via_scope in [false, true] {
+            let mut core = scripted();
+            let reservation = reserve(&mut core, 1, 32);
+            let old = core.begin(frame(1), reservation).unwrap();
+            let old_weak = retained(&mut core, old, 32);
+            let result = if via_scope {
+                Err(DriverFailure {
+                    kind,
+                    message: "late fatal present scope".into(),
+                })
+            } else {
+                Ok(())
+            };
+            phase(&mut core, old, GpuPhase::MappingPresent, result);
+            core.seal(core.index(old).unwrap());
+            let reservation = reserve(&mut core, 2, 64);
+            let next = core.begin(frame(2), reservation).unwrap();
+            let next_weak = retained(&mut core, next, 64);
+            phase(&mut core, next, GpuPhase::IsfBatch, Ok(()));
+            core.seal(core.index(next).unwrap());
+            let unexecuted = reserve(&mut core, 3, 1);
+            if !via_scope {
+                core.driver.failure = Some(DriverFailure {
+                    kind,
+                    message: "lost device or failed driver drain".into(),
+                });
+            }
+            core.driver.completed = u64::MAX;
+            core.driver.scope_ready = true;
+            let fault = core.progress().unwrap_err();
+            assert_eq!(fault.kind, kind);
+            assert_eq!(
+                core.state,
+                if kind == NativeGpuFaultKind::DeviceLost {
+                    GpuOwnerState::DeviceLostRetained
+                } else {
+                    GpuOwnerState::PoisonedRetained
+                }
+            );
+            assert!(old_weak.upgrade().is_some());
+            assert!(next_weak.upgrade().is_some());
+            assert_eq!(core.frames.len(), 2);
+            assert_eq!(
+                core.budget
+                    .snapshot()
+                    .for_kind(ChargeKind::IsfScratch)
+                    .quarantined_bytes,
+                96
+            );
+            assert_eq!(
+                core.begin(frame(3), unexecuted).unwrap_err().kind,
+                NativeGpuFaultKind::StateMismatch
+            );
+            assert_eq!(core.budget.snapshot().managed_bytes(), 96);
+            assert!(matches!(
+                core.budget.quote(&NativeAllocationPlan::new(frame(4))),
+                Err(NativeGpuDecline::QuoteExpired)
+            ));
+            core.stop();
+            assert!(core.retirement().is_err());
+            assert!(core.retirement().is_err());
+            assert_eq!(core.frames.len(), 2);
+            assert!(old_weak.upgrade().is_some());
+            assert!(next_weak.upgrade().is_some());
+            assert_eq!(core.budget.snapshot().managed_bytes(), 96);
+        }
+    }
+}
+
+#[test]
+fn native_gpu_g3_exact_512mib_includes_present_reservations_and_shared_read_owners() {
+    use crate::native_gpu_budget::NATIVE_MANAGED_LIMIT;
+    let mut core = scripted();
+    let present_bytes = 64 * 1024 * 1024;
+    let unused_present_bytes = 16;
+    let mut plan = NativeAllocationPlan::new(frame(1));
+    plan.add_new(ChargeKind::MappingBuffer, present_bytes)
+        .unwrap();
+    plan.add_new(ChargeKind::QueueUploadStaging, unused_present_bytes)
+        .unwrap();
+    let quote = core.budget.quote(&plan).unwrap();
+    let reservation = core.budget.reserve(quote).unwrap();
+    let old = core.begin(frame(1), reservation).unwrap();
+    let old_index = core.index(old).unwrap();
+    let old_allocation = core.budget.next_allocation_id().unwrap();
+    // A modeled ledger oracle: these capacity charges do not allocate 512 MiB
+    // of physical texture memory. Real GPU overlap is tested separately below.
+    let old_charge = Arc::new(
+        core.budget
+            .bind_allocation(
+                core.frames[old_index].reservation.as_mut().unwrap(),
+                old_allocation,
+                ChargeKind::MappingBuffer,
+                present_bytes,
+            )
+            .unwrap(),
+    );
+    let old_weak = Arc::downgrade(&old_charge);
+    core.frames[old_index].allocations.push(old_allocation);
+    core.frames[old_index]
+        .owned_allocations
+        .push(old_allocation);
+    core.frames[old_index]
+        .resources
+        .push(Arc::clone(&old_charge) as Arc<dyn Any + Send + Sync>);
+    let present = phase(&mut core, old, GpuPhase::MappingPresent, Ok(()));
+    core.seal(core.index(old).unwrap());
+    assert_eq!(core.budget.snapshot().allocated_bytes, present_bytes);
+    assert_eq!(core.budget.snapshot().reserved_bytes, unused_present_bytes);
+
+    let next_bytes = NATIVE_MANAGED_LIMIT - present_bytes - unused_present_bytes;
+    let mut next_plan = NativeAllocationPlan::new(frame(2));
+    next_plan.add_existing(old_allocation);
+    next_plan.add_existing(old_allocation);
+    next_plan
+        .add_new(ChargeKind::IsfScratch, next_bytes)
+        .unwrap();
+    let quote = core.budget.quote(&next_plan).unwrap();
+    let reservation = core.budget.reserve(quote).unwrap();
+    let next = core.begin(frame(2), reservation).unwrap();
+    let next_index = core.index(next).unwrap();
+    let next_allocation = core.budget.next_allocation_id().unwrap();
+    assert_ne!(old_allocation, next_allocation);
+    let next_charge = Arc::new(
+        core.budget
+            .bind_allocation(
+                core.frames[next_index].reservation.as_mut().unwrap(),
+                next_allocation,
+                ChargeKind::IsfScratch,
+                next_bytes,
+            )
+            .unwrap(),
+    );
+    core.frames[next_index]
+        .allocations
+        .extend([old_allocation, next_allocation]);
+    core.frames[next_index]
+        .owned_allocations
+        .push(next_allocation);
+    core.frames[next_index].resources.push(next_charge);
+    core.frames[next_index].resources.push(old_charge);
+    let isf = phase(&mut core, next, GpuPhase::IsfBatch, Ok(()));
+    core.seal(core.index(next).unwrap());
+    assert_eq!(core.budget.snapshot().managed_bytes(), NATIVE_MANAGED_LIMIT);
+    assert_eq!(core.budget.snapshot().allocation_count, 2);
+    let mut overflow = NativeAllocationPlan::new(frame(3));
+    overflow.add_new(ChargeKind::CpuSnapshot, 1).unwrap();
+    assert!(matches!(
+        core.budget.quote(&overflow),
+        Err(NativeGpuDecline::BudgetExceeded { live, requested: 1, limit })
+            if live == NATIVE_MANAGED_LIMIT && limit == NATIVE_MANAGED_LIMIT
+    ));
+
+    core.driver.scope_ready = true;
+    core.driver.completed = present.submission().sequence;
+    core.progress().unwrap();
+    let mut resolved_old = core.finish_record(core.index(old).unwrap()).unwrap();
+    assert!(resolved_old
+        .take_phase(present)
+        .unwrap()
+        .validation()
+        .is_ok());
+    assert!(
+        old_weak.upgrade().is_some(),
+        "the next submission still reads the alias"
+    );
+    assert!(core.budget.try_reap(old_allocation).unwrap().is_none());
+    assert_eq!(
+        core.budget.snapshot().managed_bytes(),
+        NATIVE_MANAGED_LIMIT - unused_present_bytes,
+        "only unused present reservation capacity is returned at old completion"
+    );
+    core.driver.completed = isf.submission().sequence;
+    core.progress().unwrap();
+    let mut resolved_next = core.finish_record(core.index(next).unwrap()).unwrap();
+    assert!(resolved_next.take_phase(isf).unwrap().validation().is_ok());
+    assert!(old_weak.upgrade().is_none());
+    assert_eq!(core.budget.snapshot().managed_bytes(), 0);
+    assert_eq!(
+        core.budget.snapshot().high_water_bytes,
+        NATIVE_MANAGED_LIMIT
+    );
+}
+
+#[test]
+fn native_gpu_g3_dropped_present_token_retires_only_its_own_record() {
+    let mut core = scripted();
+    let reservation = reserve(&mut core, 1, 32);
+    let old = core.begin(frame(1), reservation).unwrap();
+    let old_weak = retained(&mut core, old, 32);
+    let present = phase(&mut core, old, GpuPhase::MappingPresent, Ok(()));
+    core.seal(core.index(old).unwrap());
+    let token = PendingGpuTransaction {
+        id: old,
+        marker: Arc::clone(&core.frames[core.index(old).unwrap()].marker),
+        terminal: false,
+    };
+    let reservation = reserve(&mut core, 2, 64);
+    let next = core.begin(frame(2), reservation).unwrap();
+    let next_weak = retained(&mut core, next, 64);
+    let isf = phase(&mut core, next, GpuPhase::IsfBatch, Ok(()));
+    core.seal(core.index(next).unwrap());
+    drop(token);
+    core.driver.scope_ready = true;
+    core.driver.completed = present.submission().sequence;
+    assert_eq!(
+        core.retirement().unwrap(),
+        RetirementProgress::Pending {
+            transactions: 1,
+            allocations: 1
+        }
+    );
+    assert!(old_weak.upgrade().is_none());
+    assert!(next_weak.upgrade().is_some());
+    assert_eq!(core.frames[0].id, next);
+    assert_eq!(core.frames[0].marker.load(Ordering::Acquire), ACTIVE_TOKEN);
+    assert_eq!(core.budget.snapshot().managed_bytes(), 64);
+    core.driver.completed = isf.submission().sequence;
+    core.progress().unwrap();
+    let mut resolved = core.finish_record(core.index(next).unwrap()).unwrap();
+    assert!(resolved.take_phase(isf).unwrap().validation().is_ok());
+    assert!(next_weak.upgrade().is_none());
+    core.stop();
+    assert_eq!(core.retirement().unwrap(), RetirementProgress::Reaped);
+}
+
+struct G3PresentBuffer {
+    buffer: wgpu::Buffer,
+    _charge: AllocationCharge,
+    _staging: AllocationCharge,
+}
+
+fn g3_real_present_phase(
+    owner: &mut NativeGpuOwner,
+    frame: NativeFrameId,
+) -> (
+    PendingPhaseReceipt,
+    PendingGpuTransaction,
+    std::sync::Weak<G3PresentBuffer>,
+) {
+    let mut plan = NativeAllocationPlan::new(frame);
+    plan.add_new(ChargeKind::MappingBuffer, 16).unwrap();
+    plan.add_new(ChargeKind::QueueUploadStaging, 16).unwrap();
+    let quote = owner.quote(&plan).unwrap();
+    let reservation = owner.reserve(quote).unwrap();
+    let mut txn = owner.begin_frame(frame, reservation).unwrap();
+    let mut phase = txn.begin_phase(GpuPhase::MappingPresent).unwrap();
+    let charge = phase
+        .bind_allocation(ChargeKind::MappingBuffer, 16)
+        .unwrap();
+    let staging = phase
+        .bind_allocation(ChargeKind::QueueUploadStaging, 16)
+        .unwrap();
+    let allocations = [charge.id(), staging.id()];
+    let buffer = Arc::new(G3PresentBuffer {
+        buffer: phase.device().create_buffer(&wgpu::BufferDescriptor {
+            label: Some("G3 retained present phase buffer"),
+            size: 16,
+            usage: wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }),
+        _charge: charge,
+        _staging: staging,
+    });
+    let weak = Arc::downgrade(&buffer);
+    phase
+        .retain_resource(Arc::clone(&buffer), &allocations)
+        .unwrap();
+    phase.mark_queue_write();
+    phase.queue().write_buffer(&buffer.buffer, 0, &[0x51; 16]);
+    drop(buffer);
+    let encoded = phase.finish(Vec::new());
+    let receipt = txn.submit_phase(encoded).unwrap();
+    (receipt, txn.finish(), weak)
+}
+
+#[test]
+fn native_gpu_g3_real_batch3_encodes_behind_an_unpolled_present_phase() {
+    use crate::isf_native_gpu::tests as isf;
+    use crate::native_gpu_result::NativeIsfCompletion;
+    let mut fixture = isf::gpu();
+    let (present, mut old_pending, old_weak) =
+        g3_real_present_phase(&mut fixture.owner, isf::request(1));
+    let old = old_pending.id;
+    let old_allocations = fixture.owner.core.frames[fixture.owner.core.index(old).unwrap()]
+        .owned_allocations
+        .clone();
+    let first_clock = fixture.runtime.native_frame_index();
+    let (encoded, next_pending) = isf::encode(&mut fixture, 2, isf::identity_jobs(5, 3));
+    let next = next_pending.id;
+    assert_eq!(fixture.runtime.native_frame_index(), first_clock + 3);
+    assert_eq!(fixture.owner.core.frames.len(), 2);
+    let old_record = &fixture.owner.core.frames[fixture.owner.core.index(old).unwrap()];
+    assert_eq!(old_record.stage, FrameRecordStage::PresentRetirement);
+    assert!(
+        !old_record.phases[0].complete,
+        "no broker completion poll has run"
+    );
+    assert!(old_weak.upgrade().is_some());
+    let next_record = &fixture.owner.core.frames[fixture.owner.core.index(next).unwrap()];
+    assert_eq!(next_record.stage, FrameRecordStage::Sealed);
+    assert_eq!(next_record.phases.len(), 1);
+    assert_eq!(next_record.phases[0].phase, GpuPhase::IsfBatch);
+    assert_eq!(
+        next_record.phases[0].id.sequence,
+        present.submission().sequence + 1
+    );
+    assert!(!next_record.phases[0].complete);
+    assert!(!next_record.owned_allocations.is_empty());
+    assert!(next_record
+        .owned_allocations
+        .iter()
+        .all(|id| !old_allocations.contains(id)));
+    let before = fixture.owner.budget_snapshot();
+    let quote = fixture
+        .owner
+        .quote(&NativeAllocationPlan::new(isf::request(3)))
+        .unwrap();
+    let reservation = fixture.owner.reserve(quote).unwrap();
+    assert!(matches!(
+        fixture.owner.begin_frame(isf::request(3), reservation),
+        Err(NativeGpuFault {
+            kind: NativeGpuFaultKind::StateMismatch,
+            ..
+        })
+    ));
+    assert_eq!(fixture.runtime.native_frame_index(), first_clock + 3);
+    assert_eq!(
+        fixture.owner.budget_snapshot().managed_bytes(),
+        before.managed_bytes()
+    );
+
+    let mut resolved_old = finish(&mut fixture.owner, &mut old_pending);
+    assert!(resolved_old
+        .take_phase(present)
+        .unwrap()
+        .validation()
+        .is_ok());
+    assert!(old_weak.upgrade().is_none());
+    assert_eq!(fixture.owner.core.frames.len(), 1);
+    assert_eq!(fixture.owner.core.frames[0].id, next);
+    match isf::complete(&mut fixture, encoded, next_pending) {
+        NativeIsfCompletion::Validated { layers, .. } => {
+            assert_eq!(layers.len(), 3);
+            drop(layers);
+        }
+        _ => panic!("real next-frame Batch3 did not validate"),
+    }
+    assert_eq!(fixture.runtime.native_frame_index(), first_clock + 3);
+    drop(fixture.runtime);
+    isf::stop(&mut fixture.owner);
+}
+
+#[test]
+fn native_gpu_g3_serial_cpu_admission_and_unused_refund_ignore_only_present_retirement() {
+    let mut owner = headless(77);
+    let (present, mut old_pending, old_weak) = g3_real_present_phase(&mut owner, frame(1));
+    let retained_bytes = owner.budget_snapshot().managed_bytes();
+    let mut plan = NativeAllocationPlan::new(frame(2));
+    plan.add_new(ChargeKind::CpuSnapshot, 64).unwrap();
+    let quote = owner.quote(&plan).unwrap();
+    let reservation = owner.reserve(quote).unwrap();
+    owner
+        .discard_unsubmitted_reservation(reservation)
+        .unwrap_or_else(|(fault, _)| panic!("unused refund behind present: {fault:?}"));
+    assert_eq!(owner.budget_snapshot().managed_bytes(), retained_bytes);
+    let quote = owner.quote(&plan).unwrap();
+    let reservation = owner.reserve(quote).unwrap();
+    owner
+        .admit_serial_cpu_plan(reservation, &plan)
+        .unwrap_or_else(|(fault, _)| panic!("serial admission behind present: {fault:?}"));
+    assert_eq!(owner.budget_snapshot().managed_bytes(), retained_bytes);
+    assert!(old_weak.upgrade().is_some());
+
+    let quote = owner.quote(&NativeAllocationPlan::new(frame(3))).unwrap();
+    let reservation = owner.reserve(quote).unwrap();
+    let mut txn = owner.begin_frame(frame(3), reservation).unwrap();
+    let phase = txn.begin_phase(GpuPhase::IsfBatch).unwrap();
+    let encoded = phase.finish(Vec::new());
+    let isf = txn.submit_phase(encoded).unwrap();
+    let mut next_pending = txn.finish();
+    let quote = owner.quote(&plan).unwrap();
+    let reservation = owner.reserve(quote).unwrap();
+    let (fault, refund) = match owner.discard_unsubmitted_reservation(reservation) {
+        Err(rejected) => rejected,
+        Ok(()) => panic!("logical pending frame must still block unused refund"),
+    };
+    assert_eq!(fault.kind, NativeGpuFaultKind::StateMismatch);
+    let quote = owner.quote(&plan).unwrap();
+    let reservation = owner.reserve(quote).unwrap();
+    let (fault, envelope) = match owner.admit_serial_cpu_plan(reservation, &plan) {
+        Err(rejected) => rejected,
+        Ok(()) => panic!("logical pending frame must still block serial admission"),
+    };
+    assert_eq!(fault.kind, NativeGpuFaultKind::StateMismatch);
+    assert_eq!(
+        owner.budget_snapshot().managed_bytes(),
+        retained_bytes + 128
+    );
+
+    let mut resolved_next = finish(&mut owner, &mut next_pending);
+    assert!(resolved_next.take_phase(isf).unwrap().validation().is_ok());
+    owner
+        .discard_unsubmitted_reservation(refund)
+        .unwrap_or_else(|(fault, _)| panic!("refund after logical completion: {fault:?}"));
+    owner
+        .admit_serial_cpu_plan(envelope, &plan)
+        .unwrap_or_else(|(fault, _)| {
+            panic!("serial admission after logical completion: {fault:?}")
+        });
+    assert_eq!(owner.budget_snapshot().managed_bytes(), retained_bytes);
+    assert!(old_weak.upgrade().is_some());
+    let mut resolved_old = finish(&mut owner, &mut old_pending);
+    assert!(resolved_old
+        .take_phase(present)
+        .unwrap()
+        .validation()
+        .is_ok());
+    assert!(old_weak.upgrade().is_none());
+    owner.begin_stop();
+    assert_eq!(owner.poll_retirement().unwrap(), RetirementProgress::Reaped);
+}
