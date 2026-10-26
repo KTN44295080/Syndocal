@@ -6,6 +6,28 @@ fn id(value: usize) -> String {
 }
 
 #[test]
+fn agent_bridge_reviewed_ndi_and_output_authoring_envelopes_preserve_requests() {
+    for (operation_id, mutation) in [
+        ("syndocal.query.video.ndi_sources.v1", false),
+        ("syndocal.output.external.add.v2", true),
+        ("syndocal.output.video.configure.v2", true),
+        ("syndocal.output.video.remove.v2", true),
+    ] {
+        let params = serde_json::json!({"operationId": operation_id,
+            "request": {"request": {"exact": "backend-owned", "nested": [1, null, true]}}});
+        let parse = |params| Request { token: "token".into(), request_id: id(1),
+            method: "control_plane.execute".into(), params, auth: None }.command();
+        let command = parse(params.clone()).unwrap();
+        assert_eq!(serde_json::to_value(command).unwrap(),
+            serde_json::json!({"method": "control_plane.execute", "params": params}));
+        assert_eq!(wire::canonical_operation_is_mutation(operation_id), mutation);
+        let mut malformed = params;
+        malformed["request"] = serde_json::json!([]);
+        assert_eq!(parse(malformed).unwrap_err(), "invalid_canonical_operation");
+    }
+}
+
+#[test]
 fn diagnostic_audit_wire_preserves_legacy_intent_and_admits_strict_process_bound_pages() {
     let parse=|params|Request {token:"token".into(),request_id:id(1),method:"diagnostics.export".into(),params,auth:None}.command();
     let legacy=serde_json::json!({"destination":"C:/diagnostics/new.zip"});

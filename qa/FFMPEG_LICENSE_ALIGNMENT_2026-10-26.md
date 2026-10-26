@@ -534,3 +534,204 @@ and evidence, then rerun `check:release` and affected package/source checks.
 Do not infer publication readiness from the passing notice, native smoke or
 individual metadata checks. No installer/publication or product version bump
 was performed; unrelated video test dirty markers were preserved.
+
+## Task 55 - Agent Bridge equality and binary license proof - 2026-10-27
+
+Original checkout `main`, base `0f3a4c0364ec441d1921ae2616dc1874780be995`.
+Owned scope is Agent Bridge projections/tests, release-only AI6/AI7 checker
+drift, and this evidence section. Concurrent video, native entry point and UI
+implementation/checker lanes are preserved. Local evidence is retained under
+`target/qa/task55-agent-bridge/`. No runtime DLL, codec, Cargo feature, Tauri
+command, product version, installer or distribution change is made.
+
+### Part A - intentional membership retained
+
+`git show d8befdc3` proves that NDI discovery intentionally added
+`syndocal.query.video.ndi_sources.v1`, its `list_ndi_sources_v1` native command,
+reviewed runtime-read registry route and TypeScript bridge adapter.
+`git show ad5fe649` proves that T33 intentionally added
+`syndocal.output.external.add.v2`, `syndocal.output.video.configure.v2` and
+`syndocal.output.video.remove.v2` to Rust and TypeScript, with existing typed
+OutputControl transactions. None is an accidental product operation.
+
+Rust's finite bridge wire projection now includes the missing NDI query;
+Node MCP includes that query and the three missing T33 operations. TypeScript
+already contains all four and is unchanged. All three projections contain
+exactly **76 unique operations**. Exact set equality remains enforced, with
+explicit presence and duplicate rejection assertions. Tauri registration and
+the frozen **593-command** control-plane inventory remain unchanged.
+
+The wire schema is unchanged: `control_plane.execute` carries `operationId`
+and an object-valued `request`; Node also requires the request UUID. Rust
+retains strict envelope deserialization and finite admission; TypeScript
+retains its static operation-to-typed-command map. Operation-specific request
+and response schemas remain backend-owned, with no second schema or permissive
+fallback introduced. New native-wire and mock-MCP tests preserve nested request
+contents, classify NDI as read/T33 as mutations, and reject array payloads;
+the mock rejection test proves the broker receives no malformed request.
+These envelope tests do not claim actual typed output execution or LAN discovery.
+
+Release checker-only corrections preserve their existing acceptance:
+
+- AI6 follows the actual App import/mount to `AppWorkspaceView`, then checks
+  its authority route, panel import and mount. `2b0424df` intentionally extracted
+  this JSX. Three mutation self-tests reject removed App mount, authority route
+  and authority panel; the original security assertions remain.
+- AI7 pins the existing AI0/routing assertions at 513, replacing its stale 511
+  markers. `2907a2ea` intentionally added query/replace video-authoring lease
+  routes after project Open; no product inventories were changed here.
+
+Independent stable-diff review found no blocking issue in these seven source
+and checker files; authorization, finite admission, mutation classification,
+request identity and unchanged schema boundaries were inspected.
+
+### Part B - P0: actual Chromaprint and FFTW payload in the pinned LGPL DLL
+
+This supersedes the source-only P1 suspicion in Task 54 with binary evidence.
+`binary-identities.json` verifies the exact pinned archive SHA-256
+`3e47bda1607740550141e37c0e49d1e5182b34699f15adfd137ee266d346811a`
+and all seven DLL sizes/SHA-256 values against the runtime inventory.
+The relevant exact DLLs are:
+
+| DLL | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `avformat-62.dll` | 22,722,560 | `bcf514a394dc5ec43fe64e4f1624ba63b23e9c25967081ea2d03d95b0dc359ef` |
+| `avcodec-62.dll` | 90,992,128 | `4f817870cfaeaced3e34a083c50a1b4be0389202d7fb821632d47cf9b3f4d82a` |
+
+Observed evidence (enumeration only, no media/device/output opened):
+
+1. SDK `ffmpeg.exe -hide_banner -buildconf` includes `--enable-chromaprint`.
+   Direct exact-path `avformat_configuration()` independently confirms the
+   same flag in the DLL (`binary-buildconf.txt`, `avformat-direct-probe.json`).
+2. `ffmpeg.exe -hide_banner -muxers` lists `E chromaprint Chromaprint`.
+   Direct `av_muxer_iterate()` on the exact DLL independently returns that
+   muxer, demonstrating its presence beyond a configure string.
+3. `avformat-62.dll.strings.txt` contains **1,033** matched printable strings:
+   Chromaprint muxer/error messages, FFTW assertions, an `fftw-3.3.11`
+   wisdom identifier and hundreds of `fftw_codelet_*`/`fftw_dft_*` names,
+   including SSE2/AVX/AVX2 implementations. `avcodec-62.dll` has only the common
+   configure-line match; equivalent FFTW payload was not observed there.
+4. MSVC `dumpbin /imports` and `/exports` for both DLLs contain no external
+   Chromaprint/FFTW imports or exports. This does not exclude static linkage.
+   Static incorporation in avformat is the evidence-supported conclusion,
+   consistent with the pinned static Chromaprint and FFTW recipes.
+5. Direct `avformat_license()` reports `LGPL version 3 or later`; this compiled
+   self-description does not reconcile its transitive FFTW payload.
+
+All three CLI enumerations and all four dumpbin commands exited 0. The retained
+`probe-binaries.py` completed after explicitly decoding localized dumpbin output
+as UTF-8; the initial decoding failure is not passing evidence. Relevant primary
+sources: pinned [Chromaprint recipe](https://github.com/BtbN/FFmpeg-Builds/blob/6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b/scripts.d/50-chromaprint.sh)
+uses `BUILD_SHARED_LIBS=OFF`, `FFT_LIB=fftw3` and private `-lfftw3`;
+pinned [FFTW recipe](https://github.com/BtbN/FFmpeg-Builds/blob/6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b/scripts.d/25-fftw3.sh)
+uses static-only FFTW revision `93ed4c786934aec9946f8dda4b4e3eb08f8be41c`.
+The pinned [Chromaprint README](https://github.com/acoustid/chromaprint/blob/aed8eba2202dd9d7b3b0a56c77904cc805490d72/README.md#fft-library)
+expressly states that its FFTW-backed binary becomes GPL licensed.
+
+**P0: the pinned DLLs cannot be accepted as the product's LGPL-only distribution
+boundary.** Chromaprint and extensive identifiable FFTW implementation payload
+are present in avformat. Leaving the muxer unused or adding GPL text does not
+close this blocker. Exact final linker maps/input closure remain unavailable;
+this is not a complete binary SBOM or publication clearance. No build is switched.
+
+Concrete free options for a separately authorized follow-up:
+
+- Pin another immutable LGPL shared build whose actual binaries and sources
+  prove absence of Chromaprint/FFTW, or a suitable non-GPL FFT backend; reaccept
+  ABI/features/decode/native/artifact/source/notices. No suitable replacement
+  asset was verified here. The pinned recipe enables Chromaprint for every
+  FFmpeg >=6 target without excluding LGPL variants, so merely selecting
+  another ordinary >=6 BtbN variant using this recipe does not fix the issue.
+- Self-build FFmpeg `29e619e767cde9045a75c29bc9a8278ae7b3a98b` with the pinned
+  BtbN recipe, disabling Chromaprint in recipe enablement so generated configure
+  emits `--disable-chromaprint`; also omit the unused FFTW dependency stage.
+  Pin the build script's moving FFmpeg branch to the exact commit, retain image
+  digests, dependency source/patches/final locks, verbose link inputs and notices.
+  The recipe uses Bash plus Docker/buildx (`makeimage.sh`/`build.sh`, target
+  `win64 lgpl-shared 8.1`). Estimate: 1-2 hours for the policy patch/configuration
+  proof, and **1-2 engineer days** for an initial pinned candidate plus focused
+  reacceptance if infrastructure cooperates. Cold dependency builds may take
+  hours; Docker readiness, build duration and disk capacity were not measured.
+  Exact source/license closure may take longer.
+- If Chromaprint is required, rebuild it with its bundled permissive KissFFT
+  backend and remove FFTW dependencies/private linkage; independently verify
+  resulting binary closure. This entails more change than disabling the muxer.
+
+Other Task 54 dependency/source, embedded-notice and OpenH264 policy boundaries
+remain open. This task provides no publication, physical-output or 60fps proof.
+
+### Release continuation boundary
+
+After the owned AI4/AI6/AI7 fixes, F1 reaches the unrelated UI checker
+`check-dvc-midi-shortcuts.mjs:66`, which still searches `App.tsx` for MIDI
+mapping JSX now in `SetupIoWorkspaceView.tsx:534`. These files belong to the
+active UI lane; no assertions are bypassed or weakened to manufacture a pass.
+The remaining release sequence was also run independently through metadata
+(`remaining-release-gates.json`): **39 of 46 commands exit 0**, seven exit 1.
+These independent passes do not imply the aggregate itself passed.
+
+| Remaining failing command | Cause observed |
+| --- | --- |
+| `check:f1-input-generations` | Delegates to MIDI UI checker above; extracted mapping JSX |
+| `check:dmx-universe-state` | `check-dmx-universe-state.mjs:83` counts zero DMX panels in App; actual mount is `SetupIoWorkspaceView.tsx:301` |
+| `check:safety-blackout-runtime` | `check-safety-blackout-runtime.mjs:83` searches App for safety engage; actual JSX is `AppWorkspaceView.tsx:2206` |
+| `check:live-audio` | `check-live-audio-input.mjs:1250` searches App for graph getter; actual getter is `AppWorkspaceView.tsx:2102` |
+| `check:timeline-transport-runtime` | `check-timeline-transport-runtime.mjs:558` searches App for cue-panel callbacks; actual JSX is `PersistentWorkspaceView.tsx:1239` |
+| `check:video-display-target` | Helper slice at `check-video-display-target.mjs:34-43` runs through `export default function App`, now also including `createAppView` and its JSX; its TypeScript data-URL fixture fails with `SyntaxError: Invalid left-hand side in assignment`. The checker itself passes `node --check`; this is not proof of a product parse error |
+| `check:camera-input` | Camera profile check passes, then `check-video-transport-status-polling.mjs:98` searches App for capture fault getter now in `AppWorkspaceView.tsx:1913` |
+
+The six missing-JSX assertions match the intentional `2b0424df` extraction.
+The UI lane owns updating those checks and diagnosing the display fixture.
+No other lane was waited on, polled, edited or resumed. First safe resume is
+those UI checker repairs, then an unmodified full `check:release` rerun.
+The pinned SDK replacement remains a separate P0 follow-up; passing release
+scripts alone would not close the binary license blocker.
+
+### Final owned-scope validation
+
+| Check | Exit | Observed evidence |
+| --- | --- | --- |
+| `node app/scripts/check-agent-bridge.mjs` | 0 | 15 processor/runtime groups; exact 76/76/76 parity and uniqueness |
+| `node tools/syndocal-mcp/check.mjs` | 0 | 20 mock adapter groups, 128 hostile stdio rejections; no native/device calls |
+| `node app/scripts/check-agent-bridge-bootstrap.mjs` | 0 | Four deferred lifecycle groups |
+| AI6 checker and `--self-test` | 0 / 0 | Actual extracted route; six self-test assertions |
+| AI7 checker and `--self-test` | 0 / 0 | Exact current count markers; three self-test assertions |
+| `cargo test --release -p syndocal agent_bridge -- --test-threads=1` | 0 | 35 selected tests passed, zero failed; 2,285 filtered out; new wire test explicitly ran. Compile 6m36s, execution 0.20s |
+| `pnpm --dir app tauri build --no-bundle` | 0 | TypeScript/Vite passed (Vite 12.20s); Cargo release phase 4m45s |
+| Native artifact identity verification | 0 | Seven exact pinned DLLs and six notice resources match inventory |
+| `npm --prefix app run check:release` final rerun | 1 | Passes AI4/AI5/AI6/AI7; stops at F1 MIDI checker above |
+| Independent continuation through release metadata | 1 overall | 39/46 commands pass; seven failures enumerated above; metadata itself exits 0 |
+| `git diff --check` | 0 | Owned diff inspected; unrelated edits preserved |
+
+Native tests and build initialized vcvars64 with `-vcvars_ver=14.44`, pinned
+MSVC **14.44.35207** to the absolute Build Tools linker, printed it and verified
+it first in `where.exe link.exe`. `FFMPEG_DIR` selected the exact pinned SDK;
+its bin was prepended to the process-local PATH. Absolute isolated Cargo target
+is `target/qa/ffmpeg-lgpl-20261026/cargo-target`. The build wrapper verified that
+this exact target executable was not running before compilation. Only the
+unrelated inherited `CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS` environment key
+was removed process-locally, as in Task 54; no product guard was weakened.
+
+Resulting internal executable: version `1.2.0-alpha.82`, **74,898,432 bytes**,
+SHA-256 `2f03ea5d5984a29eea79aa15f49ab8a88b8dd7d071e89f0904279c53598232e8`.
+Exact-path launch produced one responsive `Syndocal` window, PID **6476**,
+HWND **9770078**. Computer Use inspection verified the intended executable,
+rendered Ready state and maximized state (native Restore button). Five loaded
+FFmpeg modules came from the isolated output: avcodec, avformat, avutil,
+swscale and swresample. The task-owned process was closed cleanly and its exit
+verified; no hardware controls or product mutations were exercised. Receipts:
+`native-artifact-identities.json`, `native-window-final.json`,
+`native-window-cua.json` and build/test logs in the evidence directory.
+The `computer-use:computer-use` skill supplied the native inspection workflow.
+
+Native test/build compiler warnings: **0 / 0**. No pre-change compiler baseline
+was built in Task 55, so a numeric warning delta is not measured. Git CRLF
+advisories are not compiler warnings. Normal `target/release/syndocal.exe`
+remains unchanged at SHA-256
+`232eb5c3a817475e93485ebcc7c9496a54a7c3746a7b847944f6a2c7bea35fe0`.
+
+Concurrent UI files became dirty during native compilation; they are outside
+this checkpoint. The built artifact and observed window are evidence for the
+stable owned bridge change, not acceptance of those later UI edits or the
+entire final shared working tree. No rebase, stash, reset, checkout, unrelated
+staging, hardware output, paid dependency or publication was performed.

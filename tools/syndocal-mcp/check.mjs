@@ -195,6 +195,24 @@ try {
     operationId: canonicalQuery.operationId,
     request: {},
   });
+  // The bridge preserves the backend-owned typed request without a second schema.
+  // These are mock-broker round trips, never native discovery or output actions.
+  for (const operationId of [
+    'syndocal.query.video.ndi_sources.v1',
+    'syndocal.output.external.add.v2',
+    'syndocal.output.video.configure.v2',
+    'syndocal.output.video.remove.v2',
+  ]) {
+    const args = { requestId: randomUUID(), operationId, request: { request: { exact: 'backend-owned', nested: [1, null, true] } } };
+    const reply = await call('syndocal_execute_control_plane', args);
+    assert.equal(reply.result.isError, false);
+    assert.deepEqual(requests.at(-1).params, { operationId, request: args.request });
+    assert.equal(requests.at(-1).requestId, args.requestId);
+    const count = requests.length;
+    assert.equal((await call('syndocal_execute_control_plane', { ...args, request: [] })).error.code, -32602);
+    assert.equal(requests.length, count, 'Malformed canonical envelope must not reach the broker');
+    checks++;
+  }
   for (const invalid of [
     { ...canonicalQuery, operationId: 'syndocal.query.not_reviewed.v1' },
     { ...canonicalQuery, operationId: 'syndocal.query.control_plane.capabilities.v1', request: [] },

@@ -6,9 +6,10 @@ const read = (relativePath) =>
     source.replace(/\r\n?/gu, "\n"),
   );
 
-const [panel, app, modes, commands, manifest, main, authority, bridge] = await Promise.all([
+const [panel, app, workspace, modes, commands, manifest, main, authority, bridge] = await Promise.all([
   read("../src/components/AgentAuthorityPanel.tsx"),
   read("../src/App.tsx"),
+  read("../src/components/AppWorkspaceView.tsx"),
   read("../src/uiModes.ts"),
   read("../src/tauriInvokeCommands.ts"),
   read("../src/tauri-invoke-manifest.json"),
@@ -48,9 +49,16 @@ for (const marker of [
 for (const marker of ["security", "authority", "AI Access", "AI principals, grants, consent"]) {
   required(modes, marker, "AI6 security route");
 }
-for (const marker of ["import { AgentAuthorityPanel }", "setupSubTab() === \"authority\"", "<AgentAuthorityPanel"]) {
-  required(app, marker, "AI6 reachability");
+// 2b0424df extracted the reachable JSX; preserve both edges of that route.
+function checkReachability(appSource, workspaceSource) {
+  required(appSource, 'import { AppWorkspaceView } from "./components/AppWorkspaceView"', "AI6 workspace import");
+  required(appSource, '<AppWorkspaceView model={appWorkspaceModel} invokeCommand={invoke}', "AI6 workspace mount");
+  for (const marker of ['import { AgentAuthorityPanel } from "./AgentAuthorityPanel"',
+    'workspaceTab() === "setup" && setupSubTab() === "authority"', '<AgentAuthorityPanel']) {
+    required(workspaceSource, marker, "AI6 reachability");
+  }
 }
+checkReachability(app, workspace);
 
 for (const command of [
   "agent_authority_approve_pairing_v1",
@@ -78,7 +86,10 @@ if (process.argv.includes("--self-test")) {
   assert.equal(["pairing", "grants", "revocation", "consent", "audit", "health"].length, 6);
   assert.equal(["safe", "promoted", "revoked"].length, 3);
   assert.equal(512 <= 1024, true);
-  console.log("AI6 administration UI self-test passed: 3 assertions");
+  assert.throws(() => checkReachability(app.replace('<AppWorkspaceView model=', '<RetiredView model='), workspace), /AI6 workspace mount/);
+  assert.throws(() => checkReachability(app, workspace.replace('setupSubTab() === "authority"', 'setupSubTab() === "retired"')), /AI6 reachability/);
+  assert.throws(() => checkReachability(app, workspace.replace('<AgentAuthorityPanel', '<RetiredPanel')), /AI6 reachability/);
+  console.log("AI6 administration UI self-test passed: 6 assertions");
 } else {
   console.log("AI6 administration UI ok; Security route, trusted authority actions, exact grants, single-use consent and bounded audit viewer verified");
 }

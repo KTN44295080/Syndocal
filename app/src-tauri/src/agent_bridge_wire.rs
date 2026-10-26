@@ -21,6 +21,7 @@ pub(super) const CANONICAL_OPERATION_IDS: &[&str] = &[
     "syndocal.query.video.display_monitors.v1",
     "syndocal.query.video.camera_profiles.v1",
     "syndocal.query.video.camera_profile_probe.v1",
+    "syndocal.query.video.ndi_sources.v1",
     "syndocal.query.video.output_window_observation.v1",
     "syndocal.query.events.observations.v1",
     "syndocal.effects.set_enabled.v1",

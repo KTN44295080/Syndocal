@@ -27,14 +27,18 @@ const nodeCanonicalIds = quoted(
   "'",
 );
 // Managed listing and exact-artifact deletion use immutable native adapters.
-assert.equal(rustCanonicalIds.length, 75);
-// ad5fe649 added the canonical video output authoring operations (T33).
+assert.equal(rustCanonicalIds.length, 76);
+for (const ids of [rustCanonicalIds, typescriptCanonicalIds, nodeCanonicalIds]) {
+  assert.equal(new Set(ids).size, ids.length, 'Canonical operation projections must not contain duplicates');
+}
+// d8befdc3 added NDI discovery; ad5fe649 added video output authoring (T33).
 for (const operationId of [
+  'syndocal.query.video.ndi_sources.v1',
   'syndocal.output.external.add.v2',
   'syndocal.output.video.configure.v2',
   'syndocal.output.video.remove.v2',
 ]) {
-  assert.ok(rustCanonicalIds.includes(operationId), `Video output authoring operation is missing: ${operationId}`);
+  assert.ok(rustCanonicalIds.includes(operationId), `Reviewed canonical operation is missing: ${operationId}`);
 }
 assert.deepEqual([...typescriptCanonicalIds].sort(), [...rustCanonicalIds].sort());
 assert.deepEqual([...nodeCanonicalIds].sort(), [...rustCanonicalIds].sort());

@@ -78,8 +78,9 @@ for (const marker of [
   "No automatic retry was performed",
 ]) required(sidecar, marker, "sidecar crash/rate boundary");
 
-required(ai0, "invokeManifest.length, 511", "source coverage inventory");
-required(routing, "manifest.length, 511", "frontend routing inventory");
+// 2907a2ea added the two project-Open video-authoring lease routes.
+required(ai0, "invokeManifest.length, 513", "source coverage inventory");
+required(routing, "manifest.length, 513", "frontend routing inventory");
 
 if (process.argv.includes("--self-test")) {
   assert.equal(["parity", "reply-loss", "authority", "gap", "rate", "saturation"].length, 6);
