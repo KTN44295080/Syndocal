@@ -68,7 +68,6 @@ import {
 import {
   defaultColorMappingRaster,
 } from "./components/ColorMappingEffectEditorPanel";
-import { CustomProfileEditorPanel } from "./components/CustomProfileEditorPanel";
 import {
   type DmxAddressCell,
   type DmxPatchSegment,
@@ -1038,6 +1037,13 @@ import {
   engineSnapshotWithTimelineAdvancedResult,
   specializedTimelineSelectionFromItems,
 } from "./timelineAdvancedResult";
+import { lazy, type JSX } from "solid-js";
+import { AppWorkspaceView } from "./components/AppWorkspaceView";
+import { PersistentWorkspaceView } from "./components/PersistentWorkspaceView";
+import { SetupIoWorkspaceView } from "./components/SetupIoWorkspaceView";
+import { loadPanel } from "./components/LazyPanelBoundary";
+const CustomProfileEditorPanel = lazy(() => loadPanel(() => import("./components/CustomProfileEditorPanel")).then((module) => ({ default: module.CustomProfileEditorPanel })));
+
 
 declare global {
   interface Window {
@@ -1993,12 +1999,9 @@ const displayAddPostCommitRefreshResult = (
   return { kind: "preserve" as const };
 };
 
-export default function App() {
-  const outputWindowId = readVideoOutputWindowId();
-  if (outputWindowId !== null) {
-    return <VideoOutputWindow outputId={outputWindowId} testPattern={readVideoOutputTestPattern()} />;
-  }
-
+// Models retain the existing signal accessors and command functions. Views only
+// consume them; lifecycle, runtime policy, and state ownership remain here.
+function createAppView() {
   const setupPanelRefs: Partial<Record<SetupSubTab, HTMLElement>> = {};
   const initialWorkspaceLayout = loadWorkspaceLayout();
   const [gdtfPath, setGdtfPath] = createSignal("");
@@ -26207,7 +26210,9 @@ export default function App() {
     return true;
   };
   let videoLiveControlsDialog: HTMLDialogElement | undefined;
+  const registerVideoLiveControlsDialog = (element: HTMLDialogElement) => { videoLiveControlsDialog = element; };
   const openVideoLiveControls = () => videoLiveControlsDialog?.showModal();
+  const closeVideoLiveControls = () => videoLiveControlsDialog?.close();
 
   const operatorRouteFixtureWindow = window as typeof window & {
     __syndocalTryLockedMappingSceneFxRoute?: () => void;
@@ -27527,2731 +27532,1431 @@ export default function App() {
     }
   };
 
-  return (
-    <main
-      class={`app${paneWindow ? ` paneWindow paneWindow-${paneWindow}` : ""}`}
-      style={paneWindow ? "grid-template-rows: minmax(0, 1fr) auto !important" : undefined}
-      data-pane-window-mode={paneWindow || "main"}
-      data-control-learn-mode={controlLearnMode() ?? undefined}
-      data-control-learn-busy={controlLearnBusy() ? "true" : undefined}
-    >
-      <WorkspaceChrome
-        touchControlDomain={touchControlDomain()}
-        onControlDomain={selectControlDomain}
-        onOpenVideoLiveControls={openVideoLiveControls}
-        workspaceTab={workspaceTab()}
-        setupSubTab={setupSubTab()}
-        controlMode={controlMode()}
-        blackout={snapshot().authored_blackout || snapshot().safety_blackout_engaged}
-        videoBlackout={snapshot().video.blackout}
-        blackoutBlockedReason={blackoutBlockedReason()}
-        lightingMaster={snapshot().lighting_master}
-        videoMaster={snapshot().video.master_opacity}
-        bpm={snapshot().clock.bpm}
-        clock={snapshot().clock}
-        liveAudioInputRunning={liveAudioInputStatus().running}
-        liveAudioInputStale={liveAudioInputStatus().stale}
-        liveAudioInputSafetyClearPending={liveAudioInputStatus().safety_clear_pending}
-        liveAudioInputTelemetryFresh={liveAudioInputTelemetryFresh()}
-        liveAudioInputRms={liveAudioInputStatus().rms}
-        liveAudioInputPeak={liveAudioInputStatus().peak}
-        tickMs={Math.round(snapshot().telemetry.last_tick_interval_us / 1000)}
-        jitterUs={Math.round(snapshot().telemetry.tick_jitter_stddev_us)}
-        packetBytes={snapshot().telemetry.last_packet_bytes}
-        dmxSuccessCount={snapshot().telemetry.last_dmx_send_success_count}
-        dmxOutputCount={snapshot().telemetry.last_dmx_output_count}
-        projectLabel={projectFileLabel()}
-        projectDirty={visibleProjectDirty()}
-        currentProjectPath={currentProjectPath()}
-        recentProjectPaths={recentProjectPaths()}
-        recoveryCheckpoint={projectRecoveryCheckpoint()}
-        projectBackups={projectBackups()}
-        daslightProjectImportBusy={daslightProjectImportBusy()}
-        historyStatus={{
-          ...projectHistoryStatus(),
-          can_undo: !isfEventPulseBusy() && !projectHistoryNavigationBusy()
-            && (projectHistoryStatus().can_undo || hasPendingHistoryMappings()),
-          can_redo: !isfEventPulseBusy() && !projectHistoryNavigationBusy()
-            && projectHistoryStatus().can_redo && !hasPendingHistoryMappings(),
-        }}
-        applicationUpdateConfiguration={applicationUpdateConfiguration()}
-        applicationUpdateCheck={applicationUpdateCheck()}
-        applicationUpdateProgress={applicationUpdateProgress()}
-        applicationUpdateBusy={applicationUpdateBusy()}
-        applicationUpdateError={applicationUpdateError()}
-        uiScale={uiScale()}
-        uiLocale={uiLocale()}
-        uiTheme={uiTheme()}
-        monitorQuality={monitorQuality()}
-        canBack={snapshot().cues.length > 0}
-        canGo={snapshot().cues.length > 0}
-        canPauseFade={Boolean(snapshot().active_fade)}
-        fadePaused={Boolean(snapshot().active_fade?.paused)}
-        canToggleTimeline={snapshot().timeline.playing || snapshot().timeline.duration_ms > 0}
-        timelinePlaying={snapshot().timeline.playing}
-        anyFixtureFlags={globalFixtureFlagState().anyFlagged}
-        nextCueLabel={nextCue()?.label ?? "No cue"}
-        operatorLockMode={operatorLockMode()}
-        controlLearnMode={controlLearnMode()}
-        controlLearnBusy={controlLearnBusy()}
-        controlLearnTargetLabel={controlLearnTargetLabel()}
-        showClockStatus={showClockStatus()}
-        showClockError={showClockError()}
-        operations={
-          // Pane children run main-only open/close/capture commands that
-          // reject them, so they must never render the operations menu or its
-          // popout toggles at all.
-          paneWindow ? null : (
-            <WorkspaceOperationsMenu
-              profiles={namedWorkspaces()}
-              selectedProfileId={selectedNamedWorkspaceId()}
-              poppedPanes={poppedPanes()}
-              paneTransitions={pendingPaneWindowOperations()}
-              workspaceBusy={workspaceApplyBusy()}
-              operatorPolicy={operatorPolicy()}
-              operatorLockMode={operatorLockMode()}
-              onSelectProfile={setSelectedNamedWorkspaceId}
-              onSaveProfile={saveNamedWorkspace}
-              onApplyProfile={applyNamedWorkspace}
-              onDeleteProfile={deleteNamedWorkspace}
-              onTogglePane={togglePaneWindow}
-              onConfigurePolicy={configureOperatorPolicy}
-              onClearPolicy={clearOperatorPolicy}
-              onLock={setOperatorSessionLock}
-              onUnlock={unlockOperator}
-            />
-          )
-        }
-        onWorkspaceTab={selectWorkspaceTab}
-        onSetupSubTab={selectSetupMode}
-        onControlMode={selectControlMode}
-        onBack={() => void triggerPreviousCue()}
-        onGo={() => void triggerNextCue()}
-        onToggleFade={() => void setCueFadePaused(!snapshot().active_fade?.paused)}
-        onToggleTimeline={() => void (snapshot().timeline.playing ? pauseTimeline() : playTimeline())}
-        onSetBlackout={(enabled) => void setBlackout(enabled)}
-        onSetVideoBlackout={(enabled) => void requestPerformVideoBlackout(enabled)}
-        onSetAllBlackout={(enabled) => void setAllBlackout(enabled)}
-        onClearFixtureFlags={() => void clearFixtureFlags("all")}
-        onControlLearnMode={setControlLearnMode}
-        onLightingMaster={setLightingMaster}
-        onVideoMaster={setVideoMasterOpacity}
-        onTapBpm={tapBpm}
-        onSetBpm={setOperatorBpm}
-        onOpenLiveAudioInputSettings={openLiveAudioInputSettings}
-        onNewProject={newProject}
-        onSaveUserTemplate={() => void saveUserTemplate()}
-        onLoadUserTemplate={() => void loadUserTemplate()}
-        onSaveProject={saveProject}
-        onSaveProjectAs={saveProjectAs}
-        onLoadProject={loadProject}
-        onImportDaslightProject={() => void importDaslightProject()}
-        onLoadRecentProject={loadRecentProject}
-        onClearRecentProjects={clearRecentProjects}
-        onLoadRecovery={loadProjectRecovery}
-        onDiscardRecovery={discardProjectRecovery}
-        onLoadBackup={(backup) => void loadProjectBackup(backup)}
-        onDeleteBackup={(backup) => void deleteProjectBackup(backup)}
-        onExportDiagnostics={() => void exportDiagnosticPackage()}
-        onCheckForUpdates={() => void checkForApplicationUpdate(false)}
-        onInstallUpdate={() => void installAvailableApplicationUpdate()}
-        onUiLocale={setUiLocale}
-        onUiTheme={setUiTheme}
-        onMonitorQuality={setMonitorQuality}
-        onUndo={() => void undoProject()}
-        onRedo={() => void redoProject()}
-        onUiScale={(scale) => setUiScale(scale)}
-        onResetWorkspaceLayout={resetWorkspaceLayout}
-        onLoadSample={loadPhase1SampleProject}
-        onRunSmoke={runPhase1Smoke}
-      />
-      <Show when={dvcImportReport()}>
-        {(report) => <DvcImportReportPanel report={report()} onClose={() => setDvcImportReport(null)} />}
-      </Show>
-      <Show when={projectDiscardRequest()}>
-        <dialog
-          ref={(dialog) => queueMicrotask(() => {
-            if (!dialog.open) dialog.showModal();
-            dialog.querySelector<HTMLButtonElement>("[data-project-discard-cancel]")?.focus();
-          })}
-          class="protectedCloseDialog"
-          data-project-discard-dialog
-          role="alertdialog"
-          aria-labelledby="project-discard-title"
-          aria-describedby="project-discard-detail"
-          onCancel={(event) => {
-            event.preventDefault();
-            completeProjectDiscardRequest(false);
-          }}
-        >
-          <section class="protectedCloseFrame">
-            <header>
-              <span>{translateUiText("UNSAVED CHANGES", uiLocale())}</span>
-              <strong>{translateUiText("SYNDOCAL", uiLocale())}</strong>
-            </header>
-            <div class="protectedCloseBody">
-              <div class="protectedCloseMark" aria-hidden="true">!</div>
-              <div>
-                <h2 id="project-discard-title" class="textBalance">
-                  {projectDiscardTitle()}
-                </h2>
-                <p id="project-discard-detail" class="textPretty">{projectDiscardDetail()}</p>
-              </div>
-            </div>
-            <div class="protectedCloseActions">
-              <button
-                type="button"
-                data-project-discard-cancel
-                onClick={() => completeProjectDiscardRequest(false)}
-              >
-                {translateUiText("Keep Editing", uiLocale())}
-              </button>
-              <button
-                type="button"
-                class="danger"
-                data-project-discard-confirm
-                onClick={() => completeProjectDiscardRequest(true)}
-              >
-                {translateUiText("Discard and Continue", uiLocale())}
-              </button>
-            </div>
-          </section>
-        </dialog>
-      </Show>
-      <Show when={protectedCloseRequest()}>
-        <dialog
-          ref={(dialog) => queueMicrotask(() => {
-            if (!dialog.open) dialog.showModal();
-            dialog.querySelector<HTMLButtonElement>("[data-protected-close-cancel]")?.focus();
-          })}
-          class="protectedCloseDialog"
-          data-protected-close-dialog
-          role="alertdialog"
-          aria-labelledby="protected-close-title"
-          aria-describedby="protected-close-detail"
-          onCancel={(event) => {
-            event.preventDefault();
-            cancelProtectedClose();
-          }}
-          onClose={() => setProtectedCloseRequest(null)}
-        >
-          <section class="protectedCloseFrame">
-            <header>
-              <span>{protectedCloseCopy().eyebrow}</span>
-              <strong>{translateUiText("SYNDOCAL", uiLocale())}</strong>
-            </header>
-            <div class="protectedCloseBody">
-              <div class="protectedCloseMark" aria-hidden="true">!</div>
-              <div>
-                <h2 id="protected-close-title" class="textBalance">{protectedCloseCopy().title}</h2>
-                <p id="protected-close-detail" class="textPretty">{protectedCloseCopy().detail}</p>
-              </div>
-            </div>
-            <div class="protectedCloseActions">
-              <button
-                type="button"
-                data-protected-close-cancel
-                onClick={cancelProtectedClose}
-              >
-                {protectedCloseCopy().cancel}
-              </button>
-              <button
-                type="button"
-                class="danger"
-                data-protected-close-confirm
-                onClick={() => void completeProtectedClose()}
-              >
-                {protectedCloseCopy().confirm}
-              </button>
-            </div>
-          </section>
-        </dialog>
-      </Show>
-      <InAppDialogHost locale={uiLocale} />
-      <Show when={controlAssignRequest()}>
-        {(request) => (
-          <ControlAssignMenu
-            x={request().x}
-            y={request().y}
-            label={request().targets[0]?.label ?? ""}
-            beatEligible={request().targets.length > 0
-              && request().targets.every((target) => isPerformTriggerAction(target.midi_action ?? target.action))}
-            audioEligible={request().targets.length > 0 && request().targets.every(audioTargetIsEligible)}
-            audioTrigger={request().targets.every(audioTargetIsTrigger)}
-            audioLow={request().targets[0]?.low}
-            audioHigh={request().targets[0]?.high}
-            onAudio={(settings) => {
-              const targets = request().targets;
-              closeControlAssignMenu();
-              void assignAudioForTargets(targets, settings);
-            }}
-            assignments={controlAssignments()}
-            onLearn={() => { const learn = request().learn; closeControlAssignMenu(); learn(); }}
-            onBeat={(division) => {
-              const targets = request().targets;
-              closeControlAssignMenu();
-              void assignBeatDivisionForTargets(targets, division);
-            }}
-            onRemove={(assignment) => {
-              const label = request().targets[0]?.label ?? "";
-              closeControlAssignMenu();
-              void removeMidiAssignments([assignment.mapping as MidiControlMapping], label);
-            }}
-            onDismiss={(restoreFocus) => closeControlAssignMenu(restoreFocus)}
-          />
-        )}
-      </Show>
-      <Show when={pendingPatchGroupRegistration()}>
-        {(pending) => (
-          <dialog
-            ref={(dialog) => queueMicrotask(() => {
-              if (!dialog.open) dialog.showModal();
-              dialog.querySelector<HTMLInputElement>("input")?.focus();
-            })}
-            class="patchGroupRegistrationDialog"
-            data-patch-group-registration-dialog
-            data-fixed-frame-modal="patch-group-registration"
-            aria-labelledby="patch-group-registration-title"
-            onCancel={(event) => {
-              event.preventDefault();
-              skipPatchedFixtureGroupRegistration();
-            }}
-          >
-            <div class="patchGroupRegistrationFrame">
-              <header>
-                <span>Patch complete</span>
-                <strong>{pending().fixtureIds.length} fixtures</strong>
-              </header>
-              <h3 id="patch-group-registration-title">Register new fixtures as a group?</h3>
-              <label>
-                Group name
-                <input
-                  data-patch-group-registration-name
-                  value={patchGroupRegistrationName()}
-                  placeholder={pending().defaultName}
-                  onInput={(event) => setPatchGroupRegistrationName(event.currentTarget.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      void registerPatchedFixturesAsGroup();
-                    }
-                  }}
-                />
-              </label>
-              <div class="dialogActions">
-                <button
-                  type="button"
-                  data-patch-group-registration-skip
-                  onClick={skipPatchedFixtureGroupRegistration}
-                >
-                  Skip
-                </button>
-                <button
-                  type="button"
-                  class="primary"
-                  data-patch-group-registration-register
-                  disabled={!patchGroupRegistrationName().trim()}
-                  onClick={() => void registerPatchedFixturesAsGroup()}
-                >
-                  Register group
-                </button>
-              </div>
-            </div>
-          </dialog>
-        )}
-      </Show>
-      <Show when={projectDropState()}>
-        <div class={`projectDropOverlay ${projectDropState() === "invalid" ? "invalid" : ""}`}>
-          <strong>{projectDropState() === "project" ? "Open Syndocal Project" : "Unsupported File"}</strong>
-          <span>{projectDropState() === "project" ? "Drop to load the .sdc project." : "Drop a .sdc project file."}</span>
-        </div>
-      </Show>
+  const persistentWorkspaceModel = {
+    poppedPanes,
+    lowerSplitRatio,
+    timelinePaneExpanded,
+    togglePaneWindow,
+    paneWindowOperationPending,
+    setLowerSplitRatio,
+    setWorkspaceTab,
+    selectSetupMode,
+    paneWindow,
+    workspaceTab,
+    controlMode,
+    selectedMediaLibraryAsset,
+    mediaAssetThumbnails,
+    mediaAssetAvailabilityById,
+    videoLayerListProps,
+    videoEffectCatalog,
+    snapshot,
+    videoTransitionRuntime,
+    isfEventPulseBusy,
+    applyVideoEffectCatalog,
+    projectMappingsAuthority,
+    loadVideoGroupCanvasPreview,
+    importVideoEffectScopeIsf,
+    applyVideoEffectPreset,
+    removeVideoEffectChain,
+    launchVideoLayerTransitionBus,
+    releaseVideoLayerTransitionBus,
+    bankAuthority,
+    timelineCueOptions,
+    timelineChildCueId,
+    uiLocale,
+    inspectMediaAssetIds,
+    timelineLayers,
+    activeTimeline,
+    snapTimeMs,
+    placeTimelineExternalSource,
+    setMessage,
+    timelineLowerContextMode,
+    setTimelineLowerContextMode,
+    renderTimelineInspector,
+    isTauriRuntime,
+    faderDeskTitle,
+    controlFaderModeChanging,
+    controlTargetKind,
+    controlCompactReadout,
+    controlFaderWriteMode,
+    selectedSceneCue,
+    changeControlFaderWriteMode,
+    toggleBlindEditing,
+    commitProgrammer,
+    clearProgrammer,
+    stageWorldBounds,
+    stageMapPresetLabel,
+    selectedStageMapPresetLabel,
+    mappingViewPresetLabel,
+    selectedMappingViewPresetId,
+    mappingViewPresets,
+    stageMapPresetObjectCountLabel,
+    mappingViewPresetObjectLabel,
+    lockStageMapToCurrentBounds,
+    setStageMapConfig,
+    setStageMapPresetLabel,
+    setSelectedStageMapPresetLabel,
+    saveStageMapPreset,
+    exportStageMapPreset,
+    importStageMapPreset,
+    applyStageMapPreset,
+    removeStageMapPreset,
+    setMappingViewPresetLabel,
+    setSelectedMappingViewPresetId,
+    saveMappingViewPreset,
+    applyMappingViewPreset,
+    removeMappingViewPreset,
+    exportMappingStageSvg,
+    exportVisualizerRenderPayload,
+    filteredFixtures,
+    selectedFixtureGroupFilter,
+    fixtureGroupRows,
+    selectedFixtureTypeFilter,
+    fixtureTypeRows,
+    selectFixtureGroupFilter,
+    createFixtureGroup,
+    renameFixtureGroup,
+    deleteFixtureGroup,
+    recolorFixtureGroup,
+    setSelectedFixtureTypeFilter,
+    mappingStageTool,
+    mappingHotkeyHelpOpen,
+    setMappingStageTool,
+    setMappingHotkeyHelpOpen,
+    mappingFilteredFixtures,
+    mappingStageCursorWorld,
+    mappingStageCursorLabel,
+    canFitMappingViewportToVisible,
+    canFitMappingViewportToSelection,
+    mappingViewportZoomLabel,
+    normalizedMappingViewportZoom,
+    mappingViewportMaxZoom,
+    mappingSnapEnabled,
+    normalizedMappingSnapSize,
+    mappingShowLabels,
+    mappingShowBeams,
+    mappingShowGeometry,
+    mappingShowProjectors,
+    mappingShowStageObjects,
+    mappingShowLevels,
+    fitMappingViewportToVisible,
+    fitMappingViewportToSelection,
+    zoomMappingViewport,
+    setMappingViewport,
+    resetMappingViewport,
+    setMappingSnapEnabled,
+    setMappingSnapSize,
+    setMappingShowLabels,
+    setMappingShowBeams,
+    setMappingShowGeometry,
+    setMappingShowProjectors,
+    setMappingShowStageObjects,
+    setMappingShowLevels,
+    bindMappingStageSvgElement,
+    mappingDrag,
+    mappingViewportPanDrag,
+    mappingStageViewBox,
+    mappingViewportBox,
+    stageOrigin2d,
+    mappingSnapLines,
+    mappingMarqueeBox,
+    handleMappingStagePointerDown,
+    handleMappingStageAuxClick,
+    handleMappingStagePointerMove,
+    finishMappingStageDrag,
+    setMappingStageCursorWorld,
+    handleMappingStageWheel,
+    mappingStageViewportPixelSize,
+    visualizerStageObjects2d,
+    visualizerVideoSurfaces2d,
+    mappingStageFixtures,
+    mappingGeometryNodes2d,
+    visualizerFixtures,
+    selectedMappingFixtureIdSet,
+    selectedFixtureId,
+    selectedVideoOutputId,
+    mappingPlacePreview,
+    isDraggingMappingStageObject,
+    isDraggingMappingFixture,
+    beginMappingStageObjectDrag,
+    beginMappingStageObjectRotate,
+    beginMappingStageObjectResize,
+    setSelectedVideoOutputId,
+    beginMappingFixtureYawDrag,
+    beginMappingFixtureDrag,
+    selectMappingFixture,
+    selectedMappingFixtures,
+    mappingFixtureSearch,
+    mappingSelectionGroupText,
+    parseGroupIds,
+    fixtureGroupEntities,
+    stageObjectFixtureCounts,
+    selectedStageObject,
+    selectedStageObjectId,
+    stageObjectLabel,
+    stageObjectKind,
+    stageObjectWidth,
+    stageObjectDepth,
+    stageObjectRotation,
+    stageObjectColor,
+    selectedMappingFlagState,
+    selectedMappingFixture,
+    selectedMappingGeometryRows,
+    selectedMappingUnresolvedGeometryReferences,
+    selectedFixtureLimitsDraft,
+    normalizedSelectedFixtureLimitsDraft,
+    selectedFixtureLimitWindowStyle,
+    movementLimitDrag,
+    panTiltNudgeAmount,
+    updateSelectedFixtureLimit,
+    setSelectedFixtureLimitsDraft,
+    resetSelectedMovementLimits,
+    setFixtureLimits,
+    startMovementLimitDrag,
+    dragMovementLimit,
+    endMovementLimitDrag,
+    selectedMappingVideoOutput,
+    setMappingFixtureSearch,
+    setMappingSelectionGroupText,
+    pickVisibleMappingFixtures,
+    duplicateSelectedMappingFixtures,
+    removeSelectedMappingFixtures,
+    clearMappingFixtureSelection,
+    applyMappingSelectionGroups,
+    setStageObjectLabel,
+    setStageObjectKind,
+    setStageObjectWidth,
+    setStageObjectDepth,
+    setStageObjectRotation,
+    setStageObjectColor,
+    addStageObjectAtCenter,
+    setSelectedStageObjectId,
+    setStageObject,
+    removeStageObject,
+    pickFixturesInsideSelectedStageObject,
+    layoutSelectedFixturesOnStageObject,
+    setMappingSelectionFlag,
+    nudgeSelectedMappingFixtures,
+    layoutSelectedMappingFixtures,
+    alignSelectedMappingFixtures,
+    distributeSelectedMappingFixtures,
+    mirrorSelectedMappingFixtures,
+    rotateSelectedMappingFixtures,
+    matchSelectedMappingFixtureOrientations,
+    aimSelectedMappingFixtureInstallationAxes,
+    layoutFixturePositions,
+    openSceneFxFromMapping,
+    setFixtureTransform,
+    timelineDeskSurface,
+    timelineContextDrawer,
+    editDeskSurface,
+    selectedFixtureGroupLabel,
+    selectedGroupSubmaster,
+    selectedFixture,
+    selectedGroupFlagState,
+    globalFixtureFlagState,
+    setGroupSubmaster,
+    savePreset,
+    loadPreset,
+    loadPresetForSelectedGroup,
+    loadPresetForAllMatching,
+    duplicateFixture,
+    removeFixture,
+    setFixtureHighlight,
+    setFixtureSolo,
+    setFixturePark,
+    setGroupHighlight,
+    setGroupSolo,
+    setGroupPark,
+    clearFixtureFlags,
+    timelineUpperHost,
+    setProgrammerMode,
+    referencePalettes,
+    controlTargetLabel,
+    selectedControlTargetFixtures,
+    createReferencePalette,
+    updateReferencePalette,
+    applyReferencePalette,
+    removeReferencePalette,
+    createPlaybackExecutor,
+    updatePlaybackExecutor,
+    removePlaybackExecutor,
+    setPlaybackExecutorLevel,
+    setPlaybackMaster,
+    triggerPlaybackExecutor,
+    controlFaderWriteBlocked,
+    controlCategoryRows,
+    activeControlCategory,
+    setControlCategory,
+    showFixtureTypeAttributeColumns,
+    showDimmerPanel,
+    selectedDimmerControl,
+    showPositionPad,
+    selectedPositionControls,
+    showColorPad,
+    selectedColorControls,
+    dimmerSliderRange,
+    selectedFixtureLimitOverlayStyle,
+    positionFavorites,
+    positionFavoriteLabel,
+    selectedColorHsv,
+    colorSaturationRamp,
+    colorAutoWhite,
+    colorFavorites,
+    colorPreviewForSaturation,
+    setDimmerValue,
+    resetSelectedDimmerLimits,
+    applySelectedFixtureLimits,
+    nudgePanTilt,
+    centerPanTilt,
+    mirrorPanTiltAxis,
+    setPanTiltTargetPoint,
+    setPanTiltFromPointer,
+    handlePanTiltPadKeyDown,
+    setPanTiltValues,
+    setPanTiltPercent,
+    setPanTiltNudgeAmount,
+    setPositionFavoriteLabel,
+    addCurrentPositionFavorite,
+    resetPositionFavorites,
+    removePositionFavorite,
+    setColorFromPointer,
+    setFixtureColor,
+    setColorAutoWhite,
+    setColorChannelValue,
+    setColorExtraChannelValue,
+    setColorHsvValue,
+    addCurrentColorFavorite,
+    resetColorFavorites,
+    removeColorFavorite,
+    showColorWheelPanel,
+    showColorWheelPickerPanel,
+    showGoboWheelPanel,
+    showOpticsPanel,
+    showCategoryQuickPanel,
+    activeControlCategoryLabel,
+    visibleControls,
+    colorWheelEntries,
+    goboWheelEntries,
+    colorWheelPickerColor,
+    colorWheelPickerHsv,
+    colorWheelSaturationRamp,
+    colorWheelApproximationLabel,
+    wheelMediaUrlForCurrentFixture,
+    opticsPanelTitle,
+    opticsEntries,
+    opticsPreviewClass,
+    opticsPreviewStyle,
+    opticsPresetButtons,
+    channelFunctionContainsValue,
+    channelFunctionBandStyle,
+    channelFunctionSwatchColor,
+    categoryQuickLooks,
+    visibleFunctionControls,
+    currentControlValue,
+    setColorWheelPickerFromPointer,
+    setColorWheelPickerColor,
+    setColorWheelPickerHsvValue,
+    setOpticsValueFromPointer,
+    setOpticsValueFromKey,
+    setControlAttributeValue,
+    applyColorWheelFunction,
+    applyChannelFunction,
+    applyVisibleControlValues,
+    applyCategoryQuickLook,
+    selectedControlReferenceFixture,
+    faderValue,
+    controlIsWritten,
+    setAttribute,
+    setGroupAttribute,
+    pickedFixtureTypeGroups,
+    selectPickedFixtureType,
+    setFixtureTypeControlValue,
+    resetFixtureTypeControlValue,
+    setFixtureTypeColor,
+    setFixtureTypePosition,
+    timelineNavigatorOpen,
+    setTimelineNavigatorOpen,
+    openRootTimelineFromNavigator,
+    openChildTimelineFromNavigator,
+    snapshotCues,
+    timelineInlineChildParents,
+    timelineChildCue,
+    cueIdentities,
+    timelineBank,
+    displayedTimelineFollowRuntime,
+    timelineFollowAbortBusy,
+    timelineFollowAbortFocusFence,
+    timelineExecutionLive,
+    superSceneCueCount,
+    timelineOverviewEvents,
+    timelineCueDrag,
+    timelineOverviewAutomationRanges,
+    timelineItemLanePlacements,
+    timelineOverviewOverlapClusters,
+    timelineOverlapClusters,
+    selectedTimelineAutomationRangeId,
+    timelineOverviewPlayheadX,
+    timelineVisibleWindow,
+    timelineOverviewShowDurationMs,
+    timelineOverviewEditExtentMs,
+    selectedTimelineSceneBlockEventId,
+    timelineSelection,
+    timelineSceneBlockSelectionRevision,
+    audioAnalysis,
+    audioWaveformPoints,
+    audioSpectrumPaths,
+    audioBeatMarkers,
+    timelineSnapMode,
+    timelineGridMs,
+    selectedTimelineCueId,
+    timelineEventTimeMs,
+    timelineBlockDurationMs,
+    timelineBlockLoopCount,
+    timelineBlockJumpToEventId,
+    timelineTrack,
+    timelineEventRows,
+    timelineStretchMode,
+    timelineMagnetEnabled,
+    timelineArmedCueId,
+    timelineArmedCue,
+    timelineEventDraft,
+    seekTimeline,
+    exitSuperScene,
+    openOrCreateSuperScene,
+    pauseTimeline,
+    playTimeline,
+    setTimelineMetronome,
+    setTimelineGuideEnabled,
+    setTimelinePhases,
+    setTimelineLoopRegion,
+    setTimelineLoopEnabled,
+    scaleTimelineLoop,
+    createTimeline,
+    duplicateTimeline,
+    removeTimeline,
+    reorderTimelines,
+    selectTimeline,
+    setTimelineFollow,
+    abortTimelineFollow,
+    seekTimelineFromOverviewTime,
+    moveTimelineCueEventToPlacement,
+    resizeTimelineCueEventToTime,
+    setTimelineCueEventFade,
+    selectTimelineAutomationRange,
+    selectTimelineItem,
+    moveTimelineAutomationRangeToTime,
+    resizeTimelineAutomationRangeToTime,
+    moveTimelineAutomationKeyframeToTime,
+    selectTimelineSceneBlockEvent,
+    fitTimelineOverview,
+    zoomTimelineOverview,
+    panTimelineOverview,
+    setTimelineVisibleWindowDirect,
+    zoomTimelineOverviewAt,
+    revealTimelineSceneBlock,
+    revealTimelinePlayhead,
+    analyzeAudioFile,
+    clearTimelineAudio,
+    applyAudioBpm,
+    addTimelineAudioClip,
+    updateTimelineAudioClip,
+    setTimelineAudioClipOutputBus,
+    updateTimelineVideoClip,
+    groupTimelineItems,
+    ungroupTimelineItem,
+    duplicateTimelineItems,
+    nudgeTimelineItems,
+    rippleTimelineItems,
+    quantizeTimelineItems,
+    pasteTimelineItems,
+    trimTimelineItems,
+    splitTimelineItems,
+    moveTimelineItemsToLanes,
+    setSelectedTimelineSceneBlockEventId,
+    setSelectedTimelineAutomation,
+    removeTimelineItems,
+    removeTimelineAudioClip,
+    setTimelineAudioMaster,
+    setTimelineSnapMode,
+    setTimelineGridMs,
+    snapTimelineDrafts,
+    snapTimelineItems,
+    placeArmedTimelineCue,
+    setTimelineCueId,
+    setTimelineEventTimeMs,
+    setTimelineBlockDurationMs,
+    setTimelineBlockLoopCount,
+    setTimelineBlockJumpToEventId,
+    setTimelineTrack,
+    addTimelineCueEvent,
+    addTimelineCueEventAtPlayhead,
+    updateTimelineEventDraft,
+    setTimelineCueEvent,
+    removeTimelineEvent,
+    openTimelineSourceCue,
+    timelineLayerController,
+    removeTimelineLayer,
+    setTimelineStretchMode,
+    setTimelineMagnetEnabled,
+    toggleTimelineArmedCue,
+    setTimelineContextDrawer,
+    timelineAutomationControls,
+    selectedTimelineAutomationAttribute,
+    canAddTimelineAutomation,
+    canAddTimelineGroupAutomation,
+    lightingAutomationRowScope,
+    allTimelineAutomationRows,
+    automationStartMs,
+    automationEndMs,
+    automationStartValue,
+    automationEndValue,
+    automationInterpolation,
+    timelineAutomationRows,
+    selectedLightingTimelineAutomationId,
+    timelineAutomationFixtureOptions,
+    timelineAutomationDraft,
+    fixtureAttributeOptions,
+    setEffectAttribute,
+    setAutomationStartMs,
+    setAutomationEndMs,
+    setAutomationStartValue,
+    setAutomationEndValue,
+    setAutomationInterpolation,
+    setLightingAutomationRowScope,
+    usePlayheadForLightingAutomation,
+    addTimelineAutomation,
+    addTimelineGroupAutomation,
+    updateTimelineAutomationDraft,
+    alignLightingAutomationDraftToPlayhead,
+    addLightingAutomationKeyframeAtPlayhead,
+    removeLightingAutomationKeyframeAtPlayhead,
+    removeLightingAutomationKeyframe,
+    setLightingAutomationKeyframeInterpolation,
+    setLightingAutomationKeyframeValue,
+    setTimelineAutomationEnabled,
+    setLightingAutomationRowsEnabled,
+    setTimelineAutomation,
+    removeTimelineAutomation
+  };
 
-      <section
-        class={`layout ${touchLayoutClass()}`}
-        style={
-          paneWindow || (sharedWorkspaceVisible() && !persistentBandVisible())
-            ? "grid-template-rows: minmax(0, 1fr) !important"
-            : undefined
-        }
-        data-workspace-split-root={persistentBandVisible() ? "true" : undefined}
-        data-upper-lower-ratio={persistentBandVisible() ? activeTopSplitRatio() : undefined}
-        data-lower-left-right-ratio={persistentBandVisible() ? lowerSplitRatio() : undefined}
-      >
-        {/* Keep every persistent domain tab associated with a real panel while
-            inactive panels stay unmounted: these placeholders are hidden,
-            hold no application state, and disappear as their domain mounts. */}
-        <Show when={workspaceTab() === "control" && controlMode() !== "edit"}>
-          <section id="edit-domain-panel-edit" role="tabpanel" aria-labelledby="edit-domain-tab-edit" hidden />
-        </Show>
-        <Show when={workspaceTab() === "control" && controlMode() !== "mixer"}>
-          <section id="edit-domain-panel-mixer" role="tabpanel" aria-labelledby="edit-domain-tab-mixer" hidden />
-        </Show>
-        <Show when={workspaceTab() === "control" && controlMode() !== "live"}>
-          <section id="edit-domain-panel-live" role="tabpanel" aria-labelledby="edit-domain-tab-live" hidden />
-        </Show>
-        <Show when={workspaceTab() === "touch"}>
-          <Show when={controlMode() !== "edit"}>
-            <section id="control-domain-panel-lighting" role="tabpanel" aria-labelledby="control-domain-lighting" hidden />
-          </Show>
-          <Show when={controlMode() !== "perform"}>
-            <section id="control-domain-panel-video" role="tabpanel" aria-labelledby="control-domain-video" hidden />
-          </Show>
-          <Show when={controlMode() !== "both"}>
-            <section id="control-domain-panel-both" role="tabpanel" aria-labelledby="control-domain-both" hidden />
-          </Show>
-          <Show when={touchControlDomain() !== "timeline"}>
-            <section id="control-domain-panel-timeline" role="tabpanel" aria-labelledby="control-domain-timeline" hidden />
-          </Show>
-        </Show>
-        <Show when={workspaceTab() === "control" && controlMode() === "edit"}>
-          <section
-            id="edit-domain-panel-edit"
-            role="tabpanel"
-            aria-labelledby="edit-domain-tab-edit"
-            class={`panel editDomainUpperPanel controlPanel${selectedSceneCue() ? " lightingSceneSettingsVisible" : liveStatusExpanded() ? " lightingStatusVisible" : ""}`}
-            data-workspace-pane="upper"
-            data-live-status-expanded={liveStatusExpanded() ? "true" : "false"}
-            aria-label="Lighting Banks and Scenes"
-          >
-            <Show when={controlLiveView() === "matrix"}>
-              <SceneMatrixPanel
-              projectEpoch={projectMappingsAuthority().project_epoch}
-              bankAuthority={bankAuthority()}
-              bankMutationFailureMessage={message()}
-              toolbar={liveDeskViewActions()}
-              selectedCueListId={selectedCueListId()}
-              onSelectCueList={setSelectedCueListId}
-              onCueListLabel={setCueListLabel}
-              onCreateCueList={createCueList}
-              onRenameCueList={renameCueList}
-              onRemoveCueList={removeCueList}
-              onCreateSceneForCueList={createSceneInCueList}
-              onRenameCue={renameScene}
-              onDuplicateCue={duplicateCue}
-              onRemoveCue={removeCue}
-              cueRemovalImpact={cueRemovalImpact}
-              onReorderCueLists={reorderCueLists}
-              groupColors={groupColors()}
-              onSetGroupColor={setGroupColor}
-              groupIds={sceneMatrixGroupIds()}
-              activeCueId={snapshot().active_cue_id}
-              activeGroupCueIds={snapshot().active_group_cue_ids ?? {}}
-              selectedCueId={selectedSceneCueId()}
-              activeFade={snapshot().active_fade}
-              cueLiveModifiers={snapshot().cue_live_modifiers}
-              onSetCueLiveModifier={setCueLiveModifierLive}
-              onClearCueLiveModifier={clearCueLiveModifierLive}
-              onReleaseCue={releaseCueById}
-              timelineTrack={timelineTrack()}
-              onTriggerCue={triggerCue}
-              onSelectCue={selectSceneCue}
-              onOpenSuperScene={(cueId) => void openOrCreateSuperScene(cueId)}
-              onOpenCueEditor={() => openCueEditor()}
-              onBeginTimelineCueDrag={beginTimelineCueDrag}
-              onMoveTimelineCueDrag={moveTimelineCueDrag}
-              onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
-              />
-            </Show>
-            <Show when={controlLiveView() === "pads"}>
-              {renderLightingCuePads()}
-            </Show>
-            <Show when={Boolean(selectedSceneCue()) || liveStatusExpanded()}>
-              {renderLightingStatusInspector()}
-            </Show>
-          </section>
-        </Show>
-        <Show when={workspaceTab() === "touch" && controlMode() === "both"}>
-          <ControlBothPanel
-            activeCueId={snapshot().active_cue_id ?? null}
-            activeCueLabel={activeCue()?.label ?? null}
-            nextCueLabel={nextCue()?.label ?? null}
-            cueCount={snapshot().cues.length}
-            timelinePlaying={snapshot().timeline.playing}
-            timecode={formatShowTimecode(snapshot().timeline.position_ms)}
-            lightingMaster={snapshot().lighting_master}
-            videoMaster={snapshot().video.master_opacity}
-            blackout={snapshot().authored_blackout}
-            videoBlackout={snapshot().video.blackout}
-            enabledDmxOutputCount={enabledDmxOutputCount()}
-            dmxOutputCount={snapshot().dmx_outputs.length}
-            enabledVideoOutputCount={enabledVideoOutputCount()}
-            videoOutputCount={snapshot().video.outputs.length}
-            previewLabel={liveVideoPreviewLabel()}
-            previewStatus={liveVideoMonitorStatusLabel("preview", liveVideoMonitors.preview().status)}
-            programLabel={liveVideoProgramLabel()}
-            programStatus={liveVideoMonitorStatusLabel("program", liveVideoMonitors.program().status)}
-            clipCount={snapshot().video.layers.length}
-            selectedClipLabel={selectedVideoClipSlotLayer()?.label ?? null}
-            recordingLabel={videoRecordingStatus().active ? "Recording" : videoRecordingStatus().state ?? "Idle"}
-            onOpenLighting={() => selectControlDomain("lighting")}
-            onOpenVideo={() => selectControlDomain("video")}
-            onBack={() => void triggerPreviousCue()}
-            onGo={() => void triggerNextCue()}
-            onRelease={() => {
-              const cueId = snapshot().active_cue_id;
-              if (cueId !== null && cueId !== undefined) void releaseCueById(cueId);
-            }}
-            onSetLightingMaster={setLightingMaster}
-            onSetVideoMaster={setVideoMasterOpacity}
-            onSetBlackout={(enabled) => void setBlackout(enabled)}
-            onSetVideoBlackout={(enabled) => void setVideoBlackout(enabled)}
-            onSetAllBlackout={(enabled) => void setAllBlackout(enabled)}
-          />
-        </Show>
-        <Show when={workspaceTab() === "control" && controlMode() === "live"}>
-        <section
-          class={`panel liveControlPanel controlPanel${liveStatusExpanded() ? " liveStatusExpanded" : ""}`}
-          id="edit-domain-panel-live"
-          role="tabpanel"
-          aria-labelledby="edit-domain-tab-live"
-          data-workspace-pane="upper"
-          data-live-status-expanded={liveStatusExpanded() ? "true" : "false"}
-        >
-          <header class="panelHeader controlContextHeader timelineArrangerHeader" data-timeline-arranger-header>
-            <h2>Timeline</h2>
-            <div class="controlContextHeaderTools">
-              {renderTimelineDeskHeaderTools()}
-              <Show when={timelineDeskSurface() === "show"}>
-                <button type="button" class={timelineNavigatorOpen() ? "active" : ""}
-                  data-timeline-navigator-toggle title="タイムライン一覧" aria-label="タイムライン一覧"
-                  aria-expanded={timelineNavigatorOpen()} aria-controls="timeline-navigator"
-                  onClick={() => setTimelineNavigatorOpen((open) => !open)}>
-                  タイムライン一覧
-                </button>
-              </Show>
-              <Show when={!paneWindow}>
-                <button
-                  type="button"
-                  class={`timelinePaneExpandToggle${timelinePaneExpanded() ? " expanded" : ""}`}
-                  data-timeline-pane-expand-toggle
-                  title={timelinePaneActionLabel()}
-                  aria-label={timelinePaneActionLabel()}
-                  aria-expanded={timelinePaneExpanded()}
-                  onClick={() => setTimelinePaneExpanded((expanded) => !expanded)}
-                >
-                  <svg viewBox="0 0 16 16" aria-hidden="true">
-                    <path d={timelinePaneExpanded() ? "M3 6h3V3M13 6h-3V3M13 10h-3v3M3 10h3v3" : "M6 3H3v3M10 3h3v3M13 10v3h-3M3 10v3h3"} />
-                  </svg>
-                </button>
-              </Show>
-            </div>
-          </header>
-          <div
-            ref={(host) => {
-              setTimelineUpperHost(undefined);
-              queueMicrotask(() => {
-                if (host.isConnected) setTimelineUpperHost(host);
-              });
-            }}
-            class="timelineArrangerUpperHost controlContextPane"
-            data-timeline-arranger-upper
-            aria-label="Timeline arranger"
-          />
-        </section>
-        </Show>
-        <Show when={workspaceTab() === "touch" && touchControlDomain() === "timeline"}>
-          <ControlTimelinePlaybackPanel
-            cues={snapshot().cues}
-            cueLists={snapshot().cue_lists}
-            activeCueId={snapshot().active_cue_id ?? null}
-            nextCueId={nextCue()?.id ?? null}
-            activeFade={snapshot().active_fade ?? null}
-            timelineEvents={activeTimeline().events}
-            timelinePositionMs={activeTimeline().position_ms}
-            timelineDurationMs={activeTimeline().duration_ms}
-            timelinePlaying={activeTimeline().playing}
-            childTimelineLabel={timelineChildCue()?.label ?? null}
-            blackout={snapshot().authored_blackout || snapshot().safety_blackout_engaged}
-            videoBlackout={snapshot().video.blackout}
-            safetyBlackoutEngaged={snapshot().safety_blackout_engaged}
-            blackoutBlockedReason={blackoutBlockedReason()}
-            cueIdentity={(cue) => cueIdentityCss(
-              cue.id,
-              cue.color,
-              "band",
-              cue.group_id,
-              cue.group_id ? groupColors()[cue.group_id] : null,
-            )}
-            onGo={() => void triggerNextCue()}
-            onBack={() => void triggerPreviousCue()}
-            onRelease={() => {
-              const cueId = snapshot().active_cue_id;
-              if (cueId !== null && cueId !== undefined) void releaseCueById(cueId);
-            }}
-            onTriggerCue={(cueId) => void triggerCue(cueId)}
-            onToggleFadePause={() => void setCueFadePaused(!snapshot().active_fade?.paused)}
-            onPlay={() => void playTimeline()}
-            onPause={() => void pauseTimeline()}
-            onSeek={(positionMs) => void seekTimeline(positionMs)}
-            onSetBlackout={(enabled) => void setBlackout(enabled)}
-            onSetVideoBlackout={(enabled) => void requestPerformVideoBlackout(enabled)}
-            onSetAllBlackout={(enabled) => void setAllBlackout(enabled)}
-            onOpenTimelineEditor={paneWindow ? undefined : () => selectControlMode("live")}
-          />
-        </Show>
-        <Show when={workspaceTab() === "touch" && touchControlDomain() === "video"}>
-          <dialog class="controlVideoToolsDialog" ref={videoLiveControlsDialog} aria-labelledby="control-video-tools-title"
-            onClose={() => setVideoClipSlotInspectorOpen(false)}>
-            <header class="panelHeader">
-              <h2 id="control-video-tools-title">Video live controls</h2>
-              <button type="button" autofocus onClick={() => {
-                // Do not wait for the asynchronous dialog close event to reap the nested inspector.
-                setVideoClipSlotInspectorOpen(false);
-                videoLiveControlsDialog?.close();
-              }}>Close</button>
-            </header>
-        <TouchVideoPanel
-          layers={snapshot().video.layers}
-          outputs={snapshot().video.outputs}
-          selectedOutputId={selectedVideoOutputId()}
-          onSetLayerState={setVideoLayerState}
-          onAddCuePoint={addVideoCuePoint}
-          onJumpCuePoint={jumpVideoCuePoint}
-          onSelectOutput={setSelectedVideoOutputId}
-          windowStateForOutput={(outputId) => {
-            const state = videoOutputWindowState(outputId);
-            return { stateLabel: state.stateLabel, detail: state.detail };
-          }}
-          clipSlotBank={{
-            mode: "control",
-            get layers() { return snapshot().video.layers; },
-            get layer() { return selectedVideoClipSlotLayer(); },
-            get runtime() { return selectedVideoClipSlotRuntime(); },
-            get assets() { return snapshot().video.media_assets; },
-            get thumbnails() { return mediaAssetThumbnails(); },
-            get selectedSlotId() { return selectedVideoClipSlotId(); },
-            onSelectLayer: selectVideoClipSlotLayer,
-            onSelect: selectVideoClipSlot,
-            onQueue: (slotId) => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? queueVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
-            },
-            onPreview: previewVideoClipSlot,
-            onMore: openVideoClipSlotInspector,
-            onImport: () => importMediaFiles("File"),
-            onCancelQueue: () => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? cancelQueuedVideoClipSlot(layer.id) : Promise.resolve(null);
-            },
-            onSetQuantization: updateVideoClipSlotQuantization,
-            get transitionKind() { return videoClipTakeKind(); },
-            get transitionDurationUnit() { return videoClipTakeDurationUnit(); },
-            get transitionDurationMilliunits() { return videoClipTakeDurationMilliunits(); },
-            onSetTransitionKind: setVideoClipTakeKind,
-            onSetTransitionDurationUnit: setVideoClipTakeDurationUnit,
-            onSetTransitionDurationMilliunits: (value) => setVideoClipTakeDurationMilliunits(
-              Math.max(1, Math.min(600_000, Math.round(value || 1))),
-            ),
-          }}
-          clipSlotTake={{
-            get enabled() { return videoClipSlotTakeEnabled(); },
-            get label() { return videoClipSlotTakeLabel(); },
-            onTake: takeSelectedVideoClipSlot,
-          }}
-          transitionBuses={{
-            get catalog() { return videoEffectCatalog(); },
-            get compositions() { return snapshot().video.compositions; },
-            get runtime() { return videoTransitionRuntime(); },
-            get busy() { return isfEventPulseBusy(); },
-            onApplyCatalog: applyVideoEffectCatalog,
-            onLaunch: launchVideoLayerTransitionBus,
-            onRelease: releaseVideoLayerTransitionBus,
-          }}
-        />
-        <Show when={videoClipSlotInspectorOpen() && selectedVideoClipSlotLayer()}>
-          {renderVideoClipSlotInspector(false)}
-        </Show>
-          </dialog>
-        </Show>
-        <Show when={workspaceTab() === "touch" && touchControlDomain() === "lighting"}>
-        <EditableTouchSurface
-          bankAuthority={bankAuthority()}
-          snapshot={snapshot()}
-          surface={snapshot().touch_surface}
-          selectedFixtureId={selectedFixtureId()}
-          selectedGroupId={selectedFixtureGroupFilter()}
-          colorPalette={selectedColorControls() ? defaultColorPalette.slice(0, 8) : []}
-          onSurfaceChange={setTouchSurfaceLayout}
-          onTrigger={triggerTouchBinding}
-          onValue={setTouchBindingValue}
-          onColor={setTouchBindingColor}
-          onXy={setTouchBindingXy}
-          onReleaseCue={releaseCueById}
-          onSetCueLiveModifier={setCueLiveModifierLive}
-          onClearCueLiveModifier={clearCueLiveModifierLive}
-        />
-        <TouchCuePanel
-          bankAuthority={bankAuthority()}
-          snapshot={snapshot()}
-          activeCue={activeCue()}
-          nextCue={nextCue()}
-          cuePads={liveCuePads()}
-          cuePadRangeLabel={cuePadRangeLabel()}
-          cuePadBank={cuePadBank()}
-          cuePadBankCount={cuePadBankCount()}
-          onPreviousBank={() => {
-            setCuePadFollowActive(false);
-            setCuePadBank(Math.max(0, cuePadBank() - 1));
-          }}
-          onNextBank={() => {
-            setCuePadFollowActive(false);
-            setCuePadBank(Math.min(cuePadBankCount() - 1, cuePadBank() + 1));
-          }}
-          onTriggerCue={triggerCue}
-        />
-        <section class="panel touchPanel touchStagePanel">
-          <div class="panelHeader">
-            <h2>Touch Stage</h2>
-            <span>
-              {visualizerFixtures().length} fixture(s) / {snapshot().video.outputs.length} projection surface(s) /{" "}
-              {visualizerStageObjects2d().length} ref(s)
-            </span>
-          </div>
-          <StagePreview2D
-            className="touchStage"
-            patternId="touch-stage-grid"
-            stageOrigin={stageOrigin2d()}
-            fixtures={mappingStageFixtures()}
-            videoSurfaces={visualizerVideoSurfaces2d()}
-            stageObjects={visualizerStageObjects2d()}
-            selectedFixtureId={selectedFixtureId()}
-            selectedVideoOutputId={selectedVideoOutputId()}
-            selectedFixtureGroupFilter={selectedFixtureGroupFilter()}
-            stageObjectClassName="touchStageObject"
-            surfaceMinOpacity={0.2}
-            beamMinOpacity={0.06}
-            beamIntensityScale={0.48}
-            showBeams={mappingShowBeams()}
-            showLabels={mappingShowLabels()}
-            onSelectVideoOutput={setSelectedVideoOutputId}
-            onSelectFixture={(fixtureId) => {
-              const patchedFixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
-              if (patchedFixture) {
-                selectFixture(patchedFixture);
-              }
-            }}
-          />
-          <div class="touchStageSelectionBar">
-            <Show
-              when={selectedFixture()}
-              fallback={
-                <div class="touchStageSelectionItem empty">
-                  <strong>No fixture selected</strong>
-                  <span>Selection standby</span>
-                </div>
-              }
-            >
-              {(fixture) => (
-                <div class="touchStageSelectionItem">
-                  <div>
-                    <strong>{fixture().label}</strong>
-                    <span>U{fixture().universe} A{fixture().address} / {fixture().group_ids.join(", ") || fixture().mode_name}</span>
-                  </div>
-                  <button
-                    class={touchDimmerQuickActive() ? "momentary active" : "momentary"}
-                    disabled={!selectedTouchDimmerTarget()}
-                    onPointerDown={startTouchDimmerFlash}
-                    onPointerUp={endTouchDimmerFlash}
-                    onPointerCancel={endTouchDimmerFlash}
-                    onPointerLeave={endTouchDimmerFlash}
-                    onBlur={endTouchDimmerFlash}
-                    onKeyDown={handleTouchDimmerFlashKeyDown}
-                    onKeyUp={handleTouchDimmerFlashKeyUp}
-                  >
-                    Flash
-                  </button>
-                  <button
-                    class={fixture().highlighted ? "active" : ""}
-                    onClick={() => void setFixtureHighlight(fixture().id, !fixture().highlighted)}
-                  >
-                    HL
-                  </button>
-                  <button
-                    class={fixture().soloed ? "active" : ""}
-                    onClick={() => void setFixtureSolo(fixture().id, !fixture().soloed)}
-                  >
-                    Solo
-                  </button>
-                  <button
-                    class={fixture().parked ? "active" : ""}
-                    onClick={() => void setFixturePark(fixture().id, !fixture().parked)}
-                  >
-                    Park
-                  </button>
-                </div>
-              )}
-            </Show>
-            <Show when={selectedTouchVideoOutput()}>
-              {(output) => (
-                <div class="touchStageSelectionItem projector">
-                  <div>
-                    <strong>{output().label}</strong>
-                    <span>
-                      {output().width}x{output().height} / {output().enabled ? "Enabled" : "Disabled"} /{" "}
-                      {output().blackout ? "Blackout" : `${Math.round(output().opacity * 100)}%`}
-                    </span>
-                  </div>
-                  <small role="status">
-                    Physical window: {videoOutputWindowState(output().id).stateLabel}
-                  </small>
-                </div>
-              )}
-            </Show>
-          </div>
-          <div class="touchStageLegend">
-            <button
-              class={!selectedFixtureGroupFilter() ? "active" : ""}
-              onClick={() => selectFixtureGroupFilter(null)}
-            >
-              All
-            </button>
-            <For each={fixtureGroupRows().slice(0, 6)}>
-              {(group) => (
-                <button
-                  class={selectedFixtureGroupFilter() === group.groupId ? "active" : ""}
-                  onClick={() => selectFixtureGroupFilter(group.groupId)}
-                >
-                  <span data-no-localize>{group.label}</span>
-                </button>
-              )}
-            </For>
-          </div>
-        </section>
-        <TouchFixturePanel
-          selectedGroupId={selectedFixtureGroupFilter()}
-          selectedFixture={selectedFixture() ?? null}
-          groups={fixtureGroupRows()}
-          groupColors={groupColors()}
-          fixtures={filteredFixtures()}
-          totalFixtureCount={snapshot().fixtures.length}
-          selectedFixtureId={selectedFixtureId()}
-          groupFlagState={selectedGroupFlagState()}
-          globalAnyFlagged={globalFixtureFlagState().anyFlagged}
-          groupStrobeHz={selectedGroupSubmaster()?.strobe_hz ?? 0}
-          groupStrobeFixtureCount={selectedGroupStrobeFixtureCount()}
-          categories={controlCategoryRows()}
-          activeCategory={activeControlCategory()}
-          activeCategoryLabel={activeControlCategoryLabel()}
-          visibleControlCount={visibleControls().length}
-          onSelectGroup={selectFixtureGroupFilter}
-          onSelectFixture={selectFixture}
-          onSetFixtureHighlight={setFixtureHighlight}
-          onSetFixtureSolo={setFixtureSolo}
-          onSetFixturePark={setFixturePark}
-          onSetGroupHighlight={setGroupHighlight}
-          onSetGroupSolo={setGroupSolo}
-          onSetGroupStrobe={setGroupStrobe}
-          onSetGroupPark={setGroupPark}
-          onClearFixtureFlags={() => clearFixtureFlags("all")}
-          onCategory={setControlCategory}
-        >
-          <Show when={showDimmerPanel() ? selectedDimmerControl() : undefined}>
-            {(dimmer) => (
-              <TouchDimmerControlPanel
-                value={dimmer().value}
-                sliderMin={dimmerSliderRange().min}
-                sliderMax={dimmerSliderRange().max}
-                canControl={Boolean(selectedTouchDimmerTarget())}
-                flashActive={touchDimmerQuickActive()}
-                formatDmxPercent={formatDmxPercent}
-                onSetValue={setDimmerValue}
-                onQuickLevel={setTouchDimmerQuickLevel}
-                onFlashStart={startTouchDimmerFlash}
-                onFlashEnd={endTouchDimmerFlash}
-                onFlashKeyDown={handleTouchDimmerFlashKeyDown}
-                onFlashKeyUp={handleTouchDimmerFlashKeyUp}
-              />
-            )}
-          </Show>
-          <Show when={showPositionPad() ? selectedPositionControls() : undefined}>
-            {(positionControls) => (
-              <TouchPanTiltPad
-                panValue={positionControls().panValue}
-                tiltValue={positionControls().tiltValue}
-                limitOverlayStyle={selectedFixtureLimitOverlayStyle()}
-                onPointerValue={setPanTiltFromPointer}
-              />
-            )}
-          </Show>
-          <Show when={showColorPad() ? selectedColorControls() : undefined}>
-            <TouchColorPalettePanel colors={defaultColorPalette.slice(0, 8)} onSetColor={setFixtureColor} />
-          </Show>
-          <Show when={!showDimmerPanel() && !showPositionPad() && !showColorPad() && visibleControls().length > 0}>
-            <TouchGenericAttributeGrid
-              controls={visibleControls()}
-              currentValue={currentControlValue}
-              formatValue={formatShortDmxPercent}
-              onSetValue={setControlAttributeValue}
-            />
-          </Show>
-        </TouchFixturePanel>
-        </Show>
-        <Show when={workspaceTab() === "setup" && setupSubTab() === "patch"}>
-        <aside
-          class={setupPanelClass("panel setup setupPanel", ["patch"])}
-          ref={registerSetupPanel(["patch"])}
-          tabIndex={-1}
-        >
-          <Show when={!customWorkbenchOpen()}>
-            <PatchProfileBrowserPanel
-              backendAvailable={isTauriRuntime()}
-              invokeCommand={invoke}
-              shareUser={gdtfShareUser()}
-              sharePassword={gdtfSharePassword()}
-              selectedProfile={profile()}
-              selectedMode={selectedMode()}
-              recentProfiles={recentPatchProfiles()}
-              projectFixtures={snapshot().fixtures}
-              gdtfPath={gdtfPath()}
-              gdtfShareUrl={gdtfShareUrl()}
-              onGdtfPath={setGdtfPath}
-              onGdtfShareUrl={setGdtfShareUrl}
-              onBrowse={selectGdtfFile}
-              onLoadGdtf={importGdtf}
-              onDownloadGdtf={downloadGdtfFromUrl}
-              onLoadVerified={usePatchVerifiedProfile}
-              onLoadBundled={usePatchBundledProfile}
-              onLoadCached={usePatchCachedProfile}
-              onLoadRecent={usePatchRecentProfile}
-              onLoadProject={usePatchProjectProfile}
-              onShareUser={setGdtfShareUser}
-              onSharePassword={setGdtfSharePassword}
-              onOpenWorkbench={() => setCustomWorkbenchOpen(true)}
-              repairableFixtureLabel={repairablePatchFixture()?.label ?? null}
-              operationBusy={patchRepairOperationBusy()}
-              onRepairSelectedFixture={() => void repairSelectedPatchFixture()}
-              onProfileDragStart={beginPatchProfileDrag}
-              onProfileDragEnd={clearPatchProfileDrag}
-              onMessage={setMessage}
-            />
-            <PatchFixtureFormPanel
-              armed={Boolean(profile())}
-              operationBusy={patchRepairOperationBusy()}
-              universe={universe()}
-              address={address()}
-              count={patchCount()}
-              addressStride={patchAddressStride()}
-              layoutMode={patchLayoutMode()}
-              gridColumns={patchGridColumns()}
-              circleRadius={patchCircleRadius()}
-              x={patchX()}
-              y={patchY()}
-              z={patchZ()}
-              xStep={patchXStep()}
-              zStep={patchZStep()}
-              pitch={patchPitch()}
-              yaw={patchYaw()}
-              roll={patchRoll()}
-              footprint={selectedFootprint()}
-              normalizedCount={patchCountValue()}
-              normalizedAddressStride={patchAddressStrideValue()}
-              normalizedGridColumns={patchGridColumnsValue()}
-              normalizedCircleRadius={patchCircleRadiusValue()}
-              endAddress={endAddress()}
-              conflictText={patchAddressConflictText()}
-              invalid={patchAddressInvalid()}
-              nextFreeAddress={nextFreePatchAddress()}
-              warnings={profile()?.warnings ?? []}
-              onUniverse={setUniverse}
-              onAddress={setAddress}
-              onCount={setPatchCount}
-              onAddressStride={setPatchAddressStride}
-              onLayoutMode={setPatchLayoutMode}
-              onGridColumns={setPatchGridColumns}
-              onCircleRadius={setPatchCircleRadius}
-              onX={setPatchX}
-              onY={setPatchY}
-              onZ={setPatchZ}
-              onXStep={setPatchXStep}
-              onZStep={setPatchZStep}
-              onPitch={setPatchPitch}
-              onYaw={setPatchYaw}
-              onRoll={setPatchRoll}
-              onPatch={patchFixture}
-              onNextFreeAddress={selectNextFreePatchAddress}
-            />
-          </Show>
-          <Show when={customWorkbenchOpen()}>
-          <div class="customWorkbenchBar" data-custom-workbench-bar>
-            <button
-              type="button"
-              class="customWorkbenchBack"
-              onClick={() => setCustomWorkbenchOpen(false)}
-              data-custom-workbench-back
-            >
-              Back to Patch
-            </button>
-            <span>Custom profile workbench</span>
-          </div>
-          <CustomProfileEditorPanel
-            manufacturer={customManufacturer()}
-            profileName={customProfileName()}
-            modeName={customModeName()}
-            attributesText={customAttributes()}
-            templates={customProfileAttributeTemplates}
-            drafts={customAttributeDrafts()}
-            selectedIndex={selectedCustomAttributeIndexValue()}
-            rowConflicts={customProfileDraftAnalysis().rowConflicts}
-            dmxCells={customProfileDmxCells()}
-            preview={customProfilePreview()}
-            rowStatusText={customProfileDraftRowStatusText}
-            onManufacturer={setCustomManufacturer}
-            onProfileName={setCustomProfileName}
-            onModeName={setCustomModeName}
-            onAttributesText={setCustomAttributesText}
-            onAppendTemplate={appendCustomAttributeTemplate}
-            onSelectIndex={setSelectedCustomAttributeIndex}
-            onUpdateDraft={updateCustomAttributeDraft}
-            onRemoveDraft={removeCustomAttributeDraft}
-            onAddDraft={addCustomAttributeDraft}
-            onMoveDraft={moveCustomAttributeDraft}
-            onClearDrafts={() => commitCustomAttributeDrafts([], null)}
-            onCreate={createCustomProfile}
-            onSave={saveCustomProfile}
-            onLoad={loadCustomProfile}
-          />
-          </Show>
-        </aside>
-        </Show>
+  const setupIoModel = {
+    setupPanelClass,
+    registerSetupPanel,
+    activeIoConnection,
+    setActiveIoConnection,
+    output,
+    audioOutputController,
+    midiConnected,
+    midiControlConnected,
+    oscRunning,
+    genericRemoteRunning,
+    djListenerRunning,
+    djLinkEnabled,
+    extensionStatus,
+    showClockStatus,
+    serialPorts,
+    serialDmxMachineBindingStatus,
+    showSerialDmxSafetyBlackoutRouteStatus,
+    snapshot,
+    showDmxPreparationBusy,
+    showDmxPreparationStage,
+    prepareShowDmx,
+    enableStagedShowArtNetLoopbackRoute,
+    confirmSerialDmxMachineBinding,
+    enableShowSerialDmxSafetyBlackoutRoute,
+    stopShowSerialDmxSafetyBlackoutRoute,
+    projectMappingsAuthority,
+    applyDmxOutputRoutes,
+    usbDmxUniverses,
+    usbDmxUniversesStale,
+    refreshUsbDmxUniverses,
+    refreshSerialPorts,
+    bindUsbDmxUniverse,
+    clearUsbDmxUniverse,
+    startUsbDmxUniverse,
+    stopUsbDmxUniverse,
+    dmxInputConfig,
+    dmxInputStatus,
+    dmxMappings,
+    setDmxInputConfig,
+    startDmxInput,
+    stopDmxInput,
+    setDmxMappings,
+    sendArtRdmRequest,
+    sendUsbRdmRequest,
+    discoverUsbRdmDevices,
+    discoverArtRdmDevices,
+    startArtRdmFullDiscovery,
+    dmxPreviewOptions,
+    activeDmxPreviewUniverse,
+    nonZeroDmxCount,
+    dmxCells,
+    setRawDmxUniverse,
+    visibleFunctionControls,
+    activeControlCategoryLabel,
+    currentControlValue,
+    channelFunctionContainsValue,
+    channelFunctionBandStyle,
+    channelFunctionSwatchColor,
+    applyChannelFunction,
+    dsf2026ArtNetAcceptanceProbeStatus,
+    dmxTestChannel,
+    dmxTestWidth,
+    dmxTestValue,
+    engineTelemetryReport,
+    phase1SmokeReport,
+    setDmxTestChannel,
+    setDmxTestWidth,
+    setDmxTestValue,
+    sendDmxTestFrame,
+    sendDmxRoutesTestFrame,
+    sendDsf2026ArtNetAcceptanceProbe,
+    acknowledgeDsf2026ArtNetAcceptanceProbeInDoubt,
+    resetEngineTelemetry,
+    saveEngineTelemetryReport,
+    liveAudioInputRailProps,
+    timelineCueAudioStatus,
+    timelineCueAudioMutationBusy,
+    timelineCueAudioLocalError,
+    configureTimelineCueAudio,
+    refreshTimelineCueAudioStatus,
+    midiInputs,
+    selectedMidiInput,
+    midiOutputs,
+    selectedMidiOutput,
+    midiFeedbackConnected,
+    midiFeedbackEnabled,
+    midiFeedbackOutputStatus,
+    midiMappings,
+    midiMapMessage,
+    midiMapNumber,
+    midiMapChannel,
+    midiMapAction,
+    midiMapAttribute,
+    midiClearFixtureFlagKind,
+    selectedMidiCueId,
+    selectedMidiEffectId,
+    selectedMidiNodeGraphId,
+    midiMapGroupId,
+    selectedMidiLayerId,
+    selectedMidiVideoOutputId,
+    selectedMidiVideoOutputMappingField,
+    selectedMidiVideoOutputMappingPresetLabel,
+    midiMapVideoParam,
+    midiMapCuePointIndex,
+    midiMapDurationMs,
+    midiMapLow,
+    midiMapHigh,
+    refreshMidiInputs,
+    refreshMidiOutputs,
+    setSelectedMidiInput,
+    connectMidiClock,
+    disconnectMidiClock,
+    setSelectedMidiOutput,
+    connectMidiFeedback,
+    disconnectMidiFeedback,
+    sendMidiFeedback,
+    setMidiFeedbackEnabled,
+    setMidiMapMessage,
+    setMidiMapNumber,
+    setMidiMapChannel,
+    setMidiControlMappingAction,
+    setMidiMapAttribute,
+    setMidiMapCueId,
+    setMidiMapEffectId,
+    setMidiMapNodeGraphId,
+    setMidiMapGroupId,
+    setMidiMapLayerId,
+    setMidiMapVideoOutputId,
+    setMidiVideoOutputMappingFieldTarget,
+    setMidiMapVideoOutputMappingPresetLabel,
+    setMidiMapVideoParam,
+    setMidiMapCuePointIndex,
+    setMidiMapDurationMs,
+    setMidiMapLow,
+    setMidiMapHigh,
+    controlLearnBusy,
+    setWorkspaceTab,
+    setControlLearnMode,
+    learnMidiControl,
+    addMidiMapping,
+    connectMidiControl,
+    disconnectMidiControl,
+    loadMidiMappings,
+    saveMidiMappings,
+    removeMidiMapping,
+    updateMidiMapping,
+    isTauriRuntime,
+    oscBindIp,
+    oscPort,
+    oscMappings,
+    oscMapAddress,
+    oscMapAction,
+    oscMapAttribute,
+    oscClearFixtureFlagKind,
+    selectedOscCueId,
+    selectedOscEffectId,
+    selectedOscNodeGraphId,
+    oscMapGroupId,
+    selectedOscLayerId,
+    selectedOscVideoOutputId,
+    selectedOscVideoOutputMappingField,
+    selectedOscVideoOutputMappingPresetLabel,
+    oscMapVideoParam,
+    oscMapCuePointIndex,
+    oscMapDurationMs,
+    oscMapLow,
+    oscMapHigh,
+    setOscBindIp,
+    setOscPort,
+    startOscInput,
+    stopOscInput,
+    setOscMapAddress,
+    setOscControlMappingAction,
+    setOscMapAttribute,
+    setOscMapCueId,
+    setOscMapEffectId,
+    setOscMapNodeGraphId,
+    setOscMapGroupId,
+    setOscMapLayerId,
+    setOscMapVideoOutputId,
+    setOscVideoOutputMappingFieldTarget,
+    setOscMapVideoOutputMappingPresetLabel,
+    setOscMapVideoParam,
+    setOscMapCuePointIndex,
+    setOscMapDurationMs,
+    setOscMapLow,
+    setOscMapHigh,
+    learnOscControl,
+    addOscMapping,
+    loadOscMappings,
+    saveOscMappings,
+    removeOscMapping,
+    remoteBindIp,
+    remotePort,
+    remotePairingPin,
+    remoteAllowLan,
+    remoteMaxConnections,
+    remoteMaxMessageBytes,
+    remoteMaxMessagesPerSecond,
+    djLinkMachineStatus,
+    djLinkWiredCandidates,
+    djLinkWiredCandidateCount,
+    djLinkWiredRefreshBusy,
+    djLinkWiredRefreshError,
+    djLinkSelectedBinding,
+    djLinkToken,
+    djLinkTokenCopied,
+    djTrackTriggers,
+    djTimelineOptions,
+    remoteRunning,
+    remoteStatusHydrated,
+    djLinkTokenOperationBusy,
+    djLinkOperatorReturnBusy,
+    remoteUrls,
+    remoteStatus,
+    setRemoteBindIp,
+    setRemotePort,
+    setRemotePairingPin,
+    createPairingPin,
+    setMessage,
+    setRemoteAllowLan,
+    setDjLinkBindIp,
+    djLinkBindIp,
+    setRemoteMaxConnections,
+    setRemoteMaxMessageBytes,
+    setRemoteMaxMessagesPerSecond,
+    setDjLinkSelectedBinding,
+    refreshDjLinkWiredCandidates,
+    armDjLinkMachine,
+    disarmDjLinkMachine,
+    rotateDjLinkToken,
+    copyDjLinkToken,
+    requestDjLinkOperatorReturn,
+    setDjTrackTriggersFromPanel,
+    copyRemoteUrl,
+    openRemoteUrl,
+    startRemoteControl,
+    stopRemoteControl,
+    disconnectRemoteClient
+  };
 
-        <Show when={workspaceTab() === "setup" && setupSubTab() === "patch"}>
-        <SetupMappingWorkspace
-          className={setupPanelClass("panel fixtures setupPanel", ["patch"])}
-          panelRef={registerSetupPanel(["patch"])}
-          patchMap={{
-            activeUniverse: activePatchGridUniverse(),
-            universeOptions: patchGridUniverseOptions(),
-            viewMode: dmxPatchViewMode(),
-            revealAddressRequest: patchGridRevealRequest(),
-            activeMap: activePatchGridMap(),
-            addressCells: dmxAddressCells(),
-            universeMaps: dmxUniverseMaps(),
-            fixtureCount: snapshot().fixtures.length,
-            selectedFixtureId: selectedFixtureId(),
-            plannedAddressSummary: plannedAddressSummary(),
-            profileDragActive: Boolean(patchProfileDragSource()),
-            profileDndStatus: patchProfileDndStatus(),
-            fixtureDragActive: Boolean(patchFixtureDragController.source()),
-            fixtureDndStatus: patchFixtureDragController.dndStatus(),
-            onUniverse: setPatchGridUniverse,
-            onViewMode: setDmxPatchViewMode,
-            onSelectFixture: selectFixture,
-            onAddressCell: handleDmxAddressCellClick,
-            onProfileDragHover: hoverPatchProfileAddress,
-            onProfileDragLeave: leavePatchProfileGrid,
-            onProfileDrop: dropPatchProfileAtAddress,
-            onFixtureDragStart: beginPatchFixtureDrag,
-            onFixtureDragEnd: clearPatchFixtureDrag,
-            onFixtureDragHover: hoverPatchFixtureAddress,
-            onFixtureDragLeave: leavePatchFixtureGrid,
-            onFixtureDrop: dropPatchFixtureAtAddress,
-          }}
-          profileSummary={profile() ? {
-            profile: profile()!,
-            selectedMode: selectedMode(),
-            selectedModeSummary: selectedModeSummary(),
-            selectedFootprint: selectedFootprint(),
-            dmxCells: selectedModeDmxCells(),
-            functionEntries: selectedModeFunctionEntries(),
-            visibleFunctionEntries: visibleSelectedModeFunctionEntries(),
-            geometryRows: selectedModeGeometryRows(),
-            unresolvedGeometryReferences: selectedModeUnresolvedGeometryReferences(),
-            functionLabel: channelFunctionLabel,
-            functionRangeLabel: channelFunctionRangeLabel,
-            functionDetail: channelFunctionDetail,
-            onSelectedMode: setSelectedMode,
-          } : null}
-          fixtureEditor={selectedFixture() ? {
-            fixture: selectedFixture()!,
-            labelDraft: selectedFixtureLabelDraft(),
-            universeDraft: selectedFixtureUniverseDraft(),
-            addressDraft: selectedFixtureAddressDraft(),
-            groupText: selectedFixtureGroupText(),
-            availableGroups: fixtureGroupEntities(),
-            onDuplicateFixture: duplicateFixture,
-            onLabelDraft: setSelectedFixtureLabelDraft,
-            onUniverseDraft: setSelectedFixtureUniverseDraft,
-            onAddressDraft: setSelectedFixtureAddressDraft,
-            onApplyPatch: setFixturePatch,
-            onGroupText: setSelectedFixtureGroupText,
-            onApplyGroups: setFixtureGroups,
-          } : null}
-        />
-        </Show>
+  const appWorkspaceModel = {
+    paneWindow,
+    controlLearnMode,
+    controlLearnBusy,
+    touchControlDomain,
+    selectControlDomain,
+    openVideoLiveControls,
+    workspaceTab,
+    setupSubTab,
+    controlMode,
+    snapshot,
+    blackoutBlockedReason,
+    liveAudioInputStatus,
+    liveAudioInputTelemetryFresh,
+    projectFileLabel,
+    visibleProjectDirty,
+    currentProjectPath,
+    recentProjectPaths,
+    projectRecoveryCheckpoint,
+    projectBackups,
+    daslightProjectImportBusy,
+    projectHistoryStatus,
+    isfEventPulseBusy,
+    projectHistoryNavigationBusy,
+    hasPendingHistoryMappings,
+    applicationUpdateConfiguration,
+    applicationUpdateCheck,
+    applicationUpdateProgress,
+    applicationUpdateBusy,
+    applicationUpdateError,
+    uiScale,
+    uiLocale,
+    uiTheme,
+    monitorQuality,
+    globalFixtureFlagState,
+    nextCue,
+    operatorLockMode,
+    controlLearnTargetLabel,
+    showClockStatus,
+    showClockError,
+    namedWorkspaces,
+    selectedNamedWorkspaceId,
+    poppedPanes,
+    pendingPaneWindowOperations,
+    workspaceApplyBusy,
+    operatorPolicy,
+    setSelectedNamedWorkspaceId,
+    saveNamedWorkspace,
+    applyNamedWorkspace,
+    deleteNamedWorkspace,
+    togglePaneWindow,
+    configureOperatorPolicy,
+    clearOperatorPolicy,
+    setOperatorSessionLock,
+    unlockOperator,
+    selectWorkspaceTab,
+    selectSetupMode,
+    selectControlMode,
+    triggerPreviousCue,
+    triggerNextCue,
+    setCueFadePaused,
+    pauseTimeline,
+    playTimeline,
+    setBlackout,
+    requestPerformVideoBlackout,
+    setAllBlackout,
+    clearFixtureFlags,
+    setControlLearnMode,
+    setLightingMaster,
+    setVideoMasterOpacity,
+    tapBpm,
+    setOperatorBpm,
+    openLiveAudioInputSettings,
+    newProject,
+    saveUserTemplate,
+    loadUserTemplate,
+    saveProject,
+    saveProjectAs,
+    loadProject,
+    importDaslightProject,
+    loadRecentProject,
+    clearRecentProjects,
+    loadProjectRecovery,
+    discardProjectRecovery,
+    loadProjectBackup,
+    deleteProjectBackup,
+    exportDiagnosticPackage,
+    checkForApplicationUpdate,
+    installAvailableApplicationUpdate,
+    setUiLocale,
+    setUiTheme,
+    setMonitorQuality,
+    undoProject,
+    redoProject,
+    setUiScale,
+    resetWorkspaceLayout,
+    loadPhase1SampleProject,
+    runPhase1Smoke,
+    dvcImportReport,
+    setDvcImportReport,
+    projectDiscardRequest,
+    completeProjectDiscardRequest,
+    projectDiscardTitle,
+    projectDiscardDetail,
+    protectedCloseRequest,
+    cancelProtectedClose,
+    setProtectedCloseRequest,
+    protectedCloseCopy,
+    completeProtectedClose,
+    controlAssignRequest,
+    closeControlAssignMenu,
+    assignAudioForTargets,
+    controlAssignments,
+    assignBeatDivisionForTargets,
+    removeMidiAssignments,
+    pendingPatchGroupRegistration,
+    skipPatchedFixtureGroupRegistration,
+    patchGroupRegistrationName,
+    setPatchGroupRegistrationName,
+    registerPatchedFixturesAsGroup,
+    projectDropState,
+    touchLayoutClass,
+    sharedWorkspaceVisible,
+    persistentBandVisible,
+    activeTopSplitRatio,
+    lowerSplitRatio,
+    selectedSceneCue,
+    liveStatusExpanded,
+    controlLiveView,
+    projectMappingsAuthority,
+    bankAuthority,
+    message,
+    liveDeskViewActions,
+    selectedCueListId,
+    setSelectedCueListId,
+    setCueListLabel,
+    createCueList,
+    renameCueList,
+    removeCueList,
+    createSceneInCueList,
+    renameScene,
+    duplicateCue,
+    removeCue,
+    cueRemovalImpact,
+    reorderCueLists,
+    groupColors,
+    setGroupColor,
+    sceneMatrixGroupIds,
+    selectedSceneCueId,
+    setCueLiveModifierLive,
+    clearCueLiveModifierLive,
+    releaseCueById,
+    timelineTrack,
+    triggerCue,
+    selectSceneCue,
+    openOrCreateSuperScene,
+    openCueEditor,
+    beginTimelineCueDrag,
+    moveTimelineCueDrag,
+    endTimelineCueDrag,
+    renderLightingCuePads,
+    renderLightingStatusInspector,
+    activeCue,
+    enabledDmxOutputCount,
+    enabledVideoOutputCount,
+    liveVideoPreviewLabel,
+    liveVideoMonitors,
+    liveVideoProgramLabel,
+    selectedVideoClipSlotLayer,
+    videoRecordingStatus,
+    setVideoBlackout,
+    renderTimelineDeskHeaderTools,
+    timelineDeskSurface,
+    timelineNavigatorOpen,
+    setTimelineNavigatorOpen,
+    timelinePaneExpanded,
+    timelinePaneActionLabel,
+    setTimelinePaneExpanded,
+    setTimelineUpperHost,
+    activeTimeline,
+    timelineChildCue,
+    seekTimeline,
+    registerVideoLiveControlsDialog,
+    closeVideoLiveControls,
+    setVideoClipSlotInspectorOpen,
+    selectedVideoOutputId,
+    setVideoLayerState,
+    addVideoCuePoint,
+    jumpVideoCuePoint,
+    setSelectedVideoOutputId,
+    videoOutputWindowState,
+    selectedVideoClipSlotRuntime,
+    mediaAssetThumbnails,
+    selectedVideoClipSlotId,
+    selectVideoClipSlotLayer,
+    selectVideoClipSlot,
+    queueVideoClipSlot,
+    previewVideoClipSlot,
+    openVideoClipSlotInspector,
+    importMediaFiles,
+    cancelQueuedVideoClipSlot,
+    updateVideoClipSlotQuantization,
+    videoClipTakeKind,
+    videoClipTakeDurationUnit,
+    videoClipTakeDurationMilliunits,
+    setVideoClipTakeKind,
+    setVideoClipTakeDurationUnit,
+    setVideoClipTakeDurationMilliunits,
+    videoClipSlotTakeEnabled,
+    videoClipSlotTakeLabel,
+    takeSelectedVideoClipSlot,
+    videoEffectCatalog,
+    videoTransitionRuntime,
+    applyVideoEffectCatalog,
+    launchVideoLayerTransitionBus,
+    releaseVideoLayerTransitionBus,
+    videoClipSlotInspectorOpen,
+    renderVideoClipSlotInspector,
+    selectedFixtureId,
+    selectedFixtureGroupFilter,
+    selectedColorControls,
+    setTouchSurfaceLayout,
+    triggerTouchBinding,
+    setTouchBindingValue,
+    setTouchBindingColor,
+    setTouchBindingXy,
+    liveCuePads,
+    cuePadRangeLabel,
+    cuePadBank,
+    cuePadBankCount,
+    setCuePadFollowActive,
+    setCuePadBank,
+    visualizerFixtures,
+    visualizerStageObjects2d,
+    stageOrigin2d,
+    mappingStageFixtures,
+    visualizerVideoSurfaces2d,
+    mappingShowBeams,
+    mappingShowLabels,
+    selectFixture,
+    selectedFixture,
+    touchDimmerQuickActive,
+    selectedTouchDimmerTarget,
+    startTouchDimmerFlash,
+    endTouchDimmerFlash,
+    handleTouchDimmerFlashKeyDown,
+    handleTouchDimmerFlashKeyUp,
+    setFixtureHighlight,
+    setFixtureSolo,
+    setFixturePark,
+    selectedTouchVideoOutput,
+    selectFixtureGroupFilter,
+    fixtureGroupRows,
+    filteredFixtures,
+    selectedGroupFlagState,
+    selectedGroupSubmaster,
+    selectedGroupStrobeFixtureCount,
+    controlCategoryRows,
+    activeControlCategory,
+    activeControlCategoryLabel,
+    visibleControls,
+    setGroupHighlight,
+    setGroupSolo,
+    setGroupStrobe,
+    setGroupPark,
+    setControlCategory,
+    showDimmerPanel,
+    selectedDimmerControl,
+    dimmerSliderRange,
+    setDimmerValue,
+    setTouchDimmerQuickLevel,
+    showPositionPad,
+    selectedPositionControls,
+    selectedFixtureLimitOverlayStyle,
+    setPanTiltFromPointer,
+    showColorPad,
+    setFixtureColor,
+    currentControlValue,
+    setControlAttributeValue,
+    setupPanelClass,
+    registerSetupPanel,
+    customWorkbenchOpen,
+    isTauriRuntime,
+    gdtfShareUser,
+    gdtfSharePassword,
+    profile,
+    selectedMode,
+    recentPatchProfiles,
+    gdtfPath,
+    gdtfShareUrl,
+    setGdtfPath,
+    setGdtfShareUrl,
+    selectGdtfFile,
+    importGdtf,
+    downloadGdtfFromUrl,
+    usePatchVerifiedProfile,
+    usePatchBundledProfile,
+    usePatchCachedProfile,
+    usePatchRecentProfile,
+    usePatchProjectProfile,
+    setGdtfShareUser,
+    setGdtfSharePassword,
+    setCustomWorkbenchOpen,
+    repairablePatchFixture,
+    patchRepairOperationBusy,
+    repairSelectedPatchFixture,
+    beginPatchProfileDrag,
+    clearPatchProfileDrag,
+    setMessage,
+    universe,
+    address,
+    patchCount,
+    patchAddressStride,
+    patchLayoutMode,
+    patchGridColumns,
+    patchCircleRadius,
+    patchX,
+    patchY,
+    patchZ,
+    patchXStep,
+    patchZStep,
+    patchPitch,
+    patchYaw,
+    patchRoll,
+    selectedFootprint,
+    patchCountValue,
+    patchAddressStrideValue,
+    patchGridColumnsValue,
+    patchCircleRadiusValue,
+    endAddress,
+    patchAddressConflictText,
+    patchAddressInvalid,
+    nextFreePatchAddress,
+    setUniverse,
+    setAddress,
+    setPatchCount,
+    setPatchAddressStride,
+    setPatchLayoutMode,
+    setPatchGridColumns,
+    setPatchCircleRadius,
+    setPatchX,
+    setPatchY,
+    setPatchZ,
+    setPatchXStep,
+    setPatchZStep,
+    setPatchPitch,
+    setPatchYaw,
+    setPatchRoll,
+    patchFixture,
+    selectNextFreePatchAddress,
+    CustomProfileEditorPanel,
+    customManufacturer,
+    customProfileName,
+    customModeName,
+    customAttributes,
+    customAttributeDrafts,
+    selectedCustomAttributeIndexValue,
+    customProfileDraftAnalysis,
+    customProfileDmxCells,
+    customProfilePreview,
+    customProfileDraftRowStatusText,
+    setCustomManufacturer,
+    setCustomProfileName,
+    setCustomModeName,
+    setCustomAttributesText,
+    appendCustomAttributeTemplate,
+    setSelectedCustomAttributeIndex,
+    updateCustomAttributeDraft,
+    removeCustomAttributeDraft,
+    addCustomAttributeDraft,
+    moveCustomAttributeDraft,
+    commitCustomAttributeDrafts,
+    createCustomProfile,
+    saveCustomProfile,
+    loadCustomProfile,
+    activePatchGridUniverse,
+    patchGridUniverseOptions,
+    dmxPatchViewMode,
+    patchGridRevealRequest,
+    activePatchGridMap,
+    dmxAddressCells,
+    dmxUniverseMaps,
+    plannedAddressSummary,
+    patchProfileDragSource,
+    patchProfileDndStatus,
+    patchFixtureDragController,
+    setPatchGridUniverse,
+    setDmxPatchViewMode,
+    handleDmxAddressCellClick,
+    hoverPatchProfileAddress,
+    leavePatchProfileGrid,
+    dropPatchProfileAtAddress,
+    beginPatchFixtureDrag,
+    clearPatchFixtureDrag,
+    hoverPatchFixtureAddress,
+    leavePatchFixtureGrid,
+    dropPatchFixtureAtAddress,
+    selectedModeSummary,
+    selectedModeDmxCells,
+    selectedModeFunctionEntries,
+    visibleSelectedModeFunctionEntries,
+    selectedModeGeometryRows,
+    selectedModeUnresolvedGeometryReferences,
+    setSelectedMode,
+    selectedFixtureLabelDraft,
+    selectedFixtureUniverseDraft,
+    selectedFixtureAddressDraft,
+    selectedFixtureGroupText,
+    fixtureGroupEntities,
+    duplicateFixture,
+    setSelectedFixtureLabelDraft,
+    setSelectedFixtureUniverseDraft,
+    setSelectedFixtureAddressDraft,
+    setFixturePatch,
+    setSelectedFixtureGroupText,
+    setFixtureGroups,
+    videoCompositionLabel,
+    videoCompositionLayerIds,
+    videoOutputLabel,
+    videoOutputKind,
+    videoOutputWidth,
+    videoOutputHeight,
+    videoOutputFadeMs,
+    videoOutputMonitorId,
+    videoOutputFullscreen,
+    videoOutputEndpoint,
+    videoRuntimeStatus,
+    videoOutputMappingPresetLabel,
+    selectedVideoOutputMappingPresetLabel,
+    videoOutputPreviewId,
+    videoOutputPreviewInfo,
+    videoOutputPreviewUrl,
+    setVideoCompositionLabel,
+    toggleVideoCompositionLayer,
+    addVideoComposition,
+    removeVideoComposition,
+    setVideoCompositionLayers,
+    setVideoCompositionTimelineLayers,
+    moveVideoCompositionLayer,
+    setVideoOutputLabel,
+    setVideoOutputKind,
+    setVideoOutputWidth,
+    setVideoOutputHeight,
+    setVideoOutputFadeMs,
+    setVideoOutputMonitorId,
+    setVideoOutputFullscreen,
+    setVideoOutputEndpoint,
+    addDisplayVideoOutput,
+    addExternalVideoOutput,
+    videoOutputConfigDraft,
+    updateVideoOutputConfigDraft,
+    setVideoOutputConfig,
+    removeVideoOutput,
+    enableShowSpoutOutputs,
+    resetShowSpoutOutputs,
+    setVideoOutputMappingPresetLabel,
+    setSelectedVideoOutputMappingPresetLabel,
+    saveVideoOutputMappingPreset,
+    exportVideoOutputMappingPreset,
+    importVideoOutputMappingPreset,
+    applyVideoOutputMappingPreset,
+    removeVideoOutputMappingPreset,
+    setVideoOutputMapping,
+    importVideoOutputBitmapMask,
+    clearVideoOutputBitmapMask,
+    videoOutputWindowActionBusy,
+    setDisplayVideoWindowOpen,
+    videoOutputRoutingBusy,
+    setVideoOutputRouting,
+    videoClipRuntime,
+    performTopSplitRatio,
+    performLowerSplitRatio,
+    setPerformTopSplitRatio,
+    setPerformLowerSplitRatio,
+    renderFxBrowser,
+    fxBrowserEntries,
+    fxRejections,
+    addFxBrowserEntry,
+    selectedMediaLibraryAssetId,
+    setSelectedMediaLibraryAssetId,
+    videoPreviewInfo,
+    videoPreviewDiagnosticsText,
+    videoPreviewLayerDiagnostics,
+    videoPreviewOutputDecodePlans,
+    renderDebugVideoPreview,
+    refreshVideoPreviewDiagnostics,
+    videoPreviewLayerDiagnosticClass,
+    videoPreviewLayerDiagnosticLabel,
+    videoPreviewOutputDecodePlanClass,
+    videoPreviewOutputDecodePlanLabel,
+    videoOutputRenderPlanSummary,
+    videoOutputRenderPlans,
+    videoOutputRenderPlanRows,
+    refreshVideoOutputRenderPlans,
+    videoRuntimeBackendSummary,
+    videoRuntimeBackendClass,
+    refreshVideoRuntimeStatus,
+    externalVideoIoPlanSummary,
+    externalVideoTransportSummary,
+    externalVideoIoPlans,
+    externalVideoIoPlanRows,
+    externalVideoTransportActiveRows,
+    externalVideoTransportLiveSourceRows,
+    externalVideoTransportLiveSourceFaultRows,
+    externalVideoTransportCaptureFaultRows,
+    externalVideoTransportRows,
+    externalVideoTransportEventRows,
+    externalVideoIoPlanClass,
+    externalVideoTransportClass,
+    refreshExternalVideoIoPlans,
+    syncExternalVideoTransports,
+    videoOutputWindowSummary,
+    refreshVideoOutputWindowStatuses,
+    videoOutputRenderPlanState,
+    videoOutputWindowStatusForOutput,
+    liveVideoOutputHealth,
+    vjPreviewTransport,
+    vjPreviewTransportBusy,
+    vjPreviewTransportError,
+    setVjPreviewPlaying,
+    seekVjPreview,
+    setVjPreviewSpeed,
+    clearVjPreview,
+    videoSourceKind,
+    videoLabel,
+    videoPath,
+    setVideoSourceKind,
+    setVideoLabel,
+    setVideoPathFromOperator,
+    selectVideoSourceFile,
+    addVideoLayer,
+    thumbnailController,
+    videoAudioMonitorVolume,
+    videoAudioMonitorStatus,
+    videoProgramAudioEnabled,
+    audioOutputDevices,
+    selectedAudioOutputDevice,
+    videoDeckALayerId,
+    videoDeckBLayerId,
+    videoAbMix,
+    liveAudioInputBackends,
+    selectedLiveAudioInputBackend,
+    liveAudioInputBackendsKnown,
+    liveAudioInputBackendsBusy,
+    liveAudioInputBackendError,
+    liveAudioInputDevices,
+    selectedLiveAudioInputDevice,
+    lastKnownLiveAudioInputDeviceIdentity,
+    liveAudioInputCapabilities,
+    liveAudioInputCapabilitiesBusy,
+    liveAudioInputSampleRate,
+    liveAudioInputBufferFrames,
+    liveAudioInputChannelMix,
+    liveAudioInputStatusKnown,
+    liveAudioInputBusy,
+    liveAudioInputSavedSelectionUiState,
+    liveAudioInputPersistError,
+    liveAudioInputAsioRevalidationEligible,
+    liveAudioInputAsioRevalidationArmed,
+    videoPreviewLayerId,
+    vjFirstRunAvailable,
+    vjFirstRunBusy,
+    vjFirstRunError,
+    setVideoAudioMonitorVolume,
+    setVideoProgramAudioEnabled,
+    setSelectedAudioOutputDevice,
+    refreshAudioOutputDevices,
+    assignVideoDeck,
+    applyVideoAbMix,
+    launchVideoDeck,
+    startVideoOutputRecording,
+    stopVideoOutputRecording,
+    selectLiveAudioInputBackend,
+    selectLiveAudioInputDevice,
+    selectLiveAudioInputSampleRate,
+    selectLiveAudioInputBufferFrames,
+    selectLiveAudioInputChannelMix,
+    refreshLiveAudioInputOperatorState,
+    armLiveAudioInputAsioRevalidation,
+    startLiveAudioInput,
+    stopLiveAudioInput,
+    stageVjPreviewLayer,
+    createFirstRunVjShow,
+    launchVideoClipFromGrid,
+    takeVideoClipFromGrid,
+    stopVideoClipFromGrid,
+    playVideoLayerAudioMonitor,
+    stopVideoLayerAudioMonitor,
+    authorizeVideoThumbnailAccess,
+    externalVideoTransportStatus,
+    mediaAssetAvailabilityById,
+    activeMediaAssetOperations,
+    lastMediaAssetImportReport,
+    mediaAssetCheckedAtById,
+    inspectMediaAssetIds,
+    relinkMediaLibraryAsset,
+    scanMediaLibraryRelinkFolder,
+    applyMediaLibraryRelinkRequests,
+    beginMediaAssetPreview,
+    loadMediaAssetPreviewFrame,
+    endMediaAssetPreview,
+    cancelMediaAssetOperation,
+    emptyAutoVjSnapshot,
+    autoVjBusy,
+    setAutoVjConfig,
+    setAutoVjArmed,
+    setAutoVjHold,
+    setNodeGraphEnabled,
+    videoLayerListProps,
+    loadVideoGroupCanvasPreview,
+    importVideoEffectScopeIsf,
+    applyVideoEffectPreset,
+    removeVideoEffectChain,
+    selectedVideoAutomationLayerId,
+    videoAutomationParam,
+    videoAutomationInterpolation,
+    videoAutomationStartMs,
+    videoAutomationEndMs,
+    videoAutomationStartValue,
+    videoAutomationEndValue,
+    timelineVideoAutomationRows,
+    selectedVideoTimelineAutomationId,
+    videoAutomationRowScope,
+    allTimelineVideoAutomationRows,
+    timelineVideoAutomationDraft,
+    setVideoAutomationLayerId,
+    setVideoAutomationParam,
+    setVideoAutomationInterpolation,
+    setVideoAutomationStartMs,
+    setVideoAutomationEndMs,
+    setVideoAutomationStartValue,
+    setVideoAutomationEndValue,
+    setVideoAutomationRowScope,
+    usePlayheadForVideoAutomation,
+    addTimelineVideoAutomation,
+    updateTimelineVideoAutomationDraft,
+    alignVideoAutomationDraftToPlayhead,
+    addVideoAutomationKeyframeAtPlayhead,
+    removeVideoAutomationKeyframeAtPlayhead,
+    removeVideoAutomationKeyframe,
+    setVideoAutomationKeyframeInterpolation,
+    setVideoAutomationKeyframeValue,
+    setTimelineAutomationEnabled,
+    setVideoAutomationRowsEnabled,
+    setTimelineVideoAutomation,
+    removeTimelineAutomation,
+    activeTopSplitDefaultRatio,
+    commitActiveTopSplitRatio,
+    persistentWorkspaceModel,
+    setupIoModel,
+    targetBlackout,
+    appStatus,
+    fixtureGroupDeleteUndoAvailable,
+    undoDeleteFixtureGroup
+  };
 
-        <Show when={workspaceTab() === "setup" && setupSubTab() === "video"}>
-        <SetupVideoPanel
-          className={setupPanelClass("panel videoSetupPanel setupPanel", ["video"])}
-          panelRef={registerSetupPanel(["video"])}
-          outputs={snapshot().video.outputs}
-          compositions={snapshot().video.compositions}
-          layers={snapshot().video.layers}
-          timelineId={snapshot().timeline.id ?? 0}
-          timelineLayers={snapshot().timeline.layers ?? []}
-          mappingPresets={snapshot().video.mapping_presets}
-          compositionLabel={videoCompositionLabel()}
-          compositionLayerIds={videoCompositionLayerIds()}
-          outputLabel={videoOutputLabel()}
-          outputKind={videoOutputKind()}
-          outputWidth={videoOutputWidth()}
-          outputHeight={videoOutputHeight()}
-          outputFadeMs={videoOutputFadeMs()}
-          outputMonitorId={videoOutputMonitorId()}
-          outputFullscreen={videoOutputFullscreen()}
-          outputEndpoint={videoOutputEndpoint()}
-          spoutAvailable={videoRuntimeStatus()?.backends.some((backend) => backend.id === "spout" && backend.state === "Available") ?? false}
-          ndiAvailable={videoRuntimeStatus()?.backends.some((backend) => backend.id === "ndi" && backend.state === "Available") ?? false}
-          syphonAvailable={videoRuntimeStatus()?.backends.some(
-            (backend) => backend.id === "syphon" && backend.state === "Available",
-          ) ?? false}
-          mappingPresetLabel={videoOutputMappingPresetLabel()}
-          selectedMappingPresetLabel={selectedVideoOutputMappingPresetLabel()}
-          selectedOutputId={selectedVideoOutputId()}
-          previewOutputId={videoOutputPreviewId()}
-          previewInfo={videoOutputPreviewInfo()}
-          previewUrl={videoOutputPreviewUrl()}
-          onCompositionLabel={setVideoCompositionLabel}
-          onToggleCompositionLayer={toggleVideoCompositionLayer}
-          onAddComposition={addVideoComposition}
-          onRemoveComposition={removeVideoComposition}
-          onSetCompositionLayers={setVideoCompositionLayers}
-          onSetCompositionTimelineLayers={setVideoCompositionTimelineLayers}
-          onMoveCompositionLayer={moveVideoCompositionLayer}
-          onOutputLabel={setVideoOutputLabel}
-          onOutputKind={setVideoOutputKind}
-          onOutputWidth={setVideoOutputWidth}
-          onOutputHeight={setVideoOutputHeight}
-          onOutputFadeMs={setVideoOutputFadeMs}
-          onOutputMonitorId={setVideoOutputMonitorId}
-          onOutputFullscreen={setVideoOutputFullscreen}
-          onOutputEndpoint={setVideoOutputEndpoint}
-          invokeCommand={invoke}
-          onAddDisplayOutput={addDisplayVideoOutput}
-          onAddExternalOutput={addExternalVideoOutput}
-          outputConfigDraft={videoOutputConfigDraft}
-          onOutputConfigDraft={updateVideoOutputConfigDraft}
-          onApplyOutputConfig={setVideoOutputConfig}
-          onRemoveOutput={removeVideoOutput}
-          onEnableShowSpoutOutputs={enableShowSpoutOutputs}
-          onResetShowSpoutOutputs={resetShowSpoutOutputs}
-          onSelectOutput={setSelectedVideoOutputId}
-          onMappingPresetLabel={setVideoOutputMappingPresetLabel}
-          onSelectedMappingPresetLabel={setSelectedVideoOutputMappingPresetLabel}
-          onSaveMappingPreset={saveVideoOutputMappingPreset}
-          onExportMappingPreset={exportVideoOutputMappingPreset}
-          onImportMappingPreset={importVideoOutputMappingPreset}
-          onApplyMappingPreset={applyVideoOutputMappingPreset}
-          onRemoveMappingPreset={removeVideoOutputMappingPreset}
-          onSetMapping={setVideoOutputMapping}
-          onImportBitmapMask={importVideoOutputBitmapMask}
-          onClearBitmapMask={clearVideoOutputBitmapMask}
-          windowStateForOutput={videoOutputWindowState}
-          windowActionBusyForOutput={(outputId) => Boolean(videoOutputWindowActionBusy()[String(outputId)])}
-          onToggleWindow={setDisplayVideoWindowOpen}
-          routingBusyForOutput={(outputId) => Boolean(videoOutputRoutingBusy()[String(outputId)])}
-          onAssignComposition={setVideoOutputRouting}
-        />
-        </Show>
-
-        <Show when={((workspaceTab() === "control" && controlMode() === "mixer") || (workspaceTab() === "touch" && controlMode() === "perform"))}>
-        <VideoControlPanel
-          mixer={true}
-          performance={controlMode() === "perform"}
-          performContext={{
-            get runtimes() { return videoClipRuntime().layers; },
-            get keyboardEnabled() { return !controlLearnMode() && operatorLockMode() === null; },
-            get controlLearnActive() { return controlLearnMode() !== null; },
-            onOpenEditor: () => selectControlMode("mixer"),
-            layout: {
-              get topRatio() { return performTopSplitRatio(); },
-              get lowerRatio() { return performLowerSplitRatio(); },
-              onTopRatio: setPerformTopSplitRatio,
-              onLowerRatio: setPerformLowerSplitRatio,
-            },
-            renderClipInspector: () => renderVideoClipSlotInspector(true),
-            renderEffectBrowser: renderFxBrowser,
-            get effectEntries() { return fxBrowserEntries(); },
-            get isfImportRejections() { return fxRejections(); },
-            get locale() { return uiLocale(); },
-            onAddEffect: addFxBrowserEntry,
-          }}
-          invokeCommand={invoke}
-          selectedMediaAssetId={selectedMediaLibraryAssetId()}
-          onSelectMediaAsset={setSelectedMediaLibraryAssetId}
-          layerCount={snapshot().video.layers.length}
-          previewDiagnostics={{
-            get layerCount() { return snapshot().video.layers.length; },
-            get info() { return videoPreviewInfo(); },
-            get diagnosticsText() { return videoPreviewDiagnosticsText(); },
-            get layerDiagnostics() { return videoPreviewLayerDiagnostics(); },
-            get outputDecodePlans() { return videoPreviewOutputDecodePlans(); },
-            onRenderPreview: renderDebugVideoPreview,
-            onRefreshDiagnostics: refreshVideoPreviewDiagnostics,
-            layerClass: videoPreviewLayerDiagnosticClass,
-            layerLabel: videoPreviewLayerDiagnosticLabel,
-            outputClass: videoPreviewOutputDecodePlanClass,
-            outputLabel: videoPreviewOutputDecodePlanLabel,
-          }}
-          renderPlanStatus={{
-            get summary() { return videoOutputRenderPlanSummary(); },
-            get checked() { return videoOutputRenderPlans() !== null; },
-            get rows() { return videoOutputRenderPlanRows(); },
-            onRefresh: refreshVideoOutputRenderPlans,
-          }}
-          backendStatus={{
-            get summary() { return videoRuntimeBackendSummary(); },
-            get backends() { return videoRuntimeStatus()?.backends ?? null; },
-            backendClass: videoRuntimeBackendClass,
-            onRefresh: refreshVideoRuntimeStatus,
-          }}
-          externalIoStatus={{
-            get ioSummary() { return externalVideoIoPlanSummary(); },
-            get transportSummary() { return externalVideoTransportSummary(); },
-            get checked() { return externalVideoIoPlans() !== null; },
-            get planRows() { return externalVideoIoPlanRows(); },
-            get activeTransportRows() { return externalVideoTransportActiveRows(); },
-            get liveSourceRows() { return externalVideoTransportLiveSourceRows(); },
-            get liveSourceFaultRows() { return externalVideoTransportLiveSourceFaultRows(); },
-            get captureFaultRows() { return externalVideoTransportCaptureFaultRows(); },
-            get transportRows() { return externalVideoTransportRows(); },
-            get transportEventRows() { return externalVideoTransportEventRows(); },
-            planClass: externalVideoIoPlanClass,
-            transportClass: externalVideoTransportClass,
-            onRefreshPlans: refreshExternalVideoIoPlans,
-            onSyncRoutes: syncExternalVideoTransports,
-          }}
-          masterControls={{
-            get masterOpacity() { return snapshot().video.master_opacity; },
-            get blackout() { return snapshot().video.blackout; },
-            get blackoutBlockedReason() { return blackoutBlockedReason(); },
-            onSetMasterOpacity: setVideoMasterOpacity,
-            onSetBlackout: requestPerformVideoBlackout,
-          }}
-          outputControls={{
-            get outputs() { return snapshot().video.outputs; },
-            get compositions() { return snapshot().video.compositions; },
-            get selectedOutputId() { return selectedVideoOutputId(); },
-            get windowSummary() { return videoOutputWindowSummary(); },
-            onSelectOutput: setSelectedVideoOutputId,
-            onRefreshWindows: () => { void refreshVideoOutputWindowStatuses(); },
-            renderPlanState: videoOutputRenderPlanState,
-            windowStatusForOutput: videoOutputWindowStatusForOutput,
-            windowState: videoOutputWindowState,
-          }}
-          liveMonitors={{
-            get outputHealth() { return liveVideoOutputHealth.outputs(); },
-            get outputHealthError() { return liveVideoOutputHealth.error(); },
-            get preview() { return liveVideoMonitors.preview(); },
-            get program() { return liveVideoMonitors.program(); },
-            get previewLabel() { return liveVideoPreviewLabel(); },
-            get programLabel() { return liveVideoProgramLabel(); },
-            get previewTransport() { return vjPreviewTransport(); },
-            get previewTransportBusy() { return vjPreviewTransportBusy(); },
-            get previewTransportError() { return vjPreviewTransportError(); },
-            previewTransportBackendAvailable: isTauriRuntime(),
-            onSetPreviewPlaying: setVjPreviewPlaying,
-            onSeekPreview: seekVjPreview,
-            onSetPreviewSpeed: setVjPreviewSpeed,
-            onClearPreview: clearVjPreview,
-            onRetry: liveVideoMonitors.retry,
-          }}
-          sourceCreate={{
-            get sourceKind() { return videoSourceKind(); },
-            get label() { return videoLabel(); },
-            get path() { return videoPath(); },
-            onSetSourceKind: setVideoSourceKind,
-            onSetLabel: setVideoLabel,
-            onSetPath: setVideoPathFromOperator,
-            onBrowseSource: selectVideoSourceFile,
-            onImportMultiple: importMediaFiles,
-            onAddLayer: addVideoLayer,
-          }}
-          clipGrid={mergeThumbnailViewProps(thumbnailController.layerThumbnailView, {
-            get layers() { return snapshot().video.layers; },
-            get fadeMs() { return videoOutputFadeMs(); },
-            get audioMonitorVolume() { return videoAudioMonitorVolume(); },
-            get audioMonitorLayerIds() { return videoAudioMonitorStatus().active_layer_ids; },
-            get audioMonitorStatus() { return videoAudioMonitorStatus(); },
-            get programAudioEnabled() { return videoProgramAudioEnabled(); },
-            get audioOutputDevices() { return audioOutputDevices(); },
-            get selectedAudioOutputDevice() { return selectedAudioOutputDevice(); },
-            get deckALayerId() { return videoDeckALayerId(); },
-            get deckBLayerId() { return videoDeckBLayerId(); },
-            get abMix() { return videoAbMix(); },
-            get selectedOutputId() { return selectedVideoOutputId(); },
-            get recordingStatus() { return videoRecordingStatus(); },
-            get liveAudioInputBackends() { return liveAudioInputBackends(); },
-            get selectedLiveAudioInputBackend() { return selectedLiveAudioInputBackend(); },
-            get liveAudioInputBackendsKnown() { return liveAudioInputBackendsKnown(); },
-            get liveAudioInputBackendsBusy() { return liveAudioInputBackendsBusy(); },
-            get liveAudioInputBackendError() { return liveAudioInputBackendError(); },
-            get liveAudioInputDevices() { return liveAudioInputDevices(); },
-            get selectedLiveAudioInputDevice() { return selectedLiveAudioInputDevice(); },
-            get lastKnownLiveAudioInputDeviceIdentity() { return lastKnownLiveAudioInputDeviceIdentity(); },
-            localize: (source: string) => translateUiText(source, uiLocale()),
-            get liveAudioInputCapabilities() { return liveAudioInputCapabilities(); },
-            get liveAudioInputCapabilitiesBusy() { return liveAudioInputCapabilitiesBusy(); },
-            get liveAudioInputSampleRate() { return liveAudioInputSampleRate(); },
-            get liveAudioInputBufferFrames() { return liveAudioInputBufferFrames(); },
-            get liveAudioInputChannelMix() { return liveAudioInputChannelMix(); },
-            get liveAudioInputStatus() { return liveAudioInputStatus(); },
-            get liveAudioInputStatusKnown() { return liveAudioInputStatusKnown(); },
-            get liveAudioInputBusy() { return liveAudioInputBusy(); },
-            get liveAudioInputSavedSelection() { return liveAudioInputSavedSelectionUiState(); },
-            get liveAudioInputPersistError() { return liveAudioInputPersistError(); },
-            get liveAudioInputAsioRevalidationEligible() { return liveAudioInputAsioRevalidationEligible(); },
-            get liveAudioInputAsioRevalidationArmed() { return liveAudioInputAsioRevalidationArmed(); },
-            get previewLayerId() { return videoPreviewLayerId(); },
-            get previewBusy() { return vjPreviewTransportBusy(); },
-            get previewError() { return vjPreviewTransportError(); },
-            previewBackendAvailable: isTauriRuntime(),
-            get firstRunAvailable() { return vjFirstRunAvailable(); },
-            get firstRunBusy() { return vjFirstRunBusy(); },
-            get firstRunError() { return vjFirstRunError(); },
-            firstRunBackendAvailable: isTauriRuntime(),
-            onSetFadeMs: setVideoOutputFadeMs,
-            onSetAudioMonitorVolume: setVideoAudioMonitorVolume,
-            onSetProgramAudioEnabled: setVideoProgramAudioEnabled,
-            onSetAudioOutputDevice: setSelectedAudioOutputDevice,
-            onRefreshAudioOutputDevices: refreshAudioOutputDevices,
-            onAssignDeck: assignVideoDeck,
-            onSetAbMix: applyVideoAbMix,
-            onCommitAbMix: (mix: number) => applyVideoAbMix(mix, true),
-            onLaunchDeck: launchVideoDeck,
-            onStartRecording: startVideoOutputRecording,
-            onStopRecording: stopVideoOutputRecording,
-            onSetLiveAudioInputBackend: selectLiveAudioInputBackend,
-            onSetLiveAudioInputDevice: selectLiveAudioInputDevice,
-            onSetLiveAudioInputSampleRate: selectLiveAudioInputSampleRate,
-            onSetLiveAudioInputBufferFrames: selectLiveAudioInputBufferFrames,
-            onSetLiveAudioInputChannelMix: selectLiveAudioInputChannelMix,
-            onRefreshLiveAudioInputDevices: refreshLiveAudioInputOperatorState,
-            onArmLiveAudioInputAsioRevalidation: armLiveAudioInputAsioRevalidation,
-            onStartLiveAudioInput: startLiveAudioInput,
-            onStopLiveAudioInput: stopLiveAudioInput,
-            onStagePreview: stageVjPreviewLayer,
-            onImportMedia: importMediaFiles,
-            onCreateFirstRunShow: createFirstRunVjShow,
-            onLaunch: launchVideoClipFromGrid,
-            onTake: takeVideoClipFromGrid,
-            onStop: stopVideoClipFromGrid,
-            onMonitorAudio: (layerId: number, volume: number) => playVideoLayerAudioMonitor(layerId, volume, selectedAudioOutputDevice()),
-            onStopAudio: stopVideoLayerAudioMonitor,
-            onRequestThumbnails: authorizeVideoThumbnailAccess,
-          })}
-          clipSlotBank={{
-            get mode() { return controlMode() === "perform" ? "control" as const : "edit" as const; },
-            get layers() { return snapshot().video.layers; },
-            get layer() { return selectedVideoClipSlotLayer(); },
-            get runtime() { return selectedVideoClipSlotRuntime(); },
-            get assets() { return snapshot().video.media_assets; },
-            get thumbnails() { return mediaAssetThumbnails(); },
-            get selectedSlotId() { return selectedVideoClipSlotId(); },
-            onSelectLayer: selectVideoClipSlotLayer,
-            onSelect: selectVideoClipSlot,
-            onQueue: (slotId) => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? queueVideoClipSlot(layer.id, slotId) : Promise.resolve(null);
-            },
-            onPreview: previewVideoClipSlot,
-            onMore: openVideoClipSlotInspector,
-            onImport: () => importMediaFiles("File"),
-            onCancelQueue: () => {
-              const layer = selectedVideoClipSlotLayer();
-              return layer ? cancelQueuedVideoClipSlot(layer.id) : Promise.resolve(null);
-            },
-            onSetQuantization: updateVideoClipSlotQuantization,
-            get transitionKind() { return videoClipTakeKind(); },
-            get transitionDurationUnit() { return videoClipTakeDurationUnit(); },
-            get transitionDurationMilliunits() { return videoClipTakeDurationMilliunits(); },
-            onSetTransitionKind: setVideoClipTakeKind,
-            onSetTransitionDurationUnit: setVideoClipTakeDurationUnit,
-            onSetTransitionDurationMilliunits: (value) => setVideoClipTakeDurationMilliunits(
-              Math.max(1, Math.min(600_000, Math.round(value || 1))),
-            ),
-          }}
-          clipSlotTake={{
-            get enabled() { return videoClipSlotTakeEnabled(); },
-            get label() { return videoClipSlotTakeLabel(); },
-            onTake: takeSelectedVideoClipSlot,
-          }}
-          mediaLibrary={mergeThumbnailViewProps(thumbnailController.assetThumbnailView, {
-            get assets() { return snapshot().video.media_assets; },
-            get ndiInputs() { return buildNdiInputHealthRows(snapshot().video.layers, externalVideoTransportStatus()); },
-            get availabilityById() { return mediaAssetAvailabilityById(); },
-            get activeOperations() { return activeMediaAssetOperations(); },
-            get lastImportReport() { return lastMediaAssetImportReport(); },
-            backendAvailable: isTauriRuntime(),
-            get checkedAtById() { return mediaAssetCheckedAtById(); },
-            onVerify: inspectMediaAssetIds,
-            onRelink: relinkMediaLibraryAsset,
-            onScanRelinkFolder: scanMediaLibraryRelinkFolder,
-            onApplyRelinkRequests: applyMediaLibraryRelinkRequests,
-            onPreviewStart: beginMediaAssetPreview,
-            onPreviewFrame: loadMediaAssetPreviewFrame,
-            onPreviewEnd: endMediaAssetPreview,
-            onCancelOperation: cancelMediaAssetOperation,
-          })}
-          autoVj={{
-            get snapshot() { return snapshot().video.auto_vj ?? emptyAutoVjSnapshot; },
-            get layers() { return snapshot().video.layers; },
-            get busy() { return autoVjBusy(); },
-            onSetConfig: setAutoVjConfig,
-            onSetArmed: setAutoVjArmed,
-            onSetHold: setAutoVjHold,
-          }}
-          audioReactive={{
-            get graphs() { return snapshot().node_graphs; },
-            onSetEnabled: setNodeGraphEnabled,
-          }}
-          layerList={videoLayerListProps}
-          effectScopes={{
-            get catalog() { return videoEffectCatalog(); },
-            get compositions() { return snapshot().video.compositions; },
-            get outputs() { return snapshot().video.outputs; },
-            get transitionRuntime() { return videoTransitionRuntime(); },
-            get busy() { return isfEventPulseBusy(); },
-            onApplyCatalog: applyVideoEffectCatalog,
-            get canvasAuthority() { return JSON.stringify(projectMappingsAuthority()); },
-            onLoadGroupPreview: loadVideoGroupCanvasPreview,
-            onImportIsf: importVideoEffectScopeIsf,
-            onApplyPreset: applyVideoEffectPreset,
-            onRemoveChain: removeVideoEffectChain,
-            onLaunchTransition: launchVideoLayerTransitionBus,
-            onReleaseTransition: releaseVideoLayerTransitionBus,
-          }}
-          timelineAutomation={{
-            get layers() { return snapshot().video.layers; },
-            get selectedLayerId() { return selectedVideoAutomationLayerId(); },
-            get param() { return videoAutomationParam(); },
-            get interpolation() { return videoAutomationInterpolation(); },
-            get startMs() { return videoAutomationStartMs(); },
-            get endMs() { return videoAutomationEndMs(); },
-            get startValue() { return videoAutomationStartValue(); },
-            get endValue() { return videoAutomationEndValue(); },
-            get automations() { return timelineVideoAutomationRows(); },
-            get selectedAutomationId() { return selectedVideoTimelineAutomationId(); },
-            get rowScope() { return videoAutomationRowScope(); },
-            get allRowsCount() { return allTimelineVideoAutomationRows().length; },
-            draftForAutomation: timelineVideoAutomationDraft,
-            onSetLayerId: setVideoAutomationLayerId,
-            onSetParam: setVideoAutomationParam,
-            onSetInterpolation: setVideoAutomationInterpolation,
-            onSetStartMs: setVideoAutomationStartMs,
-            onSetEndMs: setVideoAutomationEndMs,
-            onSetStartValue: setVideoAutomationStartValue,
-            onSetEndValue: setVideoAutomationEndValue,
-            onRowScope: setVideoAutomationRowScope,
-            onUsePlayheadRange: usePlayheadForVideoAutomation,
-            onAddAutomation: addTimelineVideoAutomation,
-            onUpdateAutomationDraft: updateTimelineVideoAutomationDraft,
-            onAlignDraftToPlayhead: alignVideoAutomationDraftToPlayhead,
-            onAddKeyframeAtPlayhead: addVideoAutomationKeyframeAtPlayhead,
-            onRemoveKeyframeAtPlayhead: removeVideoAutomationKeyframeAtPlayhead,
-            onRemoveKeyframe: removeVideoAutomationKeyframe,
-            onSetKeyframeInterpolation: setVideoAutomationKeyframeInterpolation,
-            onSetKeyframeValue: setVideoAutomationKeyframeValue,
-            onSetAutomationEnabled: (automation, enabled) => setTimelineAutomationEnabled(automation.id, enabled),
-            onSetRowsEnabled: setVideoAutomationRowsEnabled,
-            onSeekKeyframe: seekTimeline,
-            onSaveAutomation: setTimelineVideoAutomation,
-            onRemoveAutomation: removeTimelineAutomation,
-          }}
-        />
-        <Show when={controlMode() === "mixer" && videoClipSlotInspectorOpen() && selectedVideoClipSlotLayer()}>
-          {renderVideoClipSlotInspector(false)}
-        </Show>
-        </Show>
-
-        <Show when={persistentBandVisible() && !paneWindow}>
-        <WorkspaceSplitHandle
-          axis="horizontal"
-          ratio={activeTopSplitRatio()}
-          defaultRatio={activeTopSplitDefaultRatio()}
-          minFirstPx={280}
-          // At the compact-height floor, prioritize the Video desk above while
-          // retaining a scrollable persistent stage pane below it.
-          minSecondPx={workspaceTab() === "control" && controlMode() === "mixer" ? 220 : 310}
-          firstTrackBonusPx={workspaceTab() === "control" ? 36 : 0}
-          label="Resize upper and lower workspace panes"
-          splitter="upper-lower"
-          onCommit={commitActiveTopSplitRatio}
-        />
-        </Show>
-
-        <Show when={persistentBandVisible()}>
-        <MappingPersistentWorkspaceBand
-          poppedPanes={poppedPanes()}
-          lowerSplitRatio={lowerSplitRatio()}
-          timelinePaneExpanded={timelinePaneExpanded()}
-          onTogglePaneWindow={togglePaneWindow}
-          paneOperationPending={paneWindowOperationPending}
-          onLowerSplitRatio={setLowerSplitRatio}
-          onOpenMapping={() => {
-            setWorkspaceTab("setup");
-            selectSetupMode("patch");
-          }}
-          lowerLeftContent={
-            paneWindow !== "stage" && workspaceTab() === "control" && controlMode() === "mixer" ? (
-              <section class="panel editVideoPreviewPane" data-edit-video-preview aria-label="Selected media thumbnail">
-                <header class="panelHeader"><h2>Thumbnail</h2><span>Selected media</span></header>
-                <Show when={selectedMediaLibraryAsset()} fallback={<div class="emptyState">Select Media Library item to view its thumbnail.</div>}>
-                  {(asset) => <div class="editVideoPreviewContent">
-                    <Show when={mediaAssetThumbnails()[asset().id]} fallback={<div class="videoMediaLibraryThumbnailPlaceholder" aria-hidden="true" />}>
-                      <img src={mediaAssetThumbnails()[asset().id]} alt="" />
-                    </Show>
-                    <strong data-no-localize>{asset().label}</strong>
-                    <span data-no-localize>{asset().source.path ?? asset().source.name ?? videoSourceKindLabel(asset().source.kind)}</span>
-                  </div>}
-                </Show>
-              </section>
-            ) : undefined
-          }
-          contextContent={
-            workspaceTab() === "control" && controlMode() === "mixer" ? (
-              <EditVideoInspector
-                asset={selectedMediaLibraryAsset()}
-                availabilityById={mediaAssetAvailabilityById()}
-                layerFx={videoLayerListProps}
-                groupEffects={{
-                  get catalog() { return videoEffectCatalog(); },
-                  get compositions() { return snapshot().video.compositions; },
-                  get outputs() { return snapshot().video.outputs; },
-                  get transitionRuntime() { return videoTransitionRuntime(); },
-                  get busy() { return isfEventPulseBusy(); },
-                  onApplyCatalog: applyVideoEffectCatalog,
-                  get canvasAuthority() { return JSON.stringify(projectMappingsAuthority()); },
-                  onLoadGroupPreview: loadVideoGroupCanvasPreview,
-                  onImportIsf: importVideoEffectScopeIsf,
-                  onApplyPreset: applyVideoEffectPreset,
-                  onRemoveChain: removeVideoEffectChain,
-                  onLaunchTransition: launchVideoLayerTransitionBus,
-                  onReleaseTransition: releaseVideoLayerTransitionBus,
-                }}
-              />
-            ) : workspaceTab() === "control" && controlMode() === "live" ? (
-              <TimelineSourceShelf
-                bankAuthority={bankAuthority()}
-                cueOptions={timelineCueOptions()}
-                timelineChildCueId={timelineChildCueId()}
-                uiLocale={uiLocale()}
-                mediaAssets={snapshot().video.media_assets}
-                mediaAssetAvailabilityById={mediaAssetAvailabilityById()}
-                onVerify={inspectMediaAssetIds}
-                timelineLayers={timelineLayers()}
-                positionMs={activeTimeline().position_ms}
-                snapTimeMs={snapTimeMs}
-                onPlace={placeTimelineExternalSource}
-                onStatus={setMessage}
-                contextMode={timelineLowerContextMode()}
-                onContextModeChange={setTimelineLowerContextMode}
-                onOpenInspector={() => setTimelineLowerContextMode("inspector")}
-                inspectorContent={renderTimelineInspector()}
-                previewContent={<TimelineOutputPreview outputs={snapshot().video.outputs} invoke={invoke} backendAvailable={isTauriRuntime()} projectEpoch={projectMappingsAuthority().project_epoch} />}
-              />
-            ) : undefined
-          }
-          keepChildrenMounted={workspaceTab() === "control" && controlMode() === "live"}
-          workspace={workspaceTab() === "setup" ? "setup" : workspaceTab() === "touch" ? "touch" : "control"}
-          controlMode={workspaceTab() === "touch" ? "edit" : controlMode()}
-          controlHeaderTitle={workspaceTab() === "touch" ? "Faders" : faderDeskTitle()}
-          controlHeaderTools={
-            <>
-              <ControlFaderWriteHeader
-                busy={controlFaderModeChanging()}
-                targetKind={controlTargetKind()}
-                compactReadout={controlCompactReadout()}
-                writeMode={controlFaderWriteMode()}
-                editingSceneLabel={selectedSceneCue()?.label ?? null}
-                editingSceneIdentity={
-                  selectedSceneCue()
-                    ? groupIdentityCss(`bank:${selectedSceneCue()!.cue_list_id}`, undefined, "fill")
-                    : null
-                }
-                editingSceneIdentityText={
-                  selectedSceneCue()
-                    ? groupIdentityCss(`bank:${selectedSceneCue()!.cue_list_id}`, undefined, "text")
-                    : null
-                }
-                blindActive={snapshot().programmer.blind}
-                blindStagedCount={snapshot().programmer.values.length}
-                onWriteMode={changeControlFaderWriteMode}
-                onBlindToggle={toggleBlindEditing}
-                onBlindCommit={commitProgrammer}
-                onBlindDiscard={clearProgrammer}
-              />
-            </>
-          }
-          stageConfig={{
-            stageMap: snapshot().stage_map,
-            stageWorldBounds: stageWorldBounds(),
-            stageMapPresetLabel: stageMapPresetLabel(),
-            selectedStageMapPresetLabel: selectedStageMapPresetLabel(),
-            stageMapPresets: snapshot().stage_map_presets,
-            mappingViewPresetLabel: mappingViewPresetLabel(),
-            selectedMappingViewPresetId: selectedMappingViewPresetId(),
-            mappingViewPresets: mappingViewPresets(),
-            stageMapPresetLabelFor: stageMapPresetObjectCountLabel,
-            mappingViewPresetLabelFor: mappingViewPresetObjectLabel,
-            onLockToCurrentBounds: lockStageMapToCurrentBounds,
-            onSetStageMapConfig: setStageMapConfig,
-            onStageMapPresetLabel: setStageMapPresetLabel,
-            onSelectedStageMapPresetLabel: setSelectedStageMapPresetLabel,
-            onSaveStageMapPreset: saveStageMapPreset,
-            onExportStageMapPreset: exportStageMapPreset,
-            onImportStageMapPreset: importStageMapPreset,
-            onApplyStageMapPreset: applyStageMapPreset,
-            onRemoveStageMapPreset: removeStageMapPreset,
-            onMappingViewPresetLabel: setMappingViewPresetLabel,
-            onSelectedMappingViewPresetId: setSelectedMappingViewPresetId,
-            onSaveMappingViewPreset: saveMappingViewPreset,
-            onApplyMappingViewPreset: applyMappingViewPreset,
-            onRemoveMappingViewPreset: removeMappingViewPreset,
-            onExportMappingStageSvg: exportMappingStageSvg,
-            onExportVisualizerRenderPayload: exportVisualizerRenderPayload,
-          }}
-          filters={{
-            fixtureCount: snapshot().fixtures.length,
-            filteredFixtureCount: filteredFixtures().length,
-            selectedGroupId: selectedFixtureGroupFilter(),
-            groupRows: fixtureGroupRows(),
-            selectedTypeKey: selectedFixtureTypeFilter(),
-            fixtureTypeRows: fixtureTypeRows(),
-            onSelectGroup: selectFixtureGroupFilter,
-            onCreateGroup: async (label) => { await createFixtureGroup(label); },
-            onRenameGroup: renameFixtureGroup,
-            onDeleteGroup: deleteFixtureGroup,
-            onRecolorGroup: recolorFixtureGroup,
-            onSelectType: setSelectedFixtureTypeFilter,
-          }}
-          toolRail={{
-            stageTool: mappingStageTool(),
-            helpOpen: mappingHotkeyHelpOpen(),
-            onStageTool: setMappingStageTool,
-            onToggleHelp: () => setMappingHotkeyHelpOpen((open) => !open),
-          }}
-          viewportControls={{
-            stageTool: mappingStageTool(),
-            fixtureCount: mappingFilteredFixtures().length,
-            outputCount: snapshot().video.outputs.length,
-            objectCount: snapshot().stage_objects.length,
-            cursorReadout: mappingStageCursorWorld()
-              ? `${mappingStageCursorLabel()} / ${mappingStageTool().toUpperCase()}`
-              : null,
-            canFitVisible: canFitMappingViewportToVisible(),
-            canFitSelection: canFitMappingViewportToSelection(),
-            zoomLabel: mappingViewportZoomLabel(),
-            zoomValue: normalizedMappingViewportZoom(),
-            zoomMax: mappingViewportMaxZoom(),
-            canZoomOut: normalizedMappingViewportZoom() > 1.001,
-            canZoomIn: normalizedMappingViewportZoom() < mappingViewportMaxZoom() - 0.001,
-            canResetZoom: normalizedMappingViewportZoom() > 1.001,
-            snapEnabled: mappingSnapEnabled(),
-            snapSize: normalizedMappingSnapSize(),
-            showLabels: mappingShowLabels(),
-            showBeams: mappingShowBeams(),
-            showGeometry: mappingShowGeometry(),
-            showProjectors: mappingShowProjectors(),
-            showStageObjects: mappingShowStageObjects(),
-            showLevels: mappingShowLevels(),
-            onFitVisible: fitMappingViewportToVisible,
-            onFitSelection: fitMappingViewportToSelection,
-            onZoomOut: () => zoomMappingViewport(-1),
-            onZoomIn: () => zoomMappingViewport(1),
-            onZoomLevel: (zoom) => setMappingViewport(zoom),
-            onResetZoom: resetMappingViewport,
-            onSnapOff: () => setMappingSnapEnabled(false),
-            onSnapPreset: (preset) => {
-              setMappingSnapSize(preset);
-              setMappingSnapEnabled(true);
-            },
-            onSnapSizeChange: (size) => {
-              setMappingSnapSize(size);
-              setMappingSnapEnabled(true);
-            },
-            onShowLabels: setMappingShowLabels,
-            onShowBeams: setMappingShowBeams,
-            onShowGeometry: setMappingShowGeometry,
-            onShowProjectors: setMappingShowProjectors,
-            onShowStageObjects: setMappingShowStageObjects,
-            onShowLevels: setMappingShowLevels,
-          }}
-          editableStage={{
-            svgRef: bindMappingStageSvgElement,
-            dragging: Boolean(mappingDrag() || mappingViewportPanDrag()),
-            stageTool: mappingStageTool(),
-            viewBox: mappingStageViewBox(),
-            viewport: mappingViewportBox(),
-            stageWorldBounds: stageWorldBounds(),
-            stageOrigin: stageOrigin2d(),
-            snapEnabled: mappingSnapEnabled(),
-            snapLines: mappingSnapLines(),
-            marqueeBox: mappingMarqueeBox(),
-            onPointerDown: handleMappingStagePointerDown,
-            onAuxClick: handleMappingStageAuxClick,
-            onPointerMove: handleMappingStagePointerMove,
-            onPointerUp: finishMappingStageDrag,
-            onPointerLeave: () => setMappingStageCursorWorld(null),
-            onWheel: handleMappingStageWheel,
-          }}
-          stageLayers={{
-            blindActive: snapshot().programmer.blind,
-            showStageObjects: mappingShowStageObjects(),
-            showProjectors: mappingShowProjectors(),
-            showBeams: mappingShowBeams(),
-            showGeometry: mappingShowGeometry(),
-            showLabels: mappingShowLabels(),
-            labelViewport: {
-              x: mappingViewportBox().x,
-              z: mappingViewportBox().z,
-              width: mappingViewportBox().width,
-              height: mappingViewportBox().height,
-            },
-            labelViewportPixelSize: mappingStageViewportPixelSize(),
-            showLevels: mappingShowLevels(),
-            stageTool: mappingStageTool(),
-            stageObjects: visualizerStageObjects2d(),
-            videoSurfaces: visualizerVideoSurfaces2d(),
-            beamFixtures: mappingStageFixtures().filter((fixture) => fixture.liveColorApplied),
-            geometryNodes: mappingGeometryNodes2d(),
-            fixtures: mappingStageFixtures(),
-            labelFixtures: visualizerFixtures(),
-            selectedFixtureIds: selectedMappingFixtureIdSet(),
-            selectedFixtureId: selectedFixtureId(),
-            selectedGroupId: selectedFixtureGroupFilter(),
-            selectedTypeKey: selectedFixtureTypeFilter(),
-            selectedVideoOutputId: selectedVideoOutputId(),
-            placePreview: mappingPlacePreview(),
-            isDraggingStageObject: isDraggingMappingStageObject,
-            isDraggingFixture: isDraggingMappingFixture,
-            isYawDragging: (fixtureId) => {
-              const drag = mappingDrag();
-              return drag?.kind === "fixtureYaw" && drag.fixtureId === fixtureId;
-            },
-            onBeginStageObjectDrag: beginMappingStageObjectDrag,
-            onBeginStageObjectRotate: beginMappingStageObjectRotate,
-            onBeginStageObjectResize: beginMappingStageObjectResize,
-            onSelectVideoOutput: setSelectedVideoOutputId,
-            onBeginFixtureYawDrag: beginMappingFixtureYawDrag,
-            onFixturePointerDown: (event, fixtureId) => {
-              if (event.button === 1 || mappingStageTool() === "pan") return;
-              event.stopPropagation();
-              const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
-              if (workspaceTab() === "control") {
-                beginMappingFixtureDrag(event, fixtureId);
-                return;
-              }
-              if (fixture && mappingStageTool() === "rotate") selectMappingFixture(fixture, event);
-              beginMappingFixtureDrag(event, fixtureId);
-            },
-          }}
-          selection={{
-            selectedFixtureCount: selectedMappingFixtures().length,
-            selectedFixtures: selectedMappingFixtures(),
-            filteredFixtureCount: mappingFilteredFixtures().length,
-            fixtureSearch: mappingFixtureSearch(),
-            groupText: mappingSelectionGroupText(),
-            groupTokenCount: parseGroupIds(mappingSelectionGroupText()).length,
-            availableGroups: fixtureGroupEntities(),
-            stageObjects: snapshot().stage_objects,
-            stageObjectFixtureCounts: stageObjectFixtureCounts(),
-            selectedStageObject: selectedStageObject(),
-            selectedStageObjectId: selectedStageObjectId(),
-            stageObjectDraftLabel: stageObjectLabel(),
-            stageObjectDraftKind: stageObjectKind(),
-            stageObjectDraftWidth: stageObjectWidth(),
-            stageObjectDraftDepth: stageObjectDepth(),
-            stageObjectDraftRotation: stageObjectRotation(),
-            stageObjectDraftColor: stageObjectColor(),
-            flagState: selectedMappingFlagState(),
-            snapSize: normalizedMappingSnapSize(),
-            selectedFixture: selectedMappingFixture(),
-            selectedGeometryRows: selectedMappingGeometryRows(),
-            unresolvedGeometryReferences: selectedMappingUnresolvedGeometryReferences(),
-            fixtureLimitsEditor: selectedMappingFixture() ? {
-              fixture: selectedMappingFixture()!,
-              limitsDraft: selectedFixtureLimitsDraft(),
-              normalizedLimits: normalizedSelectedFixtureLimitsDraft(),
-              limitWindowStyle: selectedFixtureLimitWindowStyle(),
-              movementLimitDragging: Boolean(movementLimitDrag()),
-              movementLimitNudgeAmount: panTiltNudgeAmount(),
-              formatDmxPercent,
-              onUpdateNumericLimit: (field, value) => updateSelectedFixtureLimit(field, value),
-              onUpdateToggleLimit: (field, value) => updateSelectedFixtureLimit(field, value),
-              onResetLimits: () => setSelectedFixtureLimitsDraft(defaultFixtureLimits),
-              onResetMovementLimits: resetSelectedMovementLimits,
-              onApplyLimits: setFixtureLimits,
-              onMovementLimitPointerDown: startMovementLimitDrag,
-              onMovementLimitPointerMove: dragMovementLimit,
-              onMovementLimitPointerEnd: endMovementLimitDrag,
-            } : null,
-            filteredFixtures: mappingFilteredFixtures(),
-            selectedFixtureIds: selectedMappingFixtureIdSet(),
-            outputs: snapshot().video.outputs,
-            selectedOutput: selectedMappingVideoOutput(),
-            selectedOutputId: selectedVideoOutputId(),
-            onSearch: setMappingFixtureSearch,
-            onGroupText: setMappingSelectionGroupText,
-            onPickVisible: pickVisibleMappingFixtures,
-            onDuplicateSelected: duplicateSelectedMappingFixtures,
-            onRemoveSelected: removeSelectedMappingFixtures,
-            onClearSelection: clearMappingFixtureSelection,
-            onApplyGroups: applyMappingSelectionGroups,
-            onStageObjectDraftLabel: setStageObjectLabel,
-            onStageObjectDraftKind: setStageObjectKind,
-            onStageObjectDraftWidth: setStageObjectWidth,
-            onStageObjectDraftDepth: setStageObjectDepth,
-            onStageObjectDraftRotation: setStageObjectRotation,
-            onStageObjectDraftColor: setStageObjectColor,
-            onAddStageObjectCenter: addStageObjectAtCenter,
-            onSelectStageObject: setSelectedStageObjectId,
-            onSetStageObject: setStageObject,
-            onRemoveStageObject: removeStageObject,
-            onPickInsideStageObject: pickFixturesInsideSelectedStageObject,
-            onLayoutOnStageObject: layoutSelectedFixturesOnStageObject,
-            onSetSelectionFlag: setMappingSelectionFlag,
-            onNudgeSelection: nudgeSelectedMappingFixtures,
-            onLayoutSelection: layoutSelectedMappingFixtures,
-            onAlignSelection: alignSelectedMappingFixtures,
-            onDistributeSelection: distributeSelectedMappingFixtures,
-            onMirrorSelection: mirrorSelectedMappingFixtures,
-            onRotateSelection: rotateSelectedMappingFixtures,
-            onMatchSelectionOrientations: matchSelectedMappingFixtureOrientations,
-            onAimSelectionInstallationAxes: aimSelectedMappingFixtureInstallationAxes,
-            onLayoutFixtures: layoutFixturePositions,
-            onControlActive: () => setWorkspaceTab("control"),
-            onOpenSceneFx: openSceneFxFromMapping,
-            onSetFixtureTransform: setFixtureTransform,
-            onControlFixture: () => setWorkspaceTab("control"),
-            onPatchFixture: () => selectSetupMode("patch"),
-            onSelectFixture: selectMappingFixture,
-            onSelectOutput: setSelectedVideoOutputId,
-            onEditOutputProjection: (outputId) => {
-              setSelectedVideoOutputId(outputId);
-              selectSetupMode("video");
-            },
-          }}
-          hotkeyHelpOpen={mappingHotkeyHelpOpen()}
-          onCloseHotkeyHelp={() => setMappingHotkeyHelpOpen(false)}
-        >
-        <Show when={workspaceTab() === "control" || workspaceTab() === "touch"}>
-        <section
-          class={`panel faders controlPanel timelineDesk-${timelineDeskSurface()} timelineDrawer-${timelineContextDrawer()} editDesk-${editDeskSurface()}`}
-          data-timeline-context-drawer={timelineContextDrawer()}
-        >
-          <FaderFixtureControlPanel
-            selectedGroupId={selectedFixtureGroupFilter()}
-            selectedGroupLabel={selectedFixtureGroupLabel()}
-            selectedGroupFixtureCount={filteredFixtures().length}
-            patchedFixtureCount={snapshot().fixtures.length}
-            selectedGroupSubmasterLevel={selectedGroupSubmaster()?.level ?? 1}
-            selectedFixture={selectedFixture() ?? null}
-            groupFlagState={selectedGroupFlagState()}
-            globalAnyFlagged={globalFixtureFlagState().anyFlagged}
-            onSetGroupSubmaster={setGroupSubmaster}
-            onSavePreset={savePreset}
-            onLoadPreset={loadPreset}
-            onLoadPresetForGroup={loadPresetForSelectedGroup}
-            onLoadPresetForAllMatching={loadPresetForAllMatching}
-            onDuplicateFixture={duplicateFixture}
-            onRemoveFixture={removeFixture}
-            onSetFixtureHighlight={setFixtureHighlight}
-            onSetFixtureSolo={setFixtureSolo}
-            onSetFixturePark={setFixturePark}
-            onSetGroupHighlight={setGroupHighlight}
-            onSetGroupSolo={setGroupSolo}
-            onSetGroupPark={setGroupPark}
-            onClearFixtureFlags={() => clearFixtureFlags("all")}
-            onSetFixtureTransform={setFixtureTransform}
-          />
-          <Show when={workspaceTab() === "control" && controlMode() === "live" && timelineUpperHost()?.isConnected && timelineDeskSurface() === "playback"}>
-          <Portal mount={timelineUpperHost()!}>
-          <section class="panel faders controlPanel timelineDesk-playback">
-          <div class="playbackDeskSurface">
-            <ProgrammerPanel
-              programmer={snapshot().programmer}
-              onSetMode={setProgrammerMode}
-              onCommit={commitProgrammer}
-              onClear={clearProgrammer}
-            />
-            <ReferencePalettePanel
-              palettes={referencePalettes()}
-              captureFixtureLabel={selectedFixture()?.label ?? null}
-              targetLabel={controlTargetLabel()}
-              targetFixtureCount={selectedControlTargetFixtures().length}
-              onCreate={createReferencePalette}
-              onUpdate={updateReferencePalette}
-              onApply={applyReferencePalette}
-              onRemove={removeReferencePalette}
-            />
-            <PlaybackExecutorPanel
-              bankAuthority={bankAuthority()}
-              playbackMaster={snapshot().playback_master}
-              onCreate={createPlaybackExecutor}
-              onUpdate={updatePlaybackExecutor}
-              onRemove={removePlaybackExecutor}
-              onSetLevel={setPlaybackExecutorLevel}
-              onSetMaster={setPlaybackMaster}
-              onTrigger={triggerPlaybackExecutor}
-            />
-          </div>
-          </section>
-          </Portal>
-          </Show>
-          <FaderAttributeEditorPanel
-            disabled={controlFaderWriteBlocked()}
-            disabledMessage={!selectedSceneCue() ? "Select a scene to edit, or switch to Live." : undefined}
-            categories={controlCategoryRows()}
-            activeCategory={activeControlCategory()}
-            onCategory={setControlCategory}
-          >
-          <Show
-            when={showFixtureTypeAttributeColumns()}
-            fallback={
-              <>
-          <FaderPrimaryAttributePanels
-            dimmerControl={showDimmerPanel() ? selectedDimmerControl() : undefined}
-            positionControls={showPositionPad() ? selectedPositionControls() : undefined}
-            colorControls={showColorPad() ? selectedColorControls() : undefined}
-            dimmerSliderMin={dimmerSliderRange().min}
-            dimmerSliderMax={dimmerSliderRange().max}
-            canEditLimits={Boolean(selectedFixture())}
-            limitsDraft={selectedFixtureLimitsDraft()}
-            normalizedLimits={normalizedSelectedFixtureLimitsDraft()}
-            applyLimitsLabel={selectedFixture() ? "Apply to Fixture" : "No Fixture"}
-            nudgeAmount={panTiltNudgeAmount()}
-            nudgeSteps={panTiltNudgeSteps}
-            targetPoints={panTiltTargetPoints}
-            limitOverlayStyle={selectedFixtureLimitOverlayStyle()}
-            limitWindowStyle={selectedFixtureLimitWindowStyle()}
-            movementLimitDragging={Boolean(movementLimitDrag())}
-            positionFavorites={positionFavorites()}
-            positionFavoriteLabel={positionFavoriteLabel()}
-            colorHsv={selectedColorHsv()}
-            colorSaturationRamp={colorSaturationRamp()}
-            colorAutoWhite={colorAutoWhite()}
-            colorQuickLooks={colorQuickLooks}
-            colorPalette={defaultColorPalette}
-            colorFavorites={colorFavorites()}
-            targetLabel={controlTargetLabel()}
-            formatDmxPercent={formatDmxPercent}
-            formatShortDmxPercent={formatShortDmxPercent}
-            dmxValueToPercent={dmxValueToPercent}
-            colorPreviewForSaturation={colorPreviewForSaturation}
-            onSetDimmerValue={setDimmerValue}
-            onUpdateDimmerLimit={(field, value) => updateSelectedFixtureLimit(field, value)}
-            onResetDimmerLimits={resetSelectedDimmerLimits}
-            onApplyLimits={applySelectedFixtureLimits}
-            onNudgePanTilt={nudgePanTilt}
-            onCenterPanTilt={centerPanTilt}
-            onMirrorPanTiltAxis={mirrorPanTiltAxis}
-            onSetPanTiltTarget={setPanTiltTargetPoint}
-            onPanTiltPointerPad={(event) => void setPanTiltFromPointer(event)}
-            onPanTiltPadKeyDown={handlePanTiltPadKeyDown}
-            onSetPanTiltValues={(panValue, tiltValue) => void setPanTiltValues(panValue, tiltValue)}
-            onSetPanTiltPercent={setPanTiltPercent}
-            onSetPanTiltNudgeAmount={setPanTiltNudgeAmount}
-            onMovementLimitPointerDown={startMovementLimitDrag}
-            onMovementLimitPointerMove={dragMovementLimit}
-            onMovementLimitPointerEnd={endMovementLimitDrag}
-            onUpdateMovementLimit={(field, value) => updateSelectedFixtureLimit(field, value)}
-            onUpdateMovementLimitToggle={(field, value) => updateSelectedFixtureLimit(field, value)}
-            onResetMovementLimits={resetSelectedMovementLimits}
-            onSetPositionFavoriteLabel={setPositionFavoriteLabel}
-            onAddPositionFavorite={addCurrentPositionFavorite}
-            onResetPositionFavorites={resetPositionFavorites}
-            onRemovePositionFavorite={removePositionFavorite}
-            onApplyPositionFavorite={(pan, tilt) => void setPanTiltValues(pan, tilt)}
-            onPointerColor={setColorFromPointer}
-            onSetColor={(color) => void setFixtureColor(color)}
-            onSetColorAutoWhite={setColorAutoWhite}
-            onSetColorChannel={setColorChannelValue}
-            onSetColorExtraChannel={setColorExtraChannelValue}
-            onSetColorHsv={setColorHsvValue}
-            onAddColorFavorite={addCurrentColorFavorite}
-            onResetColorFavorites={resetColorFavorites}
-            onRemoveColorFavorite={removeColorFavorite}
-          />
-          <FaderAuxiliaryAttributePanels
-            showColorWheel={showColorWheelPanel()}
-            showColorWheelPicker={showColorWheelPickerPanel()}
-            showGoboWheel={showGoboWheelPanel()}
-            showOptics={showOpticsPanel()}
-            showCategoryQuick={showCategoryQuickPanel()}
-            showFunctions={activeControlCategory() !== "fader"}
-            targetLabel={controlTargetLabel()}
-            categoryLabel={activeControlCategoryLabel()}
-            attributeCount={visibleControls().length}
-            colorWheelEntries={colorWheelEntries()}
-            goboWheelEntries={goboWheelEntries()}
-            colorWheelPickerColor={colorWheelPickerColor()}
-            colorWheelPickerHsv={colorWheelPickerHsv()}
-            colorWheelSaturationRamp={colorWheelSaturationRamp()}
-            colorWheelApproximationLabel={colorWheelApproximationLabel()}
-            wheelMediaUrlFor={wheelMediaUrlForCurrentFixture}
-            wheelSlotMediaPath={wheelSlotMediaPath}
-            opticsTitle={opticsPanelTitle()}
-            opticsEntries={opticsEntries()}
-            formatShortDmxPercent={formatShortDmxPercent}
-            clampDmxValue={clampDmxValue}
-            opticsPreviewClass={opticsPreviewClass}
-            opticsPreviewStyle={opticsPreviewStyle}
-            opticsPresetButtons={opticsPresetButtons}
-            sortedFunctions={sortedChannelFunctions}
-            functionContainsValue={channelFunctionContainsValue}
-            functionBandStyle={channelFunctionBandStyle}
-            functionLabel={channelFunctionLabel}
-            functionRangeLabel={channelFunctionRangeLabel}
-            functionDetail={channelFunctionDetail}
-            functionSwatchColor={channelFunctionSwatchColor}
-            quickLooks={categoryQuickLooks()}
-            functionEntries={visibleFunctionControls()}
-            currentValue={currentControlValue}
-            onColorWheelPointerColor={setColorWheelPickerFromPointer}
-            onSetColorWheelColor={setColorWheelPickerColor}
-            onSetColorWheelHsv={setColorWheelPickerHsvValue}
-            onOpticsPointerValue={setOpticsValueFromPointer}
-            onOpticsKeyValue={setOpticsValueFromKey}
-            onSetValue={setControlAttributeValue}
-            onApplyColorFunction={applyColorWheelFunction}
-            onApplyFunction={(control, fn) => void applyChannelFunction(control, fn)}
-            onSetValueMode={(mode) => void applyVisibleControlValues(mode)}
-            onApplyLook={(look) => void applyCategoryQuickLook(look)}
-          />
-          <FaderGridPanel
-            controls={visibleControls()}
-            fullWidth={activeControlCategory() === "fader"}
-            selectedFixtureId={selectedControlReferenceFixture()?.id ?? null}
-            selectedGroupId={selectedFixtureGroupFilter()}
-            valueForControl={(control) => {
-              const fixture = selectedControlReferenceFixture();
-              return fixture ? faderValue(fixture.id, control.attribute, control.default_value) : control.default_value;
-            }}
-            isControlWritten={controlIsWritten}
-            onSetFixtureAttribute={setAttribute}
-            onSetGroupAttribute={setGroupAttribute}
-          />
-              </>
-            }
-          >
-            <FixtureTypeAttributeColumns
-              groups={pickedFixtureTypeGroups()}
-              activeCategory={activeControlCategory()}
-              valueForControl={(fixture, control) =>
-                faderValue(fixture.id, control.attribute, control.default_value)
-              }
-              onSelectType={selectPickedFixtureType}
-              onSetControl={setFixtureTypeControlValue}
-              onResetControl={resetFixtureTypeControlValue}
-              onSetColor={setFixtureTypeColor}
-              onSetPosition={setFixtureTypePosition}
-            />
-          </Show>
-          </FaderAttributeEditorPanel>
-          <div class="timelinePanel">
-        <Show when={workspaceTab() === "control" && controlMode() === "live" && timelineUpperHost()?.isConnected && timelineDeskSurface() === "show"}>
-            <Portal mount={timelineUpperHost()!}>
-            <section class="panel faders controlPanel timelineDesk-show">
-            <div class="timelinePanel">
-            <div
-              class="timelineShowSurface"
-              classList={{
-                timelineShowSurfaceBlockDrawerOpen: timelineContextDrawer() === "block",
-              }}
-            >
-            <TimelineCueEventsPanel
-              navigatorOpen={timelineNavigatorOpen()}
-              onCloseNavigator={() => setTimelineNavigatorOpen(false)}
-              onNavigateRootTimeline={openRootTimelineFromNavigator}
-              onNavigateChildTimeline={openChildTimelineFromNavigator}
-              childTimelineCues={snapshotCues()}
-              inlineChildParents={timelineInlineChildParents()}
-              bankAuthority={bankAuthority()}
-              embeddedControls={false}
-              contextDrawer={timelineContextDrawer()}
-              timelineChildCueId={timelineChildCueId()}
-              childTimelineLabel={timelineChildCue()?.label ?? null}
-              cueIdentities={cueIdentities()}
-              positionMs={activeTimeline().position_ms}
-              projectEpoch={projectMappingsAuthority().project_epoch}
-              bpm={snapshot().clock.bpm}
-              durationMs={activeTimeline().duration_ms}
-              playing={activeTimeline().playing}
-              metronomeEnabled={activeTimeline().metronome_enabled ?? false}
-              countInBeats={activeTimeline().count_in_beats ?? 4}
-              countInRemainingMs={activeTimeline().count_in_remaining_ms ?? 0}
-              phases={activeTimeline().phases ?? []}
-              guideEnabled={activeTimeline().guide_enabled ?? false}
-              loopRegion={activeTimeline().loop_region ?? null}
-              loopRuntime={activeTimeline().loop_runtime ?? {
-                generation: 0,
-                status: "disabled",
-                wrap_count: 0,
-              }}
-              timelineBank={timelineBank()}
-              activeTimelineId={activeTimeline().id ?? snapshot().timeline.id ?? 0}
-              followRuntime={displayedTimelineFollowRuntime()}
-              followAbortBusy={timelineFollowAbortBusy()}
-              followAbortFocusFence={timelineFollowAbortFocusFence}
-              executingLive={timelineExecutionLive()}
-              cuesCount={snapshot().cues.length}
-              superSceneCueCount={superSceneCueCount()}
-              lightingAutomationCount={activeTimeline().automations.length}
-              videoAutomationCount={activeTimeline().video_automations.length}
-              overviewEvents={timelineOverviewEvents()}
-              timelineLayers={timelineLayers()}
-              timelineCueDrag={timelineCueDrag()}
-              onDropExternalSource={placeTimelineExternalSource}
-              overviewMarkerAriaLabel={(event) => timelineOverviewMarkerAriaLabel(event, uiLocale())}
-              overviewAutomationRanges={timelineOverviewAutomationRanges()}
-              itemLanePlacements={timelineItemLanePlacements()}
-              overviewOverlapClusters={timelineOverviewOverlapClusters()}
-              overviewOverlapLayerIds={[
-                ...new Set(timelineOverlapClusters().map((cluster) => cluster.layer_id)),
-              ]}
-              overlapClusterMemberships={timelineOverlapClusters().map((cluster) => ({
-                id: cluster.id,
-                member_ids: cluster.member_ids.map(Number),
-              }))}
-              selectedAutomationRangeId={selectedTimelineAutomationRangeId()}
-              overviewPlayheadX={timelineOverviewPlayheadX()}
-              visibleWindow={timelineVisibleWindow()}
-              overviewShowDurationMs={timelineOverviewShowDurationMs()}
-              overviewEditExtentMs={timelineOverviewEditExtentMs()}
-              selectedEventId={selectedTimelineSceneBlockEventId()}
-              timelineSelection={timelineSelection()}
-              selectionRevision={timelineSceneBlockSelectionRevision()}
-              audioAnalysis={audioAnalysis()}
-              audioClips={activeTimeline().audio_clips ?? []}
-              videoClips={activeTimeline().video_clips ?? []}
-              mediaAssets={snapshot().video.media_assets}
-              mediaAssetAvailabilityById={mediaAssetAvailabilityById()}
-              itemGroups={activeTimeline().item_groups ?? []}
-              audioOffsetMs={activeTimeline().audio_offset_ms ?? 0}
-              audioMuted={activeTimeline().audio_muted ?? false}
-              audioWaveformPoints={audioWaveformPoints()}
-              audioSpectrumPaths={audioSpectrumPaths()}
-              audioBeatMarkers={audioBeatMarkers()}
-              snapMode={timelineSnapMode()}
-              gridMs={timelineGridMs()}
-              selectedCueId={selectedTimelineCueId()}
-              selectedCueIsSuperScene={bankAuthority().issue === null && Boolean(
-                bankAuthority().cueById.get(selectedTimelineCueId() ?? -1)?.child_timeline,
-              )}
-              eventTimeMs={timelineEventTimeMs()}
-              blockDurationMs={timelineBlockDurationMs()}
-              blockLoopCount={timelineBlockLoopCount()}
-              blockJumpToEventId={timelineBlockJumpToEventId()}
-              track={timelineTrack()}
-              cueOptions={timelineCueOptions()}
-              eventRows={timelineEventRows()}
-              stretchMode={timelineStretchMode()}
-              magnetEnabled={timelineMagnetEnabled()}
-              armedCueId={bankAuthority().issue === null ? timelineArmedCueId() : null}
-              armedCue={timelineArmedCue()}
-              timelineEventDraft={timelineEventDraft}
-              onSeek={seekTimeline}
-              onExitChildTimeline={exitSuperScene}
-              onOpenSuperScene={(cueId) => void openOrCreateSuperScene(cueId)}
-              onPause={pauseTimeline}
-              onPlay={playTimeline}
-              onSetMetronome={setTimelineMetronome}
-              onSetGuideEnabled={setTimelineGuideEnabled}
-              onSetPhases={setTimelinePhases}
-              onSetLoopRegion={setTimelineLoopRegion}
-              onSetLoopEnabled={setTimelineLoopEnabled}
-              onScaleLoop={scaleTimelineLoop}
-              onCreateTimeline={createTimeline}
-              onDuplicateTimeline={duplicateTimeline}
-              onRemoveTimeline={removeTimeline}
-              onReorderTimelines={reorderTimelines}
-              onSelectTimeline={selectTimeline}
-              onSetFollow={setTimelineFollow}
-              onAbortFollow={abortTimelineFollow}
-              onSeekOverviewTime={seekTimelineFromOverviewTime}
-              onMoveEventPlacement={moveTimelineCueEventToPlacement}
-              onResizeEventTime={resizeTimelineCueEventToTime}
-              onSetEventFade={setTimelineCueEventFade}
-              onSelectAutomationRange={selectTimelineAutomationRange}
-              onTimelineSelectionChange={selectTimelineItem}
-              onMoveAutomationRangeTime={moveTimelineAutomationRangeToTime}
-              onResizeAutomationRangeTime={resizeTimelineAutomationRangeToTime}
-              onMoveAutomationKeyframeTime={moveTimelineAutomationKeyframeToTime}
-              onSelectEvent={selectTimelineSceneBlockEvent}
-              onFitOverview={fitTimelineOverview}
-              onZoomOverview={zoomTimelineOverview}
-              onPanOverview={panTimelineOverview}
-              onSetVisibleWindow={setTimelineVisibleWindowDirect}
-              onZoomOverviewAt={zoomTimelineOverviewAt}
-              onRevealSelected={() => {
-                const eventId = selectedTimelineSceneBlockEventId();
-                if (eventId !== null) revealTimelineSceneBlock(eventId);
-              }}
-              onRevealPlayhead={revealTimelinePlayhead}
-              onAnalyzeAudio={analyzeAudioFile}
-              onClearAudio={clearTimelineAudio}
-              onApplyAudioBpm={applyAudioBpm}
-              onAddAudioClip={addTimelineAudioClip}
-              onUpdateAudioClip={updateTimelineAudioClip}
-              onSetAudioClipOutputBus={setTimelineAudioClipOutputBus}
-              onUpdateVideoClip={updateTimelineVideoClip}
-              onGroupItems={groupTimelineItems}
-              onUngroupItem={ungroupTimelineItem}
-              onDuplicateItems={duplicateTimelineItems}
-              onNudgeItems={nudgeTimelineItems}
-              onRippleItems={rippleTimelineItems}
-              onQuantizeItems={quantizeTimelineItems}
-              onPasteItems={pasteTimelineItems}
-              onTrimItems={trimTimelineItems}
-              onSplitItems={splitTimelineItems}
-              onMoveItemsToLanes={moveTimelineItemsToLanes}
-              onRestoreReturnedItemSelection={(items) => {
-                const specialized = specializedTimelineSelectionFromItems(items);
-                const selected = specialized.event_id !== null
-                  ? { kind: "lighting_event" as const, event_id: specialized.event_id }
-                  : specialized.automation?.kind === "lighting"
-                    ? { kind: "lighting_automation" as const, automation_id: specialized.automation.automationId }
-                    : specialized.automation?.kind === "video"
-                      ? { kind: "video_automation" as const, automation_id: specialized.automation.automationId }
-                      : items[0] ?? null;
-                selectTimelineItem(selected);
-                // A linked result can legitimately keep one Lighting block
-                // and one automation range visibly selected at the same time.
-                // The tagged primary above owns the Inspector; these legacy
-                // specialized states retain the multi-domain canvas highlight.
-                setSelectedTimelineSceneBlockEventId(specialized.event_id);
-                setSelectedTimelineAutomation(specialized.automation);
-              }}
-              onRemoveItems={removeTimelineItems}
-              onRemoveAudioClip={removeTimelineAudioClip}
-              onSetAudioMaster={setTimelineAudioMaster}
-              onSnapMode={setTimelineSnapMode}
-              onGridMs={setTimelineGridMs}
-              onSnapDrafts={snapTimelineDrafts}
-              onSnapItems={snapTimelineItems}
-              snapTimeMs={snapTimeMs}
-              onPlaceArmedCue={placeArmedTimelineCue}
-              onSelectedCueId={setTimelineCueId}
-              onOpenOrCreateSuperScene={async (cueId) => { await openOrCreateSuperScene(cueId); }}
-              onEventTimeMs={setTimelineEventTimeMs}
-              onBlockDurationMs={setTimelineBlockDurationMs}
-              onBlockLoopCount={setTimelineBlockLoopCount}
-              onBlockJumpToEventId={setTimelineBlockJumpToEventId}
-              onTrack={setTimelineTrack}
-              onAddEvent={addTimelineCueEvent}
-              onAddEventAtPlayhead={addTimelineCueEventAtPlayhead}
-              onUpdateEventDraft={updateTimelineEventDraft}
-              onSaveEvent={setTimelineCueEvent}
-              onRemoveEvent={removeTimelineEvent}
-              onOpenSourceCue={openTimelineSourceCue}
-              onAddTimelineLayer={timelineLayerController.add}
-              onUpdateTimelineLayer={timelineLayerController.update}
-              onRemoveTimelineLayer={removeTimelineLayer}
-              onReorderTimelineLayer={timelineLayerController.reorder}
-              onTimelineStatus={(source) => setMessage(translateUiText(source, uiLocale()))}
-              onStretchMode={setTimelineStretchMode}
-              onMagnetEnabled={setTimelineMagnetEnabled}
-              onArmCue={toggleTimelineArmedCue}
-              onContextDrawer={setTimelineContextDrawer}
-            />
-            </div>
-            </div>
-            </section>
-            </Portal>
-            </Show>
-            <Show when={workspaceTab() === "control" && controlMode() === "live" && timelineUpperHost()?.isConnected && timelineDeskSurface() === "automation"}>
-            <Portal mount={timelineUpperHost()!}>
-            <section class="panel faders controlPanel timelineDesk-automation">
-            <div class="timelinePanel">
-            <div class="timelineAutomationSurface">
-            <TimelineLightingAutomationPanel
-              activeControls={timelineAutomationControls()}
-              selectedAttribute={selectedTimelineAutomationAttribute()}
-              canAddAutomation={canAddTimelineAutomation()}
-              selectedGroupId={selectedFixtureGroupFilter()}
-              canAddGroupAutomation={canAddTimelineGroupAutomation()}
-              rowScope={lightingAutomationRowScope()}
-              allRowsCount={allTimelineAutomationRows().length}
-              startMs={automationStartMs()}
-              endMs={automationEndMs()}
-              startValue={automationStartValue()}
-              endValue={automationEndValue()}
-              interpolation={automationInterpolation()}
-              rows={timelineAutomationRows()}
-              selectedAutomationId={selectedLightingTimelineAutomationId()}
-              fixtureOptions={timelineAutomationFixtureOptions()}
-              timelineAutomationDraft={timelineAutomationDraft}
-              fixtureAttributeOptions={fixtureAttributeOptions}
-              onAttribute={setEffectAttribute}
-              onStartMs={setAutomationStartMs}
-              onEndMs={setAutomationEndMs}
-              onStartValue={setAutomationStartValue}
-              onEndValue={setAutomationEndValue}
-              onInterpolation={setAutomationInterpolation}
-              onRowScope={setLightingAutomationRowScope}
-              onUsePlayheadRange={usePlayheadForLightingAutomation}
-              onAddAutomation={addTimelineAutomation}
-              onAddGroupAutomation={addTimelineGroupAutomation}
-              onUpdateDraft={updateTimelineAutomationDraft}
-              onAlignDraftToPlayhead={alignLightingAutomationDraftToPlayhead}
-              onAddKeyframeAtPlayhead={addLightingAutomationKeyframeAtPlayhead}
-              onRemoveKeyframeAtPlayhead={removeLightingAutomationKeyframeAtPlayhead}
-              onRemoveKeyframe={removeLightingAutomationKeyframe}
-              onSetKeyframeInterpolation={setLightingAutomationKeyframeInterpolation}
-              onSetKeyframeValue={setLightingAutomationKeyframeValue}
-              onSetAutomationEnabled={(automation, enabled) => setTimelineAutomationEnabled(automation.id, enabled)}
-              onSetRowsEnabled={setLightingAutomationRowsEnabled}
-              onSeekKeyframe={seekTimeline}
-              onSaveAutomation={setTimelineAutomation}
-              onRemoveAutomation={removeTimelineAutomation}
-            />
-            </div>
-            </div>
-            </section>
-            </Portal>
-            </Show>
-          </div>
-        </section>
-        </Show>
-        </MappingPersistentWorkspaceBand>
-        </Show>
-
-        <Show when={workspaceTab() === "setup" && setupSubTab() === "authority"}>
-          <AgentAuthorityPanel
-            invokeCommand={invoke}
-          />
-        </Show>
-        <Show when={workspaceTab() === "setup" && setupSubTab() === "io"}>
-        <aside
-          class={setupPanelClass("panel output setupIoPanel setupPanel controlPanel", ["io"])}
-          ref={registerSetupPanel(["io"])}
-          tabIndex={-1}
-          data-io-layout="operator"
-        >
-          <SetupIoConnectionDeck
-            activeId={activeIoConnection()}
-            onActiveId={setActiveIoConnection}
-            outputEnabled={output().enabled}
-            audioOutputSummary={audioOutputController.summary()}
-            audioOutputState={audioOutputController.view().state}
-            audioOutputStateTone={audioOutputController.stateTone()}
-            midiClockConnected={midiConnected()}
-            midiControlConnected={midiControlConnected()}
-            oscRunning={oscRunning()}
-            webRemoteRunning={genericRemoteRunning()}
-            djListenerRunning={djListenerRunning()}
-            djLinkEnabled={djLinkEnabled()}
-            djLinkInstalled={extensionStatus().dj_link_enabled}
-            syncRunning={showClockStatus()?.running ?? false}
-            syncRole={showClockStatus()?.role ?? null}
-            renderWorkbench={(connection) => connection === "dmx" ? (
-          <section class="ioUnifiedZone ioUnifiedDmxZone" data-io-zone="dmx">
-          <div class="ioOperatorSurface dmxOperatorSurface">
-          <DmxOutputConfigPanel
-            output={output()}
-            serialPorts={serialPorts()}
-            serialDmxMachineBindingStatus={serialDmxMachineBindingStatus()}
-            showSerialDmxSafetyBlackoutRouteStatus={showSerialDmxSafetyBlackoutRouteStatus()}
-            safetyBlackoutEngaged={snapshot().safety_blackout_engaged}
-            showDmxPreparationBusy={showDmxPreparationBusy()}
-            showDmxPreparationStage={showDmxPreparationStage()}
-            onPrepareShowDmx={prepareShowDmx}
-            onEnableStagedShowArtNetLoopbackRoute={enableStagedShowArtNetLoopbackRoute}
-            onConfirmSerialDmxMachineBinding={confirmSerialDmxMachineBinding}
-            onEnableShowSerialDmxSafetyBlackoutRoute={enableShowSerialDmxSafetyBlackoutRoute}
-            onStopShowSerialDmxSafetyBlackoutRoute={stopShowSerialDmxSafetyBlackoutRoute}
-            routes={snapshot().dmx_outputs.length > 0 ? snapshot().dmx_outputs : [snapshot().output]}
-            routeTelemetry={snapshot().telemetry.last_dmx_route_results}
-            projectEpoch={projectMappingsAuthority().project_epoch}
-            onApplyNetworkRoutes={applyDmxOutputRoutes}
-            usbDmxUniverses={usbDmxUniverses()}
-            usbDmxUniversesStale={usbDmxUniversesStale()}
-            onRefreshUsbDmxUniverses={refreshUsbDmxUniverses}
-            onRescanSerialPorts={refreshSerialPorts}
-            onBindUsbDmxUniverse={bindUsbDmxUniverse}
-            onClearUsbDmxUniverse={clearUsbDmxUniverse}
-            onStartUsbDmxUniverse={startUsbDmxUniverse}
-            onStopUsbDmxUniverse={stopUsbDmxUniverse}
-          />
-          <div class="ioDisclosureStack">
-          <IoDisclosure
-            id="dmx-input"
-            summary="DMX input and merge"
-          >
-          <DmxInputPanel
-            config={dmxInputConfig()}
-            status={dmxInputStatus()}
-            mappings={dmxMappings()}
-            onConfig={setDmxInputConfig}
-            onStart={startDmxInput}
-            onStop={stopDmxInput}
-            onRemoveMapping={(index) => setDmxMappings((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-          />
-          </IoDisclosure>
-          <IoDisclosure
-            id="dmx-rdm"
-            summary="RDM tools"
-            description="Use only with an RDM-capable gateway or USB interface to discover, inspect, or send RDM."
-          >
-          <ArtRdmPanel
-            gatewayIp={output().target_ip}
-            portAddress={output().universe}
-            serialPorts={serialPorts()}
-            onRequest={sendArtRdmRequest}
-            onUsbRequest={sendUsbRdmRequest}
-            onUsbDiscover={discoverUsbRdmDevices}
-            onRefreshSerialPorts={refreshSerialPorts}
-            onDiscover={discoverArtRdmDevices}
-            onStartFullDiscovery={startArtRdmFullDiscovery}
-          />
-          </IoDisclosure>
-          <IoDisclosure
-            id="dmx-diagnostics"
-            summary="DMX diagnostics and test"
-            description="Test frames, raw monitor, telemetry, masters, and clock controls."
-            bodyClass="dmxDiagnosticsDisclosure"
-          >
-          <DmxRawMonitor
-            previews={dmxPreviewOptions()}
-            activeUniverse={activeDmxPreviewUniverse()}
-            activeCount={nonZeroDmxCount()}
-            cells={dmxCells()}
-            onUniverseChange={setRawDmxUniverse}
-          >
-            <Show when={visibleFunctionControls().length > 0}>
-              <div class="dmxGdtfFunctionReadout">
-                <ChannelFunctionPanel
-                  categoryLabel={activeControlCategoryLabel()}
-                  entries={visibleFunctionControls()}
-                  currentValue={currentControlValue}
-                  clampDmxValue={clampDmxValue}
-                  functionContainsValue={channelFunctionContainsValue}
-                  functionBandStyle={channelFunctionBandStyle}
-                  functionLabel={channelFunctionLabel}
-                  functionRangeLabel={channelFunctionRangeLabel}
-                  functionDetail={channelFunctionDetail}
-                  functionSwatchColor={channelFunctionSwatchColor}
-                  onApplyFunction={(control, fn) => void applyChannelFunction(control, fn)}
-                />
-              </div>
-            </Show>
-          </DmxRawMonitor>
-          <OutputDiagnosticsPanel
-            output={output()}
-            dsf2026ArtNetAcceptanceProbeStatus={dsf2026ArtNetAcceptanceProbeStatus}
-            protocolLabel={outputProtocolLabel(output().protocol)}
-            testChannel={dmxTestChannel()}
-            testWidth={dmxTestWidth()}
-            testValue={dmxTestValue()}
-            telemetry={snapshot().telemetry}
-            telemetryBudget={engineTelemetryReport()?.budget ?? null}
-            phase1SmokeReport={phase1SmokeReport()}
-            onTestChannel={setDmxTestChannel}
-            onTestWidth={setDmxTestWidth}
-            onTestValue={setDmxTestValue}
-            onSendTest={sendDmxTestFrame}
-            onSendRoutes={sendDmxRoutesTestFrame}
-            onSendDsf2026ArtNetAcceptanceProbe={sendDsf2026ArtNetAcceptanceProbe}
-            onAcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt={acknowledgeDsf2026ArtNetAcceptanceProbeInDoubt}
-            onResetTelemetry={resetEngineTelemetry}
-            onSaveTelemetryReport={saveEngineTelemetryReport}
-          />
-          </IoDisclosure>
-          </div>
-           </div>
-           </section>
-             ) : connection === "audio" ? (
-           <section class="ioUnifiedZone ioCompactZone" data-io-zone="audio">
-           <div class="ioOperatorSurface audioOperatorSurface">
-           <div
-             id="setup-audio-input"
-             class="setupAudioInput"
-             role="region"
-             aria-label="Audio input settings"
-             tabIndex={-1}
-           >
-             <div class="setupAudioInputHeader">
-               <strong>Audio Input</strong>
-               <span>Live analysis</span>
-             </div>
-             <LiveAudioInputRail {...liveAudioInputRailProps} compact />
-           </div>
-           <AudioOutputPanel
-             view={audioOutputController.view()}
-             options={audioOutputController.options()}
-             busy={audioOutputController.busy()}
-             canRefresh={audioOutputController.canRefresh()}
-             canRevalidate={audioOutputController.canRevalidate()}
-             canStart={audioOutputController.canStart()}
-             canStop={audioOutputController.canStop()}
-             canReturnToNormal={audioOutputController.canReturnToNormal()}
-             onBackendChange={audioOutputController.setBackend}
-             onDriverChange={audioOutputController.setDriver}
-             onSampleRateChange={audioOutputController.setSampleRate}
-             onBufferFramesChange={audioOutputController.setBufferFrames}
-             onProgramLeftChange={audioOutputController.setProgramLeft}
-             onProgramRightChange={audioOutputController.setProgramRight}
-             onCueChange={audioOutputController.setCue}
-             onSpareChange={audioOutputController.setSpare}
-             onRefresh={audioOutputController.refresh}
-             onRevalidate={audioOutputController.revalidate}
-             onStart={audioOutputController.start}
-             onStop={audioOutputController.stop}
-             onReturnToNormal={audioOutputController.returnToNormal}
-             timelineCueAudioStatus={timelineCueAudioStatus()}
-             timelineCueAudioMutationBusy={timelineCueAudioMutationBusy()}
-             timelineCueAudioLocalError={timelineCueAudioLocalError()}
-             onConfigureTimelineCueAudio={configureTimelineCueAudio}
-             onRefreshTimelineCueAudio={async () => { await refreshTimelineCueAudioStatus(true, true); }}
-           />
-           </div>
-           </section>
-             ) : connection === "midi" ? (
-          <section class="ioUnifiedZone ioCompactZone" data-io-zone="midi">
-          <MidiControlMappingPanel
-            snapshot={snapshot()}
-            midiInputs={midiInputs()}
-            selectedMidiInput={selectedMidiInput()}
-            clockConnected={midiConnected()}
-            midiOutputs={midiOutputs()}
-            selectedMidiOutput={selectedMidiOutput()}
-            feedbackConnected={midiFeedbackConnected()}
-            feedbackEnabled={midiFeedbackEnabled()}
-            feedbackOutputStatus={midiFeedbackOutputStatus()}
-            midiInputsCount={midiInputs().length}
-            controlConnected={midiControlConnected()}
-            mappings={midiMappings()}
-            mapMessage={midiMapMessage()}
-            mapNumber={midiMapNumber()}
-            mapChannel={midiMapChannel()}
-            mapAction={midiMapAction()}
-            mapAttribute={midiMapAttribute()}
-            clearFixtureFlagKind={midiClearFixtureFlagKind()}
-            selectedCueId={selectedMidiCueId()}
-            selectedEffectId={selectedMidiEffectId()}
-            selectedNodeGraphId={selectedMidiNodeGraphId()}
-            mapGroupId={midiMapGroupId()}
-            selectedLayerId={selectedMidiLayerId()}
-            selectedOutputId={selectedMidiVideoOutputId()}
-            selectedMappingField={selectedMidiVideoOutputMappingField()}
-            selectedMappingPresetLabel={selectedMidiVideoOutputMappingPresetLabel()}
-            mapVideoParam={midiMapVideoParam()}
-            mapCuePointIndex={midiMapCuePointIndex()}
-            mapDurationMs={midiMapDurationMs()}
-            mapLow={midiMapLow()}
-            mapHigh={midiMapHigh()}
-            mappingTargetLabel={controlMappingTargetLabel}
-            onRefreshMidi={() => {
-              void refreshMidiInputs();
-              void refreshMidiOutputs();
-            }}
-            onSelectedMidiInput={setSelectedMidiInput}
-            onConnectClock={connectMidiClock}
-            onDisconnectClock={disconnectMidiClock}
-            onSelectedMidiOutput={setSelectedMidiOutput}
-            onConnectFeedback={connectMidiFeedback}
-            onDisconnectFeedback={disconnectMidiFeedback}
-            onSendFeedback={sendMidiFeedback}
-            onFeedbackEnabled={setMidiFeedbackEnabled}
-            onMapMessage={setMidiMapMessage}
-            onMapNumber={setMidiMapNumber}
-            onMapChannel={setMidiMapChannel}
-            onMapAction={setMidiControlMappingAction}
-            onMapAttribute={setMidiMapAttribute}
-            onMapCueId={setMidiMapCueId}
-            onMapEffectId={setMidiMapEffectId}
-            onMapNodeGraphId={setMidiMapNodeGraphId}
-            onMapGroupId={setMidiMapGroupId}
-            onMapLayerId={setMidiMapLayerId}
-            onMapOutputId={setMidiMapVideoOutputId}
-            onMappingField={setMidiVideoOutputMappingFieldTarget}
-            onMappingPresetLabel={setMidiMapVideoOutputMappingPresetLabel}
-            onMapVideoParam={setMidiMapVideoParam}
-            onMapCuePointIndex={setMidiMapCuePointIndex}
-            onMapDurationMs={setMidiMapDurationMs}
-            onMapLow={setMidiMapLow}
-            onMapHigh={setMidiMapHigh}
-            learnBusy={controlLearnBusy()}
-            onStartControlLearn={() => { setWorkspaceTab("touch"); setControlLearnMode("midi"); }}
-            onLearn={learnMidiControl}
-            onAddMapping={addMidiMapping}
-            onConnectControl={async () => { await connectMidiControl(); }}
-            onDisconnectControl={async () => { await disconnectMidiControl(); }}
-            onLoadMappings={loadMidiMappings}
-            onSaveMappings={saveMidiMappings}
-            onRemoveMapping={removeMidiMapping}
-            onUpdateMapping={updateMidiMapping}
-          />
-          <MtcOutputSection backendAvailable={isTauriRuntime()} invokeCommand={invoke} midiOutputs={midiOutputs()} />
-          </section>
-            ) : connection === "osc" ? (
-          <section class="ioUnifiedZone ioCompactZone" data-io-zone="osc">
-          <OscControlMappingPanel
-            snapshot={snapshot()}
-            bindIp={oscBindIp()}
-            port={oscPort()}
-            running={oscRunning()}
-            mappings={oscMappings()}
-            mapAddress={oscMapAddress()}
-            mapAction={oscMapAction()}
-            mapAttribute={oscMapAttribute()}
-            clearFixtureFlagKind={oscClearFixtureFlagKind()}
-            selectedCueId={selectedOscCueId()}
-            selectedEffectId={selectedOscEffectId()}
-            selectedNodeGraphId={selectedOscNodeGraphId()}
-            mapGroupId={oscMapGroupId()}
-            selectedLayerId={selectedOscLayerId()}
-            selectedOutputId={selectedOscVideoOutputId()}
-            selectedMappingField={selectedOscVideoOutputMappingField()}
-            selectedMappingPresetLabel={selectedOscVideoOutputMappingPresetLabel()}
-            mapVideoParam={oscMapVideoParam()}
-            mapCuePointIndex={oscMapCuePointIndex()}
-            mapDurationMs={oscMapDurationMs()}
-            mapLow={oscMapLow()}
-            mapHigh={oscMapHigh()}
-            mappingTargetLabel={controlMappingTargetLabel}
-            onBindIp={setOscBindIp}
-            onPort={setOscPort}
-            onStart={startOscInput}
-            onStop={stopOscInput}
-            onMapAddress={setOscMapAddress}
-            onMapAction={setOscControlMappingAction}
-            onMapAttribute={setOscMapAttribute}
-            onMapCueId={setOscMapCueId}
-            onMapEffectId={setOscMapEffectId}
-            onMapNodeGraphId={setOscMapNodeGraphId}
-            onMapGroupId={setOscMapGroupId}
-            onMapLayerId={setOscMapLayerId}
-            onMapOutputId={setOscMapVideoOutputId}
-            onMappingField={setOscVideoOutputMappingFieldTarget}
-            onMappingPresetLabel={setOscMapVideoOutputMappingPresetLabel}
-            onMapVideoParam={setOscMapVideoParam}
-            onMapCuePointIndex={setOscMapCuePointIndex}
-            onMapDurationMs={setOscMapDurationMs}
-            onMapLow={setOscMapLow}
-            onMapHigh={setOscMapHigh}
-            onLearn={learnOscControl}
-            onAddMapping={addOscMapping}
-            onLoadMappings={loadOscMappings}
-            onSaveMappings={saveOscMappings}
-            onRemoveMapping={removeOscMapping}
-          />
-          </section>
-            ) : connection === "sync" ? (
-          <section class="ioUnifiedZone ioCompactZone" data-io-zone="sync">
-          <div class="ioOperatorSurface syncOperatorSurface">
-            <StandbySyncPanel backendAvailable={isTauriRuntime()} invokeCommand={invoke} />
-            <ShowClockStatusPanel backendAvailable={isTauriRuntime()} invokeCommand={invoke} />
-            <LtcInputPanel backendAvailable={isTauriRuntime()} invokeCommand={invoke} />
-          </div>
-          </section>
-            ) : (
-          <section class="ioUnifiedZone ioCompactZone" data-io-zone="remote">
-          <RemoteControlPanel
-            // Keep the selected remote surface direct in the fixed I/O
-            // workbench; its related safety, endpoint, standby, and DJ Link
-            // sections remain grouped below as disclosures.
-            surface={connection === "dj" ? "dj" : connection === "web" ? "web" : "all"}
-            backendAvailable={isTauriRuntime()}
-            invokeCommand={invoke}
-            bindIp={remoteBindIp()}
-            port={remotePort()}
-            pairingPin={remotePairingPin()}
-            allowLan={remoteAllowLan()}
-            maxConnections={remoteMaxConnections()}
-            maxMessageBytes={remoteMaxMessageBytes()}
-            maxMessagesPerSecond={remoteMaxMessagesPerSecond()}
-            djLinkEnabled={djLinkEnabled()}
-            djLinkMachineStatus={djLinkMachineStatus()}
-            djLinkWiredCandidates={djLinkWiredCandidates()}
-            djLinkWiredCandidateCount={djLinkWiredCandidateCount()}
-            djLinkWiredRefreshBusy={djLinkWiredRefreshBusy()}
-            djLinkWiredRefreshError={djLinkWiredRefreshError()}
-            djLinkSelectedBinding={djLinkSelectedBinding()}
-            djLinkToken={djLinkToken()}
-            djLinkTokenCopied={djLinkTokenCopied()}
-            djTrackTriggers={djTrackTriggers()}
-            timelineOptions={djTimelineOptions()}
-            listenerRunning={remoteRunning()}
-            listenerStatusHydrated={remoteStatusHydrated()}
-            genericRunning={genericRemoteRunning()}
-            djListenerRunning={djListenerRunning()}
-            djLinkTokenOperationBusy={djLinkTokenOperationBusy()}
-            djLinkOperatorReturnBusy={djLinkOperatorReturnBusy()}
-            remoteUrls={remoteUrls()}
-            status={remoteStatus()}
-            onBindIp={setRemoteBindIp}
-            onPort={setRemotePort}
-            onPairingPin={setRemotePairingPin}
-            onRegeneratePairingPin={() => {
-              const nextPin = createPairingPin();
-              if (!nextPin) {
-                setMessage("Secure pairing PIN generation is unavailable; the existing PIN was kept.");
-                return;
-              }
-              setRemotePairingPin(nextPin);
-            }}
-            onAllowLan={(value) => {
-              if (!value && djLinkEnabled()) {
-                setMessage("Disarm DJ Link before disabling trusted LAN access.");
-                return;
-              }
-              setRemoteAllowLan(value);
-              if (!value) {
-                setDjLinkBindIp(null);
-                setRemoteBindIp("127.0.0.1");
-              } else {
-                setRemoteBindIp(djLinkEnabled() ? (djLinkBindIp() ?? "0.0.0.0") : "0.0.0.0");
-              }
-            }}
-            onMaxConnections={setRemoteMaxConnections}
-            onMaxMessageBytes={setRemoteMaxMessageBytes}
-            onMaxMessagesPerSecond={setRemoteMaxMessagesPerSecond}
-            onDjLinkSelectedBinding={setDjLinkSelectedBinding}
-            onRefreshDjLinkWiredCandidates={refreshDjLinkWiredCandidates}
-            onArmDjLinkMachine={armDjLinkMachine}
-            onDisarmDjLinkMachine={disarmDjLinkMachine}
-            onRotateDjLinkToken={rotateDjLinkToken}
-            onCopyDjLinkToken={copyDjLinkToken}
-            onRequestDjLinkOperatorReturn={requestDjLinkOperatorReturn}
-            onDjTrackTriggers={setDjTrackTriggersFromPanel}
-            onCopyRemoteUrl={copyRemoteUrl}
-            onOpenRemoteUrl={openRemoteUrl}
-            onStart={startRemoteControl}
-            onStop={stopRemoteControl}
-            onDisconnectClient={disconnectRemoteClient}
-          />
-          </section>
-            )}
-          />
-        </aside>
-        </Show>
-      </section>
-
-      <Show when={
-        operatorLockMode() === "Full"
-          ? "Full"
-          : operatorLockMode() === "Partial" && (paneWindow === "setup" || paneWindow === "programmer")
-            ? "Partial"
-            : null
-      }>
-        {(mode) => (
-          <OperatorLockOverlay
-            mode={mode() as OperatorLockMode}
-            restrictedPane={mode() === "Partial"}
-            blackout={snapshot().safety_blackout_engaged}
-            onSetAllBlackout={() => void targetBlackout.engageSafetyBlackout()}
-            onUnlock={unlockOperator}
-          />
-        )}
-      </Show>
-
-      <AppStatusLine
-        status={appStatus()}
-        actionLabel={fixtureGroupDeleteUndoAvailable() ? "Undo group delete" : null}
-        onAction={fixtureGroupDeleteUndoAvailable() ? () => void undoDeleteFixtureGroup() : undefined}
-      />
-    </main>
+  const renderApp = (): JSX.Element => (
+    <AppWorkspaceView model={appWorkspaceModel} invokeCommand={invoke} />
   );
+  return { renderApp, persistentWorkspaceModel, setupIoModel, appWorkspaceModel };
 }
+
+
+export type PersistentWorkspaceViewModel = ReturnType<typeof createAppView>["persistentWorkspaceModel"];
+export type SetupIoWorkspaceViewModel = ReturnType<typeof createAppView>["setupIoModel"];
+
+export default function App() {
+  const outputWindowId = readVideoOutputWindowId();
+  if (outputWindowId !== null) {
+    return <VideoOutputWindow outputId={outputWindowId} testPattern={readVideoOutputTestPattern()} />;
+  }
+
+  return createAppView().renderApp();
+}
+
+export type AppWorkspaceViewModel = ReturnType<typeof createAppView>["appWorkspaceModel"];
+
+export type FrontendViewInvoke = typeof invoke;

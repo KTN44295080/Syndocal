@@ -1079,7 +1079,7 @@ const [
 ] = await Promise.all([
   read("src/tauriInvokeCommands.ts"),
   read("src/tauri-invoke-manifest.json"),
-  read("src/App.tsx"),
+  Promise.all(["src/App.tsx","src/components/AppWorkspaceView.tsx","src/components/PersistentWorkspaceView.tsx","src/components/SetupIoWorkspaceView.tsx"].map(read)).then((parts) => parts.join("\n")),
   read("src/components/StandbySyncPanel.tsx"),
   read("src/components/DmxOutputConfigPanel.tsx"),
   read("src/components/IoConnectionDeck.tsx"),

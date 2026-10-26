@@ -579,7 +579,9 @@ assert.deepEqual(
 // cadence health adds one route (505 total) and the read-only Media Health
 // folder listing select_media_relink_folder one more (506 total). NDI source discovery adds
 // one read-only route (507 total), T27 Audio runtime adds one route (508 total),
-// and canonical video output authoring adds three output-control routes (511 total),
+// and canonical video output authoring adds three output-control routes (511 total).
+// Project-qualified video authoring lease observation and replacement add two
+// local output-control routes in 2907a2ea (513 total),
 // with the exact 137/31 mutation
 // classifications checked against both App and control_plane.rs below.
 assert(manifest.includes("set_network_dmx_routes_v1"), "network universes must use the canonical output-control route");
@@ -599,7 +601,7 @@ assert(manifest.includes("get_live_video_output_health"), "native output cadence
 for (const command of ["add_external_output_v2", "configure_video_output_v2", "remove_video_output_v2"]) {
   assert(manifest.includes(command), `${command} must use canonical output authoring`);
 }
-assert.equal(manifest.length, 511, "frontend Tauri manifest count drifted");
+assert.equal(manifest.length, 513, "frontend Tauri manifest count drifted");
 assert.equal(backendRendererMutations.length, 137, "backend renderer-ticketed classification count drifted");
 assert.equal(backendServerMutations.length, 31, "backend authoritative classification count drifted");
 assert.deepEqual(

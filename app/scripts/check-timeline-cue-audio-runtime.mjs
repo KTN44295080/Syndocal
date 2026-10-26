@@ -5,7 +5,7 @@ import ts from "typescript";
 const appRoot = new URL("..", import.meta.url);
 const read = (path) => readFile(new URL(path, appRoot), "utf8");
 const controllerSource = await read("src/timelineCueAudioStatusSync.ts");
-const app = await read("src/App.tsx");
+const app = await Promise.all(["src/App.tsx","src/components/AppWorkspaceView.tsx","src/components/PersistentWorkspaceView.tsx","src/components/SetupIoWorkspaceView.tsx"].map(read)).then((parts) => parts.join("\n"));
 const editor = await read("src/components/TimelinePerformanceEditor.tsx");
 const routingPanel = await read("src/components/TimelineCueAudioRoutingPanel.tsx");
 const audioPanel = await read("src/components/AudioOutputPanel.tsx");

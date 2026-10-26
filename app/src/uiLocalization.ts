@@ -25,6 +25,8 @@ export const djLinkMachineBlockReasonText = (reason: string): string => ({
 }[reason] ?? "DJ Link is blocked until its machine authority can be verified.");
 
 const japaneseText: Record<string, string> = {
+  "Loading panel…": "パネルを読み込み中…",
+  "Panel could not load. Restart Syndocal and try again.": "パネルを読み込めませんでした。Syndocalを再起動して再試行してください。",
   "Image inputs": "画像入力",
   "None (transparent)": "なし（透明）",
   "Imported still": "読み込み画像",

@@ -35,7 +35,7 @@ const localization = await load("uiLocalization.ts");
 const shelfSource = await readFile(new URL("../src/components/TimelineSourceShelf.tsx", import.meta.url), "utf8");
 const matrixSource = await readFile(new URL("../src/components/SceneMatrixPanel.tsx", import.meta.url), "utf8");
 const cueManagementSource = await readFile(new URL("../src/components/CueManagementPanel.tsx", import.meta.url), "utf8");
-const appSource = (await readFile(new URL("../src/App.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+const appSource = ((await Promise.all(["../src/App.tsx","../src/components/AppWorkspaceView.tsx","../src/components/PersistentWorkspaceView.tsx","../src/components/SetupIoWorkspaceView.tsx"].map((path) => readFile(new URL(path, import.meta.url), "utf8")))).join("\n")).replace(/\r\n/g, "\n");
 const timelineCommandDispatchersSource = await readFile(new URL("../src/timelineCommandDispatchers.ts", import.meta.url), "utf8");
 const cssSource = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 const packageSource = await readFile(new URL("../package.json", import.meta.url), "utf8");

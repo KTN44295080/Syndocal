@@ -122,11 +122,11 @@ const selectors = {
   inspect: `${root} [data-video-perform-inspect]`,
   clipOptions: `${root} [data-video-perform-clip-options]`,
   blackout: "[data-global-operator-action='video-blackout']",
-  // Tempo has one home: the global top bar cluster, visible in every workspace.
+  // Shared-header contract (2026-10-22): tempo and sync are disclosed in Tools.
   tap: ".topbarTempoCluster [data-topbar-tap]",
   bpm: ".topbarTempoCluster .topbarBpmControl",
-  sync: ".topbarTempoCluster [data-topbar-sync]",
-  beats: ".topbarTempoCluster [data-topbar-sync] .topbarBeats",
+  sync: ".topbarToolsPopover [data-topbar-sync]",
+  beats: ".topbarToolsPopover [data-topbar-sync] .topbarBeats",
 };
 
 // Intersect every scroll/clipping ancestor as well as the viewport. A center
@@ -136,7 +136,7 @@ function inspectInPage(selector) {
   if (!element) return { selector, failure: "missing" };
   const rect = element.getBoundingClientRect();
   const style = getComputedStyle(element);
-  let failure = rect.width <= 0 || rect.height <= 0 || style.visibility !== "visible" || style.display === "none" ? "hidden" : null;
+  let failure = !element.checkVisibility() || rect.width <= 0 || rect.height <= 0 || style.visibility !== "visible" || style.display === "none" ? "hidden" : null;
   let clip = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
   // Modal dialogs paint in the top layer, outside their DOM ancestors' clips.
   // Keep viewport/hit checks and all clipping ancestors inside the modal.
@@ -222,7 +222,8 @@ const quickFxFocusSource = `
  import { VideoPerformQuickFx } from '/src/components/VideoPerformQuickFx.tsx';
  import '/src/theme.css';import '/src/styles.css';
  const control={name:'gain',kind:'Float',value:[0.5,0,0,0],default:[0.5,0,0,0],minimum:[0,0,0,0],maximum:[1,0,0,0],values:[],labels:[]};
- const [layer,setLayer]=createSignal({id:1,label:'Focus layer',isf_effect:{label:'Focus effect',enabled:true,controls:[control],stack:[]}});
+ const source='/*{"ISFVSN":"2","INPUTS":[{"NAME":"gain","TYPE":"float","DEFAULT":0.5,"MIN":0,"MAX":1}]}*/ void main(){gl_FragColor=vec4(gain,gain,gain,1.0);}';
+ const [layer,setLayer]=createSignal({id:1,label:'Focus layer',isf_effect:{label:'Focus effect',enabled:true,source,categories:[],controls:[control],stack:[]}});
  const calls=[];
  const replace=(value,enabled)=>setLayer({...structuredClone(layer()),label:'Updated FX layer',isf_effect:{...structuredClone(layer().isf_effect),enabled,controls:[{...structuredClone(control),value:[value,0,0,0]}]}});
  Object.assign(window,{__quickFxFocus:{
@@ -335,7 +336,8 @@ try {
       await writeFile(join(evidenceDir, `${label}-before.png`), Buffer.from((await cdp.capture( { format: "png", captureBeyondViewport: false, optimizeForSpeed: true }, 30_000)).data, "base64"));
       const inspect = (selector) => cdp.evaluate('('+inspectInPage+')('+JSON.stringify(selector)+')');
       const regions = ['matrix','transition','quick-fx','health','output'].map(name => root+' [data-video-perform-region="'+name+'"]');
-      const required = [...Object.values(selectors), ...regions];
+      const disclosedSelectors = [selectors.tap, selectors.bpm, selectors.sync, selectors.beats];
+      const required = [...Object.values(selectors).filter(selector => !disclosedSelectors.includes(selector)), ...regions];
       const geometry = [];
       for (const selector of required) {
         const measurement = await inspect(selector); geometry.push(measurement);
@@ -349,14 +351,54 @@ try {
       assert.ok(headerOrder, label+': health region is rendered inside the Perform pane header');
       assert.ok(headerOrder.healthLeft >= headerOrder.titleRight - 1 && headerOrder.healthRight <= headerOrder.legendLeft + 1, label+': health sits between title and shortcuts in the pane header '+JSON.stringify(headerOrder));
       assert.equal(headerOrder.standalone, false, label+': no separate bottom health row');
-      // One tempo cluster: the Perform desk no longer carries its own BPM, Tap, sync or beat lights.
-      const tempo = await cdp.evaluate('(()=>{const vis=(e)=>{const r=e.getBoundingClientRect();const s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility==="visible"&&s.display!=="none"};const count=(q)=>[...document.querySelectorAll(q)].filter(vis).length;const rect=(q)=>{const r=document.querySelector(q)?.getBoundingClientRect();return r&&{left:r.left,right:r.right,top:r.top,bottom:r.bottom}};const sync=document.querySelector("[data-topbar-sync]");const dots=[...(sync?.querySelectorAll(".topbarBeats i")??[])];const lit=dots.map((d,i)=>d.classList.contains("lit")?i:-1).filter(i=>i>=0);const top=document.querySelector(".topbar");const fits=(q)=>{const e=document.querySelector(q);if(!e)return false;const range=document.createRange();range.selectNodeContents(e);return range.getBoundingClientRect().width<=e.getBoundingClientRect().width+1&&e.scrollWidth<=e.clientWidth+1};return {tap:count("[data-topbar-tap]"),tapTargets:count("[data-control-map-target*=\\\"TapBpm\\\"]"),bpm:count(".topbarBpmControl"),bpmTargets:count("[data-control-map-target*=\\\"SetBpm\\\"]"),deskTempo:document.querySelectorAll("[data-video-perform-layout] [data-video-perform-tap], [data-video-perform-layout] [data-video-perform-region=tempo], [data-video-perform-layout] .videoPerformTempo, [data-video-perform-layout] input[aria-label*=BPM]").length,tapWords:[...document.querySelectorAll("button")].filter(b=>vis(b)&&/^(Tap|タップ)$/.test(b.textContent.trim())).length,dots:dots.length,lit,beat:Number(sync?.querySelector(".topbarBeats")?.dataset.topbarBeat),source:sync?.querySelector(".topbarSyncSource")?.textContent.trim(),status:sync?.querySelector(".topbarSyncStatus")?.textContent.trim(),title:sync?.title,sourceFits:fits("[data-topbar-sync] .topbarSyncSource"),statusFits:fits("[data-topbar-sync] .topbarSyncStatus")&&fits("[data-topbar-sync] .topbarSyncRow"),cluster:rect(".topbarTempoCluster"),state:rect(".topbarStateCluster"),windowControls:rect("[data-window-controls]"),topbarOverflow:top.scrollWidth-top.clientWidth,viewportWidth:innerWidth}})()');
+      // Tools starts closed. Exercise its real keyboard disclosure before checking
+      // tempo geometry; closed <details> descendants can retain stale rectangles.
+      assert.equal(await cdp.evaluate('document.querySelector(".topbarTools").open'), false, label+': Tools starts closed');
+      assert.equal((await inspect(selectors.tap)).failure, 'hidden', label+': Tap is disclosed, not a hidden header target');
+      assert.equal((await inspect('.topbarTools > summary')).failure, null, label+': Tools trigger is reachable');
+      await cdp.evaluate('document.querySelector(".topbarTools > summary").focus()');
+      await cdp.key('Enter', 'Enter', 13);
+      await waitFor(() => cdp.evaluate('document.querySelector(".topbarTools").open'), label+': Tools opens by keyboard');
+      for (const selector of disclosedSelectors) {
+        const measurement = await inspect(selector); geometry.push(measurement);
+        assert.equal(measurement.failure, null, label+': disclosed '+JSON.stringify(measurement));
+        if (selector === selectors.tap) assert.ok(measurement.width >= 40 && measurement.height >= 40, label+': preserved 40px Tap target');
+      }
+      let tapReached = false;
+      for (let attempt = 0; attempt < 40 && !tapReached; attempt++) {
+        await cdp.key('Tab', 'Tab', 9);
+        tapReached = await cdp.evaluate('document.activeElement?.matches("[data-topbar-tap]")');
+      }
+      assert.equal(tapReached, true, label+': disclosed Tap is reachable by Tab');
+      // One tempo cluster: the Perform desk carries no duplicate tempo controls.
+      const tempo = await cdp.evaluate('(()=>{const vis=(e)=>{const r=e.getBoundingClientRect();const s=getComputedStyle(e);return e.checkVisibility()&&r.width>0&&r.height>0&&s.visibility==="visible"&&s.display!=="none"};const count=(q)=>[...document.querySelectorAll(q)].filter(vis).length;const rect=(q)=>{const r=document.querySelector(q)?.getBoundingClientRect();return r&&{left:r.left,right:r.right,top:r.top,bottom:r.bottom}};const sync=document.querySelector("[data-topbar-sync]");const dots=[...(sync?.querySelectorAll(".topbarBeats i")??[])];const lit=dots.map((d,i)=>d.classList.contains("lit")?i:-1).filter(i=>i>=0);const top=document.querySelector(".topbar");const fits=(q)=>{const e=document.querySelector(q);if(!e)return false;const range=document.createRange();range.selectNodeContents(e);return range.getBoundingClientRect().width<=e.getBoundingClientRect().width+1&&e.scrollWidth<=e.clientWidth+1};return {tap:count("[data-topbar-tap]"),tapTargets:count("[data-control-map-target*=\\\"TapBpm\\\"]"),bpm:count(".topbarBpmControl"),bpmTargets:count("[data-control-map-target*=\\\"SetBpm\\\"]"),deskTempo:document.querySelectorAll("[data-video-perform-layout] [data-video-perform-tap], [data-video-perform-layout] [data-video-perform-region=tempo], [data-video-perform-layout] .videoPerformTempo, [data-video-perform-layout] input[aria-label*=BPM]").length,tapWords:[...document.querySelectorAll("button")].filter(b=>vis(b)&&/^(Tap|タップ)$/.test(b.textContent.trim())).length,dots:dots.length,lit,beat:Number(sync?.querySelector(".topbarBeats")?.dataset.topbarBeat),source:sync?.querySelector(".topbarSyncSource")?.textContent.trim(),status:sync?.querySelector(".topbarSyncStatus")?.textContent.trim(),title:sync?.title,sourceFits:fits("[data-topbar-sync] .topbarSyncSource"),statusFits:fits("[data-topbar-sync] .topbarSyncStatus")&&fits("[data-topbar-sync] .topbarSyncRow"),cluster:rect(".topbarTempoCluster"),state:rect(".topbarStateCluster"),windowControls:rect("[data-window-controls]"),topbarOverflow:top.scrollWidth-top.clientWidth,viewportWidth:innerWidth}})()');
       assert.deepEqual([tempo.tap, tempo.tapTargets, tempo.tapWords, tempo.bpm, tempo.bpmTargets, tempo.deskTempo], [1, 1, 1, 1, 1, 0], label+': exactly one Tap and one BPM control, none on the Perform desk '+JSON.stringify(tempo));
       assert.equal(tempo.dots, 4, label+': four beat lights '+JSON.stringify(tempo));
       assert.deepEqual(tempo.lit, [tempo.beat % 4], label+': exactly the current beat is lit '+JSON.stringify(tempo));
       assert.ok(tempo.source && tempo.status && tempo.title?.includes(tempo.source) && tempo.title.includes(tempo.status), label+': sync source and status are shown and carried in title '+JSON.stringify(tempo));
       assert.ok(tempo.sourceFits && tempo.statusFits, label+': sync text is not truncated '+JSON.stringify(tempo));
-      assert.ok(tempo.cluster.right <= tempo.state.left + 1 && tempo.state.right <= tempo.windowControls.left + 1 && tempo.windowControls.right <= tempo.viewportWidth + 1 && tempo.topbarOverflow <= 0, label+': top bar tempo cluster fits without overlap or overflow '+JSON.stringify(tempo));
+      assert.ok(tempo.cluster && tempo.windowControls.right <= tempo.viewportWidth + 1 && tempo.topbarOverflow <= 0, label+': disclosed tempo and shared header fit without overflow '+JSON.stringify(tempo));
+      const headerGeometry = await cdp.evaluate(`(() => {
+        const header = document.querySelector('.topbar'), bounds = header.getBoundingClientRect();
+        const items = [...header.querySelectorAll('button, .topbarTools > summary, .topbarProject > strong, .topbarProject > span')]
+          .filter(el => el.checkVisibility() && !el.closest('.topbarToolsPopover'))
+          .map(el => ({label: el.getAttribute('aria-label') || el.textContent.trim(), rect: el.getBoundingClientRect().toJSON()}));
+        const overlaps = [];
+        const intersects = (a, b) => Math.min(a.right,b.right)-Math.max(a.left,b.left)>1 && Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>1;
+        items.forEach((a, i) => items.slice(i+1).forEach(b => { if(intersects(a.rect,b.rect)) overlaps.push([a.label,b.label]); }));
+        const cluster = document.querySelector('.topbarTempoCluster').getBoundingClientRect();
+        const sync = document.querySelector('[data-topbar-sync]').getBoundingClientRect();
+        return {overlaps, contained: items.every(({rect:r}) => r.left>=bounds.left-1 && r.right<=bounds.right+1 && r.top>=bounds.top-1 && r.bottom<=bounds.bottom+1),
+          tempoSyncOverlap: intersects(cluster,sync), rows: getComputedStyle(header).gridTemplateRows.split(' ').length};
+      })()`);
+      assert.deepEqual(headerGeometry.overlaps, [], label+': shared header items do not overlap');
+      assert.equal(headerGeometry.contained, true, label+': shared header items are contained');
+      assert.equal(headerGeometry.tempoSyncOverlap, false, label+': disclosed tempo and sync do not overlap');
+      assert.equal(headerGeometry.rows, 1, label+': shared header retains one row');
+      await writeFile(join(evidenceDir, `${label}-tools.png`), Buffer.from((await cdp.capture({ format: "png", captureBeyondViewport: false })).data, "base64"));
+      await cdp.key('Escape', 'Escape', 27);
+      assert.equal(await cdp.evaluate('document.querySelector(".topbarTools").open'), false, label+': Escape closes Tools');
+      assert.equal(await cdp.evaluate('document.activeElement?.matches(".topbarTools > summary")'), true, label+': Escape restores Tools trigger focus');
       const rowSelector=root+' [data-video-perform-row="1"]';
       // Every Perform control is MIDI/OSC/DMX-learnable with stable ids: clip, Take, Stop, blend, transition type and time.
       const learnTargets = await cdp.evaluate('(()=>{const read=(q)=>{try{const t=JSON.parse(document.querySelector(q)?.dataset.controlMapTarget??"null");return t&&t[0]}catch{return null}};return {pad:read('+JSON.stringify(selectors.launch)+'),stop:read('+JSON.stringify(root+' [data-video-perform-row="1"] [data-video-layer-stop]')+'),blend:read('+JSON.stringify(root+' [data-video-perform-row="1"] [data-video-layer-blend]')+'),take:read('+JSON.stringify(selectors.take)+'),kind:read('+JSON.stringify(selectors.transitionKind)+'),time:read('+JSON.stringify(selectors.transitionDuration)+'),padSlotId:Number(document.querySelector('+JSON.stringify(selectors.launch)+')?.closest("[data-video-clip-slot-id]")?.dataset.videoClipSlotId)}})()');
@@ -513,6 +555,9 @@ try {
       assert.ok(fxTab.stageHeight >= 44 && fxTab.rangeHeight >= 44, label+': FX stage rows and parameter controls keep 44px targets '+JSON.stringify(fxTab));
       assert.ok(fxTab.value && fxTab.value.length > 0, label+': FX parameters show their value '+JSON.stringify(fxTab));
       assert.equal((await inspect(root+' [data-perform-fx-stage="0"] [data-perform-fx-bypass]')).failure, null, label+': stage toggle fully visible');
+      // The Inspector parameter column scrolls internally on short windows.
+      // Exercise that user path before requiring the complete, unobstructed target.
+      await cdp.evaluate('document.querySelector('+JSON.stringify(root+' [data-perform-fx-control] input')+').scrollIntoView({block:"nearest",inline:"nearest"})');
       assert.equal((await inspect(root+' [data-perform-fx-control] input')).failure, null, label+': first parameter fully visible');
       // ---- Inspector tabs switch; the Clip tab embeds the existing Clip Inspector without a modal. ----
       const tabState = () => cdp.evaluate('({selected:[...document.querySelectorAll("[data-video-perform-inspector-tab]")].filter(t=>t.getAttribute("aria-selected")==="true").map(t=>t.dataset.videoPerformInspectorTab),panel:document.querySelector("[data-video-perform-inspector-panel]")?.dataset.videoPerformInspectorPanel,clip:!!document.querySelector("[data-video-clip-slot-inspector-embedded]"),clipDialog:!!document.querySelector("[data-video-clip-slot-inspector][role=dialog]"),browser:!!document.querySelector("[data-video-perform-effect-browser]"),fx:!!document.querySelector("[data-perform-quick-fx]")})');
@@ -655,7 +700,7 @@ try {
       const focus = (selector) => cdp.evaluate('document.querySelector('+JSON.stringify(selector)+').focus({preventScroll:true})');
       // Real Tab traversal catches hidden tab stops, focus traps and omitted controls.
       await cdp.evaluate('document.activeElement?.blur()');
-      const tabCandidates=[root+' [data-video-perform-cell-index][tabindex="0"]',selectors.master,selectors.take,selectors.tap,selectors.guardedBlackout,selectors.legend,selectors.inspect,selectors.clipOptions,rowSelector+' [data-video-layer-opacity]',rowSelector+' [data-video-layer-blend]'];
+      const tabCandidates=[root+' [data-video-perform-cell-index][tabindex="0"]',selectors.master,selectors.take,'.topbarTools > summary',selectors.guardedBlackout,selectors.legend,selectors.inspect,selectors.clipOptions,rowSelector+' [data-video-layer-opacity]',rowSelector+' [data-video-layer-blend]'];
       const tabTargets=[];for(const selector of tabCandidates)if(!(await inspect(selector)).disabled)tabTargets.push(selector);
       const reached=new Set();
       for(let attempt=0;attempt<220&&reached.size<tabTargets.length;attempt++){
@@ -686,66 +731,48 @@ try {
       assert.notEqual((await inspect(blend)).value,beforeBlend,label+': blend keyboard changes');
       const beforeMaster=(await inspect(selectors.master)).value;await focus(selectors.master);await cdp.key('ArrowLeft','ArrowLeft',37);
       assert.notEqual((await inspect(selectors.master)).value,beforeMaster,label+': master keyboard changes');
-      // The deliberate confirmation is the in-app dialog (never a browser prompt):
-      // no command may escape the guard, and nothing browser-native may open.
-      const dlg='[data-in-app-dialog]',dlgCancel=dlg+' [data-in-app-dialog-cancel]',dlgConfirm=dlg+' [data-in-app-dialog-confirm]';
+      // Owner decision 77d8c8b4: live Blackout and show-time New Project act
+      // without confirmation. This browser has no backend: prove immediate
+      // backend-required refusal and unchanged authoritative state, not a toggle.
+      const dlg='[data-in-app-dialog]';
       const blackoutState=()=>cdp.evaluate('document.querySelector('+JSON.stringify(selectors.guardedBlackout)+').getAttribute("aria-pressed")');
       const dialogOpen=()=>cdp.evaluate('!!document.querySelector('+JSON.stringify(dlg+'[open]')+')');
       const dialogsBefore=cdp.dialogs.length;
       const blackoutBefore=await blackoutState();
+      const backendRefusal=()=>cdp.evaluate('document.querySelector(".appStatusLine .appStatusText")?.textContent.includes("Syndocal desktop backend is not connected in this browser preview.")');
+      // Seed a distinct real UI status before every action, so a stale failure
+      // from an earlier command cannot satisfy the immediate-dispatch assertion.
+      const prepareImmediateAction=async()=>{
+        await cdp.evaluate('window.__syndocalOutputDriveFixture="standby"');
+        await waitFor(()=>cdp.evaluate('document.querySelector('+JSON.stringify(selectors.guardedBlackout)+').getAttribute("aria-disabled")==="true"'),label+': prepare blocked state');
+        await focus(selectors.guardedBlackout);await cdp.key('Enter','Enter',13);
+        await waitFor(()=>cdp.evaluate('!!document.querySelector(".appStatusLine[data-status-key=blackout-unavailable]")'),label+': prepare distinct refusal');
+        await cdp.evaluate('window.__syndocalOutputDriveFixture="driving"');
+        await waitFor(()=>cdp.evaluate('!document.querySelector(".appStatusLine[data-status-key=blackout-unavailable]")&&!document.querySelector('+JSON.stringify(selectors.guardedBlackout)+').hasAttribute("data-blackout-blocked")'),label+': prepare driving state');
+        assert.equal(Boolean(await backendRefusal()),false,label+': no stale backend refusal before action');
+      };
+      const assertImmediateRefusal=async(action)=>{
+        await waitFor(backendRefusal,label+': '+action+' immediately reaches the desktop-required path');
+        assert.equal(await dialogOpen(),false,label+': '+action+' does not ask for confirmation');
+        assert.equal(await blackoutState(),blackoutBefore,label+': '+action+' cannot change authoritative blackout without a backend');
+        assert.equal(cdp.dialogs.length,dialogsBefore,label+': '+action+' never opens a browser dialog');
+      };
+      await prepareImmediateAction();
       await focus(selectors.guardedBlackout);await cdp.key('Enter','Enter',13);
-      await waitFor(dialogOpen,label+': in-app blackout dialog opens');
-      const shown=await cdp.evaluate('(()=>{const d=document.querySelector('+JSON.stringify(dlg)+');const r=d.getBoundingClientRect();const title=document.getElementById(d.getAttribute("aria-labelledby"));const detail=document.getElementById(d.getAttribute("aria-describedby"));return {role:d.getAttribute("role"),modal:d.matches(":modal"),ariaModal:d.getAttribute("aria-modal"),tone:d.dataset.tone,title:title?.innerText,detail:detail?.innerText,focus:document.activeElement?.matches("[data-in-app-dialog-cancel]"),hazard:!!d.querySelector(".inAppDialogHazard"),inside:r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight,buttons:[...d.querySelectorAll("button")].map(b=>({text:b.innerText.trim(),h:Math.round(b.getBoundingClientRect().height),w:Math.round(b.getBoundingClientRect().width)}))}})()');
-      assert.equal(shown.role,'alertdialog',label+': dialog role');
-      assert.ok(shown.modal&&shown.ariaModal==='true',label+': dialog is modal');
-      assert.equal(shown.tone,'danger',label+': blackout is a danger dialog');
-      assert.ok(shown.hazard,label+': danger dialog carries the hazard stripe');
-      assert.ok(shown.inside,label+': dialog fits the viewport');
-      assert.ok(shown.focus,label+': a danger dialog starts focused on Cancel');
-      assert.ok(shown.buttons.length===2&&shown.buttons.every(b=>b.h>=44&&b.w>=44),label+': dialog targets are at least 44px '+JSON.stringify(shown.buttons));
-      if(locale==='ja'){assert.match(shown.title,/ブラックアウト/,label+': Japanese blackout title');assert.match(shown.detail,/即座/,label+': Japanese consequence');}
-      else{assert.match(shown.title,/Blackout video output\?/,label+': English blackout title');assert.match(shown.detail,/Program goes black immediately/,label+': English consequence');}
-      await writeFile(join(evidenceDir,label+'-blackout-dialog.png'),Buffer.from((await cdp.capture({format:'png',captureBeyondViewport:false})).data,'base64'));
-      // Perform and global shortcuts are suspended while the question is open.
-      await cdp.key('?','Slash');
-      assert.equal(await cdp.evaluate('!!document.querySelector("[data-video-perform-legend][open]")'),false,label+': Perform shortcuts are suspended under the dialog');
-      // Focus is trapped: Tab never leaves the dialog.
-      for(let i=0;i<5;i++){await cdp.key('Tab','Tab',9);assert.ok(await cdp.evaluate('document.activeElement?.closest("[data-in-app-dialog]")!==null'),label+': Tab stays inside the dialog');}
-      await focus(dlgCancel);
-      // Enter with focus on Cancel does nothing harmful and closes the question.
-      await cdp.key('Enter','Enter',13);
-      await waitFor(async()=>!(await dialogOpen()),label+': Enter on Cancel closes the dialog');
-      assert.equal(await blackoutState(),blackoutBefore,label+': Enter on Cancel preserves blackout');
-      assert.ok(await cdp.evaluate('document.activeElement?.matches('+JSON.stringify(selectors.guardedBlackout)+')'),label+': focus returns to the Blackout key');
-      // Escape cancels too.
-      await cdp.key('Enter','Enter',13);await waitFor(dialogOpen,label+': dialog reopens');
-      await cdp.key('Escape','Escape',27);
-      await waitFor(async()=>!(await dialogOpen()),label+': Escape cancels');
-      assert.equal(await blackoutState(),blackoutBefore,label+': Escape preserves blackout');
-      // Ctrl+Shift+B opens the same guarded dialog.
+      await assertImmediateRefusal('Blackout Enter');
+      await writeFile(join(evidenceDir,label+'-blackout-immediate.png'),Buffer.from((await cdp.capture({format:'png',captureBeyondViewport:false})).data,'base64'));
+      await prepareImmediateAction();
       await cdp.evaluate('document.activeElement?.blur()');
       await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'B',code:'KeyB',windowsVirtualKeyCode:66,modifiers:10});
       await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'B',code:'KeyB',windowsVirtualKeyCode:66,modifiers:10});
-      await waitFor(dialogOpen,label+': Ctrl+Shift+B opens the same guarded dialog');
-      assert.equal(await cdp.evaluate('document.querySelector('+JSON.stringify(dlg)+').dataset.tone'),'danger',label+': Ctrl+Shift+B dialog is the danger dialog');
-      await focus(dlgCancel);await cdp.key('Enter','Enter',13);
-      await waitFor(async()=>!(await dialogOpen()),label+': Ctrl+Shift+B dialog cancels');
-      assert.equal(await blackoutState(),blackoutBefore,label+': Ctrl+Shift+B cancel preserves blackout');
-      // New Project in Perform asks in the app as well (Ctrl+N); declining changes nothing.
+      await assertImmediateRefusal('Ctrl+Shift+B');
+      // This clean fixture has no unsaved draft. The separate unsaved-data
+      // protection remains covered by the canonical destructive-actions check.
+      await prepareImmediateAction();
       await cdp.evaluate('document.activeElement?.blur()');
       await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'n',code:'KeyN',windowsVirtualKeyCode:78,modifiers:2});
       await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'n',code:'KeyN',windowsVirtualKeyCode:78,modifiers:2});
-      await waitFor(dialogOpen,label+': New Project in Perform opens the in-app dialog');
-      const newProjectDialog=await cdp.evaluate('(()=>{const d=document.querySelector('+JSON.stringify(dlg)+');return {title:document.getElementById(d.getAttribute("aria-labelledby")).innerText,tone:d.dataset.tone,cancelFocused:document.activeElement?.matches("[data-in-app-dialog-cancel]")}})()');
-      assert.match(newProjectDialog.title,locale==='ja'?/新規プロジェクト/:/new project/i,label+': New Project dialog wording');
-      assert.ok(newProjectDialog.tone==='danger'&&newProjectDialog.cancelFocused,label+': New Project dialog starts on Cancel');
-      await cdp.key('Escape','Escape',27);
-      await waitFor(async()=>!(await dialogOpen()),label+': declining New Project closes the dialog');
-      // Confirming proceeds to the existing blackout path (the browser preview has no desktop backend).
-      await focus(selectors.guardedBlackout);await cdp.key('Enter','Enter',13);await waitFor(dialogOpen,label+': dialog opens for confirmation');
-      await cdp.evaluate('document.querySelector('+JSON.stringify(dlgConfirm)+').click()');
-      await waitFor(async()=>!(await dialogOpen()),label+': Confirm closes the dialog');
-      assert.equal(cdp.dialogs.length,dialogsBefore,label+': no browser dialog ("tauri.localhost says") ever opened');
+      await assertImmediateRefusal('clean New Project in Perform');
       // Standby: this machine is not driving outputs. The operator learns that before acting:
       // the keys stay visible and focusable but read as unavailable, activating one explains
       // instead of opening a confirmation that can only fail, and the footer note retires itself.
@@ -793,11 +820,9 @@ try {
         // The note describes the previous state: it retires when the state changes.
         await setDrive('driving');
         await waitFor(()=>cdp.evaluate('!document.querySelector('+JSON.stringify(footer)+')&&!document.querySelector('+JSON.stringify(selectors.guardedBlackout)+').hasAttribute("data-blackout-blocked")'),label+': the refusal retires from the status line once outputs are driven again');
-        // The emergency path is intact again: the same key asks, then proceeds.
+        // Driving restores the immediate emergency path, without a question.
         await focus(selectors.guardedBlackout);await cdp.key('Enter','Enter',13);
-        await waitFor(dialogOpen,label+': Blackout confirms again once this machine drives outputs');
-        await focus(dlgCancel);await cdp.key('Enter','Enter',13);
-        await waitFor(async()=>!(await dialogOpen()),label+': the restored confirmation can be declined');
+        await assertImmediateRefusal('Blackout after Standby');
         await setDrive(undefined);
         assert.equal(cdp.dialogs.length,dialogsBefore,label+': Standby handling never opens a browser dialog');
       }
@@ -1013,24 +1038,15 @@ try {
   await cdp.key('Enter','Enter',13);
   assert.deepEqual(await cdp.evaluate('window.__matrixFocus.effectAdds'),[['builtin:invert',2]],currentCase+': catalog Enter adds the exact effect to layer 2');
   assert.equal(await cdp.evaluate('window.__matrixFocus.takes.length'),2,currentCase+': catalog Enter never Takes a queued clip');
-  // Dragging a card onto a layer row adds to that exact row after a visible LIVE confirmation; declining adds nothing.
+  // Owner decision 77d8c8b4: adding FX to a LIVE layer dispatches immediately,
+  // without confirmation. Prove one exact destination/add, not a dialog cycle.
   const dropOnRow = (layer, payload) => cdp.evaluate(`(()=>{const row=document.querySelector('[data-video-perform-row="${layer}"]');const dt=new DataTransfer();dt.setData('application/x-syndocal-fx',${JSON.stringify(payload)});const over=new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:dt});row.dispatchEvent(over);row.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:dt}));return over.defaultPrevented})()`);
   cdp.dialogs.length = 0;
   const inApp = '[data-in-app-dialog]';
   assert.equal(await dropOnRow(3, 'builtin:mirror'), true, currentCase+': a layer row accepts effect drops');
-  await waitFor(() => cdp.evaluate(`!!document.querySelector('${inApp}[open]')`), currentCase+': a row drop asks for confirmation in the app');
-  const dropDialog = await cdp.evaluate(`(()=>{const d=document.querySelector('${inApp}');return {title:document.getElementById(d.getAttribute('aria-labelledby')).innerText,detail:document.getElementById(d.getAttribute('aria-describedby')).innerText,tone:d.dataset.tone}})()`);
-  assert.match(dropDialog.title, /Layer 3/, currentCase+': confirmation names the destination layer');
-  assert.match(dropDialog.detail, /LIVE/, currentCase+': confirmation states the LIVE consequence');
-  assert.equal(cdp.dialogs.length, 0, currentCase+': the confirmation is never a browser dialog');
-  await cdp.evaluate(`document.querySelector('${inApp} [data-in-app-dialog-cancel]').click()`);
-  await waitFor(() => cdp.evaluate(`!document.querySelector('${inApp}[open]')`), currentCase+': declining closes the dialog');
-  assert.equal((await cdp.evaluate('window.__matrixFocus.effectAdds')).length, 1, currentCase+': declined drop adds nothing');
-  await dropOnRow(3, 'builtin:mirror');
-  await waitFor(() => cdp.evaluate(`!!document.querySelector('${inApp}[open]')`), currentCase+': the second drop asks again');
-  await cdp.evaluate(`document.querySelector('${inApp} [data-in-app-dialog-confirm]').click()`);
-  await waitFor(() => cdp.evaluate(`!document.querySelector('${inApp}[open]')`), currentCase+': accepting closes the dialog');
-  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.effectAdds'), [['builtin:invert',2],['builtin:mirror',3]], currentCase+': accepted drop adds the exact card to the dropped row');
+  assert.deepEqual(await cdp.evaluate('window.__matrixFocus.effectAdds'), [['builtin:invert',2],['builtin:mirror',3]], currentCase+': one drop immediately adds the exact card once to the dropped row');
+  assert.equal(await cdp.evaluate(`!!document.querySelector('${inApp}[open]')`), false, currentCase+': a LIVE FX drop does not ask for confirmation in the app');
+  assert.equal(cdp.dialogs.length, 0, currentCase+': a LIVE FX drop never opens a browser dialog');
   await dropOnRow(3, 'builtin:unknown-or-untrusted-source');
   assert.equal((await cdp.evaluate('window.__matrixFocus.effectAdds')).length, 2, currentCase+': an unknown drag payload adds nothing');
   await cdp.evaluate("window.__catalogFocus=document.querySelector('[data-fx-catalog-search]');window.__catalogFocus.focus();window.__matrixFocus.replaceLayer();true");

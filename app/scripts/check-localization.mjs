@@ -950,7 +950,7 @@ assert.match(
   /Armed:\s*<span data-no-localize>\{cue\(\)\.label\}<\/span>/,
   "armed Timeline cue names must remain authored user data when a label matches UI copy such as New Scene",
 );
-const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const appSource = (await Promise.all(["../src/App.tsx","../src/components/AppWorkspaceView.tsx","../src/components/PersistentWorkspaceView.tsx","../src/components/SetupIoWorkspaceView.tsx"].map((path) => readFile(new URL(path, import.meta.url), "utf8")))).join("\n");
 assert.match(
   appSource,
   /overviewMarkerAriaLabel=\{\(event\) => timelineOverviewMarkerAriaLabel\(event, uiLocale\(\)\)\}/,

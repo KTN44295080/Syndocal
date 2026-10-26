@@ -169,7 +169,7 @@ for (const [mode,domain] of [["perform","video"],["both","both"]]) {
 {
   const panelSource = await readFile(new URL("../src/components/ControlTimelinePlaybackPanel.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(panelSource, /@tauri-apps|invoke\s*\(|from "\.\.\/App"/, "playback panel owns no backend call");
-  const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const appSource = (await Promise.all(["../src/App.tsx","../src/components/AppWorkspaceView.tsx","../src/components/PersistentWorkspaceView.tsx","../src/components/SetupIoWorkspaceView.tsx"].map((path) => readFile(new URL(path, import.meta.url), "utf8")))).join("\n");
   const panelUse = appSource.slice(appSource.indexOf("<ControlTimelinePlaybackPanel"), appSource.indexOf("/>", appSource.indexOf("onOpenTimelineEditor")));
   for (const [prop, command] of [["onGo","triggerNextCue"],["onBack","triggerPreviousCue"],["onTriggerCue","triggerCue"],["onPlay","playTimeline"],["onPause","pauseTimeline"],["onSeek","seekTimeline"],["onSetBlackout","setBlackout"],["onSetVideoBlackout","requestPerformVideoBlackout"],["onSetAllBlackout","setAllBlackout"],["onToggleFadePause","setCueFadePaused"],["onRelease","releaseCueById"]]) {
     assert.match(panelUse, new RegExp(`${prop}=[^\\n]*${command}|${prop}=\\{[\\s\\S]*?${command}`), `${prop} uses ${command}`);

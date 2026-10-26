@@ -4629,6 +4629,10 @@ pub struct RemoteWsServer {
     dj_link_connections: Arc<AtomicU64>,
     #[cfg(test)]
     local_addr: std::net::SocketAddr,
+    #[cfg(test)]
+    next_worker_id: Arc<AtomicU64>,
+    #[cfg(test)]
+    worker_start_gate: Arc<Mutex<()>>,
 }
 
 struct RemoteClientState {
@@ -4916,6 +4920,10 @@ impl RemoteWsServer {
         let thread_client_workers = Arc::clone(&client_workers);
         let thread_shutdown_sockets = Arc::clone(&shutdown_sockets);
         let thread_next_worker_id = Arc::clone(&next_worker_id);
+        #[cfg(test)]
+        let worker_start_gate = Arc::new(Mutex::new(()));
+        #[cfg(test)]
+        let thread_worker_start_gate = Arc::clone(&worker_start_gate);
         let thread = thread::Builder::new()
             .name("syndocal-remote-ws".to_string())
             .spawn(move || {
@@ -4989,11 +4997,32 @@ impl RemoteWsServer {
                         }
                     }
                     match listener.accept() {
-                        Ok((stream, _)) => {
+                        Ok((stream, peer)) => {
                             if thread_stop.load(Ordering::Acquire) {
                                 let _ = stream.shutdown(Shutdown::Both);
                                 break;
                             }
+                            // Reserve the pending-head capacity before creating
+                            // any worker or shutdown-socket bookkeeping. The
+                            // accepted peer address is already authoritative.
+                            let Some(head_slot) = PendingHeadSlot::acquire(
+                                &thread_pending_heads,
+                                peer.ip().to_canonical(),
+                            ) else {
+                                thread_rejected_connections.fetch_add(1, Ordering::Relaxed);
+                                // Refusal runs on the listener: never wait for
+                                // a slow peer to read even this small response.
+                                if stream.set_nonblocking(true).is_ok() {
+                                    refuse_http_client(
+                                        stream,
+                                        "503 Service Unavailable",
+                                        "Too many pending connections",
+                                    );
+                                } else {
+                                    let _ = stream.shutdown(Shutdown::Both);
+                                }
+                                continue;
+                            };
                             let worker_id = thread_next_worker_id.fetch_add(1, Ordering::AcqRel);
                             let shutdown_stream = match stream.try_clone() {
                                 Ok(shutdown_stream) => shutdown_stream,
@@ -5030,11 +5059,17 @@ impl RemoteWsServer {
                             let client_dj_link_handler = thread_dj_link_handler.clone();
                             let client_dj_link_connections =
                                 Arc::clone(&thread_dj_link_connections);
-                            let client_pending_heads = Arc::clone(&thread_pending_heads);
                             let worker_sockets = Arc::clone(&thread_shutdown_sockets);
+                            #[cfg(test)]
+                            let client_worker_start_gate = Arc::clone(&thread_worker_start_gate);
                             let worker = thread::Builder::new()
                                 .name("syndocal-remote-ws-client".to_string())
                                 .spawn(move || {
+                                    // Tests can stall worker entry before any
+                                    // head deadline starts, proving admission
+                                    // also bounds workers awaiting scheduling.
+                                    #[cfg(test)]
+                                    drop(client_worker_start_gate.lock().unwrap());
                                     // The transport boundary is panic-safe: a
                                     // callback panic must still remove the
                                     // socket from the shutdown registry and
@@ -5066,7 +5101,7 @@ impl RemoteWsServer {
                                                     dj_link_handler: client_dj_link_handler,
                                                     dj_link_registry: client_dj_link_registry,
                                                     dj_link_connections: client_dj_link_connections,
-                                                    pending_heads: client_pending_heads,
+                                                    head_slot,
                                                 },
                                             );
                                         },
@@ -5118,6 +5153,10 @@ impl RemoteWsServer {
             dj_link_connections,
             #[cfg(test)]
             local_addr,
+            #[cfg(test)]
+            next_worker_id,
+            #[cfg(test)]
+            worker_start_gate,
         })
     }
 
@@ -5688,7 +5727,7 @@ struct RemoteConnectionContext<'a> {
     dj_link_handler: Option<DjLinkDispatchHandler>,
     dj_link_registry: Arc<Mutex<DjLinkRegistry>>,
     dj_link_connections: Arc<AtomicU64>,
-    pending_heads: Arc<PendingHeadCounters>,
+    head_slot: PendingHeadSlot,
 }
 
 struct RemoteWebsocketContext<'a> {
@@ -5720,7 +5759,7 @@ fn handle_connection<F, S>(
         dj_link_handler,
         dj_link_registry,
         dj_link_connections,
-        pending_heads,
+        head_slot,
     } = context;
     // The listener is non-blocking, and Windows and macOS hand that mode to
     // accepted sockets.  Every read below relies on blocking I/O bounded by
@@ -5731,21 +5770,6 @@ fn handle_connection<F, S>(
     }
     let _ = stream.set_read_timeout(Some(REMOTE_SOCKET_READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(REMOTE_SOCKET_WRITE_TIMEOUT));
-    // A connection whose peer address cannot be read cannot be attributed
-    // to a host for the per-address cap, so it is refused like a full one.
-    let head_slot = stream
-        .peer_addr()
-        .ok()
-        .and_then(|peer| PendingHeadSlot::acquire(&pending_heads, peer.ip().to_canonical()));
-    let Some(head_slot) = head_slot else {
-        rejected_connections.fetch_add(1, Ordering::Relaxed);
-        refuse_http_client(
-            stream,
-            "503 Service Unavailable",
-            "Too many pending connections",
-        );
-        return;
-    };
     let mut peek_buffer = [0u8; HTTP_HEAD_MAX_BYTES];
     let peeked = peek_http_head(&stream, &mut peek_buffer, &stop);
     drop(head_slot);
@@ -7617,6 +7641,10 @@ fn video_param_from_str(value: &str) -> Option<VideoParam> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "remote_ws_admission_tests.rs"]
+mod admission_tests;
 
 #[cfg(test)]
 mod tests {
