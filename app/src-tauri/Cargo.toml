@@ -13,6 +13,7 @@ license.workspace = true
 default = ["libav", "spout", "asio", "syphon"]
 asio = ["dep:libloading"]
 show-asio = ["asio"]
+qa-native-frame-timing = ["video/qa-native-frame-timing"]
 libav = ["video/libav"]
 ndi = ["io/ndi", "video/ndi"]
 spout = ["dep:spout2-rs", "video/spout"]

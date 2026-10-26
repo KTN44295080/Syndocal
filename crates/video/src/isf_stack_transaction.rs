@@ -113,6 +113,9 @@ impl<'a> PendingStack<'a> {
 
     fn unmap(&mut self) {
         if self.mapping_started {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_unmap =
+                crate::native_frame_timing::span(crate::native_frame_timing::Phase::IsfUnmap);
             self.workspace.as_ref().unwrap().readback.unmap();
             self.mapping_started = false;
         }
@@ -120,6 +123,9 @@ impl<'a> PendingStack<'a> {
 
     fn copy_and_unmap(&mut self) -> VideoFrame {
         let identity = self.identity;
+        #[cfg(feature = "qa-native-frame-timing")]
+        let qa_copy =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::IsfMappedCopy);
         let readback = &self.workspace.as_ref().unwrap().readback;
         let mapped = readback.slice(..).get_mapped_range();
         let data = copy_rgba_readback(
@@ -129,6 +135,8 @@ impl<'a> PendingStack<'a> {
             identity.width as usize * identity.height as usize * 4,
         );
         drop(mapped);
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(qa_copy);
         self.unmap();
         VideoFrame {
             layer_id: identity.layer_id,
@@ -210,6 +218,15 @@ impl IsfGpuRuntime {
         date: [f32; 4],
         keys: &[IsfInstanceKey],
     ) -> Result<VideoFrame, IsfRuntimeError> {
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _qa_isf = crate::native_frame_timing::span(crate::native_frame_timing::Phase::Isf);
+        #[cfg(feature = "qa-native-frame-timing")]
+        crate::native_frame_timing::set_isf_metadata_for_layer(
+            crate::native_frame_timing::isf_single_path(u64::from(frame_index), frame.layer_id),
+            frame.layer_id,
+            stages.len() as u32,
+            u64::from(frame_index),
+        );
         self.last_stack_stage_count = stages.len();
         self.last_stack_render_us = 0;
         if stages.is_empty() {
@@ -253,6 +270,10 @@ impl IsfGpuRuntime {
             .encode_pass_stack(&mut pending[0], frame, stages, None)
             .and_then(|()| self.submit_and_complete_stacks(&mut pending));
         let result = self.finish_stack_transaction(&mut pending, result);
+        #[cfg(feature = "qa-native-frame-timing")]
+        if result.is_err() {
+            crate::native_frame_timing::mark_isf_failed(u64::from(frame_index), frame.layer_id);
+        }
         self.record_stack_diagnostic(started, stages.len());
         result.map(|frames| match frames {
             StackBatch::One([frame]) => frame,
@@ -267,10 +288,28 @@ impl IsfGpuRuntime {
         &mut self,
         requests: &[IndependentStack<'_>],
     ) -> Option<Result<StackBatch<VideoFrame>, IsfRuntimeError>> {
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _qa_isf = crate::native_frame_timing::span(crate::native_frame_timing::Phase::Isf);
         if let Err(error) = self.reject_poisoned_stack_transaction() {
             return Some(Err(error));
         }
-        let reservation = self.independent_stack_reservation(requests)?;
+        let reservation = self.independent_stack_reservation(requests);
+        #[cfg(feature = "qa-native-frame-timing")]
+        for request in requests {
+            crate::native_frame_timing::set_isf_metadata_for_layer(
+                if reservation.is_none() {
+                    crate::native_frame_timing::IsfPath::Decline
+                } else if requests.len() == 2 {
+                    crate::native_frame_timing::IsfPath::Batch2
+                } else {
+                    crate::native_frame_timing::IsfPath::Batch3
+                },
+                request.frame.layer_id,
+                request.stages.len() as u32,
+                u64::from(request.frame_index),
+            );
+        }
+        let reservation = reservation?;
         #[cfg(test)]
         {
             self.resources.phase_timing = None;
@@ -315,6 +354,15 @@ impl IsfGpuRuntime {
             })
             .and_then(|()| self.submit_and_complete_stacks(&mut pending));
         let result = self.finish_stack_transaction(&mut pending, result);
+        #[cfg(feature = "qa-native-frame-timing")]
+        if result.is_err() {
+            for request in requests {
+                crate::native_frame_timing::mark_isf_failed(
+                    u64::from(request.frame_index),
+                    request.frame.layer_id,
+                );
+            }
+        }
         self.record_stack_diagnostic(
             started,
             requests.iter().map(|request| request.stages.len()).sum(),
@@ -394,10 +442,15 @@ impl IsfGpuRuntime {
         &mut self,
         pending: &mut [PendingStack],
     ) -> Result<StackBatch<VideoFrame>, IsfRuntimeError> {
+        #[cfg(feature = "qa-native-frame-timing")]
+        let qa_submit =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::IsfSubmit);
         let commands = pending
             .iter_mut()
             .map(|stack| stack.encoder.take().unwrap().finish());
         self.queue.submit(commands);
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(qa_submit);
         #[cfg(test)]
         {
             self.resources.stack_submit_count += 1;
@@ -412,6 +465,9 @@ impl IsfGpuRuntime {
                 timing.mark(4);
             }
         }
+        #[cfg(feature = "qa-native-frame-timing")]
+        let qa_map_wait =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::IsfMapWait);
         for stack in pending.iter_mut() {
             stack.begin_mapping();
         }
@@ -426,6 +482,8 @@ impl IsfGpuRuntime {
                 failed.get_or_insert(error);
             }
         }
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(qa_map_wait);
         if let Some(error) = failed {
             return Err(error);
         }
@@ -438,6 +496,9 @@ impl IsfGpuRuntime {
         if let Some(timing) = self.resources.phase_timing.as_mut() {
             timing.mark(6);
         }
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _qa_cleanup =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::IsfCleanup);
         // Preserve the canonical single-stack feedback commit. Validation
         // scope failure below invalidates the same ownership keys as before.
         for stack in pending.iter_mut() {
@@ -469,14 +530,25 @@ impl IsfGpuRuntime {
         pending: &mut [PendingStack<'_>],
         result: Result<StackBatch<VideoFrame>, IsfRuntimeError>,
     ) -> Result<StackBatch<VideoFrame>, IsfRuntimeError> {
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _qa_cleanup =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::IsfCleanup);
         let cleanup_failure = if result.is_err() {
             // Flush writes even when encoding stopped before a command buffer
             // was submitted. Keep every ticket and its resources alive here.
-            self.queue.submit(std::iter::empty::<wgpu::CommandBuffer>());
+            {
+                #[cfg(feature = "qa-native-frame-timing")]
+                let _qa_submit =
+                    crate::native_frame_timing::span(crate::native_frame_timing::Phase::IsfSubmit);
+                self.queue.submit(std::iter::empty::<wgpu::CommandBuffer>());
+            }
             #[cfg(test)]
             {
                 self.resources.stack_submit_count += 1;
             }
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_map_wait =
+                crate::native_frame_timing::span(crate::native_frame_timing::Phase::IsfMapWait);
             self.device
                 .poll(wgpu::PollType::wait())
                 .err()
@@ -535,3 +607,144 @@ impl IsfGpuRuntime {
 #[cfg(test)]
 #[path = "isf_stack_transaction_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "qa-native-frame-timing"))]
+mod native_timing_probe {
+    use super::*;
+    use crate::isf_runtime::IndependentChain;
+    use crate::native_frame_timing::{self as timing, IsfPath, Outcome, Phase};
+
+    /// Real admitted 3-job ? 3-stage work through the canonical batch encoder.
+    /// Run serialized with the other capture tests; this probe asserts no time budget.
+    #[test]
+    fn isf_native_timing_actual_three_by_three_batch_order_and_coverage() {
+        timing::enable_for_tests();
+        let shader = crate::prepare_isf_shader(
+            r#"/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"}]}*/
+            void main() { gl_FragColor = IMG_THIS_PIXEL(inputImage); }"#,
+        )
+        .unwrap();
+        let stages: [_; 3] = std::array::from_fn(|_| IsfStageInputs {
+            shader: &shader,
+            controls: &[],
+            images: &[],
+        });
+        let frames: [_; 3] = std::array::from_fn(|index| {
+            Arc::new(VideoFrame {
+                layer_id: index as u64 + 1,
+                width: 65,
+                height: 3,
+                pts_ms: 17,
+                duration_ms: 17,
+                format: VideoPixelFormat::Rgba8,
+                data: [index as u8 * 39, 91, 173, 255].repeat(65 * 3),
+            })
+        });
+        let keys: [_; 3] = std::array::from_fn(|index| {
+            (0..3)
+                .map(|stage| IsfInstanceKey::legacy(frames[index].layer_id, stage))
+                .collect::<Vec<_>>()
+        });
+        let chains: [_; 3] = std::array::from_fn(|index| IndependentChain {
+            frame: Arc::clone(&frames[index]),
+            stages: &stages,
+            keys: &keys[index],
+            time_seconds: 7.0,
+            time_delta_seconds: 0.017,
+            date: [2026.0, 10.0, 25.0, 0.0],
+        });
+        let mut runtime = IsfGpuRuntime::new().expect("actual 3?3 probe requires a GPU");
+        runtime.set_stack_phase_timing_enabled(false);
+        timing::start().unwrap();
+        timing::prepare_thread().unwrap();
+        {
+            let _parent = timing::begin_parent(44, 1, 65, 3);
+            let output = runtime
+                .apply_independent_chains(&chains)
+                .expect("3?3 resource-neutral jobs must be admitted");
+            assert_eq!(output.len(), 3);
+            for ((actual, failures), expected) in output.iter().zip(&frames) {
+                assert!(failures.is_empty());
+                assert_eq!(actual, expected.as_ref());
+            }
+            assert_eq!(runtime.independent_batch_count(), 1);
+            assert_eq!(runtime.resources.stack_upload_count, 3);
+            assert_eq!(runtime.resources.stack_submit_count, 1);
+            assert_eq!(runtime.frame_index, 3);
+            assert_eq!(runtime.last_stack_stage_count, 9);
+            timing::set_outcome(Outcome::Presented);
+        }
+        timing::stop_capture().unwrap();
+        timing::retire_thread();
+        timing::acknowledge_stop().unwrap();
+        let snapshot = timing::snapshot().unwrap();
+        assert!(!snapshot.overflow);
+        assert_eq!(snapshot.unprepared_parents, 0);
+        assert_eq!(snapshot.attempted_parents, 1);
+        assert_eq!(snapshot.parents.len(), 1);
+        let parent = &snapshot.parents[0];
+        assert!(parent.complete);
+        assert_eq!(parent.flags, 0);
+        assert_eq!(parent.attempts.len(), 3);
+        for (index, attempt) in parent.attempts.iter().enumerate() {
+            assert_eq!(
+                attempt.path,
+                IsfPath::Batch3,
+                "no recovery/ordinary fallback"
+            );
+            assert_eq!(attempt.layer_id, index as u64 + 1);
+            assert_eq!(attempt.frame_index, index as u64);
+            assert_eq!(attempt.stage_count, 3);
+            assert_eq!(attempt.span_id, parent.children[0].id);
+        }
+        assert_eq!(
+            parent.attempts.iter().map(|a| a.stage_count).sum::<u32>(),
+            9
+        );
+        let expected = [
+            Phase::Isf,
+            Phase::IsfEncode,
+            Phase::IsfUpload,
+            Phase::IsfEncode,
+            Phase::IsfUpload,
+            Phase::IsfEncode,
+            Phase::IsfUpload,
+            Phase::IsfSubmit,
+            Phase::IsfMapWait,
+            Phase::IsfMappedCopy,
+            Phase::IsfUnmap,
+            Phase::IsfMappedCopy,
+            Phase::IsfUnmap,
+            Phase::IsfMappedCopy,
+            Phase::IsfUnmap,
+            Phase::IsfCleanup,
+            Phase::IsfCleanup,
+        ];
+        assert_eq!(
+            parent.children.iter().map(|c| c.phase).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(parent.children[0].parent_id, None);
+        for (index, child) in parent.children.iter().enumerate().skip(1) {
+            let expected_parent = if child.phase == Phase::IsfUpload {
+                parent.children[index - 1].id
+            } else {
+                parent.children[0].id
+            };
+            assert_eq!(child.parent_id, Some(expected_parent));
+            let enclosing = &parent.children[usize::from(expected_parent)];
+            assert!(enclosing.start_us <= child.start_us);
+            assert!(child.start_us <= child.end_us);
+            assert!(child.end_us <= enclosing.end_us);
+        }
+        assert_eq!(
+            parent.residual_us + parent.children.iter().map(|c| c.exclusive_us).sum::<u64>(),
+            parent.end_us - parent.start_us,
+        );
+        // One cold post-Stop/ACK export keeps the probe's raw primitive evidence.
+        println!(
+            "QA_NATIVE_3X3 {}",
+            serde_json::to_string(&snapshot).unwrap()
+        );
+    }
+}

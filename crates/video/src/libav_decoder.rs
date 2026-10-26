@@ -779,9 +779,18 @@ impl LibavFrameDecoder {
 
     #[cfg(feature = "libav")]
     fn join(&mut self, lookaheads: Vec<LibavLookahead>) {
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _native_join = crate::native_frame_timing::span(crate::native_frame_timing::Phase::RetentionJoin);
         for lookahead in lookaheads {
+            #[cfg(feature = "qa-native-frame-timing")]
+            crate::native_frame_timing::add_retired_owner_for_layer(lookahead.layer_id);
             // A look-ahead that panicked lost its session.
-            let Ok(done) = lookahead.done.recv() else {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let native_recv = crate::native_frame_timing::span(crate::native_frame_timing::Phase::RetentionRecv);
+            let received = lookahead.done.recv();
+            #[cfg(feature = "qa-native-frame-timing")]
+            drop(native_recv);
+            let Ok(done) = received else {
                 self.session_counters.lookahead_discards =
                     self.session_counters.lookahead_discards.saturating_add(1);
                 continue;

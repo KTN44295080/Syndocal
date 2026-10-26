@@ -964,6 +964,10 @@ impl GpuSurfacePresenter {
             return Err(GpuSurfaceError::InvalidSize);
         }
         if self.config.width != width || self.config.height != height {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_reconfigure = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::PresenterReconfigure,
+            );
             self.config.width = width;
             self.config.height = height;
             self.surface.configure(&self.device, &self.config);
@@ -1007,19 +1011,33 @@ impl GpuSurfacePresenter {
                 },
             ],
         });
+        #[cfg(feature = "qa-native-frame-timing")]
+        let qa_acquire =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::PresenterAcquire);
         let surface_texture = match self.surface.get_current_texture() {
             Ok(texture) => texture,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                #[cfg(feature = "qa-native-frame-timing")]
+                let qa_reconfigure = crate::native_frame_timing::span(
+                    crate::native_frame_timing::Phase::PresenterReconfigure,
+                );
                 self.surface.configure(&self.device, &self.config);
+                #[cfg(feature = "qa-native-frame-timing")]
+                drop(qa_reconfigure);
                 self.surface
                     .get_current_texture()
                     .map_err(|error| GpuSurfaceError::Present(error.to_string()))?
             }
             Err(error) => return Err(GpuSurfaceError::Present(error.to_string())),
         };
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(qa_acquire);
         let output_view = surface_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        #[cfg(feature = "qa-native-frame-timing")]
+        let qa_encode =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::PresenterEncode);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1044,8 +1062,22 @@ impl GpuSurfacePresenter {
             pass.set_bind_group(0, &bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
-        self.queue.submit(Some(encoder.finish()));
-        surface_texture.present();
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(qa_encode);
+        {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_submit = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::PresenterSubmit,
+            );
+            self.queue.submit(Some(encoder.finish()));
+        }
+        {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_present = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::PresenterPresent,
+            );
+            surface_texture.present();
+        }
         Ok(())
     }
 
@@ -1121,6 +1153,9 @@ impl GpuSurfacePresenter {
             .write_buffer(&gpu_buffers.mapping_params, 0, &mapping_params);
         self.queue
             .write_buffer(&gpu_buffers.dimensions, 0, &dimensions);
+        #[cfg(feature = "qa-native-frame-timing")]
+        let qa_encode =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::PresenterEncode);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1193,8 +1228,20 @@ impl GpuSurfacePresenter {
             pass.set_bind_group(0, &gpu_buffers.output_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
-        self.queue.submit(Some(encoder.finish()));
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(qa_encode);
+        {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_submit = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::PresenterSubmit,
+            );
+            self.queue.submit(Some(encoder.finish()));
+        }
         if validate_submission {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_validation = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::PresenterValidation,
+            );
             if let Some(error) = pollster::block_on(self.device.pop_error_scope()) {
                 return Err(GpuSurfaceError::Present(format!(
                     "GPU buffer presentation validation failed: {error}"
@@ -1202,7 +1249,13 @@ impl GpuSurfacePresenter {
             }
             self.submission_validation.legacy_prepared_output_validated = true;
         }
-        surface_texture.present();
+        {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_present = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::PresenterPresent,
+            );
+            surface_texture.present();
+        }
         gpu_buffers.frames_presented = gpu_buffers.frames_presented.saturating_add(1);
         gpu_buffers.compressed_layer_uploads = gpu_buffers.compressed_layer_uploads.saturating_add(
             source_frames
@@ -1316,6 +1369,9 @@ impl GpuSurfacePresenter {
         if validate_submission {
             self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         }
+        #[cfg(feature = "qa-native-frame-timing")]
+        let qa_encode =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::PresenterEncode);
         let (mut encoder, compressed_uploads) = gpu_buffers.encode_gpu_composition(
             &self.device,
             &self.queue,
@@ -1348,8 +1404,20 @@ impl GpuSurfacePresenter {
             pass.set_bind_group(0, &gpu_buffers.output_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
-        self.queue.submit(Some(encoder.finish()));
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(qa_encode);
+        {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_submit = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::PresenterSubmit,
+            );
+            self.queue.submit(Some(encoder.finish()));
+        }
         if validate_submission {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_validation = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::PresenterValidation,
+            );
             if let Some(error) = pollster::block_on(self.device.pop_error_scope()) {
                 gpu_buffers.forget_composition_uploads();
                 return Err(GpuSurfaceError::Present(format!(
@@ -1358,7 +1426,13 @@ impl GpuSurfacePresenter {
             }
             self.submission_validation.gpu_composition_validated = true;
         }
-        surface_texture.present();
+        {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_present = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::PresenterPresent,
+            );
+            surface_texture.present();
+        }
         gpu_buffers.frames_presented = gpu_buffers.frames_presented.saturating_add(1);
         gpu_buffers.compressed_layer_uploads = gpu_buffers
             .compressed_layer_uploads
@@ -1402,10 +1476,19 @@ impl GpuSurfacePresenter {
     }
 
     fn acquire_surface_texture(&self) -> Result<wgpu::SurfaceTexture, GpuSurfaceError> {
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _qa_acquire =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::PresenterAcquire);
         match self.surface.get_current_texture() {
             Ok(texture) => Ok(texture),
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                #[cfg(feature = "qa-native-frame-timing")]
+                let qa_reconfigure = crate::native_frame_timing::span(
+                    crate::native_frame_timing::Phase::PresenterReconfigure,
+                );
                 self.surface.configure(&self.device, &self.config);
+                #[cfg(feature = "qa-native-frame-timing")]
+                drop(qa_reconfigure);
                 self.surface
                     .get_current_texture()
                     .map_err(|error| GpuSurfaceError::Present(error.to_string()))
@@ -1459,6 +1542,9 @@ impl GpuSurfacePresenter {
         let output_view = surface_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        #[cfg(feature = "qa-native-frame-timing")]
+        let qa_encode =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::PresenterEncode);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1480,8 +1566,22 @@ impl GpuSurfacePresenter {
                 occlusion_query_set: None,
             });
         }
-        self.queue.submit(Some(encoder.finish()));
-        surface_texture.present();
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(qa_encode);
+        {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_submit = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::PresenterSubmit,
+            );
+            self.queue.submit(Some(encoder.finish()));
+        }
+        {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_present = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::PresenterPresent,
+            );
+            surface_texture.present();
+        }
         self.hard_blackout_frames_presented = self.hard_blackout_frames_presented.saturating_add(1);
         Ok(())
     }
@@ -1515,6 +1615,9 @@ impl GpuSurfacePresenter {
             &self.buffer_bind_group_layout,
             buffer_size,
         );
+        #[cfg(feature = "qa-native-frame-timing")]
+        let qa_upload =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::PresenterUpload);
         // The artistic frame is already composed by the video core: one write
         // replaces the whole per-layer composite stage and the single mapping
         // dispatch below is its only consumer.
@@ -1527,6 +1630,11 @@ impl GpuSurfacePresenter {
             .write_buffer(&gpu_buffers.mapping_params, 0, &mapping_params);
         self.queue
             .write_buffer(&gpu_buffers.dimensions, 0, &dimensions);
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(qa_upload);
+        #[cfg(feature = "qa-native-frame-timing")]
+        let qa_encode =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::PresenterEncode);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1565,8 +1673,20 @@ impl GpuSurfacePresenter {
             pass.set_bind_group(0, &gpu_buffers.output_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
-        self.queue.submit(Some(encoder.finish()));
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(qa_encode);
+        {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_submit = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::PresenterSubmit,
+            );
+            self.queue.submit(Some(encoder.finish()));
+        }
         if validate_submission {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_validation = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::PresenterValidation,
+            );
             if let Some(error) = pollster::block_on(self.device.pop_error_scope()) {
                 return Err(GpuSurfaceError::Present(format!(
                     "GPU artistic presentation validation failed: {error}"
@@ -1574,7 +1694,13 @@ impl GpuSurfacePresenter {
             }
             self.submission_validation.artistic_output_validated = true;
         }
-        surface_texture.present();
+        {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_present = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::PresenterPresent,
+            );
+            surface_texture.present();
+        }
         let gpu_buffers = self.gpu_buffers.as_mut().expect("GPU buffers initialized");
         gpu_buffers.frames_presented = gpu_buffers.frames_presented.saturating_add(1);
         Ok(())

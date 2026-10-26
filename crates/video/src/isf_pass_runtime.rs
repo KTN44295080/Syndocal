@@ -89,6 +89,9 @@ impl GpuImage {
     }
 
     fn upload_rgba(&self, queue: &wgpu::Queue, data: &[u8]) {
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _qa_upload =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::IsfUpload);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.texture,
@@ -239,6 +242,10 @@ impl IsfGpuRuntime {
         stages: &[IsfStageInputs<'_>],
         batch_reservation: Option<u64>,
     ) -> Result<(), IsfRuntimeError> {
+        // Uploads are explicit children; encode exclusive time excludes their host wall.
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _qa_encode =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::IsfEncode);
         let keys = pending.keys.as_ref();
         let stack_transaction::StackClocks {
             time_seconds,

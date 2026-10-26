@@ -13699,6 +13699,8 @@ impl NativeVideoOutputWorker {
 
     fn request_stop(&self) {
         self.stop.store(true, Ordering::Release);
+        #[cfg(feature = "qa-native-frame-timing")]
+        video::native_frame_timing::request_automatic_stop();
     }
 
     fn join(&mut self, label: &str) -> Result<(), String> {
@@ -84294,6 +84296,42 @@ fn present_native_display_payload(
     }
 }
 
+#[cfg(feature = "qa-native-frame-timing")]
+fn native_frame_demand_counters(renderer: &AppVideoPreviewRenderer) -> Option<[u64; 4]> {
+    // recording_active first checks the immutable startup flag with one relaxed
+    // load; disabled frames return before reading decoder counters or TLS.
+    video::native_frame_timing::recording_active().then(|| {
+        let diagnostics = renderer.frame_provider().decoder().diagnostics();
+        [diagnostics.decode_wall_us, diagnostics.decode_call_count,
+            diagnostics.total_requests, diagnostics.libav_successes]
+    })
+}
+
+#[cfg(feature = "qa-native-frame-timing")]
+fn export_native_frame_capture_on_exit(
+    app: &tauri::AppHandle,
+    state: &AppState,
+) -> Result<(), String> {
+    if !video::native_frame_timing::automatic_export_pending() {
+        return Ok(());
+    }
+    // The QA harness closes normally only after measuring the existing Standby
+    // response. Export here cannot add serialization or I/O to that Stop call.
+    // Failed joins/ACKs retain their worker/quarantine entries and block export.
+    let ownership = state.engine.output_ownership_status();
+    if ownership.state != protocol::OutputOwnershipState::Ready
+        || ownership.effective_role != MachineOutputRole::Standby
+        || ownership.video_allowed
+        || ownership.lighting_allowed
+        || !native_video_output_retirement_labels(app, &state.native_video_output_workers)?.is_empty()
+    {
+        return Err("Native frame export requires the completed existing Stop/retirement ACK".into());
+    }
+    video::native_frame_timing::request_automatic_stop();
+    video::native_frame_timing::acknowledge_stop().map_err(str::to_string)?;
+    video::native_frame_timing::export_automatic_once().map(|_| ())
+}
+
 #[derive(Debug, Clone)]
 struct NativePresentableVideoOutputFrame {
     payload: NativeDisplayPayload,
@@ -85386,8 +85424,26 @@ fn start_native_video_live_output(
     let mut first_observed_follow = None;
     let mut first_validation_identity = None;
     let mut first_validation_boundary = None;
+    #[cfg(feature = "qa-native-frame-timing")]
+    video::native_frame_timing::prepare_automatic_thread()?;
+    #[cfg(feature = "qa-native-frame-timing")]
+    let trace_epoch = if video::native_frame_timing::recording_active() {
+        engine.output_ownership_status().epoch
+    } else {
+        0
+    };
+    #[cfg(feature = "qa-native-frame-timing")]
+    let _trace_retirement = video::native_frame_timing::ThreadRetirementGuard::new();
+    #[cfg(feature = "qa-native-frame-timing")]
+    let first_trace = video::native_frame_timing::begin_parent(
+        output_id, trace_epoch, initial_size.0, initial_size.1);
     let first_started = Instant::now();
-    let first_result = prepare_native_video_output(
+    let first_result = {
+    #[cfg(feature = "qa-native-frame-timing")]
+    let prepare_trace = video::native_frame_timing::span(video::native_frame_timing::Phase::Prepare);
+    #[cfg(feature = "qa-native-frame-timing")]
+    let demand_before = native_frame_demand_counters(&renderer);
+    let prepared = prepare_native_video_output(
         &mut renderer,
         &engine,
         output_id,
@@ -85400,7 +85456,15 @@ fn start_native_video_live_output(
             .as_ref()
             .and_then(video::GpuSurfacePresenter::gpu_composition_support),
         &mut first_observed_follow,
-    )
+    );
+    #[cfg(feature = "qa-native-frame-timing")]
+    if let (Some(before), Some(after)) = (demand_before, native_frame_demand_counters(&renderer)) {
+        video::native_frame_timing::set_demand_counters(before, after);
+    }
+    #[cfg(feature = "qa-native-frame-timing")]
+    drop(prepare_trace);
+    prepared
+    }
     .and_then(|first_output| {
         first_validation_identity = match &first_output {
             NativeVideoOutputFrame::Presentable(frame) => Some(frame.validation_identity.clone()),
@@ -85438,6 +85502,8 @@ fn start_native_video_live_output(
                 fullscreen,
             )?;
             initial_size = (size.width.max(1), size.height.max(1));
+            #[cfg(feature = "qa-native-frame-timing")]
+            first_trace.set_dimensions(initial_size.0, initial_size.1);
             presenter = Some(
                 video::GpuSurfacePresenter::new(
                     Arc::clone(&window),
@@ -85455,6 +85521,8 @@ fn start_native_video_live_output(
         }
         match first_output {
             NativeVideoOutputFrame::SettlementOnly(acknowledgement) => {
+                #[cfg(feature = "qa-native-frame-timing")]
+                video::native_frame_timing::set_outcome(video::native_frame_timing::Outcome::ZeroPresent);
                 // A definitive non-presenting settlement (NotApplicable or a
                 // typed Fault) publishes exactly zero presents.
                 acknowledge_native_timeline_follow_video_settlement(&engine, acknowledgement, &stop);
@@ -85489,6 +85557,8 @@ fn start_native_video_live_output(
                         present_native_display_payload(presenter, &first_frame).map_err(|error| {
                             format!("Native Display output first frame failed: {error:?}")
                         })?;
+                        #[cfg(feature = "qa-native-frame-timing")]
+                        video::native_frame_timing::set_outcome(video::native_frame_timing::Outcome::Presented);
                         output_health.delivered();
                         Ok(())
                     },
@@ -85545,6 +85615,18 @@ fn start_native_video_live_output(
             );
         }
     }
+    #[cfg(feature = "qa-native-frame-timing")]
+    {
+        if first_result.is_err() {
+            video::native_frame_timing::set_outcome(if stop.load(Ordering::Acquire) {
+                video::native_frame_timing::Outcome::Cancelled
+            } else {
+                video::native_frame_timing::Outcome::Failed
+            });
+        }
+        drop(first_trace);
+        video::native_frame_timing::retire_thread();
+    }
     first_result?;
     let mut presenter =
         presenter.ok_or_else(|| "Native video output presenter was not initialized".to_string())?;
@@ -85567,6 +85649,11 @@ fn start_native_video_live_output(
     let join = std::thread::Builder::new()
         .name(format!("syndocal-video-output-{output_id}"))
         .spawn(move || -> Result<(), String> {
+            #[cfg(feature = "qa-native-frame-timing")]
+            video::native_frame_timing::prepare_thread().map_err(str::to_string)?;
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _trace_retirement = video::native_frame_timing::ThreadRetirementGuard::new();
+            let result = (|| -> Result<(), String> {
             if let Some(start_gate) = worker_start_gate {
                 while !start_gate.load(Ordering::Acquire) && !worker_stop.load(Ordering::Acquire) {
                     std::thread::park_timeout(Duration::from_millis(1));
@@ -85582,11 +85669,22 @@ fn start_native_video_live_output(
                 Duration::from_nanos(1_000_000_000 / 60),
             );
             while !worker_stop.load(Ordering::Acquire) {
+                #[cfg(feature = "qa-native-frame-timing")]
+                let frame_trace = video::native_frame_timing::begin_parent(
+                    output_id, trace_epoch, presenter.size().0, presenter.size().1);
+                #[cfg(feature = "qa-native-frame-timing")]
+                video::native_frame_timing::set_outcome(video::native_frame_timing::Outcome::ZeroPresent);
                 let frame_started = Instant::now();
                 let (width, height) = match window.inner_size() {
                     Ok(size) => (size.width, size.height),
                     Err(error) => {
                         let error = format!("Native video output window size failed: {error}");
+                        #[cfg(feature = "qa-native-frame-timing")]
+                        video::native_frame_timing::set_outcome(if worker_stop.load(Ordering::Acquire) {
+                            video::native_frame_timing::Outcome::Cancelled
+                        } else {
+                            video::native_frame_timing::Outcome::Failed
+                        });
                         record_native_video_output_metrics(
                             &metrics,
                             0,
@@ -85615,6 +85713,8 @@ fn start_native_video_live_output(
                         return result;
                     }
                 };
+                #[cfg(feature = "qa-native-frame-timing")]
+                frame_trace.set_dimensions(width, height);
                 if let Some((width, height)) = native_video_output_render_extent(width, height) {
                     let mut frame_validation_identity = None;
                     let mut frame_validation_boundary = None;
@@ -85641,6 +85741,10 @@ fn start_native_video_live_output(
                         || {
                             // Preparation excludes the presenter GPU work and
                             // its potential vsync wait, and excludes pacing.
+                            #[cfg(feature = "qa-native-frame-timing")]
+                            let prepare_trace = video::native_frame_timing::span(video::native_frame_timing::Phase::Prepare);
+                            #[cfg(feature = "qa-native-frame-timing")]
+                            let demand_before = native_frame_demand_counters(&renderer);
                             let render_started = Instant::now();
                             let output = prepare_native_video_output(
                                 &mut renderer,
@@ -85655,10 +85759,18 @@ fn start_native_video_live_output(
                                 &mut *frame_follow_identity.borrow_mut(),
                             );
                             let render_time = render_started.elapsed();
+                            #[cfg(feature = "qa-native-frame-timing")]
+                            if let (Some(before), Some(after)) = (demand_before, native_frame_demand_counters(&renderer)) {
+                                video::native_frame_timing::set_demand_counters(before, after);
+                            }
+                            #[cfg(feature = "qa-native-frame-timing")]
+                            drop(prepare_trace);
                             output.map(|output| (output, render_time))
                         },
                         |presenter, (output, render_time)| {
                             if worker_stop.load(Ordering::Acquire) {
+                                #[cfg(feature = "qa-native-frame-timing")]
+                                video::native_frame_timing::set_outcome(video::native_frame_timing::Outcome::Cancelled);
                                 return Ok(());
                             }
                             frame_validation_identity = match &output {
@@ -85691,6 +85803,8 @@ fn start_native_video_live_output(
                                     frame.follow_identity,
                                     || {
                                         if worker_stop.load(Ordering::Acquire) {
+                                            #[cfg(feature = "qa-native-frame-timing")]
+                                            video::native_frame_timing::set_outcome(video::native_frame_timing::Outcome::Cancelled);
                                             return Ok(());
                                         }
                                         present_native_display_payload(presenter, &frame)
@@ -85699,6 +85813,8 @@ fn start_native_video_live_output(
                                                     "Native Display output present failed: {error:?}"
                                                 )
                                             })?;
+                                        #[cfg(feature = "qa-native-frame-timing")]
+                                        video::native_frame_timing::set_outcome(video::native_frame_timing::Outcome::Presented);
                                         output_health.delivered_with_render_time(render_time);
                                         Ok(())
                                     },
@@ -85722,6 +85838,8 @@ fn start_native_video_live_output(
                                     // fault fence; the next iteration captures
                                     // a fresh authoritative sample.
                                     Err(NativeDisplayPresentError::Revoked(error)) => {
+                                        #[cfg(feature = "qa-native-frame-timing")]
+                                        video::native_frame_timing::set_outcome(video::native_frame_timing::Outcome::Revoked);
                                         frame_validation_boundary = Some(error);
                                         Ok(())
                                     }
@@ -85768,6 +85886,16 @@ fn start_native_video_live_output(
                             }
                         },
                     );
+                    #[cfg(feature = "qa-native-frame-timing")]
+                    if let Err(error) = &result {
+                        video::native_frame_timing::set_outcome(if worker_stop.load(Ordering::Acquire) {
+                            video::native_frame_timing::Outcome::Cancelled
+                        } else if matches!(error, NativeVideoOutputLiveFrameError::Permit(_)) {
+                            video::native_frame_timing::Outcome::Rejected
+                        } else {
+                            video::native_frame_timing::Outcome::Failed
+                        });
+                    }
                     record_native_video_output_metrics(
                         &metrics,
                         width,
@@ -85845,9 +85973,21 @@ fn start_native_video_live_output(
                         )),
                     );
                 }
+                #[cfg(feature = "qa-native-frame-timing")]
+                drop(frame_trace);
                 output_pacer.wait_after_frame();
             }
             Ok(())
+            })();
+            #[cfg(feature = "qa-native-frame-timing")]
+            {
+                // Drop GPU/decoder owners and reap lookaheads before the cold
+                // primitive-buffer transfer. Export still waits for Stop ACK.
+                drop(renderer);
+                drop(presenter);
+                video::native_frame_timing::retire_thread();
+            }
+            result
         })
         .map_err(|error| format!("Native video output thread failed: {error}"))?;
     Ok(NativeVideoOutputWorker::with_teardown_lease_and_start_gate(
@@ -136136,6 +136276,11 @@ include!("tests/live_audio_input_tests.rs");
 mod video_recording_runtime_tests;
 
 fn main() {
+    #[cfg(feature = "qa-native-frame-timing")]
+    if let Err(error) = video::native_frame_timing::configure_from_environment() {
+        eprintln!("Native frame attribution configuration failed: {error}");
+        std::process::exit(1);
+    }
     if process_identity_cli::requested(env::args_os().skip(1)) {
         if let Err(error) = process_identity_cli::run(env::args_os().skip(1)) {
             eprintln!("Process inspection failed: {error}");
@@ -137364,6 +137509,13 @@ fn main() {
                 ) {
                     eprintln!("Process exit was blocked by managed output boundary: {error}");
                     api.prevent_exit();
+                } else {
+                    #[cfg(feature = "qa-native-frame-timing")]
+                    if let Err(error) = export_native_frame_capture_on_exit(app_handle, state.inner()) {
+                        // Observer failure never changes the product's exit decision.
+                        // The harness requires the complete post-close file to pass.
+                        eprintln!("Native frame attribution export failed: {error}");
+                    }
                 }
             }
             #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]

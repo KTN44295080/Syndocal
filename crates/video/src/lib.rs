@@ -45,6 +45,10 @@ mod layer_group_composition;
 mod layer_group_composition_tests;
 mod layer_thumbnail_render;
 mod libav_decoder;
+#[cfg(feature = "qa-native-frame-timing")]
+pub mod native_frame_timing;
+#[cfg(feature = "qa-native-frame-timing")]
+use native_frame_timing::{span as native_span, Phase as NativePhase};
 mod live_source;
 mod rgba_row_copy;
 mod show_spout_aspect_fit;
@@ -2810,11 +2814,15 @@ impl VideoRuntime {
     }
 
     pub fn push_frame(&mut self, frame: VideoFrame) -> FrameQueuePush {
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _native_queue = native_span(NativePhase::Queue);
         self.push_shared_frame(Arc::new(frame))
     }
 
     /// `push_frame` of a shared frame, which the queue keeps without a copy.
     fn push_shared_frame(&mut self, frame: Arc<VideoFrame>) -> FrameQueuePush {
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _native_queue = native_span(NativePhase::Queue);
         let layer_id = frame.layer_id;
         if !self.queues.iter().any(|queue| queue.layer_id() == layer_id) {
             self.queues
@@ -5192,17 +5200,37 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     ));
                 }
                 self.last_output_render_error = None;
+                #[cfg(feature = "qa-native-frame-timing")]
+                let native_lookup = native_span(NativePhase::LastValidLookup);
                 if let Some(entry) = self
                     .output_last_valid_frames
                     .iter_mut()
                     .find(|entry| entry.key == key)
                 {
-                    entry.frame = frame.clone();
+                    #[cfg(feature = "qa-native-frame-timing")]
+                    drop(native_lookup);
+                    #[cfg(feature = "qa-native-frame-timing")]
+                    let native_clone = native_span(NativePhase::LastValidClone);
+                    let cloned = frame.clone();
+                    #[cfg(feature = "qa-native-frame-timing")]
+                    drop(native_clone);
+                    #[cfg(feature = "qa-native-frame-timing")]
+                    let _native_replace = native_span(NativePhase::LastValidReplace);
+                    entry.frame = cloned;
                 } else {
+                    #[cfg(feature = "qa-native-frame-timing")]
+                    drop(native_lookup);
+                    #[cfg(feature = "qa-native-frame-timing")]
+                    let native_clone = native_span(NativePhase::LastValidClone);
+                    let cloned = frame.clone();
+                    #[cfg(feature = "qa-native-frame-timing")]
+                    drop(native_clone);
+                    #[cfg(feature = "qa-native-frame-timing")]
+                    let _native_replace = native_span(NativePhase::LastValidReplace);
                     self.output_last_valid_frames
                         .push(VideoOutputLastValidFrame {
                             key,
-                            frame: frame.clone(),
+                            frame: cloned,
                         });
                 }
                 Ok(VideoOutputArtisticRenderResult {
@@ -5244,11 +5272,19 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         let (frame, freshness) = if let Some(rejected_frame) = rejected_frame {
             (rejected_frame, VideoOutputRenderFreshness::Error)
         } else {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let native_lookup = native_span(NativePhase::LastValidLookup);
             let fallback = self
                 .output_last_valid_frames
                 .iter()
                 .find(|entry| entry.key == *key)
-                .map(|entry| entry.frame.clone());
+                .map(|entry| {
+                    #[cfg(feature = "qa-native-frame-timing")]
+                    let _native_clone = native_span(NativePhase::LastValidClone);
+                    entry.frame.clone()
+                });
+            #[cfg(feature = "qa-native-frame-timing")]
+            drop(native_lookup);
             let freshness = if fallback.is_some() {
                 VideoOutputRenderFreshness::LastValid
             } else {
@@ -5659,6 +5695,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         height: u32,
         cancellation: Option<&dyn VideoRenderCancellation>,
     ) -> Result<(VideoFrame, Vec<VideoEffectStageFault>), VideoRuntimeError> {
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _native_composition = native_span(NativePhase::CpuComposition);
         check_runtime_cancellation(cancellation)?;
         let frames = self.runtime.select_frames_for_plan(plan);
         let mut faults = Vec::new();
@@ -6026,6 +6064,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) {
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _native_demand = native_span(NativePhase::Demand);
         let mut inputs = Vec::new();
         for layer in snapshot
             .layers
@@ -6097,6 +6137,10 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .iter()
             .map(|layer| layer.id)
             .collect::<Vec<_>>();
+        #[cfg(feature = "qa-native-frame-timing")]
+        native_frame_timing::set_requested_layers(requested_layer_ids);
+        #[cfg(feature = "qa-native-frame-timing")]
+        let native_retention = native_span(NativePhase::Retention);
         let mut retained_inputs = Vec::new();
         // This provider is shared by output previews. Retain the current input
         // universe, not just the output being drawn; alternating outputs must
@@ -6147,6 +6191,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             }
         }
         self.frame_provider.retain_inputs(&retained_inputs);
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(native_retention);
         self.generator_queue_sources.sync(
             &mut self.runtime,
             true,
@@ -6324,6 +6370,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             // The live path takes shared frames: a layer without effects
             // queues the decoder's frame itself, so a frame reused from one
             // tick to the next is never copied.
+            #[cfg(feature = "qa-native-frame-timing")]
+            let native_demand = native_span(NativePhase::Demand);
             let frames = match cancellation {
                 Some(cancellation) => self
                     .frame_provider
@@ -6343,6 +6391,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     return Err(error);
                 }
             };
+            #[cfg(feature = "qa-native-frame-timing")]
+            drop(native_demand);
             let produced_frame = !frames.is_empty();
             for frame in frames {
                 check_render_cancellation(cancellation)?;
@@ -6371,6 +6421,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                         .is_some_and(resolved_chain_executes)
                 {
                     if let Ok(Some(chain)) = layer_chain {
+                        #[cfg(feature = "qa-native-frame-timing")]
+                        let _native_chain_preparation = native_span(NativePhase::ChainPreparation);
                         self.defer_independent_layer_chain(
                             &mut pending_layers, frame, chain, &mut effect_faults,
                         ).map_err(VideoPreviewError::Runtime)?;
