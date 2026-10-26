@@ -1,34 +1,326 @@
-//! P-owned history policy (INTERFACE-01 ﾂｧ5), independent of G's concrete GPU.
-//! Eviction transfers strong owners; it never releases a GPU budget charge.
-use crate::frame_history_policy::{plan_history_update, HistoryMeta, HistoryPlan};
+//! P-owned history policy (INTERFACE-01 section 5), independent of G's concrete
+//! GPU types. Eviction transfers strong owners; it never releases a GPU budget
+//! charge. Long-term recipe inputs and CPU backing are bounded by the separate
+//! HistoryHostBudget (section 8.1). The only production constructors of
+//! validated entries and the G type adapters live in the `adapter` child module.
+use crate::frame_history_policy::{
+    plan_history_update, HistoryMeta, HistoryPlan, NATIVE_HISTORY_CAPACITY,
+};
 use crate::native_gpu_contract::{
-    ExactCpuLayer, GpuAllocationId, GpuContextId, HistoryEntryId, LayerOrigin, LayerResultIdentity,
-    MaterializationProof, NativeFrameId,
+    GpuAllocationId, GpuContextId, HistoryEntryId, LayerOrigin, LayerResultIdentity,
+    MaterializationDescriptor, NativeFrameId,
 };
 use crate::{VideoFrame, VideoPixelFormat};
 use protocol::{VideoLayerId, VideoRenderInputKey};
-use std::sync::Arc;
+use std::any::Any;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-const CAPACITY: usize = 8;
+const CAPACITY: usize = NATIVE_HISTORY_CAPACITY;
 const RESIDENT_CAPACITY: usize = 2;
 
-/// Implemented by the future G lease adapter, never by a second allocator.
+/// Implemented by G's lease (adapter), never by a second allocator.
 pub(crate) trait HistoryResident {
     fn identity(&self) -> &LayerResultIdentity;
     fn allocation(&self) -> GpuAllocationId;
 }
-pub(crate) enum HistoryBacking<R> {
-    Replay(R),
-    Cpu(Arc<VideoFrame>),
+/// Long-lived host allocations a frozen recipe keeps alive (its raw inputs).
+pub(crate) trait HistoryHostFootprint {
+    fn host_allocations(&self) -> Vec<HostAllocation>;
 }
-struct Entry<R, T> {
+/// An affine validated CPU readback: pixels, completion descriptor and the
+/// charge of that same CPU allocation (adapter: G's ValidatedCpuMaterialization).
+/// The three parts are only split inside the history, into one owner.
+pub(crate) trait MaterializedCpuLayer: Sized {
+    type Charge;
+    fn frame(&self) -> &VideoFrame;
+    fn descriptor(&self) -> &MaterializationDescriptor;
+    fn into_charged_parts(self) -> (VideoFrame, MaterializationDescriptor, Self::Charge);
+}
+/// An affine validated GPU materialization (adapter: G's MaterializedGpuLayer).
+pub(crate) trait MaterializedResident: Sized {
+    type Resident;
+    fn descriptor(&self) -> MaterializationDescriptor;
+    fn resident(&self) -> &Self::Resident;
+    fn into_resident(self) -> Self::Resident;
+}
+
+/// One host allocation retained by a history owner. The key is the identity of
+/// the shared allocation, so an alias held by several entries/layers is
+/// counted once. The keepalive pins that identity for the charge's lifetime.
+pub(crate) struct HostAllocation {
+    key: usize,
+    bytes: u64,
+    managed: bool,
+    keepalive: Arc<dyn Any + Send + Sync>,
+}
+impl HostAllocation {
+    /// `managed`: the same bytes are also charged to G's 512MiB session ledger
+    /// (reported as an alias, never added twice to process-unique bytes).
+    pub(crate) fn shared_frame(frame: &Arc<VideoFrame>, managed: bool) -> Self {
+        let keepalive: Arc<dyn Any + Send + Sync> = frame.clone();
+        Self {
+            key: Arc::as_ptr(frame) as usize,
+            bytes: frame.data.capacity() as u64,
+            managed,
+            keepalive,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct HistoryHostSnapshot {
+    pub limit: u64,
+    /// Unique retained bytes; an alias is counted once.
+    pub unique_bytes: u64,
+    /// Admitted for an owner that is being created (handover conversion).
+    pub reserved_bytes: u64,
+    /// Part of `unique_bytes` that G's session ledger also charges.
+    pub managed_alias_bytes: u64,
+    pub allocations: usize,
+    pub charges: usize,
+    pub high_water_bytes: u64,
+}
+impl HistoryHostSnapshot {
+    /// Host bytes not already reported by G's managed ledger.
+    pub(crate) fn unmanaged_bytes(&self) -> u64 {
+        self.unique_bytes - self.managed_alias_bytes
+    }
+}
+struct HostRecord {
+    bytes: u64,
+    managed: bool,
+    refs: usize,
+}
+#[derive(Default)]
+struct HostLedger {
+    limit: u64,
+    records: HashMap<usize, HostRecord>,
+    unique_bytes: u64,
+    reserved_bytes: u64,
+    managed_alias_bytes: u64,
+    charges: usize,
+    high_water: u64,
+}
+impl HostLedger {
+    fn admit(&mut self, bytes: u64) -> Result<(), HistoryError> {
+        let live = self.unique_bytes + self.reserved_bytes;
+        if bytes > self.limit.saturating_sub(live) {
+            return Err(HistoryError::HostBudgetExceeded);
+        }
+        Ok(())
+    }
+    fn insert(&mut self, key: usize, bytes: u64, managed: bool) {
+        self.charges += 1;
+        match self.records.get_mut(&key) {
+            Some(record) => {
+                record.refs += 1;
+                if managed && !record.managed {
+                    record.managed = true;
+                    self.managed_alias_bytes += record.bytes;
+                }
+            }
+            None => {
+                self.records.insert(
+                    key,
+                    HostRecord {
+                        bytes,
+                        managed,
+                        refs: 1,
+                    },
+                );
+                self.unique_bytes += bytes;
+                if managed {
+                    self.managed_alias_bytes += bytes;
+                }
+            }
+        }
+        self.high_water = self.high_water.max(self.unique_bytes + self.reserved_bytes);
+    }
+}
+/// INTERFACE-01 section 8.1: one bounded host ledger per output session for
+/// long-term history owners (recipe inputs, post-FX CPU backing), separate
+/// from G's 512MiB ledger. Locked only when an owner is admitted or dropped
+/// (history commit/eviction/handover), never per pixel or per GPU phase.
+#[derive(Clone)]
+pub(crate) struct HistoryHostBudget {
+    ledger: Arc<Mutex<HostLedger>>,
+}
+impl HistoryHostBudget {
+    pub(crate) fn new(limit: u64) -> Self {
+        Self {
+            ledger: Arc::new(Mutex::new(HostLedger {
+                limit,
+                ..HostLedger::default()
+            })),
+        }
+    }
+    /// `layers` full histories plus one incoming or converting entry each.
+    pub(crate) fn planning_limit(layers: usize, extent: (u32, u32)) -> Option<u64> {
+        u64::from(extent.0)
+            .checked_mul(u64::from(extent.1))?
+            .checked_mul(4)?
+            .checked_mul(u64::try_from(CAPACITY + 1).ok()?)?
+            .checked_mul(u64::try_from(layers).ok()?)
+    }
+    fn lock(&self) -> MutexGuard<'_, HostLedger> {
+        lock(&self.ledger)
+    }
+    /// All or nothing. Allocations already charged (aliases) add no bytes.
+    pub(crate) fn charge_all(
+        &self,
+        allocations: Vec<HostAllocation>,
+    ) -> Result<Vec<HistoryHostCharge>, HistoryError> {
+        let mut ledger = self.lock();
+        let mut fresh: Vec<usize> = Vec::new();
+        let mut bytes = 0u64;
+        for allocation in &allocations {
+            if !ledger.records.contains_key(&allocation.key) && !fresh.contains(&allocation.key) {
+                fresh.push(allocation.key);
+                bytes = bytes.saturating_add(allocation.bytes);
+            }
+        }
+        ledger.admit(bytes)?;
+        Ok(allocations
+            .into_iter()
+            .map(|allocation| {
+                ledger.insert(allocation.key, allocation.bytes, allocation.managed);
+                HistoryHostCharge {
+                    ledger: Arc::clone(&self.ledger),
+                    key: allocation.key,
+                    _keepalive: allocation.keepalive,
+                }
+            })
+            .collect())
+    }
+    /// Admit bytes for an owner that does not exist yet (affine materialization
+    /// split), so a rejection can still return the complete owner.
+    pub(crate) fn reserve(&self, bytes: u64) -> Result<HostReservation, HistoryError> {
+        let mut ledger = self.lock();
+        ledger.admit(bytes)?;
+        ledger.reserved_bytes += bytes;
+        ledger.high_water = ledger
+            .high_water
+            .max(ledger.unique_bytes + ledger.reserved_bytes);
+        Ok(HostReservation {
+            ledger: Arc::clone(&self.ledger),
+            bytes,
+        })
+    }
+    pub(crate) fn snapshot(&self) -> HistoryHostSnapshot {
+        let ledger = self.lock();
+        HistoryHostSnapshot {
+            limit: ledger.limit,
+            unique_bytes: ledger.unique_bytes,
+            reserved_bytes: ledger.reserved_bytes,
+            managed_alias_bytes: ledger.managed_alias_bytes,
+            allocations: ledger.records.len(),
+            charges: ledger.charges,
+            high_water_bytes: ledger.high_water,
+        }
+    }
+    fn owns(&self, charge: &HistoryHostCharge) -> bool {
+        Arc::ptr_eq(&self.ledger, &charge.ledger)
+    }
+}
+fn lock(ledger: &Mutex<HostLedger>) -> MutexGuard<'_, HostLedger> {
+    ledger.lock().unwrap_or_else(PoisonError::into_inner)
+}
+/// Admitted bytes for one not-yet-created unique owner.
+pub(crate) struct HostReservation {
+    ledger: Arc<Mutex<HostLedger>>,
+    bytes: u64,
+}
+impl HostReservation {
+    /// Bind to the owner created for these bytes; the reservation is consumed.
+    fn bind(mut self, frame: &Arc<VideoFrame>, managed: bool) -> HistoryHostCharge {
+        let allocation = HostAllocation::shared_frame(frame, managed);
+        let mut ledger = lock(&self.ledger);
+        ledger.reserved_bytes -= std::mem::take(&mut self.bytes);
+        ledger.insert(allocation.key, allocation.bytes, allocation.managed);
+        drop(ledger);
+        HistoryHostCharge {
+            ledger: Arc::clone(&self.ledger),
+            key: allocation.key,
+            _keepalive: allocation.keepalive,
+        }
+    }
+}
+impl Drop for HostReservation {
+    fn drop(&mut self) {
+        if self.bytes != 0 {
+            lock(&self.ledger).reserved_bytes -= self.bytes;
+        }
+    }
+}
+/// Host charge of one retained allocation; released when its last alias drops.
+pub(crate) struct HistoryHostCharge {
+    ledger: Arc<Mutex<HostLedger>>,
+    key: usize,
+    _keepalive: Arc<dyn Any + Send + Sync>,
+}
+impl Drop for HistoryHostCharge {
+    fn drop(&mut self) {
+        let mut ledger = lock(&self.ledger);
+        ledger.charges -= 1;
+        let Some(record) = ledger.records.get_mut(&self.key) else {
+            return;
+        };
+        record.refs -= 1;
+        if record.refs == 0 {
+            let record = ledger.records.remove(&self.key).expect("live record");
+            ledger.unique_bytes -= record.bytes;
+            if record.managed {
+                ledger.managed_alias_bytes -= record.bytes;
+            }
+        }
+    }
+}
+
+/// Where long-term CPU pixels came from. The G charge of the same CPU
+/// allocation is owned here, so it lives exactly as long as the pixels.
+pub(crate) enum CpuBackingOrigin<C> {
+    /// Existing post-FX CPU queue entry: never minted or charged by G.
+    Imported,
+    /// G's validated readback of a GPU result or exact frozen replay.
+    Materialized {
+        descriptor: MaterializationDescriptor,
+        charge: C,
+    },
+    /// G's fixed-clock CPU recovery output (canonical pixels, no recipe).
+    Recovered { charge: C },
+}
+/// Post-FX CPU history backing: pixels, their G charge/proof and their host
+/// charge as one owner. Fields drop in order, so pixels go before charges.
+pub(crate) struct CpuHistoryBacking<C> {
+    frame: Arc<VideoFrame>,
+    origin: CpuBackingOrigin<C>,
+    host: HistoryHostCharge,
+}
+impl<C> CpuHistoryBacking<C> {
+    /// Read-only pixels. Clone the owning Arc<CpuHistoryBacking>, never the
+    /// pixels alone, when a consumer must outlive this history.
+    pub(crate) fn frame(&self) -> &VideoFrame {
+        &self.frame
+    }
+    pub(crate) fn origin(&self) -> &CpuBackingOrigin<C> {
+        &self.origin
+    }
+}
+pub(crate) enum HistoryBacking<R, C> {
+    Replay(R),
+    Cpu(Arc<CpuHistoryBacking<C>>),
+}
+struct Entry<R, T, C> {
     identity: LayerResultIdentity,
     // Original G receipt/lease identity; layer normalization changes metadata only.
     resource_identity: LayerResultIdentity,
-    backing: HistoryBacking<R>,
+    backing: HistoryBacking<R, C>,
+    /// Host charges of the replay recipe's inputs; CPU backing owns its own.
+    /// Declared after `backing`, so the recipe is released first.
+    replay_host: Vec<HistoryHostCharge>,
     resident: Option<Arc<T>>,
 }
-impl<R, T> Entry<R, T> {
+impl<R, T, C> Entry<R, T, C> {
     fn meta(&self) -> HistoryMeta {
         HistoryMeta {
             id: self.identity.entry,
@@ -46,25 +338,53 @@ pub(crate) enum HistoryError {
     IsfFailed,
     Cancelled,
     InvalidPixels,
+    HostBudgetExceeded,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HistoryPhaseOutcome {
-    IsfValid { composition_valid: bool },
+    IsfValid {
+        composition_valid: bool,
+    },
+    /// G's fixed-clock recovery after an admitted ISF failure: CPU backing
+    /// only, and the provisional GPU composition is never valid.
+    RecoveredCpu,
     IsfFailed,
     Cancelled,
 }
-/// No production success constructor. P's integration adapter must consume
-/// G's validated receipt or an exact canonical CPU outcome.
-pub(crate) struct ValidatedHistoryEntries<R, T> {
+/// Sealed: fields are private and the only production constructors consume
+/// actual validated G owners (adapter). Test fixtures assemble it directly.
+pub(crate) struct ValidatedHistoryEntries<R, T, C> {
     frame: NativeFrameId,
     phase: HistoryPhaseOutcome,
-    entries: Vec<Entry<R, T>>,
+    entries: Vec<Entry<R, T, C>>,
+}
+impl<R, T, C> ValidatedHistoryEntries<R, T, C> {
+    pub(crate) fn frame(&self) -> NativeFrameId {
+        self.frame
+    }
+    pub(crate) fn phase(&self) -> HistoryPhaseOutcome {
+        self.phase
+    }
+    pub(crate) fn metadata(&self) -> Vec<HistoryMeta> {
+        self.entries.iter().map(Entry::meta).collect()
+    }
+    /// Same chain set after the composition/snapshot phase resolved. Only an
+    /// ISF-valid batch has a composition outcome to record.
+    pub(crate) fn record_composition(&mut self, valid: bool) -> Result<(), HistoryError> {
+        match &mut self.phase {
+            HistoryPhaseOutcome::IsfValid { composition_valid } => {
+                *composition_valid = valid;
+                Ok(())
+            }
+            _ => Err(HistoryError::StateMismatch),
+        }
+    }
 }
 /// Rejected affine inputs are returned intact, not silently dropped.
-pub(crate) struct HistoryCommitFailure<R, T> {
+pub(crate) struct HistoryCommitFailure<R, T, C> {
     pub error: HistoryError,
     pub plan: HistoryPlan,
-    pub entries: ValidatedHistoryEntries<R, T>,
+    pub entries: ValidatedHistoryEntries<R, T, C>,
 }
 pub(crate) struct RetiredResident<T> {
     pub entry: HistoryEntryId,
@@ -91,10 +411,9 @@ pub(crate) struct HistoryCommit<T> {
 pub(crate) struct ResidentChange<T> {
     pub retired: Vec<RetiredResident<T>>,
 }
-pub(crate) struct MaterializationAttachFailure<T> {
+pub(crate) struct MaterializationAttachFailure<M> {
     pub error: HistoryError,
-    pub resident: T,
-    pub proof: MaterializationProof,
+    pub materialized: M,
 }
 pub(crate) enum HistoryMaterializationRequest<'a, R, T> {
     Incoming {
@@ -107,7 +426,7 @@ pub(crate) enum HistoryMaterializationRequest<'a, R, T> {
     },
     UploadCpuPostFx {
         entry: HistoryEntryId,
-        frame: &'a Arc<VideoFrame>,
+        frame: &'a VideoFrame,
     },
 }
 pub(crate) struct HistorySelection<'a, R, T> {
@@ -117,7 +436,17 @@ pub(crate) struct HistorySelection<'a, R, T> {
     /// Must be included in pre-execution allocation quote.
     pub cold_materialization_required: bool,
 }
-pub(crate) struct NativeHistory<R, T> {
+/// Fixed incarnation of one input's history (output, epochs, extent).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HistoryScope {
+    pub frame_scope: NativeFrameId,
+    pub input: VideoRenderInputKey,
+    pub layer_id: VideoLayerId,
+    pub queue_epoch: u64,
+    pub source_generation: u64,
+    pub extent: (u32, u32),
+}
+pub(crate) struct NativeHistory<R, T, C> {
     context: GpuContextId,
     frame_scope: NativeFrameId,
     input: VideoRenderInputKey,
@@ -127,36 +456,44 @@ pub(crate) struct NativeHistory<R, T> {
     extent: (u32, u32),
     revision: u64,
     last_sequence: Option<u64>,
-    entries: Vec<Entry<R, T>>,
+    entries: Vec<Entry<R, T, C>>,
+    host: HistoryHostBudget,
 }
-impl<R, T: HistoryResident> NativeHistory<R, T> {
+impl<R, T: HistoryResident, C> NativeHistory<R, T, C> {
     pub(crate) fn new(
         context: GpuContextId,
-        frame_scope: NativeFrameId,
-        input: VideoRenderInputKey,
-        layer_id: VideoLayerId,
-        queue_epoch: u64,
-        source_generation: u64,
-        extent: (u32, u32),
+        scope: HistoryScope,
+        host: HistoryHostBudget,
     ) -> Result<Self, HistoryError> {
-        if extent.0 == 0 || extent.1 == 0 {
+        if scope.extent.0 == 0 || scope.extent.1 == 0 {
             return Err(HistoryError::InvalidPixels);
         }
-        if frame_scope.project_epoch != input.project_render_epoch {
+        if scope.frame_scope.project_epoch != scope.input.project_render_epoch {
             return Err(HistoryError::IdentityMismatch);
         }
         Ok(Self {
             context,
-            frame_scope,
-            input,
-            layer_id,
-            queue_epoch,
-            source_generation,
-            extent,
+            frame_scope: scope.frame_scope,
+            input: scope.input,
+            layer_id: scope.layer_id,
+            queue_epoch: scope.queue_epoch,
+            source_generation: scope.source_generation,
+            extent: scope.extent,
             revision: 0,
             last_sequence: None,
             entries: Vec::new(),
+            host,
         })
+    }
+    pub(crate) fn scope(&self) -> HistoryScope {
+        HistoryScope {
+            frame_scope: self.frame_scope,
+            input: self.input,
+            layer_id: self.layer_id,
+            queue_epoch: self.queue_epoch,
+            source_generation: self.source_generation,
+            extent: self.extent,
+        }
     }
     pub(crate) fn metadata(&self) -> Vec<HistoryMeta> {
         self.entries.iter().map(Entry::meta).collect()
@@ -218,8 +555,11 @@ impl<R, T: HistoryResident> NativeHistory<R, T> {
                         HistoryBacking::Replay(frozen) => {
                             HistoryMaterializationRequest::Replay { entry: id, frozen }
                         }
-                        HistoryBacking::Cpu(frame) => {
-                            HistoryMaterializationRequest::UploadCpuPostFx { entry: id, frame }
+                        HistoryBacking::Cpu(backing) => {
+                            HistoryMaterializationRequest::UploadCpuPostFx {
+                                entry: id,
+                                frame: backing.frame(),
+                            }
                         }
                     },
                 })
@@ -270,15 +610,54 @@ impl<R, T: HistoryResident> NativeHistory<R, T> {
         }
         Ok(())
     }
+    fn check_incoming(
+        &self,
+        e: &Entry<R, T, C>,
+        phase: HistoryPhaseOutcome,
+    ) -> Result<(), HistoryError> {
+        self.check_identity(&e.identity)?;
+        if e.resource_identity != e.identity {
+            return Err(HistoryError::IdentityMismatch);
+        }
+        if let Some(r) = &e.resident {
+            if r.identity() != &e.identity || r.allocation().context != self.context {
+                return Err(HistoryError::IdentityMismatch);
+            }
+        }
+        if e.replay_host.iter().any(|charge| !self.host.owns(charge)) {
+            return Err(HistoryError::IdentityMismatch);
+        }
+        match &e.backing {
+            HistoryBacking::Cpu(backing) => {
+                if !self.host.owns(&backing.host) {
+                    return Err(HistoryError::IdentityMismatch);
+                }
+                check_pixels(&backing.frame, &e.resource_identity)?;
+                if phase == HistoryPhaseOutcome::RecoveredCpu
+                    && (e.resident.is_some()
+                        || !matches!(backing.origin, CpuBackingOrigin::Recovered { .. }))
+                {
+                    return Err(HistoryError::StateMismatch);
+                }
+            }
+            HistoryBacking::Replay(_) if phase == HistoryPhaseOutcome::RecoveredCpu => {
+                // A failed GPU phase never becomes a successful recipe.
+                return Err(HistoryError::StateMismatch);
+            }
+            HistoryBacking::Replay(_) => {}
+        }
+        Ok(())
+    }
     pub(crate) fn commit_validated(
         &mut self,
         plan: HistoryPlan,
-        mut entries: ValidatedHistoryEntries<R, T>,
-    ) -> Result<HistoryCommit<T>, HistoryCommitFailure<R, T>> {
+        mut entries: ValidatedHistoryEntries<R, T, C>,
+    ) -> Result<HistoryCommit<T>, HistoryCommitFailure<R, T, C>> {
         let checked = (|| {
             self.check_plan(&plan)?;
-            let composition_valid = match entries.phase {
+            let output_phases_valid = match entries.phase {
                 HistoryPhaseOutcome::IsfValid { composition_valid } => composition_valid,
+                HistoryPhaseOutcome::RecoveredCpu => false,
                 HistoryPhaseOutcome::IsfFailed => return Err(HistoryError::IsfFailed),
                 HistoryPhaseOutcome::Cancelled => return Err(HistoryError::Cancelled),
             };
@@ -290,25 +669,14 @@ impl<R, T: HistoryResident> NativeHistory<R, T> {
                 return Err(HistoryError::IdentityMismatch);
             }
             for (e, meta) in entries.entries.iter().zip(plan.incoming()) {
-                self.check_identity(&e.identity)?;
                 if e.meta() != *meta || e.identity.frame != entries.frame {
                     return Err(HistoryError::IdentityMismatch);
                 }
-                if e.resource_identity != e.identity {
-                    return Err(HistoryError::IdentityMismatch);
-                }
-                if let Some(r) = &e.resident {
-                    if r.identity() != &e.identity || r.allocation().context != self.context {
-                        return Err(HistoryError::IdentityMismatch);
-                    }
-                }
-                if let HistoryBacking::Cpu(frame) = &e.backing {
-                    check_pixels(frame, &e.resource_identity)?;
-                }
+                self.check_incoming(e, entries.phase)?;
             }
-            Ok((next_revision, composition_valid))
+            Ok((next_revision, output_phases_valid))
         })();
-        let (next_revision, composition_valid) = match checked {
+        let (next_revision, output_phases_valid) = match checked {
             Ok(v) => v,
             Err(error) => {
                 return Err(HistoryCommitFailure {
@@ -335,6 +703,9 @@ impl<R, T: HistoryResident> NativeHistory<R, T> {
         for e in &mut pool {
             retire(e, &mut retired);
         }
+        // Evicted recipes/CPU backing and their host charges drop here; any
+        // GPU owner moved to `retired` keeps its G charge until retirement.
+        drop(pool);
         self.entries = survivors;
         self.trim_residents(plan.selected(), &mut retired);
         self.revision = next_revision;
@@ -343,7 +714,7 @@ impl<R, T: HistoryResident> NativeHistory<R, T> {
         }
         Ok(HistoryCommit {
             retired,
-            output_phases_valid: composition_valid,
+            output_phases_valid,
         })
     }
     fn trim_residents(
@@ -366,19 +737,22 @@ impl<R, T: HistoryResident> NativeHistory<R, T> {
             retire(&mut self.entries[i], retired);
         }
     }
-    pub(crate) fn install_materialized(
+    pub(crate) fn install_materialized<M>(
         &mut self,
         expected: HistoryEntryId,
-        resident: T,
-        proof: MaterializationProof,
-    ) -> Result<ResidentChange<T>, MaterializationAttachFailure<T>> {
+        materialized: M,
+    ) -> Result<ResidentChange<T>, MaterializationAttachFailure<M>>
+    where
+        M: MaterializedResident<Resident = T>,
+    {
         let checked = (|| {
             let e = self
                 .entries
                 .iter()
                 .find(|e| e.identity.entry == expected)
                 .ok_or(HistoryError::IdentityMismatch)?;
-            let d = proof.descriptor();
+            let d = materialized.descriptor();
+            let resident = materialized.resident();
             if d.layer != e.resource_identity
                 || resident.identity() != &e.resource_identity
                 || d.allocation != resident.allocation()
@@ -396,8 +770,7 @@ impl<R, T: HistoryResident> NativeHistory<R, T> {
             Err(error) => {
                 return Err(MaterializationAttachFailure {
                     error,
-                    resident,
-                    proof,
+                    materialized,
                 })
             }
         };
@@ -408,12 +781,12 @@ impl<R, T: HistoryResident> NativeHistory<R, T> {
             .find(|e| e.identity.entry == expected)
             .unwrap();
         retire(e, &mut retired);
-        e.resident = Some(Arc::new(resident));
+        e.resident = Some(Arc::new(materialized.into_resident()));
         self.trim_residents(Some(expected), &mut retired);
         self.revision = revision;
         Ok(ResidentChange { retired })
     }
-    pub(crate) fn begin_cpu_handover(self) -> CpuHistoryHandover<R, T> {
+    pub(crate) fn begin_cpu_handover(self) -> CpuHistoryHandover<R, T, C> {
         let mut handover = CpuHistoryHandover {
             history: self,
             retired: Vec::new(),
@@ -426,45 +799,112 @@ impl<R, T: HistoryResident> NativeHistory<R, T> {
         handover
     }
     pub(crate) fn import_cpu_history(
-        snapshot: CpuHistorySnapshot,
+        snapshot: CpuHistorySnapshot<C>,
         context: GpuContextId,
     ) -> Result<Self, HistoryError> {
-        let mut h = Self::new(
-            context,
-            snapshot.frame_scope,
-            snapshot.input,
-            snapshot.layer_id,
-            snapshot.queue_epoch,
-            snapshot.source_generation,
-            snapshot.extent,
-        )?;
+        let mut h = Self::new(context, snapshot.scope, snapshot.host)?;
         if snapshot.entries.len() > CAPACITY {
             return Err(HistoryError::InvalidPolicy);
         }
-        for (mut identity, frame) in snapshot.entries {
+        for (mut identity, backing) in snapshot.entries {
             identity.context = context;
             identity.origin = LayerOrigin::ImportedCpu;
+            h.check_identity(&identity)?;
+            if !h.host.owns(&backing.host) {
+                return Err(HistoryError::IdentityMismatch);
+            }
+            let resource_identity = LayerResultIdentity {
+                layer_id: backing.frame.layer_id,
+                ..identity
+            };
+            check_pixels(&backing.frame, &resource_identity)?;
+            h.push_imported(identity, resource_identity, backing);
+        }
+        plan_history_update(&h.metadata(), &[], CAPACITY, 0)
+            .map_err(|_| HistoryError::InvalidPolicy)?;
+        Ok(h)
+    }
+    /// CPU-to-native entry from the canonical CPU queue (section 5.4): every
+    /// post-FX survivor moves as Imported CPU backing; no clock or recipe is
+    /// invented. The caller mints fresh entry IDs in canonical ascending order.
+    pub(crate) fn import_canonical_queue(
+        context: GpuContextId,
+        scope: HistoryScope,
+        host: HistoryHostBudget,
+        frames: Vec<(HistoryEntryId, Arc<VideoFrame>)>,
+    ) -> Result<Self, HistoryError> {
+        let mut h = Self::new(context, scope, host)?;
+        if frames.len() > CAPACITY {
+            return Err(HistoryError::InvalidPolicy);
+        }
+        let mut checked = Vec::with_capacity(frames.len());
+        for (entry, frame) in frames {
+            let identity = LayerResultIdentity {
+                context,
+                frame: h.frame_scope,
+                entry,
+                layer_id: h.layer_id,
+                source_generation: h.source_generation,
+                content_sequence: entry.sequence,
+                pts_ms: frame.pts_ms,
+                duration_ms: frame.duration_ms,
+                width: frame.width,
+                height: frame.height,
+                format: frame.format,
+                origin: LayerOrigin::ImportedCpu,
+            };
             h.check_identity(&identity)?;
             let resource_identity = LayerResultIdentity {
                 layer_id: frame.layer_id,
                 ..identity
             };
             check_pixels(&frame, &resource_identity)?;
-            identity.layer_id = h.layer_id;
-            h.last_sequence = Some(h.last_sequence.unwrap_or(0).max(identity.entry.sequence));
-            h.entries.push(Entry {
-                identity,
-                resource_identity,
-                backing: HistoryBacking::Cpu(frame),
-                resident: None,
-            });
+            checked.push((identity, resource_identity, frame));
         }
-        plan_history_update(&h.metadata(), &[], CAPACITY, 0)
+        let metadata: Vec<_> = checked
+            .iter()
+            .map(|(i, _, _)| HistoryMeta {
+                id: i.entry,
+                pts_ms: i.pts_ms,
+                duration_ms: i.duration_ms,
+            })
+            .collect();
+        plan_history_update(&metadata, &[], CAPACITY, 0)
             .map_err(|_| HistoryError::InvalidPolicy)?;
+        let charges = h.host.charge_all(
+            checked
+                .iter()
+                .map(|(_, _, frame)| HostAllocation::shared_frame(frame, false))
+                .collect(),
+        )?;
+        for ((identity, resource_identity, frame), host) in checked.into_iter().zip(charges) {
+            let backing = Arc::new(CpuHistoryBacking {
+                frame,
+                origin: CpuBackingOrigin::Imported,
+                host,
+            });
+            h.push_imported(identity, resource_identity, backing);
+        }
         Ok(h)
     }
+    fn push_imported(
+        &mut self,
+        mut identity: LayerResultIdentity,
+        resource_identity: LayerResultIdentity,
+        backing: Arc<CpuHistoryBacking<C>>,
+    ) {
+        identity.layer_id = self.layer_id;
+        self.last_sequence = Some(self.last_sequence.unwrap_or(0).max(identity.entry.sequence));
+        self.entries.push(Entry {
+            identity,
+            resource_identity,
+            backing: HistoryBacking::Cpu(backing),
+            replay_host: Vec::new(),
+            resident: None,
+        });
+    }
 }
-fn retire<R, T>(e: &mut Entry<R, T>, retired: &mut Vec<RetiredResident<T>>) {
+fn retire<R, T, C>(e: &mut Entry<R, T, C>, retired: &mut Vec<RetiredResident<T>>) {
     if let Some(owner) = e.resident.take() {
         retired.push(RetiredResident {
             entry: e.identity.entry,
@@ -488,20 +928,27 @@ fn check_pixels(frame: &VideoFrame, i: &LayerResultIdentity) -> Result<(), Histo
     }
     Ok(())
 }
-pub(crate) struct CpuHistorySnapshot {
-    frame_scope: NativeFrameId,
-    input: VideoRenderInputKey,
-    layer_id: VideoLayerId,
-    queue_epoch: u64,
-    source_generation: u64,
-    extent: (u32, u32),
-    entries: Vec<(LayerResultIdentity, Arc<VideoFrame>)>,
+/// Complete, published CPU history: all survivors, each with its whole owner.
+pub(crate) struct CpuHistorySnapshot<C> {
+    scope: HistoryScope,
+    host: HistoryHostBudget,
+    entries: Vec<(LayerResultIdentity, Arc<CpuHistoryBacking<C>>)>,
 }
-impl CpuHistorySnapshot {
+impl<C> CpuHistorySnapshot<C> {
+    pub(crate) fn scope(&self) -> HistoryScope {
+        self.scope
+    }
     /// Identity carries the canonical queue layer. Shared CPU backing retains
     /// its diagnostic tag; the CPU adapter publishes by queue identity.
-    pub(crate) fn entries(&self) -> impl Iterator<Item = (&LayerResultIdentity, &Arc<VideoFrame>)> {
-        self.entries.iter().map(|(i, f)| (i, f))
+    pub(crate) fn entries(
+        &self,
+    ) -> impl Iterator<Item = (&LayerResultIdentity, &Arc<CpuHistoryBacking<C>>)> {
+        self.entries.iter().map(|(i, b)| (i, b))
+    }
+    /// For the canonical CPU queue: it must retain each whole owner (pixels
+    /// with their charges), not a pixel Arc split from it.
+    pub(crate) fn into_entries(self) -> Vec<(LayerResultIdentity, Arc<CpuHistoryBacking<C>>)> {
+        self.entries
     }
 }
 pub(crate) enum CpuHistoryMaterializationRequest<'a, R, T> {
@@ -514,15 +961,29 @@ pub(crate) enum CpuHistoryMaterializationRequest<'a, R, T> {
         frozen: &'a R,
     },
 }
-pub(crate) struct CpuHistoryHandover<R, T> {
-    history: NativeHistory<R, T>,
+/// Full-history barrier (section 5.4). Holds a mixed ledger of completed CPU
+/// backing and unmaterialized recipe/resident owners until every survivor is
+/// CPU. A cancelled or failed step leaves it intact; nothing is published.
+pub(crate) struct CpuHistoryHandover<R, T, C> {
+    history: NativeHistory<R, T, C>,
     retired: Vec<RetiredResident<T>>,
 }
-pub(crate) struct CpuHandoverFailure {
+pub(crate) struct CpuHandoverFailure<M> {
     pub error: HistoryError,
-    pub exact: ExactCpuLayer,
+    pub materialized: M,
 }
-impl<R, T: HistoryResident> CpuHistoryHandover<R, T> {
+impl<R, T: HistoryResident, C> CpuHistoryHandover<R, T, C> {
+    pub(crate) fn len(&self) -> usize {
+        self.history.entries.len()
+    }
+    /// Survivors still owned as recipe/resident (not yet CPU).
+    pub(crate) fn pending(&self) -> usize {
+        self.history
+            .entries
+            .iter()
+            .filter(|e| matches!(e.backing, HistoryBacking::Replay(_)))
+            .count()
+    }
     pub(crate) fn next_entry(&self) -> Option<CpuHistoryMaterializationRequest<'_, R, T>> {
         self.history.entries.iter().find_map(|e| match &e.backing {
             HistoryBacking::Cpu(_) => None,
@@ -538,11 +999,17 @@ impl<R, T: HistoryResident> CpuHistoryHandover<R, T> {
             }),
         })
     }
-    pub(crate) fn accept_materialized(
+    /// Converts one entry. Pixels, descriptor and G charge become one CPU
+    /// owner; only then are this entry's recipe, its host charges and its
+    /// resident released. Any rejection returns the complete owner unsplit.
+    pub(crate) fn accept_materialized<M>(
         &mut self,
         expected: HistoryEntryId,
-        exact: ExactCpuLayer,
-    ) -> Result<(), CpuHandoverFailure> {
+        materialized: M,
+    ) -> Result<(), CpuHandoverFailure<M>>
+    where
+        M: MaterializedCpuLayer<Charge = C>,
+    {
         let checked = (|| {
             let e = self
                 .history
@@ -550,7 +1017,7 @@ impl<R, T: HistoryResident> CpuHistoryHandover<R, T> {
                 .iter()
                 .find(|e| e.identity.entry == expected)
                 .ok_or(HistoryError::IdentityMismatch)?;
-            let d = exact.proof().descriptor();
+            let d = materialized.descriptor();
             if matches!(e.backing, HistoryBacking::Cpu(_))
                 || d.layer != e.resource_identity
                 || d.allocation.context != self.history.context
@@ -561,21 +1028,38 @@ impl<R, T: HistoryResident> CpuHistoryHandover<R, T> {
             {
                 return Err(HistoryError::IdentityMismatch);
             }
-            check_pixels(exact.frame(), &e.resource_identity)
+            check_pixels(materialized.frame(), &e.resource_identity)?;
+            self.history
+                .host
+                .reserve(materialized.frame().data.capacity() as u64)
         })();
-        if let Err(error) = checked {
-            return Err(CpuHandoverFailure { error, exact });
-        }
+        let reservation = match checked {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                return Err(CpuHandoverFailure {
+                    error,
+                    materialized,
+                })
+            }
+        };
+        let layer_id = self.history.layer_id;
         let e = self
             .history
             .entries
             .iter_mut()
             .find(|e| e.identity.entry == expected)
             .unwrap();
-        let (mut frame, _proof) = exact.into_parts();
-        frame.layer_id = self.history.layer_id;
-        // Release this raw recipe before materializing the next entry.
-        e.backing = HistoryBacking::Cpu(Arc::new(frame));
+        let (mut frame, descriptor, charge) = materialized.into_charged_parts();
+        frame.layer_id = layer_id;
+        let frame = Arc::new(frame);
+        let host = reservation.bind(&frame, true);
+        // Release this raw recipe (and its host charges) before the next entry.
+        e.backing = HistoryBacking::Cpu(Arc::new(CpuHistoryBacking {
+            frame,
+            origin: CpuBackingOrigin::Materialized { descriptor, charge },
+            host,
+        }));
+        e.replay_host.clear();
         e.resource_identity = e.identity;
         retire(e, &mut self.retired);
         Ok(())
@@ -583,31 +1067,31 @@ impl<R, T: HistoryResident> CpuHistoryHandover<R, T> {
     pub(crate) fn take_retired(&mut self) -> Vec<RetiredResident<T>> {
         std::mem::take(&mut self.retired)
     }
-    pub(crate) fn finish(self) -> Result<CpuHistorySnapshot, Self> {
+    pub(crate) fn finish(self) -> Result<CpuHistorySnapshot<C>, Self> {
         if self.next_entry().is_some() || !self.retired.is_empty() {
             return Err(self);
         }
-        let h = self.history;
+        let scope = self.history.scope();
+        let NativeHistory { entries, host, .. } = self.history;
         Ok(CpuHistorySnapshot {
-            frame_scope: h.frame_scope,
-            input: h.input,
-            layer_id: h.layer_id,
-            queue_epoch: h.queue_epoch,
-            source_generation: h.source_generation,
-            extent: h.extent,
-            entries: h
-                .entries
+            scope,
+            host,
+            entries: entries
                 .into_iter()
                 .map(|e| {
-                    let HistoryBacking::Cpu(frame) = e.backing else {
+                    let HistoryBacking::Cpu(backing) = e.backing else {
                         unreachable!("checked all slots")
                     };
-                    (e.identity, frame)
+                    (e.identity, backing)
                 })
                 .collect(),
         })
     }
 }
+
+#[path = "native_gpu_history_adapter.rs"]
+pub(crate) mod adapter;
+
 #[cfg(test)]
 #[path = "native_gpu_history_tests.rs"]
 mod tests;

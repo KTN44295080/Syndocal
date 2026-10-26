@@ -674,16 +674,32 @@ fn shared_present_maps_committed_premapping_once_and_matches_cpu_oracle() {
         vec!["before_acquire", "before_present"]
     );
     // Steady state presents without a host wait: the submission is still the
-    // presenter's, and G admits no next frame until it is drained.
+    // presenter's. G3: that retiring present does not block the next logical
+    // frame, but a second present is refused while it retires (before any
+    // scope, allocation or write of the next mapping phase).
     assert_eq!(presenter.retirements.len(), 1);
     assert!(presenter.retirements[0].pending.is_some());
-    let next = NativeAllocationPlan::new(receipt.frame());
+    let next_frame = NativeFrameId {
+        request_sequence: receipt.frame().request_sequence + 1,
+        ..receipt.frame()
+    };
+    let next = NativeAllocationPlan::new(next_frame);
     let quote = env.fixture.owner.quote(&next).unwrap();
     let reservation = env.fixture.owner.reserve(quote).unwrap();
-    match env.fixture.owner.begin_frame(receipt.frame(), reservation) {
+    let mut txn = match env.fixture.owner.begin_frame(next_frame, reservation) {
+        Ok(txn) => txn,
+        Err(fault) => panic!("a retiring present blocked the next logical frame: {fault:?}"),
+    };
+    match txn.begin_phase(GpuPhase::MappingPresent) {
         Err(fault) => assert_eq!(fault.kind, NativeGpuFaultKind::StateMismatch),
-        Ok(_) => panic!("G admitted a frame while the present submission was undrained"),
+        Ok(_) => panic!("G admitted a second present while one was retiring"),
     }
+    let pending = txn.finish();
+    assert!(
+        presenter.retirements[0].pending.is_some(),
+        "admitting the next logical frame needed no present drain"
+    );
+    drop(await_transaction(&mut env.fixture.owner, pending, &|| false).unwrap());
     presenter.drain_retirements(&mut env.fixture.owner).unwrap();
     assert!(presenter.retirements.is_empty());
     wait_for_allocations(&mut env.fixture.owner, 4);

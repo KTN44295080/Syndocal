@@ -502,8 +502,8 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
 
     /// Nonblocking: reap present submissions that G resolved. A resolved
     /// validation failure faults the presenter. Returns the pending count.
-    /// I calls this each tick before the next `begin_frame` (G admits one
-    /// in-flight transaction per owner).
+    /// I calls this each tick; since G3 a retiring present no longer blocks
+    /// the next logical frame's `begin_frame`, so no drain is needed there.
     pub(crate) fn poll_retirements(
         &mut self,
         owner: &mut NativeGpuOwner,
@@ -549,9 +549,10 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
         }
     }
 
-    /// Bounded backpressure: G admits one in-flight transaction per owner, so
-    /// the previous present submission must resolve before the next frame's
-    /// `begin_frame` (I's tick) or this presenter's next transaction.
+    /// Bounded backpressure: G refuses a second MappingPresent while one
+    /// retires, so the previous present submission must resolve before this
+    /// presenter's next present (and before Stop/re-arm). The next logical
+    /// frame is admitted without it (G3).
     pub(crate) fn drain_retirements(
         &mut self,
         owner: &mut NativeGpuOwner,
