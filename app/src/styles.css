@@ -40625,7 +40625,43 @@ button.timelineExternalSourceCard:active,
 .dmxPatchSelectionControls { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 2px; }
 .dmxPatchSelectionControls label { display: flex; align-items: center; gap: 4px; }
 .dmxPatchSelectionControls input { width: 90px; }
-.dmxPatchSelectionControls > span { color: var(--muted); }
+.dmxPatchSelectionHelp > summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 28px;
+  box-sizing: border-box;
+  border: 1px solid var(--theme-line);
+  border-radius: 2px;
+  background: var(--theme-raised);
+  color: var(--theme-text);
+  font-size: var(--fs-control);
+  cursor: pointer;
+  list-style: none;
+}
+.dmxPatchSelectionHelp > summary::-webkit-details-marker { display: none; }
+.dmxPatchSelectionHelp[open] > span {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 4px);
+  right: 0;
+  width: max-content;
+  max-width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--theme-line-strong);
+  border-radius: 2px;
+  padding: 8px;
+  background: var(--theme-bg);
+  color: var(--theme-text);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+/* Compact panes keep help inside the Selection popup's scrollport. */
+@container dmx-patch-desk (max-width: 450px) {
+  .dmxPatchSelectionHelp[open] { flex-basis: 100%; min-width: 0; max-width: 100%; }
+  .dmxPatchSelectionHelp[open] > span { position: static; display: block; width: auto; }
+}
 
 .dmxPatchMap.withFixtureSelection { grid-template-rows: auto auto minmax(0, 1fr); }
 

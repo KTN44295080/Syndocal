@@ -145,6 +145,7 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
   let patchMap: HTMLDivElement | undefined;
   let addressGrid: HTMLDivElement | undefined;
   let universeOverview: HTMLDetailsElement | undefined;
+  let selectionHelp: HTMLDetailsElement | undefined;
   let patchLayoutResizeObserver: ResizeObserver | undefined;
   let patchLayoutResizeFrame = 0;
   let selectionFocusTarget: HTMLElement | undefined;
@@ -476,6 +477,28 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
       onClick={() => props.onViewMode("list")} aria-pressed={props.viewMode === "list"}>List</button>
   </div>;
 
+  const selectionHelpControl = () => (
+    <details class="dmxPatchSelectionHelp" ref={(element) => { selectionHelp = element; }}
+      onToggle={(event) => {
+        if (event.currentTarget.open) {
+          if (universeOverview) universeOverview.open = false;
+          if (!compactHeader()) setSelectionExpanded(false);
+        }
+        schedulePatchLayout();
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && event.currentTarget.open) {
+          event.preventDefault();
+          event.stopPropagation();
+          event.currentTarget.open = false;
+          event.currentTarget.querySelector("summary")?.focus({ preventScroll: true });
+        }
+      }}>
+      <summary aria-label="Ctrl / Cmd: toggle · Shift: range · Drag: move">?</summary>
+      <span>Ctrl / Cmd: toggle · Shift: range · Drag: move</span>
+    </details>
+  );
+
   return (
     <>
       <div class="dmxPatchMap withFixtureSelection" ref={(element) => { patchMap = element; }}
@@ -522,7 +545,10 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
             <details class="dmxUniverseOverviewDisclosure" data-dmx-universe-disclosure
               ref={(element) => { universeOverview = element; }}
               onToggle={(event) => {
-                if (event.currentTarget.open) setSelectionExpanded(false);
+                if (event.currentTarget.open) {
+                  setSelectionExpanded(false);
+                  if (selectionHelp) selectionHelp.open = false;
+                }
                 schedulePatchLayout();
               }}>
               <summary aria-label="DMX view and universe overview">{compactHeader() ? "View" : "Overview"}</summary>
@@ -588,11 +614,13 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
                 </For>
               </div>
             </details>
+            <Show when={!compactHeader()}>{selectionHelpControl()}</Show>
             <button class="dmxPatchSelectionToggle" data-patch-selection-toggle
               title="Patch selection and move" aria-label="Patch selection and move"
               aria-expanded={selectionExpanded()} aria-controls={selectionControlsId}
               onClick={() => {
                 if (universeOverview) universeOverview.open = false;
+                if (selectionHelp) selectionHelp.open = false;
                 setSelectionExpanded(!selectionExpanded());
                 schedulePatchLayout();
               }}>
@@ -611,7 +639,7 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
             const anchor = fixtures.reduce((first, fixture) => fixture.address < first.address ? fixture : first);
             props.onFixtureDragStart(anchor, fixtures); void props.onFixtureDrop(moveAddress());
           }}>Move Selected</button>
-          <span>Ctrl / Cmd: toggle · Shift: range · Drag: move</span>
+          <Show when={compactHeader()}>{selectionHelpControl()}</Show>
         </div>
         <Show when={activeDndStatus()}>
           {(status) => (

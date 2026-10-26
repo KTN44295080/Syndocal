@@ -18817,7 +18817,8 @@ async function exercisePatchLayoutInPage() {
   const closeSelection = async () => { if (compact && toggle.getAttribute('aria-expanded') === 'true') { toggle.click(); await pause(); } };
   evidence.viewport = { width:innerWidth, height:innerHeight, dpr:devicePixelRatio, scale:getComputedStyle(document.documentElement).getPropertyValue('--ui-scale'), compact };
   evidence.header = [...header.querySelectorAll('button,select,summary')].filter(el => !el.closest('.dmxUniverseOverviewContent') && visible(el)).map(inspect);
-  check('headerControlsReachable', evidence.header.length === (compact ? 3 : 4) && evidence.header.every(reachable));
+  // Wide panes add the hint disclosure; compact panes host it in Selection.
+  check('headerControlsReachable', evidence.header.length === (compact ? 3 : 5) && evidence.header.every(reachable));
   const headerHeading=rect(header.querySelector('h3'));
   check('headerIsOneRow', evidence.header.every(item => Math.abs(item.y+item.height/2-headerHeading.y-headerHeading.height/2)<1.5));
   check('nextFreeIsUnique', [...document.querySelectorAll('.layoutSetup.setupMode-patch button')].filter(el => /^(Next Free|次の空き)$/.test(el.textContent.trim())).length===1);
