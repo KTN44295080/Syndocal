@@ -182,6 +182,8 @@ impl IsfGpuRuntime {
 pub(crate) struct IndependentClockReservation {
     first: u32,
     count: usize,
+    #[cfg(test)]
+    epoch: Arc<()>,
 }
 
 impl IndependentClockReservation {
@@ -197,7 +199,15 @@ impl IsfGpuRuntime {
         IndependentClockReservation {
             first: self.frame_index,
             count,
+            #[cfg(test)]
+            epoch: Arc::clone(&self.resources.native_clock_epoch),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn native_clocks_current(&self, clocks: &IndependentClockReservation) -> bool {
+        self.frame_index == clocks.first
+            && Arc::ptr_eq(&self.resources.native_clock_epoch, &clocks.epoch)
     }
 
     pub(crate) fn commit_independent_clocks(&mut self, clocks: IndependentClockReservation) {
@@ -205,7 +215,7 @@ impl IsfGpuRuntime {
             self.frame_index, clocks.first,
             "a logical chain cannot be committed twice"
         );
-        self.frame_index = clocks.first.wrapping_add(clocks.count as u32);
+        self.advance_frame_index(clocks.count as u32);
     }
 }
 

@@ -37,6 +37,8 @@ pub use date::{isf_date_from_system_time, isf_date_now};
 mod independent;
 #[path = "isf_pass_runtime.rs"]
 mod pass_runtime;
+#[cfg(test)]
+pub(crate) use independent::IndependentClockReservation;
 pub(crate) use independent::{IndependentChain, StackBatch};
 #[path = "isf_resources.rs"]
 mod resources;
@@ -338,7 +340,7 @@ impl IsfGpuRuntime {
             &keys,
         );
         if rendered.is_ok() && !stages.is_empty() {
-            self.frame_index = self.frame_index.wrapping_add(1);
+            self.advance_frame_index(1);
         }
         rendered
     }
@@ -442,7 +444,7 @@ impl IsfGpuRuntime {
             frame_index,
         );
         if !stages.is_empty() {
-            self.frame_index = self.frame_index.wrapping_add(1);
+            self.advance_frame_index(1);
         }
         result
     }
@@ -486,7 +488,7 @@ impl IsfGpuRuntime {
     ) -> Result<(), IsfRuntimeError> {
         #[cfg(test)]
         self.reject_ownerless_native_entry()?;
-        self.frame_index = self.frame_index.wrapping_add(1);
+        self.advance_frame_index(1);
         self.last_stack_stage_count = 0;
         self.last_stack_render_us = 0;
         Ok(())
@@ -494,6 +496,17 @@ impl IsfGpuRuntime {
 
     pub fn pipeline_count(&self) -> usize {
         self.pipelines.len()
+    }
+
+    fn advance_frame_index(&mut self, count: u32) {
+        let next = self.frame_index.wrapping_add(count);
+        #[cfg(test)]
+        if next < self.frame_index {
+            // Rotate only on wrap; ordinary advancement allocates nothing.
+            // Existing reservations keep the old token alive, preventing ABA.
+            self.resources.native_clock_epoch = Arc::new(());
+        }
+        self.frame_index = next;
     }
 
     pub fn last_stack_stage_count(&self) -> usize {

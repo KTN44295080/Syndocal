@@ -132,6 +132,32 @@ fn assert_inputs(inputs: &[Arc<VideoFrame>], original: &[VideoFrame], owners: us
 }
 
 #[test]
+fn isf_independent_g2_wrapped_clock_does_not_revive_a_previous_epoch_reservation() {
+    let mut runtime = gpu();
+    let original = runtime.reserve_independent_clocks(3);
+    assert_eq!(original.at(0), 0);
+    assert!(runtime.native_clocks_current(&original));
+    // Bound the full u32 cycle to two canonical advances, rather than render
+    // billions of frames, while keeping the old reservation alive throughout.
+    runtime.advance_frame_index(u32::MAX);
+    let crossing = runtime.reserve_independent_clocks(3);
+    assert_eq!(
+        [crossing.at(0), crossing.at(1), crossing.at(2)],
+        [u32::MAX, 0, 1]
+    );
+    runtime.advance_frame_index(1);
+    assert_eq!(runtime.frame_index, 0);
+    assert!(!runtime.native_clocks_current(&original));
+    assert!(!runtime.native_clocks_current(&crossing));
+    let current = runtime.reserve_independent_clocks(3);
+    assert_eq!(current.at(0), original.at(0));
+    assert!(runtime.native_clocks_current(&current));
+    runtime.commit_independent_clocks(current);
+    assert_eq!(runtime.frame_index, 3);
+    assert!(!runtime.native_clocks_current(&original));
+}
+
+#[test]
 fn isf_independent_batch_matches_sequential_pixels_metadata_and_shared_ownership() {
     let shader = prepare_isf_shader(INCREMENT).unwrap();
     let stages = vec![vec![stage(&shader); 3]; 3];

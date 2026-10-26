@@ -64,6 +64,10 @@ pub(super) struct IsfResourcePool {
     // Only with_native_context associates the pool with the shared broker.
     #[cfg(test)]
     pub(super) native_context: Option<std::sync::Arc<crate::native_gpu_context::NativeGpuContext>>,
+    // Identifies this logical runtime and a non-wrapping FRAMEINDEX epoch.
+    // Default fixtures get their own token without another runtime constructor.
+    #[cfg(test)]
+    pub(super) native_clock_epoch: std::sync::Arc<()>,
     #[cfg(test)]
     pub(super) native_cpu_inputs:
         Vec<std::sync::Weak<crate::native_gpu_result::NativeCpuFrameOwner>>,

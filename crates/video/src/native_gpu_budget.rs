@@ -526,6 +526,29 @@ impl NativeGpuBudget {
         Ok(())
     }
 
+    /// The root binder matches allocations by kind/capacity. Before G uses it,
+    /// every other phase's new slots must already be split into child reserves.
+    /// Keep family-wide validation separate: P still needs to validate its own
+    /// child plan. Additional existing aliases for validated history are safe.
+    pub(crate) fn validate_root_plan(
+        &self,
+        reservation: &FrameReservation,
+        plan: &NativeAllocationPlan,
+    ) -> Result<(), NativeGpuFault> {
+        self.validate_reserved_plan(reservation, plan)?;
+        let root = &self.reservations[&reservation.id];
+        if root.entries.len() != plan.new.len()
+            || root.entries.iter().any(|entry| !plan.new.contains(entry))
+        {
+            return Err(self.fault(
+                Some(plan.frame),
+                NativeGpuFaultKind::StateMismatch,
+                "split other phase reservations before binding the exact G root plan",
+            ));
+        }
+        Ok(())
+    }
+
     /// A serial CPU admission is an unused whole-call envelope, not a G/P
     /// sub-plan. It may be returned before issuing exact, drained chunk plans
     /// only when every original slot and alias is still present at the root.

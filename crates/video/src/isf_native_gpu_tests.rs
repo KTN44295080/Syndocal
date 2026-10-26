@@ -192,6 +192,18 @@ pub(crate) fn encode(
         .runtime
         .prepare_native_inputs(frame, jobs, NativeBatchRestrictions::default())
         .unwrap();
+    let before_queries = fixture.owner.budget_snapshot();
+    let prospective = inputs.prospective_identities(&fixture.runtime).unwrap();
+    assert_eq!(&*prospective, expected.as_slice());
+    for _ in 0..3 {
+        assert_eq!(
+            &*inputs.prospective_identities(&fixture.runtime).unwrap(),
+            &*prospective,
+            "repeated preflight queries must keep the same complete identity"
+        );
+    }
+    assert_eq!(fixture.runtime.native_frame_index(), first_clock);
+    assert_eq!(fixture.owner.budget_snapshot(), before_queries);
     let quote = fixture
         .owner
         .quote(inputs.allocation_plan().unwrap())
@@ -208,12 +220,18 @@ pub(crate) fn encode(
         .runtime
         .encode_native_batch(&mut txn, admitted)
         .unwrap();
-    for (candidate, expected) in encoded.candidates.iter().zip(&expected) {
+    for ((candidate, expected), prospective) in encoded
+        .candidates
+        .iter()
+        .zip(&expected)
+        .zip(prospective.iter())
+    {
         assert_eq!(
             candidate.identity(),
             expected,
             "provisional identity must preserve its actual input and reserved clocks"
         );
+        assert_eq!(candidate.identity(), prospective);
     }
     (encoded, txn.finish())
 }
@@ -299,6 +317,444 @@ fn submission_probe(owner: &mut NativeGpuOwner, sequence: u64) -> u64 {
         .into_validation()
         .unwrap();
     sequence
+}
+
+fn g2_admitted(
+    runtime: &IsfGpuRuntime,
+    prepared: PreparedNativeInputs,
+    quote: &BudgetQuote,
+) -> PreparedNativeBatch {
+    match runtime.admit_native_batch(prepared, quote) {
+        NativeBatchAdmission::Accepted(batch) => batch,
+        NativeBatchAdmission::Declined { reason, .. } => {
+            panic!("eligible G2 fixture declined: {reason:?}")
+        }
+    }
+}
+
+#[test]
+fn isf_native_gpu_g2_prospective_queries_keep_full_identity_and_batch3_advances_three_twice() {
+    let mut fixture = gpu();
+    let specs = [shader(CLOCK_RED), shader(CLOCK_GREEN), shader(TIME_DATE)];
+    let mut retained: Vec<(StackBatch<ValidatedLayerResult>, Vec<LayerResultIdentity>)> =
+        Vec::new();
+    for round in 0..2 {
+        let before = submission_probe(&mut fixture.owner, 80 + round * 2);
+        let prepared = jobs(65, 3, &specs);
+        let originals = prepared
+            .iter()
+            .map(|job| Arc::clone(&job.input))
+            .collect::<Vec<_>>();
+        // encode independently calculates every expected field, queries the
+        // same prepared inputs repeatedly, then checks all actual candidates.
+        let (layers, receipt) = validated(&mut fixture, round + 1, prepared);
+        assert_eq!(receipt.phase().submission().sequence, before + 1);
+        assert_eq!(fixture.runtime.native_frame_index(), (round as u32 + 1) * 3);
+        for (index, layer) in layers.iter().enumerate() {
+            assert_eq!(
+                layer.recipe.clocks().frame_index,
+                round as u32 * 3 + index as u32
+            );
+        }
+        for (old_layers, identities) in &retained {
+            assert_eq!(
+                old_layers
+                    .iter()
+                    .map(|layer| layer.identity)
+                    .collect::<Vec<_>>(),
+                *identities,
+                "later prospective queries must not rewrite validated history"
+            );
+        }
+        let identities = layers
+            .iter()
+            .map(|layer| layer.identity)
+            .collect::<Vec<_>>();
+        retained.push((layers, identities));
+        assert!(originals.iter().all(|input| Arc::strong_count(input) > 1));
+    }
+    drop(retained);
+    stop(&mut fixture.owner);
+}
+
+#[test]
+fn isf_native_gpu_g2_resourceful_and_cpu_prospective_queries_return_typed_declines_without_work() {
+    let mut fixture = gpu();
+    let before = submission_probe(&mut fixture.owner, 80);
+    let budget = fixture.owner.budget_snapshot();
+    for source in [MULTIPASS, CPU_BRIDGE_PERSISTENT] {
+        let prepared = jobs(3, 2, &[shader(source)]);
+        let originals = prepared
+            .iter()
+            .map(|job| Arc::clone(&job.input))
+            .collect::<Vec<_>>();
+        let prepared = fixture
+            .runtime
+            .prepare_native_inputs(request(1), prepared, NativeBatchRestrictions::default())
+            .unwrap();
+        for _ in 0..3 {
+            assert_eq!(
+                prepared
+                    .prospective_identities(&fixture.runtime)
+                    .unwrap_err(),
+                NativeProspectiveIdentityError::Declined(NativeGpuDecline::UnsupportedChain {
+                    reason: UnsupportedNativeFx::Multipass,
+                })
+            );
+        }
+        let quote = fixture
+            .owner
+            .quote(&NativeAllocationPlan::new(request(1)))
+            .unwrap();
+        match fixture.runtime.admit_native_batch(prepared, &quote) {
+            NativeBatchAdmission::Declined { reason, prepared } => {
+                assert_eq!(
+                    reason,
+                    NativeGpuDecline::UnsupportedChain {
+                        reason: UnsupportedNativeFx::Multipass,
+                    }
+                );
+                let returned = prepared.into_layers();
+                assert!(returned
+                    .iter()
+                    .zip(&originals)
+                    .all(|(job, original)| Arc::ptr_eq(&job.input, original)));
+            }
+            NativeBatchAdmission::Accepted(_) => panic!("resourceful work entered Batch3"),
+        }
+        assert!(originals.iter().all(|input| Arc::strong_count(input) == 1));
+    }
+    let job = jobs(3, 2, &[shader(MULTIPASS)]).into_iter().next().unwrap();
+    let original = job.input.as_ref().clone();
+    let invocation =
+        PreparedNativeCpuInvocation::new(Arc::clone(&job.input), job.chain.clone(), job.date, None);
+    let prepared = fixture
+        .runtime
+        .prepare_native_cpu_inputs(request(2), invocation)
+        .unwrap();
+    for _ in 0..3 {
+        assert_eq!(
+            prepared
+                .prospective_identities(&fixture.runtime)
+                .unwrap_err(),
+            NativeProspectiveIdentityError::CpuFallback
+        );
+    }
+    assert_eq!(fixture.runtime.native_frame_index(), 0);
+    assert_eq!(fixture.owner.budget_snapshot(), budget);
+    assert_eq!(*job.input, original);
+    drop(prepared);
+    assert_eq!(Arc::strong_count(&job.input), 1);
+    assert_eq!(submission_probe(&mut fixture.owner, 81), before + 1);
+    stop(&mut fixture.owner);
+}
+
+#[test]
+fn isf_native_gpu_g2_clock_advance_after_query_declines_even_with_a_fresh_covering_quote() {
+    let mut fixture = gpu();
+    let jobs = identity_jobs(3, 2);
+    let originals = jobs
+        .iter()
+        .map(|job| Arc::clone(&job.input))
+        .collect::<Vec<_>>();
+    let prepared = fixture
+        .runtime
+        .prepare_native_inputs(request(1), jobs, NativeBatchRestrictions::default())
+        .unwrap();
+    let first = prepared.prospective_identities(&fixture.runtime).unwrap();
+    assert!(matches!(first[0].origin, LayerOrigin::Executed(clocks) if clocks.frame_index == 0));
+    let unqueried = fixture
+        .runtime
+        .prepare_native_inputs(
+            request(3),
+            identity_jobs(3, 2),
+            NativeBatchRestrictions::default(),
+        )
+        .unwrap();
+    let (history, _) = validated(&mut fixture, 2, identity_jobs(3, 2));
+    let before = submission_probe(&mut fixture.owner, 80);
+    let budget = fixture.owner.budget_snapshot();
+    assert_eq!(
+        unqueried
+            .prospective_identities(&fixture.runtime)
+            .unwrap_err(),
+        NativeProspectiveIdentityError::StaleClock,
+        "clocks freeze during preparation even if the first query comes later"
+    );
+    for _ in 0..3 {
+        assert_eq!(
+            prepared
+                .prospective_identities(&fixture.runtime)
+                .unwrap_err(),
+            NativeProspectiveIdentityError::StaleClock
+        );
+    }
+    // Quote after the intervening render: refusal must come from the clock
+    // reservation, not an obsolete ledger revision or a different plan.
+    let quote = fixture
+        .owner
+        .quote(prepared.allocation_plan().unwrap())
+        .unwrap();
+    assert!(quote.covers_plan(prepared.allocation_plan().unwrap()));
+    match fixture.runtime.admit_native_batch(prepared, &quote) {
+        NativeBatchAdmission::Declined { reason, prepared } => {
+            assert_eq!(reason, NativeGpuDecline::QuoteExpired);
+            let returned = prepared.into_layers();
+            assert!(returned
+                .iter()
+                .zip(&originals)
+                .all(|(job, original)| Arc::ptr_eq(&job.input, original)));
+        }
+        NativeBatchAdmission::Accepted(_) => panic!("stale prospective clocks were admitted"),
+    }
+    assert_eq!(fixture.runtime.native_frame_index(), 3);
+    assert_eq!(fixture.owner.budget_snapshot(), budget);
+    assert!(originals.iter().all(|input| Arc::strong_count(input) == 1));
+    assert_eq!(submission_probe(&mut fixture.owner, 81), before + 1);
+    drop(history);
+    stop(&mut fixture.owner);
+}
+
+#[test]
+fn isf_native_gpu_g2_clock_advance_after_admission_rejects_before_phase_binding_or_submission() {
+    let mut fixture = gpu();
+    let jobs = identity_jobs(3, 2);
+    let originals = jobs
+        .iter()
+        .map(|job| Arc::clone(&job.input))
+        .collect::<Vec<_>>();
+    let prepared = fixture
+        .runtime
+        .prepare_native_inputs(request(1), jobs, NativeBatchRestrictions::default())
+        .unwrap();
+    prepared.prospective_identities(&fixture.runtime).unwrap();
+    let plan = prepared.allocation_plan().unwrap().clone();
+    let quote = fixture.owner.quote(&plan).unwrap();
+    let admitted = g2_admitted(&fixture.runtime, prepared, &quote);
+    let reservation = fixture.owner.reserve(quote).unwrap();
+    let (history, _) = validated(&mut fixture, 2, identity_jobs(3, 2));
+    let before = submission_probe(&mut fixture.owner, 80);
+    let budget = fixture.owner.budget_snapshot();
+    let mut txn = fixture.owner.begin_frame(request(1), reservation).unwrap();
+    let fault = match fixture.runtime.encode_native_batch(&mut txn, admitted) {
+        Err(fault) => fault,
+        Ok(_) => panic!("admission must not authorize stale clocks at encode"),
+    };
+    assert_eq!(fault.kind, NativeGpuFaultKind::StateMismatch);
+    txn.validate_plan(&plan).unwrap();
+    let pending = txn.finish();
+    assert_eq!(fixture.runtime.native_frame_index(), 3);
+    assert_eq!(fixture.owner.budget_snapshot(), budget);
+    assert!(originals.iter().all(|input| Arc::strong_count(input) == 1));
+    await_transaction(&mut fixture.owner, pending, &|| false).unwrap();
+    assert_eq!(submission_probe(&mut fixture.owner, 81), before + 1);
+    drop(history);
+    stop(&mut fixture.owner);
+}
+
+#[test]
+fn isf_native_gpu_g2_foreign_context_and_same_context_other_runtime_reject_before_gpu_work() {
+    let mut fixture = gpu();
+    let mut sibling = IsfGpuRuntime::with_native_context(&mut fixture.owner).unwrap();
+    let mut foreign = gpu();
+    assert!(Arc::ptr_eq(
+        fixture.runtime.native_context().unwrap(),
+        sibling.native_context().unwrap()
+    ));
+    assert_ne!(fixture.owner.context().id(), foreign.owner.context().id());
+    for same_context in [true, false] {
+        let before = submission_probe(&mut fixture.owner, 80);
+        let foreign_before = submission_probe(&mut foreign.owner, 80);
+        let budget = fixture.owner.budget_snapshot();
+        let foreign_budget = foreign.owner.budget_snapshot();
+        let prepared = fixture
+            .runtime
+            .prepare_native_inputs(
+                request(1),
+                identity_jobs(3, 2),
+                NativeBatchRestrictions::default(),
+            )
+            .unwrap();
+        let prospective = prepared.prospective_identities(&fixture.runtime).unwrap();
+        let wrong_runtime = if same_context {
+            &sibling
+        } else {
+            &foreign.runtime
+        };
+        let expected = if same_context {
+            NativeProspectiveIdentityError::StaleClock
+        } else {
+            NativeProspectiveIdentityError::ContextMismatch
+        };
+        for _ in 0..3 {
+            assert_eq!(
+                prepared.prospective_identities(wrong_runtime).unwrap_err(),
+                expected
+            );
+        }
+        let plan = prepared.allocation_plan().unwrap().clone();
+        let quote = fixture.owner.quote(&plan).unwrap();
+        let prepared = match wrong_runtime.admit_native_batch(prepared, &quote) {
+            NativeBatchAdmission::Declined { reason, prepared } => {
+                assert_eq!(reason, NativeGpuDecline::QuoteExpired);
+                prepared
+            }
+            NativeBatchAdmission::Accepted(_) => panic!("another runtime adopted prepared clocks"),
+        };
+        assert_eq!(
+            &*prepared.prospective_identities(&fixture.runtime).unwrap(),
+            &*prospective
+        );
+        assert_eq!(fixture.owner.budget_snapshot(), budget);
+        assert_eq!(foreign.owner.budget_snapshot(), foreign_budget);
+        let admitted = g2_admitted(&fixture.runtime, prepared, &quote);
+        let reservation = fixture.owner.reserve(quote).unwrap();
+        let reserved = fixture.owner.budget_snapshot();
+        let mut txn = fixture.owner.begin_frame(request(1), reservation).unwrap();
+        let result = if same_context {
+            sibling.encode_native_batch(&mut txn, admitted)
+        } else {
+            foreign.runtime.encode_native_batch(&mut txn, admitted)
+        };
+        let fault = match result {
+            Err(fault) => fault,
+            Ok(_) => panic!("another runtime consumed the admitted batch"),
+        };
+        assert_eq!(
+            fault.kind,
+            if same_context {
+                NativeGpuFaultKind::StateMismatch
+            } else {
+                NativeGpuFaultKind::IdentityMismatch
+            }
+        );
+        txn.validate_plan(&plan).unwrap();
+        let pending = txn.finish();
+        assert_eq!(fixture.owner.budget_snapshot(), reserved);
+        assert_eq!(foreign.owner.budget_snapshot(), foreign_budget);
+        assert_eq!(fixture.runtime.native_frame_index(), 0);
+        assert_eq!(sibling.native_frame_index(), 0);
+        assert_eq!(foreign.runtime.native_frame_index(), 0);
+        await_transaction(&mut fixture.owner, pending, &|| false).unwrap();
+        assert_eq!(submission_probe(&mut fixture.owner, 81), before + 1);
+        assert_eq!(submission_probe(&mut foreign.owner, 81), foreign_before + 1);
+    }
+    stop(&mut fixture.owner);
+    stop(&mut foreign.owner);
+}
+
+#[test]
+fn isf_native_gpu_g2_p_slots_must_be_split_before_isf_but_history_aliases_remain_accepted() {
+    let mut fixture = gpu();
+    let (history, _) = validated(&mut fixture, 1, identity_jobs(65, 3));
+    let old_identities = history
+        .iter()
+        .map(|layer| layer.identity)
+        .collect::<Vec<_>>();
+    for split in 0..3 {
+        let frame = request(split + 2);
+        let before = submission_probe(&mut fixture.owner, 80 + split * 2);
+        let first_clock = fixture.runtime.native_frame_index();
+        let prepared = fixture
+            .runtime
+            .prepare_native_inputs(
+                frame,
+                identity_jobs(65, 3),
+                NativeBatchRestrictions::default(),
+            )
+            .unwrap();
+        let prospective = prepared.prospective_identities(&fixture.runtime).unwrap();
+        let g_plan = prepared.allocation_plan().unwrap().clone();
+        let mut p_plan = NativeAllocationPlan::new(frame);
+        p_plan
+            .add_new(
+                ChargeKind::QueueUploadStaging,
+                checked_upload_staging_bytes(
+                    65,
+                    3,
+                    fixture.owner.context().capabilities().upload_row_pitch,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        p_plan.add_existing(history[0].lease.allocation_id());
+        // P's upload deliberately precedes equal-kind/equal-capacity G uploads.
+        // Family coverage alone cannot keep the root binder from spending it.
+        let mut combined = p_plan.clone();
+        combined.merge(&g_plan).unwrap();
+        let quote = fixture.owner.quote(&combined).unwrap();
+        let admitted = g2_admitted(&fixture.runtime, prepared, &quote);
+        let reservation = fixture.owner.reserve(quote).unwrap();
+        let reserved = fixture.owner.budget_snapshot();
+        let mut txn = fixture.owner.begin_frame(frame, reservation).unwrap();
+        let child = match split {
+            0 => None,
+            1 => Some(txn.split_reservation(&g_plan).unwrap()),
+            _ => Some(txn.split_reservation(&p_plan).unwrap()),
+        };
+        txn.validate_plan(&g_plan).unwrap();
+        let result = fixture.runtime.encode_native_batch(&mut txn, admitted);
+        if split != 2 {
+            assert_eq!(
+                result
+                    .as_ref()
+                    .err()
+                    .expect("unsafe root must decline")
+                    .kind,
+                NativeGpuFaultKind::StateMismatch
+            );
+            txn.validate_plan(&g_plan).unwrap();
+        }
+        let pending = txn.finish();
+        match result {
+            Err(_) => {
+                assert_ne!(split, 2, "correctly split root was refused");
+                assert_eq!(fixture.runtime.native_frame_index(), first_clock);
+                let after = fixture.owner.budget_snapshot();
+                assert_eq!(after.allocated_bytes, reserved.allocated_bytes);
+                assert_eq!(after.allocation_count, reserved.allocation_count);
+                assert_eq!(after.reserved_bytes, reserved.reserved_bytes);
+                assert_eq!(after.by_kind, reserved.by_kind);
+                await_transaction(&mut fixture.owner, pending, &|| false).unwrap();
+                assert_eq!(
+                    submission_probe(&mut fixture.owner, 81 + split * 2),
+                    before + 1,
+                    "root-plan refusal must not open or abandon an ISF phase"
+                );
+            }
+            Ok(encoded) => {
+                assert_eq!(split, 2);
+                assert_eq!(
+                    encoded
+                        .candidates
+                        .iter()
+                        .map(|candidate| *candidate.identity())
+                        .collect::<Vec<_>>(),
+                    prospective.iter().copied().collect::<Vec<_>>()
+                );
+                match complete(&mut fixture, encoded, pending) {
+                    NativeIsfCompletion::Validated { layers, receipt } => {
+                        assert_eq!(receipt.phase().submission().sequence, before + 1);
+                        assert_eq!(layers.len(), 3);
+                        assert_eq!(fixture.runtime.native_frame_index(), first_clock + 3);
+                        drop(layers);
+                    }
+                    _ => panic!("correct P split with retained history must validate"),
+                }
+            }
+        }
+        drop(child);
+        assert_eq!(
+            history
+                .iter()
+                .map(|layer| layer.identity)
+                .collect::<Vec<_>>(),
+            old_identities
+        );
+    }
+    assert_eq!(fixture.runtime.native_frame_index(), 6);
+    drop(history);
+    stop(&mut fixture.owner);
 }
 
 #[test]

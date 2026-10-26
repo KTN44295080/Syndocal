@@ -2,7 +2,8 @@
 //! The C0b module gate leaves production routing unchanged until I's C1 join.
 use crate::isf_chain_execution::PreparedChain;
 use crate::isf_runtime::{
-    IsfGpuRuntime, IsfInstanceKey, IsfStageInputs, NativeStackResources, StackBatch,
+    IndependentClockReservation, IsfGpuRuntime, IsfInstanceKey, IsfStageInputs,
+    NativeStackResources, StackBatch,
 };
 use crate::native_gpu_budget::{
     checked_upload_staging_bytes, AllocationCharge, BudgetQuote, ChargeKind, NativeAllocationPlan,
@@ -81,15 +82,74 @@ pub(crate) struct PreparedNativeInputs {
     work: PreparedNativeWork,
     audio: Option<protocol::LiveAudioTextureFrame>,
     plan: Result<NativeAllocationPlan, NativeGpuDecline>,
+    clocks: Option<IndependentClockReservation>,
 }
 enum PreparedNativeWork {
     Layers(StackBatch<Arc<PreparedNativeLayer>>),
     Cpu(cpu::PreparedCpuWork),
 }
+
+/// Read-only preflight metadata is not execution or completion authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeProspectiveIdentityError {
+    CpuFallback,
+    Declined(NativeGpuDecline),
+    ContextMismatch,
+    StaleClock,
+}
+
 impl PreparedNativeInputs {
     pub(crate) fn allocation_plan(&self) -> Result<&NativeAllocationPlan, NativeGpuDecline> {
         self.plan.as_ref().map_err(|reason| *reason)
     }
+
+    /// Return the exact prospective identities for P's allocation/selection
+    /// preflight. Eligible clocks were frozen at prepare_native_inputs, not by
+    /// this query. Querying never advances clocks or touches the GPU/history.
+    /// Admission and encode revalidate the same runtime epoch and clock range.
+    pub(crate) fn prospective_identities(
+        &self,
+        runtime: &IsfGpuRuntime,
+    ) -> Result<StackBatch<LayerResultIdentity>, NativeProspectiveIdentityError> {
+        let (jobs, clocks) = self.resident_preview_parts(runtime)?;
+        Ok(StackBatch::from_fn(jobs.len(), |index| {
+            jobs[index].identity(
+                self.context,
+                self.frame,
+                jobs[index].clocks(clocks.at(index)),
+            )
+        }))
+    }
+
+    fn resident_preview_parts(
+        &self,
+        runtime: &IsfGpuRuntime,
+    ) -> Result<
+        (
+            &StackBatch<Arc<PreparedNativeLayer>>,
+            &IndependentClockReservation,
+        ),
+        NativeProspectiveIdentityError,
+    > {
+        let PreparedNativeWork::Layers(jobs) = &self.work else {
+            return Err(NativeProspectiveIdentityError::CpuFallback);
+        };
+        self.allocation_plan()
+            .map_err(NativeProspectiveIdentityError::Declined)?;
+        if runtime
+            .native_context()
+            .is_none_or(|context| context.id() != self.context)
+        {
+            return Err(NativeProspectiveIdentityError::ContextMismatch);
+        }
+        let clocks = self
+            .clocks
+            .as_ref()
+            .filter(|clocks| runtime.native_clocks_current(clocks))
+            .ok_or(NativeProspectiveIdentityError::StaleClock)?;
+        Ok((jobs, clocks))
+    }
+
     pub(crate) fn into_layers(self) -> StackBatch<Arc<PreparedNativeLayer>> {
         match self.work {
             PreparedNativeWork::Layers(jobs) => jobs,
@@ -271,12 +331,17 @@ impl IsfGpuRuntime {
             }
             Ok(plan)
         })();
+        let clocks = plan
+            .as_ref()
+            .ok()
+            .map(|_| self.reserve_independent_clocks(jobs.len()));
         Ok(PreparedNativeInputs {
             frame,
             context: context.id(),
             work: PreparedNativeWork::Layers(jobs),
             audio: self.native_audio_snapshot(),
             plan,
+            clocks,
         })
     }
 
@@ -285,15 +350,23 @@ impl IsfGpuRuntime {
         inputs: PreparedNativeInputs,
         quote: &BudgetQuote,
     ) -> NativeBatchAdmission {
-        let reason = match (&inputs.work, &inputs.plan) {
-            (PreparedNativeWork::Cpu(_), _) => {
+        let reason = match inputs.resident_preview_parts(self) {
+            Err(NativeProspectiveIdentityError::CpuFallback) => {
                 Some(unsupported(UnsupportedNativeFx::UnsupportedJobCount))
             }
-            (_, Err(reason)) => Some(*reason),
-            (_, Ok(plan)) if quote.context() != inputs.context || !quote.covers_plan(plan) => {
+            Err(NativeProspectiveIdentityError::Declined(reason)) => Some(reason),
+            Err(
+                NativeProspectiveIdentityError::ContextMismatch
+                | NativeProspectiveIdentityError::StaleClock,
+            ) => Some(NativeGpuDecline::QuoteExpired),
+            Ok(_)
+                if !inputs.plan.as_ref().is_ok_and(|plan| {
+                    quote.context() == inputs.context && quote.covers_plan(plan)
+                }) =>
+            {
                 Some(NativeGpuDecline::QuoteExpired)
             }
-            (_, Ok(_)) => None,
+            Ok(_) => None,
         };
         match reason {
             Some(reason) => NativeBatchAdmission::Declined {
@@ -311,7 +384,22 @@ impl IsfGpuRuntime {
     ) -> Result<EncodedIsfBatch, NativeGpuFault> {
         let inputs = batch.inputs;
         self.check_native_transaction(txn, inputs.frame)?;
-        txn.validate_plan(inputs.plan.as_ref().expect("admitted allocation plan"))?;
+        inputs.resident_preview_parts(self).map_err(|error| {
+            fault(
+                inputs.context,
+                inputs.frame,
+                GpuPhase::IsfBatch,
+                if error == NativeProspectiveIdentityError::ContextMismatch {
+                    NativeGpuFaultKind::IdentityMismatch
+                } else {
+                    NativeGpuFaultKind::StateMismatch
+                },
+                format!("prospective native identity is no longer current: {error:?}"),
+            )
+        })?;
+        // P must split its composition/snapshot allocation slots before G can
+        // bind by kind/capacity. Extra validated-history aliases are permitted.
+        txn.validate_root_plan(inputs.plan.as_ref().expect("admitted allocation plan"))?;
         if inputs.context != txn.context().id() {
             return Err(fault(
                 inputs.context,
@@ -332,7 +420,7 @@ impl IsfGpuRuntime {
                 "CPU invocation cannot enter resident Batch3",
             ));
         };
-        let logical = self.reserve_independent_clocks(jobs.len());
+        let logical = inputs.clocks.expect("validated prospective clock range");
         let clocks = StackBatch::from_fn(jobs.len(), |index| jobs[index].clocks(logical.at(index)));
         let mut phase = txn.begin_phase(GpuPhase::IsfBatch)?;
         let mut managed_inputs = StackBatch::Empty;
@@ -2392,6 +2480,7 @@ mod cpu {
                     cache_stamp,
                 }),
                 plan,
+                clocks: None,
             })
         }
     }

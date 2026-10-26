@@ -1422,6 +1422,21 @@ impl NativeGpuFrameTxn<'_> {
             .budget
             .validate_reserved_plan(reservation, plan)
     }
+
+    /// ISF root binding is permitted only after P has split its new allocation
+    /// slots. Family-wide coverage alone cannot prevent kind/capacity theft.
+    pub(crate) fn validate_root_plan(
+        &self,
+        plan: &NativeAllocationPlan,
+    ) -> Result<(), NativeGpuFault> {
+        let index = self.owner.core.index(self.id)?;
+        let reservation = self.owner.core.frames[index]
+            .reservation
+            .as_ref()
+            .expect("active reservation");
+        self.owner.core.budget.validate_root_plan(reservation, plan)
+    }
+
     pub(crate) fn bind_allocation(
         &mut self,
         kind: ChargeKind,

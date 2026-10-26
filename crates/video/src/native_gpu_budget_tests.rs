@@ -1,6 +1,103 @@
 use super::*;
 
 #[test]
+fn g2_root_plan_requires_exact_new_slots_but_allows_validated_history_aliases() {
+    let mut budget = NativeGpuBudget::new(context());
+    let history = allocate(&mut budget, ChargeKind::ResidentLayer, 64);
+    let g = plan(ChargeKind::QueueUploadStaging, 256);
+    let p = plan(ChargeKind::QueueUploadStaging, 256);
+    let mut combined = p.clone();
+    combined.merge(&g).unwrap();
+    combined.add_existing(history.id());
+    let mut root = budget.reserve(budget.quote(&combined).unwrap()).unwrap();
+    let before = budget.snapshot();
+    assert!(budget.validate_reserved_plan(&root, &g).is_ok());
+    assert_eq!(
+        budget.validate_root_plan(&root, &g).unwrap_err().kind,
+        NativeGpuFaultKind::StateMismatch,
+        "an equal-kind/equal-capacity P slot cannot remain available to G's binder"
+    );
+    let impostor = plan(ChargeKind::QueueUploadStaging, 256);
+    assert_eq!(
+        budget
+            .validate_root_plan(&root, &impostor)
+            .unwrap_err()
+            .kind,
+        NativeGpuFaultKind::IdentityMismatch
+    );
+    assert_eq!(budget.snapshot(), before);
+
+    let mut child = budget.split_reservation(&mut root, &p).unwrap();
+    let split = budget.snapshot();
+    for _ in 0..3 {
+        budget.validate_root_plan(&root, &g).unwrap();
+        budget.validate_reserved_plan(&root, &p).unwrap();
+        budget.validate_reserved_plan(&root, &combined).unwrap();
+    }
+    assert_eq!(budget.snapshot(), split);
+    assert_eq!(root.capacity_bytes(), 256);
+    assert_eq!(child.capacity_bytes(), 256);
+    assert_eq!(split.allocated_bytes, 64);
+    assert_eq!(split.reserved_bytes, 512);
+
+    let g_id = budget.next_allocation_id().unwrap();
+    let g_charge = budget
+        .bind_allocation(&mut root, g_id, ChargeKind::QueueUploadStaging, 256)
+        .unwrap();
+    budget.validate_reserved_plan(&root, &p).unwrap();
+    assert_eq!(
+        budget.validate_root_plan(&root, &g).unwrap_err().kind,
+        NativeGpuFaultKind::IdentityMismatch,
+        "the consumed G slot cannot be claimed a second time"
+    );
+    let p_id = budget.next_allocation_id().unwrap();
+    let p_charge = budget
+        .bind_allocation(&mut child, p_id, ChargeKind::QueueUploadStaging, 256)
+        .unwrap();
+    assert_eq!(budget.snapshot().allocated_bytes, 576);
+    assert_eq!(budget.snapshot().reserved_bytes, 0);
+    budget.cancel_reservation_tree(root).unwrap();
+    let history_id = history.id();
+    drop((child, g_charge, p_charge, history));
+    for id in [g_id, p_id, history_id] {
+        let receipt = budget.try_reap(id).unwrap().unwrap();
+        budget.release_reaped(receipt).unwrap();
+    }
+    assert_eq!(budget.snapshot().managed_bytes(), 0);
+}
+
+#[test]
+fn g2_root_plan_rejects_g_slots_moved_to_a_child_despite_valid_family_coverage() {
+    let mut budget = NativeGpuBudget::new(context());
+    let g = plan(ChargeKind::QueueUploadStaging, 256);
+    let p = plan(ChargeKind::QueueUploadStaging, 256);
+    let mut combined = p.clone();
+    combined.merge(&g).unwrap();
+    let mut root = budget.reserve(budget.quote(&combined).unwrap()).unwrap();
+    let child = budget.split_reservation(&mut root, &g).unwrap();
+    let before = budget.snapshot();
+    assert_eq!(root.capacity_bytes(), g.requested_bytes());
+    assert!(budget.validate_reserved_plan(&root, &g).is_ok());
+    assert!(budget.validate_reserved_plan(&root, &combined).is_ok());
+    for _ in 0..3 {
+        assert_eq!(
+            budget.validate_root_plan(&root, &g).unwrap_err().kind,
+            NativeGpuFaultKind::StateMismatch,
+            "equal bytes in the root do not restore G's slots from a sibling"
+        );
+        assert_eq!(
+            budget.validate_root_plan(&child, &g).unwrap_err().kind,
+            NativeGpuFaultKind::StateMismatch,
+            "the G child cannot impersonate the frame root"
+        );
+    }
+    assert_eq!(budget.snapshot(), before);
+    budget.cancel_reservation_tree(root).unwrap();
+    drop(child);
+    assert_eq!(budget.snapshot().managed_bytes(), 0);
+}
+
+#[test]
 fn serial_cpu_unused_root_refund_rejects_forged_foreign_split_and_bound_authority() {
     let mut budget = NativeGpuBudget::new(context());
     let original = plan(ChargeKind::SerialCpuAdmission, 128);
