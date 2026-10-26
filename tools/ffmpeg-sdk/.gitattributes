@@ -1,0 +1,4 @@
+# Unified diff context prefixes (space + blank/tab) are part of patch syntax.
+*.patch text eol=lf -whitespace
+*.sh text eol=lf
+*.lock text eol=lf
