@@ -25,6 +25,15 @@ export const djLinkMachineBlockReasonText = (reason: string): string => ({
 }[reason] ?? "DJ Link is blocked until its machine authority can be verified.");
 
 const japaneseText: Record<string, string> = {
+  "Visible clips": "表示中のクリップ",
+  "Selected clip": "選択中のクリップ",
+  "No clip selected": "クリップ未選択",
+  "Off-page clips": "ページ外のクリップ",
+  "Jump to clip": "クリップへ移動",
+  "Effect views": "FXの表示",
+  "Selected stage": "選択中のステージ",
+  "PREVIEW ONLY": "プレビューのみ",
+  Targets: "対象",
   "Loading panel…": "パネルを読み込み中…",
   "Panel could not load. Restart Syndocal and try again.": "パネルを読み込めませんでした。Syndocalを再起動して再試行してください。",
   "Image inputs": "画像入力",

@@ -414,7 +414,8 @@ try {
       assert.deepEqual([learnTargets.time?.action, learnTargets.time?.low, learnTargets.time?.high], ['VideoTransitionTime', 0.1, 10], label+': transition time is a shared Learn target');
       const legendText = await cdp.evaluate('document.querySelector('+JSON.stringify(root+' [data-video-perform-legend]')+').textContent');
       assert.doesNotMatch(legendText, /not supported by the current control model|現在の制御モデルは/, label+': the legend no longer reports unsupported MIDI targets');
-      // Density: complete layer rows inside the matrix viewport (excluding the sticky head and horizontal scrollbar).
+      // Density: complete layer rows inside the matrix viewport. Clip paging
+      // replaces horizontal scrolling without reducing the 100px columns.
       const matrixDensity = await cdp.evaluate('(()=>{const sc=document.querySelector('+JSON.stringify(root+' .videoPerformMatrixScroll')+');sc.scrollTop=0;const b=sc.getBoundingClientRect();const head=sc.querySelector(".videoPerformMatrixHead").getBoundingClientRect();const limit=b.top+sc.clientTop+sc.clientHeight;const rows=[...sc.querySelectorAll("[data-video-perform-row]")];const full=rows.filter(r=>{const x=r.getBoundingClientRect();return x.top>=head.bottom-1&&x.bottom<=limit+1});const first=rows[0].getBoundingClientRect();const cell=rows[0].querySelector(".videoPerformMatrixCell");const groupHeaders=[...sc.querySelectorAll("[data-video-perform-group]")].filter(r=>{const x=r.getBoundingClientRect();return x.top>=head.bottom-1&&x.bottom<=limit+1}).length;return {fullRows:full.length,groupHeaders,totalRows:rows.length,headHeight:head.height,rowHeight:first.height,stripHeight:rows[0].querySelector(".videoPerformLayerStrip").getBoundingClientRect().height,cellButtons:cell.querySelectorAll("button").length,actionRows:document.querySelectorAll(".videoPerformClipActions").length,numberBadges:document.querySelectorAll(".videoPerformClipNumber").length,keyBadges:cell.querySelectorAll("kbd").length}})()');
       const expectedRows = width >= 1920 ? 4 : 3;
       assert.ok(matrixDensity.totalRows >= 4, label+': fixture has at least 4 layers '+JSON.stringify(matrixDensity));
@@ -548,16 +549,29 @@ try {
       assert.ok(healthView.chips >= 5 && healthView.rows >= 1 && healthView.groups.includes('unverified'), label + ': fixture assets are listed by state ' + JSON.stringify(healthView));
       await cdp.key('Escape', 'Escape', 27);
       await waitFor(() => cdp.evaluate('document.querySelector("dialog[data-media-health-dialog][open]") === null'), label + ': Escape closes the health view');
-      // ---- Inspector: FX tab shows every stage toggle and its parameters. ----
-      const fxTab = await cdp.evaluate('(()=>{const q=document.querySelector('+JSON.stringify(root+' [data-video-perform-region="quick-fx"]')+');const stage=q.querySelector("[data-perform-fx-stage]");const bypass=q.querySelector("[data-perform-fx-bypass]");const control=q.querySelector("[data-perform-fx-control]");return {selected:document.querySelector("[data-video-perform-inspector-tab=fx]").getAttribute("aria-selected"),stages:q.querySelectorAll("[data-perform-fx-stage]").length,bypass:!!bypass,bypassPressed:bypass?.getAttribute("aria-pressed"),stageHeight:stage?.getBoundingClientRect().height,controls:q.querySelectorAll("[data-perform-fx-control]").length,value:q.querySelector("[data-perform-fx-control] output")?.textContent??null,rangeHeight:control?.querySelector("input")?.getBoundingClientRect().height??null}})()');
+      // Batch3: narrow Quick FX starts with Parameters; Chain management remains
+      // mounted behind a view switch. Test each visible view instead of requiring
+      // two compressed columns to be simultaneously visible.
+      const showQuickFxView = async (view) => {
+        await cdp.evaluate('(()=>{const q=document.querySelector("[data-perform-quick-fx]");if(q.dataset.fxCompact==="true")q.querySelector("[data-perform-fx-view='+view+']").click()})()');
+        await sleep(40);
+      };
+      const revealQuickFx = async (selector) => cdp.evaluate('(()=>{const owner=document.querySelector("[data-perform-fx-scroll]"),node=document.querySelector('+JSON.stringify(selector)+');const b=node.getBoundingClientRect(),p=owner.getBoundingClientRect();if(b.top<p.top+2)owner.scrollTop-=p.top+2-b.top;else if(b.bottom>p.top+owner.clientHeight-2)owner.scrollTop+=b.bottom-(p.top+owner.clientHeight-2);return owner.scrollLeft===0})()');
+      const fxTab = await cdp.evaluate('(()=>{const q=document.querySelector('+JSON.stringify(root+' [data-video-perform-region="quick-fx"]')+');const bypass=q.querySelector("[data-perform-fx-selected-bypass]");const control=q.querySelector("[data-perform-fx-control]");const chain=q.querySelector("[data-perform-fx-panel=chain]"),parameters=q.querySelector("[data-perform-fx-panel=parameters]");return {selected:document.querySelector("[data-video-perform-inspector-tab=fx]").getAttribute("aria-selected"),compact:q.dataset.fxCompact==="true",parametersVisible:parameters.getClientRects().length>0,chainHidden:chain.hidden&&getComputedStyle(chain).display==="none"&&chain.getClientRects().length===0,stages:q.querySelectorAll("[data-perform-fx-stage]").length,bypass:!!bypass,bypassPressed:bypass?.getAttribute("aria-pressed"),bypassHeight:bypass?.getBoundingClientRect().height,controls:q.querySelectorAll("[data-perform-fx-control]").length,value:q.querySelector("[data-perform-fx-control] output")?.textContent??null,rangeHeight:control?.querySelector("input")?.getBoundingClientRect().height??null}})()');
       assert.equal(fxTab.selected, 'true', label+': FX is the default Inspector tab '+JSON.stringify(fxTab));
-      assert.ok(fxTab.stages >= 1 && fxTab.bypass && fxTab.controls >= 1, label+': FX tab shows the stage toggles and parameters '+JSON.stringify(fxTab));
-      assert.ok(fxTab.stageHeight >= 44 && fxTab.rangeHeight >= 44, label+': FX stage rows and parameter controls keep 44px targets '+JSON.stringify(fxTab));
+      if (!fxTab.compact) fxTab.bypassHeight = await cdp.evaluate('document.querySelector("[data-perform-fx-stage] [data-perform-fx-bypass]").getBoundingClientRect().height');
+      assert.ok(fxTab.stages >= 1 && fxTab.bypass && fxTab.controls >= 1 && fxTab.parametersVisible && (!fxTab.compact || fxTab.chainHidden), label+': FX starts with Parameters and retains every stage '+JSON.stringify(fxTab));
+      assert.ok(fxTab.bypassHeight >= 44 && fxTab.rangeHeight >= 44, label+': selected bypass and parameter controls keep 44px targets '+JSON.stringify(fxTab));
       assert.ok(fxTab.value && fxTab.value.length > 0, label+': FX parameters show their value '+JSON.stringify(fxTab));
-      assert.equal((await inspect(root+' [data-perform-fx-stage="0"] [data-perform-fx-bypass]')).failure, null, label+': stage toggle fully visible');
-      // The Inspector parameter column scrolls internally on short windows.
-      // Exercise that user path before requiring the complete, unobstructed target.
-      await cdp.evaluate('document.querySelector('+JSON.stringify(root+' [data-perform-fx-control] input')+').scrollIntoView({block:"nearest",inline:"nearest"})');
+      await showQuickFxView('chain');
+      assert.equal(await revealQuickFx(root+' [data-perform-fx-stage="0"] [data-perform-fx-bypass]'),true,label+': Chain uses vertical owner only');
+      assert.equal((await inspect(root+' [data-perform-fx-stage="0"] [data-perform-fx-bypass]')).failure, null, label+': stage toggle reachable through Chain');
+      fxTab.stageHeight=await cdp.evaluate('document.querySelector("[data-perform-fx-stage]").getBoundingClientRect().height');
+      assert.ok(fxTab.stageHeight>=44,label+': Chain stage rows keep 44px targets');
+      await showQuickFxView('parameters');
+      // Only the common Quick FX body may scroll; hidden panels cannot rescue
+      // clipping through scrollIntoView or an inner scrollport.
+      assert.equal(await revealQuickFx(root+' [data-perform-fx-control] input'),true,label+': Parameters uses vertical owner only');
       assert.equal((await inspect(root+' [data-perform-fx-control] input')).failure, null, label+': first parameter fully visible');
       // ---- Inspector tabs switch; the Clip tab embeds the existing Clip Inspector without a modal. ----
       const tabState = () => cdp.evaluate('({selected:[...document.querySelectorAll("[data-video-perform-inspector-tab]")].filter(t=>t.getAttribute("aria-selected")==="true").map(t=>t.dataset.videoPerformInspectorTab),panel:document.querySelector("[data-video-perform-inspector-panel]")?.dataset.videoPerformInspectorPanel,clip:!!document.querySelector("[data-video-clip-slot-inspector-embedded]"),clipDialog:!!document.querySelector("[data-video-clip-slot-inspector][role=dialog]"),browser:!!document.querySelector("[data-video-perform-effect-browser]"),fx:!!document.querySelector("[data-perform-quick-fx]")})');
@@ -882,6 +896,41 @@ try {
   await freshTarget();await cdp.send('Emulation.setDeviceMetricsOverride',{width:1366,height:768,deviceScaleFactor:1,mobile:false});
   await cdp.send('Page.navigate',{url:origin+'__perform-matrix-focus'});
   await waitFor(()=>cdp.evaluate('!!window.__matrixFocus && !!document.querySelector("[data-video-perform-cell-index]")'),currentCase+': fixture ready');
+  // Paging/status navigation is selection only. Keep all queue, Preview and
+  // Take spies at zero while exercising off-page canonical runtime states.
+  await cdp.evaluate('window.__matrixFocus.setRuntime({layer_id:1,active_slot_id:101,queued_slot_id:102,pending_launch:null,transition:null,playhead_ms:0,playing:true});document.querySelector("[data-video-perform-page=next]").click()');
+  await waitFor(()=>cdp.evaluate('Number(document.querySelector("[data-video-perform-matrix]").dataset.pageStart)>0'),currentCase+': next clip page');
+  assert.equal(await cdp.evaluate('document.querySelectorAll("[data-video-perform-cell-index][tabindex=\\"0\\"]").length'),1,currentCase+': a page outside selected slot still has one visible roving pad');
+  await cdp.evaluate('document.querySelector("[data-video-perform-offpage-status]").click()');
+  await waitFor(()=>cdp.evaluate('!!document.querySelector("[data-video-perform-offpage-list]")'),currentCase+': off-page runtime status');
+  assert.deepEqual(await cdp.evaluate('[...document.querySelectorAll("[data-video-perform-status-jump]")].map(e=>[e.dataset.videoPerformStatusJump,Number(e.dataset.layerId),Number(e.dataset.slotId),Number(e.dataset.clipIndex)])'),[['live',1,101,0],['queued',1,102,1]],currentCase+': off-page status carries exact LIVE/QUEUED layer and stable slot identities');
+  await cdp.evaluate('document.querySelector("[data-video-perform-status-jump=queued]").click()');
+  await waitFor(()=>cdp.evaluate('document.querySelector("[data-video-perform-row=\\"1\\"] [data-video-perform-cell-index=\\"1\\"]")?.getAttribute("aria-pressed")==="true"'),currentCase+': queued status jump selects its canonical slot');
+  await cdp.evaluate('document.querySelector("[data-video-perform-page=next]").click();document.querySelector("[data-video-perform-offpage-status]").click()');
+  await waitFor(()=>cdp.evaluate('!!document.querySelector("[data-video-perform-status-jump=live]")'),currentCase+': live status jump available');
+  await cdp.evaluate('document.querySelector("[data-video-perform-status-jump=live]").click()');
+  await waitFor(()=>cdp.evaluate('document.querySelector("[data-video-perform-row=\\"1\\"] [data-video-perform-cell-index=\\"0\\"]")?.getAttribute("aria-pressed")==="true"'),currentCase+': live status jump selects its canonical slot');
+  assert.deepEqual(await cdp.evaluate('[window.__matrixFocus.queueCalls,window.__matrixFocus.takes,window.__matrixFocus.inspectCalls,window.__matrixFocus.auditionCalls,window.__matrixFocus.moreCalls]'),[[],[],[],[],[]],currentCase+': page and status navigation never queue, Take, Preview, audition or open clip options');
+  assert.equal(await cdp.evaluate('document.querySelector(".videoPerformMatrixScroll").scrollLeft'),0,currentCase+': status jumps never horizontally scroll');
+  // Authoritative polling can remove a focused off-page item. Keep a visible
+  // keyboard exit when another item survives and when the whole list vanishes.
+  const matrixPopupFocusState = () => cdp.evaluate('(()=>{const active=document.activeElement,list=document.querySelector("[data-video-perform-offpage-list]"),r=active?.getBoundingClientRect(),hit=r?document.elementFromPoint(r.left+r.width/2,r.top+r.height/2):null;return {activeTag:active?.tagName,activeText:active?.textContent?.trim().slice(0,120),activeData:active instanceof HTMLElement?{...active.dataset}:null,activeVisible:active?.checkVisibility(),activeBox:r?.toJSON(),hitTag:hit?.tagName,hitText:hit?.textContent?.trim().slice(0,80),portal:Boolean(list),entries:[...document.querySelectorAll("[data-video-perform-status-jump]")].map(e=>({kind:e.dataset.videoPerformStatusJump,layer:e.dataset.layerId,slot:e.dataset.slotId,index:e.dataset.clipIndex})),focusedClose:active===list?.querySelector("button"),pageStart:document.querySelector("[data-video-perform-matrix]")?.dataset.pageStart,scrollLeft:document.querySelector(".videoPerformMatrixScroll")?.scrollLeft}})()');
+  await cdp.evaluate('document.querySelector("[data-video-perform-page=next]").click();document.querySelector("[data-video-perform-offpage-status]").click()');
+  await waitFor(()=>cdp.evaluate('!!document.querySelector("[data-video-perform-status-jump=queued]")'),currentCase+': polling focus fixture status');
+  await cdp.evaluate('document.querySelector("[data-video-perform-status-jump=queued]").focus();window.__matrixFocus.setRuntime({layer_id:1,active_slot_id:101,queued_slot_id:null,pending_launch:null,transition:null,playhead_ms:0,playing:true})');
+  await waitFor(()=>cdp.evaluate('!document.querySelector("[data-video-perform-status-jump=queued]")'),currentCase+': queued item removed by polling');
+  assert.equal(await cdp.evaluate('document.activeElement===document.querySelector("[data-video-perform-offpage-list] button")&&document.activeElement.checkVisibility()'),true,currentCase+': removed focused status returns to the surviving Portal Close control '+JSON.stringify(await matrixPopupFocusState()));
+  await cdp.evaluate('document.querySelector("[data-video-perform-status-jump=live]").focus();window.__matrixFocus.setRuntime({layer_id:1,active_slot_id:null,queued_slot_id:null,pending_launch:null,transition:null,playhead_ms:0,playing:false})');
+  await waitFor(()=>cdp.evaluate('!document.querySelector("[data-video-perform-offpage-list]")'),currentCase+': empty runtime status closes Portal');
+  assert.equal(await cdp.evaluate('(()=>{const e=document.activeElement,b=e.getBoundingClientRect(),p=document.querySelector(".videoPerformMatrixScroll").getBoundingClientRect(),hit=document.elementFromPoint(b.left+b.width/2,b.top+b.height/2);return e.matches("[data-video-perform-cell-index][tabindex=\\"0\\"]")&&e.checkVisibility()&&b.top>=p.top&&b.bottom<=p.bottom&&(hit===e||e.contains(hit))})()'),true,currentCase+': vanished status trigger returns focus to a visible roving pad '+JSON.stringify(await matrixPopupFocusState()));
+  await cdp.evaluate('window.__matrixFocus.setRuntime({layer_id:1,active_slot_id:101,queued_slot_id:102,pending_launch:null,transition:null,playhead_ms:0,playing:true});document.querySelector("[data-video-perform-offpage-status]").click()');
+  await waitFor(()=>cdp.evaluate('!!document.querySelector("[data-video-perform-status-jump=live]")'),currentCase+': external focus fixture status');
+  await cdp.evaluate('(()=>{document.querySelector("[data-video-perform-status-jump=live]").focus();const outside=document.createElement("button");outside.textContent="Outside matrix";outside.style.cssText="position:fixed;left:1308px;top:8px;width:44px;height:44px";document.body.append(outside);window.__matrixOutsideFocus=outside;window.__matrixFocus.setRuntime({layer_id:1,active_slot_id:null,queued_slot_id:null,pending_launch:null,transition:null,playhead_ms:0,playing:false});outside.focus()})()');
+  await waitFor(()=>cdp.evaluate('!document.querySelector("[data-video-perform-offpage-list]")'),currentCase+': external focus runtime update');
+  assert.equal(await cdp.evaluate('document.activeElement===window.__matrixOutsideFocus'),true,currentCase+': deferred polling cleanup never steals newly acquired outside focus '+JSON.stringify(await matrixPopupFocusState()));
+  assert.deepEqual(await cdp.evaluate('[window.__matrixFocus.queueCalls,window.__matrixFocus.takes,window.__matrixFocus.inspectCalls,window.__matrixFocus.auditionCalls]'),[[],[],[],[]],currentCase+': polling focus recovery remains presentation only');
+  await cdp.evaluate('window.__matrixOutsideFocus.remove();for(let guard=0;guard<32&&Number(document.querySelector("[data-video-perform-matrix]").dataset.pageStart)>0;guard++)document.querySelector("[data-video-perform-page=previous]").click()');
+  await cdp.evaluate('window.__matrixFocus.setRuntime({layer_id:1,active_slot_id:101,queued_slot_id:null,pending_launch:null,transition:null,playhead_ms:0,playing:true});window.__matrixFocus.select(1,101)');
   const matrixFocusedSelector='[data-video-perform-row="1"] [data-video-perform-cell-index="0"]';
   await cdp.evaluate('window.__matrixOriginal=document.querySelector('+JSON.stringify(matrixFocusedSelector)+');window.__matrixOriginal.focus();true');
   const matrixState=()=>cdp.evaluate('({connected:window.__matrixOriginal.isConnected,sameElement:document.querySelector('+JSON.stringify(matrixFocusedSelector)+')===window.__matrixOriginal,focused:document.activeElement===window.__matrixOriginal,state:window.__matrixOriginal.closest("[data-video-perform-cell-state]").dataset.videoPerformCellState})');
@@ -981,6 +1030,15 @@ try {
   await cdp.evaluate('window.__matrixFocus.setPreviewTarget(null,null);window.__matrixFocus.select(1,101);window.__matrixOriginal.focus();true');
 
   // Physical number codes work with shifted US/JA characters.
+  const restoreMatrixFocusPage = async () => {
+    await cdp.evaluate('window.__matrixFocus.select(1,101);document.querySelector("[data-video-perform-select-layer=\\"1\\"]").focus({preventScroll:true})');
+    await cdp.key('Home','Home',36);
+    await waitFor(()=>cdp.evaluate('document.activeElement?.dataset.videoPerformLayerId==="1"&&document.activeElement?.dataset.videoPerformCellIndex==="0"&&document.querySelector("[data-video-perform-matrix]").dataset.pageStart==="0"'),currentCase+': Home restores the first canonical clip page');
+    // Crossing a page intentionally unmounts off-page pads. Establish the
+    // current-page DOM reference here, before the unchanged polling/same-ID
+    // reconciliation identity guards; never replace it during those guards.
+    await cdp.evaluate('window.__matrixOriginal=document.querySelector('+JSON.stringify(matrixFocusedSelector)+');true');
+  };
   const auditionKey=(key,code,extra={},prevented=false)=>cdp.evaluate('(()=>{const event=new KeyboardEvent("keydown",'+JSON.stringify({bubbles:true,cancelable:true,shiftKey:true,key,code,...extra})+');'+(prevented?'event.preventDefault();':'')+'(document.activeElement??document.body).dispatchEvent(event);return event.defaultPrevented})()');
   const auditionCount=()=>cdp.evaluate('window.__matrixFocus.auditionCalls.length');
   const beforeKeys=await auditionCount();
@@ -991,7 +1049,7 @@ try {
   assert.deepEqual(await cdp.evaluate('window.__matrixFocus.auditionCalls.slice(-3)'),[[1,102],[1,101],[3,310]],currentCase+': Shift 2/1/0 request exact slots');
   assert.equal(await auditionCount(),beforeKeys+3);
   assert.deepEqual(await cdp.evaluate('window.__matrixFocus.queueCalls'),[],currentCase+': Shift auditions never queue');
-  await cdp.evaluate('window.__matrixFocus.select(1,101);window.__matrixOriginal.focus();true');
+  await restoreMatrixFocusPage();
   await auditionKey('%','Digit5');
   assert.equal(await auditionCount(),beforeKeys+3,currentCase+': empty target does not audition');
   for(const blocked of [{ctrlKey:true},{metaKey:true},{altKey:true},{repeat:true},{isComposing:true}]) await auditionKey('@','Digit2',blocked);
@@ -1014,7 +1072,8 @@ try {
   assert.deepEqual(await cdp.evaluate('window.__matrixFocus.queueCalls'),[],currentCase+': blocked Shift keys never fall through to queue');
 
   // Restore original setup for the existing reconciliation and queue tests.
-  await cdp.evaluate('window.__matrixFocus.setPreviewTarget(null,null);window.__matrixFocus.select(1,101);window.__matrixFocus.setRuntime({layer_id:1,active_slot_id:101,queued_slot_id:null,pending_launch:null,transition:null,playhead_ms:0,playing:true});window.__matrixOriginal.focus();true');
+  await cdp.evaluate('window.__matrixFocus.setPreviewTarget(null,null);window.__matrixFocus.setRuntime({layer_id:1,active_slot_id:101,queued_slot_id:null,pending_launch:null,transition:null,playhead_ms:0,playing:true});true');
+  await restoreMatrixFocusPage();
   await cdp.evaluate('window.__matrixFocus.refresh();true');
   assert.deepEqual(await matrixState(),{connected:true,sameElement:true,focused:true,state:'LIVE'},currentCase+': polling replacement retains focused element');
   await cdp.evaluate('window.__matrixFocus.queue();true');
@@ -1081,6 +1140,48 @@ try {
   await cdp.key('Enter','Enter',13);
   assert.deepEqual(await cdp.evaluate('window.__quickFxFocus.calls.at(-1)'),['enabled',1,0,false],currentCase+': Enter bypasses exact scoped stage after refresh');
   assert.deepEqual(await fxState(fxBypass),{connected:true,sameElement:true,focused:true,value:'',pressed:'false'},currentCase+': scoped bypass publication retains focus');
+  // Preserve the wide polling/focus proof above and additionally exercise the
+  // compact view switch with an actual unsaved local preset-name draft.
+  await cdp.evaluate('(()=>{const host=document.querySelector("[data-perform-quick-fx]").parentElement;host.style.width="360px";host.style.height="400px"})()');
+  await waitFor(()=>cdp.evaluate('document.querySelector("[data-perform-quick-fx]").dataset.fxCompact==="true"'),currentCase+': compact FX layout');
+  await cdp.evaluate('document.querySelector("[data-perform-fx-view=parameters]").click();document.querySelector("[data-fx-presets] > summary").click();window.__fxDraft=document.querySelector("[data-fx-presets] input[type=text]");window.__fxDraft.value="Unsaved density preset";window.__fxDraft.dispatchEvent(new Event("input",{bubbles:true}));window.__fxBeforeViewCalls=window.__quickFxFocus.calls.length');
+  await cdp.evaluate('document.querySelector("[data-perform-fx-view=chain]").click()');
+  assert.equal(await cdp.evaluate('(()=>{const p=document.querySelector("[data-perform-fx-panel=parameters]");return p.hidden&&getComputedStyle(p).display==="none"&&p.getClientRects().length===0&&window.__fxDraft.isConnected&&window.__fxDraft.value==="Unsaved density preset"})()'),true,currentCase+': compact Chain hides Parameters with CSS while preserving its mounted unsaved draft');
+  await rememberFx(fxBypass);
+  await cdp.evaluate('window.__quickFxFocus.refresh()');
+  assert.equal((await fxState(fxBypass)).focused,true,currentCase+': Chain bypass focus survives polling in compact view');
+  await cdp.evaluate('document.querySelector("[data-perform-fx-view=parameters]").click()');
+  assert.equal(await cdp.evaluate('(()=>{const p=document.querySelector("[data-perform-fx-panel=chain]");return p.hidden&&getComputedStyle(p).display==="none"&&p.getClientRects().length===0&&document.querySelector("[data-fx-presets] input[type=text]")===window.__fxDraft&&window.__fxDraft.value==="Unsaved density preset"})()'),true,currentCase+': Parameters restores the same DOM and draft');
+  assert.equal(await cdp.evaluate('window.__quickFxFocus.calls.length===window.__fxBeforeViewCalls'),true,currentCase+': view changes and draft typing do not publish FX commands');
+  const resizeQuickFx = async (width) => {
+    await cdp.evaluate('document.querySelector("[data-perform-quick-fx]").parentElement.style.width='+JSON.stringify(width+'px'));
+    await waitFor(()=>cdp.evaluate('document.querySelector("[data-perform-quick-fx]").dataset.fxCompact==='+JSON.stringify(width<640?'true':'false')),currentCase+': FX resize to '+width);
+  };
+  const visibleFxFocus = (selector) => cdp.evaluate('(()=>{const e=document.querySelector('+JSON.stringify(selector)+'),o=document.querySelector("[data-perform-fx-scroll]");if(!e||document.activeElement!==e||!e.checkVisibility())return false;const b=e.getBoundingClientRect(),p=o.getBoundingClientRect(),hit=document.elementFromPoint(b.left+b.width/2,b.top+b.height/2);return b.width>0&&b.height>0&&b.left>=p.left-1&&b.right<=p.left+o.clientWidth+1&&b.top>=p.top-1&&b.bottom<=p.top+o.clientHeight+1&&(hit===e||e.contains(hit))})()');
+  await cdp.evaluate('document.querySelector("[data-perform-fx-view=parameters]").focus()');
+  await resizeQuickFx(1000);
+  assert.equal(await visibleFxFocus(fxParameter),true,currentCase+': widening a focused Parameters tab transfers focus to the selected stage operator input');
+  await resizeQuickFx(360);
+  assert.equal(await visibleFxFocus(fxParameter),true,currentCase+': a normal focused parameter keeps its same visible input on narrowing');
+  await cdp.evaluate('window.__fxResizedParameter=document.activeElement');
+  await resizeQuickFx(1000);
+  assert.equal(await cdp.evaluate('document.activeElement===window.__fxResizedParameter'),true,currentCase+': widening never replaces an already visible parameter focus');
+  for (const [source, destination] of [
+    ['[data-perform-fx-stage-picker]','[data-perform-fx-stage="0"] [data-perform-fx-select]'],
+    ['[data-perform-fx-selected-bypass]',fxBypass],
+    ['[data-perform-fx-view="chain"]','[data-perform-fx-stage="0"] [data-perform-fx-select]'],
+  ]) {
+    await resizeQuickFx(360);
+    await cdp.evaluate('document.querySelector("[data-perform-fx-view=parameters]").click();document.querySelector('+JSON.stringify(source)+').focus()');
+    await resizeQuickFx(1000);
+    assert.equal(await visibleFxFocus(destination),true,currentCase+': widening transfers hidden '+source+' focus to the same stage');
+  }
+  await resizeQuickFx(360);
+  await cdp.evaluate('(()=>{const outside=document.createElement("button");outside.textContent="Outside FX";outside.style.cssText="position:fixed;left:1100px;top:8px;width:44px;height:44px";document.body.append(outside);window.__fxOutsideFocus=outside;outside.focus()})()');
+  await resizeQuickFx(1000);
+  assert.equal(await cdp.evaluate('document.activeElement===window.__fxOutsideFocus'),true,currentCase+': responsive FX layout does not steal outside focus');
+  assert.equal(await cdp.evaluate('window.__quickFxFocus.calls.length===window.__fxBeforeViewCalls'),true,currentCase+': all focus migrations issue zero FX writes');
+  await cdp.evaluate('window.__fxOutsideFocus.remove()');
   assert.deepEqual(cdp.errors,[],currentCase+': console errors/warnings');
   focusResults.push({label:currentCase,focusRetainedAcross:'polling and same-ID authored layer/stage/control replacement',scopedCalls:await cdp.evaluate('window.__quickFxFocus.calls'),consoleErrors:cdp.errors});
   console.log('PASS '+currentCase);

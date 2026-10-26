@@ -103,8 +103,15 @@ class CdpClient {
     this.socket = new WebSocket(url);
     this.nextId = 0;
     this.pending = new Map();
+    this.diagnosticEvents = [];
     this.socket.onmessage = (event) => {
       const message = JSON.parse(event.data);
+      if (message.method === "Runtime.exceptionThrown"
+        || message.method === "Page.javascriptDialogOpening"
+        || (message.method === "Runtime.consoleAPICalled" && ["error", "warning"].includes(message.params?.type))) {
+        this.diagnosticEvents.push({ method: message.method, params: message.params });
+        if (this.diagnosticEvents.length > 100) this.diagnosticEvents.shift();
+      }
       const pending = this.pending.get(message.id);
       if (!pending) return;
       this.pending.delete(message.id);
@@ -220,15 +227,71 @@ const prepareTimelineSurface = async (client, label) => {
   await waitFor(() => click(client, '[data-timeline-desk-surface="show"]'), `${label} Timeline Show tab`);
   assert.equal(await click(client, ".timelineToolsDisclosure > summary"), true, `${label} opens Timeline tools`);
   await waitFor(() => evaluate(client, "document.querySelector('.timelineToolsDisclosure[open] .timelinePerformanceEditor') !== null"), `${label} Timeline performance disclosure`);
+  // Batch3: Audio is an exclusive mounted Tools tab. Select it before starting
+  // the unchanged strict Setup I/O IPC capture; no audio command is allowlisted
+  // or suppressed to accommodate this presentation-only navigation.
+  assert.equal(await click(client, '[data-timeline-tools-tab="audio"]'), true, label + " selects Timeline Audio");
+  await waitFor(() => evaluate(client, "document.querySelector('[data-timeline-tools-tab=audio]')?.getAttribute('aria-selected')==='true'&&document.querySelector('[data-timeline-tools-panel=audio]')?.getClientRects().length>0"), label + " Audio tab visibly mounted");
+  assert.equal(await evaluate(client, "[...document.querySelectorAll('[data-timeline-tools-panel][hidden]')].length===2&&[...document.querySelectorAll('[data-timeline-tools-panel][hidden]')].every(panel=>getComputedStyle(panel).display==='none'&&panel.getClientRects().length===0)"), true, label + " inactive Tools panels are actually hidden");
 };
 const openCueAudioPanel = async (client, label) => {
-  await evaluate(client, "window.__syndocalCueAudioMock.cueAudioCalls = []; window.__syndocalCueAudioMock.captureCueAudioCalls = true; window.__syndocalCueAudioMock.manualRefreshListSeen = false;");
-  assert.equal(await click(client, "[data-timeline-cue-audio-open-setup]"), true, `${label} navigates from Timeline status to Setup I/O Audio`);
-  await waitFor(() => evaluate(client, "document.querySelector('[data-io-connection=\"audio\"]') !== null"), `${label} Setup I/O deck`);
-  assert.equal(await click(client, '[data-io-connection="audio"] .setupIoConnectionSelect'), true, `${label} selects the Audio workbench`);
-  await waitFor(() => evaluate(client, `(() => [...document.querySelectorAll('[data-timeline-cue-audio-routing] button')]
-    .some((candidate) => candidate.textContent?.trim() === 'Refresh Windows outputs'))()`), `${label} Setup Cue Audio Refresh button`);
-  await waitFor(() => evaluate(client, "window.__syndocalCueAudioMock?.cueAudioCalls?.map((call) => call.command).join(',') === 'list_audio_output_devices,get_timeline_cue_audio_status'"), `${label} automatic Setup list then Cue Audio status`);
+  try {
+    await evaluate(client, "window.__syndocalCueAudioMock.cueAudioCalls = []; window.__syndocalCueAudioMock.captureCueAudioCalls = true; window.__syndocalCueAudioMock.manualRefreshListSeen = false;");
+    assert.equal(await click(client, "[data-timeline-cue-audio-open-setup]"), true, `${label} navigates from Timeline status to Setup I/O Audio`);
+    await waitFor(() => evaluate(client, "document.querySelector('[data-io-connection=\"audio\"]') !== null"), `${label} Setup I/O deck`);
+    assert.equal(await click(client, '[data-io-connection="audio"] .setupIoConnectionSelect'), true, `${label} selects the Audio workbench`);
+    await waitFor(() => evaluate(client, `(() => [...document.querySelectorAll('[data-timeline-cue-audio-routing] button')]
+      .some((candidate) => candidate.textContent?.trim() === 'Refresh Windows outputs'))()`), `${label} Setup Cue Audio Refresh button`);
+    await waitFor(() => evaluate(client, "window.__syndocalCueAudioMock?.cueAudioCalls?.map((call) => call.command).join(',') === 'list_audio_output_devices,get_timeline_cue_audio_status'"), `${label} automatic Setup list then Cue Audio status`);
+  } catch (error) {
+    // Observe the failed route without selecting a different panel, changing the
+    // locale, clearing a rejection, or relaxing the original postconditions.
+    try {
+      const state = await evaluate(client, `(() => {
+        const describe = (element) => ({
+          tag: element.tagName, text: element.textContent?.trim() ?? '',
+          attributes: Object.fromEntries([...element.attributes].map(attribute => [attribute.name, attribute.value])),
+          display: getComputedStyle(element).display, rectCount: element.getClientRects().length,
+        });
+        const mock = window.__syndocalCueAudioMock;
+        const calls = mock?.calls ?? [];
+        const knownCommands = new Set(mock?.knownCommands ?? []);
+        return {
+          url: location.href, documentLanguage: document.documentElement.lang,
+          storedLocale: localStorage.getItem('syndocal.uiLocale.v1'), navigatorLanguage: navigator.language,
+          visibilityState: document.visibilityState, hidden: document.hidden, hasFocus: document.hasFocus(),
+          appClass: document.querySelector('.app')?.className ?? null,
+          workspaceOptions: [...document.querySelectorAll('[data-workspace-option]')].map(describe),
+          selectedTabs: [...document.querySelectorAll('[aria-selected=true]')].map(describe),
+          audioConnection: [...document.querySelectorAll('[data-io-connection="audio"] .setupIoConnectionSelect')].map(describe),
+          workbenches: [...document.querySelectorAll('[data-io-connection-workbench]')].map(element => ({
+            id: element.getAttribute('data-io-connection-workbench'),
+            text: element.textContent?.trim() ?? '',
+            buttons: [...element.querySelectorAll('button')].map(describe),
+          })),
+          audioPanels: [...document.querySelectorAll('[data-audio-output-panel]')].map(describe),
+          routingPanels: [...document.querySelectorAll('[data-timeline-cue-audio-routing]')].map(describe),
+          cueRefreshButtons: [...document.querySelectorAll('[data-timeline-cue-audio-refresh]')].map(describe),
+          dialogs: [...document.querySelectorAll('dialog[open], [role=dialog], [role=alertdialog]')].map(describe),
+          alerts: [...document.querySelectorAll('[role=alert], .inlineError')].map(describe),
+          bodyTextStart: document.body.innerText.slice(0, 4000),
+          cueAudioCalls: mock?.cueAudioCalls ?? null,
+          rejected: mock?.rejected ?? null,
+          unknownCalls: calls.filter(call => !knownCommands.has(call.command)),
+          commandCounts: calls.reduce((counts, call) => { counts[call.command] = (counts[call.command] ?? 0) + 1; return counts; }, {}),
+          recentCalls: calls.slice(-40),
+        };
+      })()`);
+      console.error("CUE AUDIO SETUP FAILURE DIAGNOSTIC " + JSON.stringify({
+        label, error: String(error?.message ?? error), state, runtimeEvents: client.diagnosticEvents,
+      }));
+    } catch (diagnosticError) {
+      console.error("CUE AUDIO SETUP DIAGNOSTIC FAILED " + JSON.stringify({
+        label, error: String(diagnosticError?.message ?? diagnosticError), runtimeEvents: client.diagnosticEvents,
+      }));
+    }
+    throw error;
+  }
 };
 const runTrustedCueAudioRefresh = async (client, label) => {
   await evaluate(client, "window.__syndocalCueAudioMock.cueAudioCalls = []; window.__syndocalCueAudioMock.captureCueAudioCalls = true; window.__syndocalCueAudioMock.manualRefreshListSeen = false;");

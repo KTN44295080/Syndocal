@@ -169,6 +169,22 @@ const ux = (code) => evaluate(`(async()=>{const u=window.__fxUx;${code}})()`);
 const click = (selector) => evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)throw Error('missing '+${JSON.stringify(selector)});if(e.disabled)throw Error('disabled '+${JSON.stringify(selector)});e.click();return true})()`);
 const text = (selector) => evaluate(`document.querySelector(${JSON.stringify(selector)})?.innerText??null`);
 const settle = async () => { await delay(120); };
+// Batch3 keeps management and parameters mounted, but only one compact view
+// visible. Navigate through the actual view buttons before editing a stage.
+const showPerformFxView = async (view) => {
+  await evaluate("(()=>{const root=document.querySelector('[data-perform-quick-fx]');if(root?.dataset.fxCompact==='true')root.querySelector(" + JSON.stringify('[data-perform-fx-view="' + view + '"]') + ").click()})()");
+  await settle();
+};
+const selectPerformStage = async (index) => {
+  await showPerformFxView("chain");
+  await click('[data-perform-fx-stage="' + index + '"] [data-perform-fx-select]');
+  await settle();
+  await showPerformFxView("parameters");
+};
+const openPerformImageInputs = async () => {
+  assert.equal(await evaluate("(()=>{const details=document.querySelector('[data-perform-quick-fx] [data-fx-image-disclosure]');if(!(details instanceof HTMLDetailsElement))return false;if(!details.open)details.querySelector(':scope > summary').click();return details.open})()"), true, "Perform image inputs are reached through their disclosure");
+  await settle();
+};
 const setView = async (viewport, locale, theme, view, width, height, layer = 2) => {
   await send("Emulation.setDeviceMetricsOverride", { width: viewport[0], height: viewport[1], deviceScaleFactor: 1, mobile: false });
   await ux(`u.setLocale(${JSON.stringify(locale)});u.setSize({width:${width},height:${height}});u.setSelectedLayerId(${layer});u.setView(${JSON.stringify(view)});document.documentElement.dataset.theme=${JSON.stringify(theme)};`);
@@ -202,7 +218,7 @@ try {
 
   // ---- Parameter editing (maximised Inspector pane), English then Japanese ----
   await setView([1920, 1080], "en", "tally", "fx", 700, 620);
-  await click('[data-perform-fx-stage="0"] [data-perform-fx-select]');
+  await selectPerformStage(0);
   await settle();
   const labels = await evaluate("[...document.querySelectorAll('[data-perform-fx-control] .videoFxParameterHead')].map(e=>e.innerText.replace(/\\s+/g,' '))");
   assert.equal(labels.length, 2, "both parameters render");
@@ -220,7 +236,7 @@ try {
   await click('[data-perform-fx-control=amount] .videoFxParameterFoot button'); await settle();
   assert.match(await text("[data-perform-fx-control=amount] .videoFxParameterHead output"), /75 %/, "reset returns the declared default");
   // A point parameter has a 2D pad: a click publishes one value, the arrow keys step it.
-  await click('[data-perform-fx-stage="3"] [data-perform-fx-select]'); await settle();
+  await selectPerformStage(3); await settle();
   const pad = await evaluate("(()=>{const r=document.querySelector('[data-fx-point-pad]').getBoundingClientRect();return {x:r.left,y:r.top,w:r.width,h:r.height}})()");
   const writesBeforePad = await ux("return u.log.liveWrites");
   await send("Input.dispatchMouseEvent", { type: "mousePressed", x: pad.x + pad.w * 0.25, y: pad.y + pad.h * 0.25, button: "left", buttons: 1, clickCount: 1 });
@@ -234,7 +250,7 @@ try {
   assert.match(await text("[data-perform-fx-control=center] .videoFxParameterHead output"), /0\.26, 0\.75/, "the point reads as X, Y values");
   await shot("params-point-pad-en-tally-1920x1080");
   // Selecting the strobe stage shows Hz units; presets are listed for built-ins.
-  await click('[data-perform-fx-stage="2"] [data-perform-fx-select]'); await settle();
+  await selectPerformStage(2); await settle();
   assert.match(await text("[data-perform-fx-control=rate] .videoFxParameterHead output"), /8 Hz/, "strobe rate carries its unit");
   await evaluate("document.querySelector('[data-fx-presets]').open=true"); await settle();
   assert.ok((await evaluate("[...document.querySelectorAll('[data-fx-presets] select option')].map(e=>e.textContent)")).includes("Slow pulse"), "built-in presets are offered");
@@ -281,7 +297,7 @@ try {
 
   // ---- Narrow Inspector (1366x768): the slider keeps a usable length beside its number field ----
   await setView([1366, 768], "ja", "tally", "fx", 446, 236);
-  await click('[data-perform-fx-stage="2"] [data-perform-fx-select]'); await settle();
+  await selectPerformStage(2); await settle();
   const narrow = await evaluate("(()=>{const r=document.querySelector('[data-perform-fx-control=rate] input[type=range]').getBoundingClientRect();return Math.round(r.width)})()");
   assert.ok(narrow >= 120, `the slider stays usable in the narrow Inspector (${narrow}px)`);
   await shot("params-ja-tally-1366x768");
@@ -300,7 +316,7 @@ try {
   assert.match(await text("[data-fx-audition-bar]"), /AUDITION\s+·\s+PREVIEW ONLY/i);
   await shot("audition-en-tally-1920x1080");
   // Draft edits stay in the draft and Preview.
-  await click('[data-perform-fx-stage="0"] [data-perform-fx-select]');
+  await selectPerformStage(0);
   const writesBefore = await ux("return u.log.liveWrites");
   await ux("u.audition.setEnabled(1,0,false)"); await settle();
   assert.equal(await ux("return u.log.liveWrites"), writesBefore, "draft edits never use the live commands");
@@ -331,7 +347,7 @@ try {
   // ---- Task 18 D1: tempo-synced beat and bar units ----
   await ux("u.resetLayers();u.setBpm(120)");
   await setView([1920, 1080], "en", "tally", "fx", 700, 620);
-  await click('[data-perform-fx-stage="2"] [data-perform-fx-select]'); await settle();
+  await selectPerformStage(2); await settle();
   const syncBox = "[data-perform-fx-control=rate] [data-fx-tempo-sync]";
   // Serialised in the page: CDP flattens store proxies, JSON.stringify is what the project writer sees.
   const rateControl = async () => JSON.parse(await ux("return JSON.stringify(u.layers()[1].isf_effect.stack[1].controls.find(c=>c.name==='rate'))"));
@@ -608,6 +624,8 @@ try {
   // Stable image inputs through the real editor and existing live mutation.
   await ux("u.imageFixture();u.log.rejectImageWrite=false;u.log.ignoreImageWrite=false");
   await setView([1920, 1080], "en", "tally", "fx", 700, 740, 2);
+  assert.equal(await evaluate("document.querySelector('[data-fx-image-disclosure]')?.open"), false, "Perform image routing starts disclosed without changing the shared Full FX editor");
+  await openPerformImageInputs();
   const imageSelector = '[data-fx-image-input="overlay"] [data-fx-image-source]';
   const chooseImage = async (value) => {
     await evaluate("(()=>{const e=document.querySelector(" + JSON.stringify(imageSelector) + ");e.value=" + JSON.stringify(value) + ";e.dispatchEvent(new Event('change',{bubbles:true}));})()");
@@ -640,6 +658,8 @@ try {
   await evaluate("document.querySelector('[data-fx-image-inputs]').scrollIntoView({block:'nearest'})");
   await shot("image-inputs-en-tally-1920x1080");
   await setView([1366, 768], "ja", "cobalt", "fx", 446, 680, 2);
+  await showPerformFxView("parameters");
+  await openPerformImageInputs();
   assert.match(await text("[data-fx-image-inputs]"), /画像入力/);
   await shot("image-inputs-ja-cobalt-1366x768");
   await chooseImage("none");

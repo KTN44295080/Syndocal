@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, type ComponentProps } from "solid-js";
+import { batch, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, type ComponentProps } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { Portal } from "solid-js/web";
 import { controlMappingTargetData, type ControlMappingTarget } from "../controlMappingLearn";
@@ -49,10 +49,52 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
   const visibleRows = () => rows.filter(row => !collapsed().includes(groupFor(row.id)?.id ?? -1));
   const selectLayer = (id: number) => { props.onSelectGroup?.(null); props.bank.onSelectLayer(id); };
   const [focusedColumn, setFocusedColumn] = createSignal(0);
+  const [pageSize, setPageSize] = createSignal(1);
+  const [pageStart, setPageStart] = createSignal(0);
+  const pageEnd = () => Math.min(32, pageStart() + pageSize());
+  const columnOnPage = (column: number) => column >= pageStart() && column < pageEnd();
   let root: HTMLDivElement | undefined;
+  let resizeObserver: ResizeObserver | undefined;
   const selectedLayerId = () => props.bank.layer?.id ?? rows[0]?.id ?? null;
+  const tabLayerId = () => visibleRows().find(row => row.id === selectedLayerId())?.id ?? visibleRows()[0]?.id;
+  const tabColumn = () => {
+    const selected = rows.find(row => row.id === tabLayerId())?.layer.clip_slots?.findIndex(slot => slot.id === props.bank.selectedSlotId) ?? -1;
+    return columnOnPage(selected) ? selected : columnOnPage(focusedColumn()) ? focusedColumn() : pageStart();
+  };
+  const attachScroll = (element: HTMLDivElement) => {
+    root = element;
+    resizeObserver?.disconnect();
+    const measure = () => {
+      const stripWidth = element.querySelector<HTMLElement>(".videoPerformMatrixCorner")?.offsetWidth ?? 336;
+      const nextSize = Math.max(1, Math.min(32, Math.floor((element.clientWidth - stripWidth) / 100)));
+      if (nextSize === pageSize()) return;
+      const active = document.activeElement instanceof HTMLElement && element.contains(document.activeElement)
+        ? document.activeElement.closest<HTMLElement>("[data-video-perform-cell-index]") : null;
+      const anchor = active ? Number(active.dataset.videoPerformCellIndex) : pageStart();
+      // Keep the focused absolute slot in the page when the pane is resized.
+      // Reconcile the same cell objects so an overlapping pad keeps its DOM.
+      batch(() => {
+        setPageSize(nextSize);
+        setPageStart(Math.floor(anchor / nextSize) * nextSize);
+      });
+    };
+    resizeObserver = new ResizeObserver(measure);
+    resizeObserver.observe(element);
+    measure();
+  };
+  onCleanup(() => resizeObserver?.disconnect());
+  const showColumn = (column: number) => {
+    if (!columnOnPage(column)) setPageStart(Math.floor(column / pageSize()) * pageSize());
+  };
+  const changePage = (direction: -1 | 1) => {
+    // Paging is presentation only: it never queues, auditions, or takes a clip.
+    closeClipMenu();
+    closeOffpage();
+    setPageStart(start => Math.max(0, Math.min(Math.floor(31 / pageSize()) * pageSize(), start + direction * pageSize())));
+  };
 
   const focusCell = (layerId: number, column: number) => {
+    showColumn(column);
     setFocusedColumn(column);
     selectLayer(layerId);
     const layer = rows.find((row) => row.id === layerId)?.layer;
@@ -62,11 +104,7 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
       if (!pad || !root) return;
       pad.focus({ preventScroll: true });
       const bounds = root.getBoundingClientRect();
-      const target = pad.getBoundingClientRect();
-      const stickyWidth = root.querySelector<HTMLElement>(".videoPerformMatrixCorner")?.offsetWidth ?? 336;
       const stickyHeight = root.querySelector<HTMLElement>(".videoPerformMatrixHead")?.offsetHeight ?? 44;
-      if (target.left < bounds.left + stickyWidth) root.scrollLeft -= bounds.left + stickyWidth - target.left;
-      else if (target.right > bounds.right - 2) root.scrollLeft += target.right - bounds.right + 2;
       const row = pad.closest<HTMLElement>("[data-video-perform-row]")?.getBoundingClientRect();
       if (row && row.top < bounds.top + stickyHeight) root.scrollTop -= bounds.top + stickyHeight - row.top;
       else if (row && row.bottom > bounds.bottom - 2) root.scrollTop += row.bottom - bounds.bottom + 2;
@@ -162,6 +200,95 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
   onMount(() => document.addEventListener("pointerdown", outsideClipMenu, true));
   onCleanup(() => document.removeEventListener("pointerdown", outsideClipMenu, true));
 
+  type OffpageClip = { id: string; layerId: number; layerLabel: string; slotId: VideoClipSlotId; index: number; label: string; state: "live" | "queued" };
+  const [offpageClips, setOffpageClips] = createStore<OffpageClip[]>([]);
+  const [offpageOpen, setOffpageOpen] = createSignal(false);
+  const [offpagePosition, setOffpagePosition] = createSignal({ x: 8, y: 8 });
+  let offpageTrigger: HTMLButtonElement | undefined;
+  let offpageElement: HTMLDivElement | undefined;
+  const returnFromOffpage = () => {
+    const candidates = [offpageTrigger,
+      root?.querySelector<HTMLElement>('[data-video-perform-cell-index][tabindex="0"]'),
+      root?.querySelector<HTMLElement>("[data-video-perform-page]:not(:disabled)"), root];
+    const target = candidates.find(element => {
+      if (!element?.isConnected || !element.getClientRects().length) return false;
+      const bounds = element.getBoundingClientRect();
+      return bounds.width > 0 && bounds.height > 0;
+    });
+    target?.focus({ preventScroll: true });
+    if (root && target?.matches("[data-video-perform-cell-index]")) {
+      const viewport = root.getBoundingClientRect();
+      const headHeight = root.querySelector<HTMLElement>(".videoPerformMatrixHead")?.offsetHeight ?? 44;
+      const row = target.closest<HTMLElement>("[data-video-perform-row]")?.getBoundingClientRect();
+      if (row && row.top < viewport.top + headHeight) root.scrollTop -= viewport.top + headHeight - row.top;
+      else if (row && row.bottom > viewport.bottom - 2) root.scrollTop += row.bottom - viewport.bottom + 2;
+    }
+  };
+  const closeOffpage = (restoreFocus = false) => {
+    setOffpageOpen(false);
+    if (restoreFocus) returnFromOffpage();
+  };
+  createEffect(() => {
+    const entries = rows.flatMap(row => {
+      const runtime = props.runtimes.find(item => item.layer_id === row.id);
+      const states: Array<{ slotId: VideoClipSlotId; state: "live" | "queued" }> = [];
+      if (runtime?.playing && runtime.active_slot_id != null) states.push({ slotId: runtime.active_slot_id, state: "live" });
+      for (const slotId of new Set([runtime?.queued_slot_id, runtime?.pending_launch?.slot_id])) {
+        if (slotId != null) states.push({ slotId, state: "queued" });
+      }
+      return states.flatMap(({ slotId, state }) => {
+        const index = row.layer.clip_slots?.findIndex(slot => slot.id === slotId) ?? -1;
+        if (index < 0 || columnOnPage(index)) return [];
+        const slot = row.layer.clip_slots![index];
+        return [{ id: `${row.id}:${slotId}:${state}`, layerId: row.id, layerLabel: row.layer.label, slotId, index,
+          label: props.bank.assets.find(asset => asset.id === slot.media_asset_id)?.label ?? `#${slotId}`, state }];
+      });
+    });
+    const dialog = offpageOpen() ? offpageElement : undefined;
+    const active = document.activeElement;
+    const focused = active instanceof HTMLElement && dialog?.contains(active) ? active : null;
+    setOffpageClips(reconcile(entries, { key: "id" }));
+    if (dialog) queueMicrotask(() => {
+      if (!offpageOpen() || offpageElement !== dialog) return;
+      const current = document.activeElement;
+      // A removed focused entry can leave focus on body without a focusout
+      // event. Restore only that lost focus, never a user's new external focus.
+      const ownsFocus = focused !== null && (current === focused || (!focused.isConnected
+        && (current === document.body || current === document.documentElement || current === null)));
+      if (offpageClips.length === 0) closeOffpage(ownsFocus);
+      else if (focused && !ownsFocus && !dialog.contains(current)) closeOffpage();
+      else if (ownsFocus && focused && !focused.isConnected) {
+        dialog.scrollTop = 0;
+        dialog.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
+      }
+    });
+  });
+  const openOffpage = () => {
+    if (offpageOpen()) { closeOffpage(true); return; }
+    closeClipMenu();
+    const anchor = offpageTrigger?.getBoundingClientRect();
+    setOffpagePosition({ x: anchor?.left ?? 8, y: anchor?.bottom ?? 8 });
+    setOffpageOpen(true);
+    queueMicrotask(() => {
+      if (!offpageElement) return;
+      const bounds = offpageElement.getBoundingClientRect();
+      setOffpagePosition({ x: Math.max(8, Math.min(anchor?.left ?? 8, innerWidth - bounds.width - 8)),
+        y: Math.max(8, Math.min(anchor?.bottom ?? 8, innerHeight - bounds.height - 8)) });
+      offpageElement.querySelector<HTMLButtonElement>("button")?.focus();
+    });
+  };
+  const outsideOffpage = (event: PointerEvent) => {
+    if (offpageOpen() && event.target instanceof Node && !offpageElement?.contains(event.target) && !offpageTrigger?.contains(event.target)) closeOffpage();
+  };
+  onMount(() => document.addEventListener("pointerdown", outsideOffpage, true));
+  onCleanup(() => document.removeEventListener("pointerdown", outsideOffpage, true));
+  const jumpToClip = (entry: OffpageClip) => {
+    closeOffpage();
+    const group = groupFor(entry.layerId);
+    if (group) setCollapsed(ids => ids.filter(id => id !== group.id));
+    focusCell(entry.layerId, entry.index);
+  };
+
   const keyDown = (event: KeyboardEvent) => {
     if (props.keyboardEnabled === false || clipMenu() || event.defaultPrevented || event.repeat || event.isComposing
       || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -223,6 +350,10 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
     const slots = rows.find((row) => row.id === selectedLayerId())?.layer.clip_slots;
     return slots?.find((slot) => slot.id === props.bank.selectedSlotId) ?? null;
   };
+  const selectedClipName = () => {
+    const slot = selectedSlot();
+    return slot ? props.bank.assets.find(asset => asset.id === slot.media_asset_id)?.label ?? `#${slot.id}` : "";
+  };
   // The corner buttons carry the per-clip actions that used to repeat in every cell.
   const inspectSelected = () => {
     const slot = selectedSlot();
@@ -259,7 +390,7 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
         // A row may differ from the browser's selected target; add to this row.
         void props.onAddEffect?.(entry, layer().id);
       }}>
-      <div class="videoPerformLayerStrip" role="rowheader">
+      <div class="videoPerformLayerStrip" role="rowheader" aria-colindex={1}>
         <div class="videoPerformLayerTop">
           <button type="button" class="videoPerformLayerName" aria-pressed={selected()} title={layer().label} data-video-perform-select-layer={layer().id} onClick={() => selectLayer(layer().id)} data-no-localize>{layer().label}</button>
           <button type="button" aria-pressed={layer().state.solo} classList={{ active: layer().state.solo }} data-video-layer-solo={layer().id} {...controlMappingTargetData({ action: "VideoLayerSolo", label: `${layer().label} solo`, layer_id: layer().id })} onClick={() => void props.layerList.onSetLayerState(layer().id, { ...layer().state, solo: !layer().state.solo })}>Solo</button>
@@ -272,7 +403,7 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
           <label class="videoPerformLayerBlend" title="Blend"><select value={layer().blend_mode} aria-label="Blend" data-video-layer-blend={layer().id} {...controlMappingTargetData({ action: "VideoLayerBlendMode", label: `${layer().label} blend`, layer_id: layer().id })} onInput={(event) => void props.layerList.onSetBlendMode(layer().id, event.currentTarget.value as VideoBlendMode)}><For each={blends}>{(blend) => <option value={blend}>{blend === "SoftLight" ? "Soft Light" : blend}</option>}</For></select></label>
         </div>
       </div>
-      <For each={cells}>{(cell) => {
+      <For each={cells.slice(pageStart(), pageEnd())}>{(cell) => {
         const asset = () => props.bank.assets.find((item) => item.id === cell.slot?.media_asset_id);
         const availability = () => cell.slot ? props.availabilityById[cell.slot.media_asset_id] : undefined;
         const missing = () => cell.slot !== null && (!asset() || availability()?.kind === "missing");
@@ -283,8 +414,8 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
           && (props.previewSlotId != null ? cell.slot?.id === props.previewSlotId : cell.active);
         const state = () => !cell.slot ? "Empty" : missing() ? "Missing" : failed() ? "Error" : cell.active ? (runtime()?.playing ? "LIVE" : previewing() ? "Preview" : "Paused") : cell.queued || cell.pending ? "Queued" : previewing() ? "Preview" : "Loaded";
         const selectedCell = () => selected() && (cell.slot ? cell.slot.id === props.bank.selectedSlotId : focusedColumn() === cell.index && props.bank.selectedSlotId === null);
-        return <div class="videoPerformMatrixCell" classList={{ occupied: cell.slot !== null, live: cell.active && runtime()?.playing === true, queued: cell.queued || cell.pending, preview: previewing(), selected: selectedCell(), error: missing() || failed() }} role="gridcell" data-video-clip-slot-id={cell.slot?.id} data-video-clip-slot-index={cell.index} data-video-clip-slot-layer-id={layer().id} data-video-perform-cell-state={state()} data-video-perform-preview={previewing() ? "true" : undefined}>
-          <button type="button" class="videoPerformClipTrigger" data-video-perform-layer-id={layer().id} data-video-perform-cell-index={cell.index} data-video-clip-slot-pad-index={cell.index} {...controlMappingTargetData(cell.slot ? { action: "VideoClipSlotTrigger", label: `${layer().label} clip ${cell.index + 1}`, layer_id: layer().id, clip_slot_id: cell.slot.id } : null)} aria-label={`Queue clip ${cell.index + 1}: ${asset()?.label ?? "Empty"}`} aria-pressed={selectedCell()} tabIndex={selectedCell() || selected() && props.bank.selectedSlotId == null && cell.index === focusedColumn() ? 0 : -1} onFocus={() => setFocusedColumn(cell.index)} onClick={() => queue(layer().id, cell.index)} aria-haspopup="menu" onContextMenu={(event) => openClipMenu(event, layer().id, cell.slot?.id ?? null)}>
+        return <div class="videoPerformMatrixCell" classList={{ occupied: cell.slot !== null, live: cell.active && runtime()?.playing === true, queued: cell.queued || cell.pending, preview: previewing(), selected: selectedCell(), error: missing() || failed() }} role="gridcell" aria-colindex={cell.index + 2} data-video-clip-slot-id={cell.slot?.id} data-video-clip-slot-index={cell.index} data-video-clip-slot-layer-id={layer().id} data-video-perform-cell-state={state()} data-video-perform-preview={previewing() ? "true" : undefined}>
+          <button type="button" class="videoPerformClipTrigger" data-video-perform-layer-id={layer().id} data-video-perform-cell-index={cell.index} data-video-clip-slot-pad-index={cell.index} {...controlMappingTargetData(cell.slot ? { action: "VideoClipSlotTrigger", label: `${layer().label} clip ${cell.index + 1}`, layer_id: layer().id, clip_slot_id: cell.slot.id } : null)} aria-label={`Queue clip ${cell.index + 1}: ${asset()?.label ?? "Empty"}`} aria-pressed={selectedCell()} tabIndex={tabLayerId() === layer().id && cell.index === tabColumn() ? 0 : -1} onFocus={() => setFocusedColumn(cell.index)} onClick={() => queue(layer().id, cell.index)} aria-haspopup="menu" onContextMenu={(event) => openClipMenu(event, layer().id, cell.slot?.id ?? null)}>
             <span class="videoPerformClipImage"><Show when={props.thumbnailsAuthorized && cell.slot && props.bank.thumbnails[cell.slot.media_asset_id]} fallback={<span class="videoPerformClipPlaceholder" aria-hidden="true">{cell.slot ? "▧" : "+"}</span>}>{(thumbnail) => <img src={thumbnail()} alt="" loading="lazy" />}</Show><kbd data-no-localize>{videoPerformClipKeys[cell.index].toUpperCase()}</kbd><Show when={previewing() && state() !== "Preview"}><span class="videoPerformPreviewBadge"><span aria-hidden="true">◉</span><span>Preview</span></span></Show></span>
             <span class="videoPerformClipTitle" title={asset()?.label} data-no-localize>{cell.slot ? asset()?.label ?? `#${cell.slot.id}` : "—"}</span>
             <span class="videoPerformClipState"><span aria-hidden="true">{state() === "LIVE" ? "▶ " : state() === "Queued" ? "◷ " : state() === "Preview" ? "◉" : missing() || failed() ? "! " : ""}</span><span>{state()}</span></span>
@@ -314,16 +445,64 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
     </div>;
   };
 
-  return <section class="videoPerformMatrix" data-video-perform-matrix data-video-perform-region="matrix" aria-label="Clip matrix">
+  return <section class="videoPerformMatrix" data-video-perform-matrix data-video-perform-region="matrix" aria-label="Clip matrix"
+    data-page-start={pageStart()} data-page-size={pageSize()} data-page-end={pageEnd()} data-slot-count="32"
+    style={{ "--perform-visible-columns": pageEnd() - pageStart() }}>
     <Show when={rows.length > 0} fallback={<div class="videoPerformMatrixEmpty"><span>No video layers. Add a file, still, or input above.</span><button type="button" onClick={() => void props.bank.onImport()}>Import</button></div>}>
-      <div ref={root} class="videoPerformMatrixScroll" role="grid" aria-label="Video layers and clips" aria-rowcount={rows.length + 1} aria-colcount="33" tabIndex={-1}>
-        <div class="videoPerformMatrixHead" role="row"><div class="videoPerformMatrixCorner" role="columnheader"><strong title={`${rows.length} × 32`}>Layers / Clips</strong><button type="button" data-video-perform-inspect disabled={!selectedSlot()} title="Audition selected clip in Preview" onClick={inspectSelected}>Inspect</button><button type="button" data-video-perform-clip-options aria-label="Options for the selected clip" title="Options for the selected clip" onClick={(event) => clipOptions(event.currentTarget)}>Clip…</button></div><For each={Array.from({ length: 32 }, (_, index) => index)}>{(index) => <div class="videoPerformMatrixColumn" role="columnheader"><span data-no-localize>{index + 1}</span><kbd data-no-localize>{videoPerformClipKeys[index].toUpperCase()}</kbd></div>}</For></div>
+      <div ref={attachScroll} class="videoPerformMatrixScroll" role="grid" aria-label="Video layers and clips" aria-rowcount={rows.length + 1} aria-colcount="33" tabIndex={-1}>
+        <div class="videoPerformMatrixHead" role="row">
+          <div class="videoPerformMatrixCorner" role="columnheader" aria-colindex={1}>
+            <button type="button" data-video-perform-page="previous" aria-label="Previous clip slots" title="Previous clip slots" disabled={pageStart() === 0} onClick={() => changePage(-1)}>‹</button>
+            <span data-video-perform-page-range data-no-localize aria-label="Visible clips">{pageStart() + 1}–{pageEnd()}/32</span>
+            <button type="button" data-video-perform-page="next" aria-label="Next clip slots" title="Next clip slots" disabled={pageEnd() === 32} onClick={() => changePage(1)}>›</button>
+            <button type="button" data-video-perform-inspect disabled={!selectedSlot()} title="Audition selected clip in Preview" onClick={inspectSelected}>Inspect</button>
+            <button type="button" data-video-perform-clip-options aria-label="Options for the selected clip" title="Options for the selected clip" onClick={(event) => clipOptions(event.currentTarget)}>Clip…</button>
+          </div>
+          <div class="videoPerformMatrixSelection" role="columnheader" aria-colindex={pageStart() + 2} aria-colspan={pageEnd() - pageStart()}>
+            <div class="videoPerformSelectedClip"><Show when={selectedSlot()} fallback={<span>No clip selected</span>}>
+              <span>Selected clip</span><strong data-video-perform-selected-clip-name data-no-localize>{selectedClipName()}</strong>
+            </Show></div>
+            <Show when={offpageClips.length > 0}>
+              <button ref={offpageTrigger} type="button" data-video-perform-offpage-status aria-label="Off-page clips" aria-haspopup="dialog" aria-expanded={offpageOpen()} onClick={openOffpage}>
+                <span>Off-page clips</span>
+                <Show when={offpageClips.some(entry => entry.state === "live")}><span class="videoPerformOffpageLive">LIVE <span data-no-localize>{offpageClips.filter(entry => entry.state === "live").length}</span></span></Show>
+                <Show when={offpageClips.some(entry => entry.state === "queued")}><span class="videoPerformOffpageQueued"><span>Queued</span> <span data-no-localize>{offpageClips.filter(entry => entry.state === "queued").length}</span></span></Show>
+              </button>
+            </Show>
+          </div>
+        </div>
         <For each={rows}>{(row) => <>
           <Show when={groupFor(row.id)?.layer_ids[0] === row.id ? groupFor(row.id) : undefined}>{group => <GroupHeader id={group().id} />}</Show>
           <Show when={!collapsed().includes(groupFor(row.id)?.id ?? -1)}><Row layer={row.layer} /></Show>
         </>}</For>
       </div>
     </Show>
+    <Show when={offpageOpen()}><Portal>
+      <div ref={offpageElement} class="videoPerformOffpageList" data-video-perform-offpage-list role="dialog" aria-label="Off-page clips"
+        style={{ left: `${offpagePosition().x}px`, top: `${offpagePosition().y}px` }}
+        onFocusOut={event => {
+          const dialog = event.currentTarget;
+          // Do not defer an internal focus move: its destination may be removed
+          // by the next runtime snapshot before the microtask is delivered.
+          if (event.relatedTarget instanceof Node && dialog.contains(event.relatedTarget)) return;
+          const departed = event.target;
+          queueMicrotask(() => {
+            if (offpageElement !== dialog) return;
+            const active = document.activeElement;
+            const removedEntry = departed instanceof Node && !departed.isConnected
+              && (active === document.body || active === document.documentElement || active === null);
+            if (offpageOpen() && !offpageElement?.contains(active) && !removedEntry) closeOffpage();
+          });
+        }}
+        onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeOffpage(true); } }}>
+        <header><strong>Off-page clips</strong><button type="button" onClick={() => closeOffpage(true)}>Close</button></header>
+        <For each={offpageClips}>{entry => <button type="button" data-video-perform-status-jump={entry.state}
+          data-layer-id={entry.layerId} data-slot-id={entry.slotId} data-clip-index={entry.index} title="Jump to clip" onClick={() => jumpToClip(entry)}>
+          <strong class={entry.state === "live" ? "videoPerformOffpageLive" : "videoPerformOffpageQueued"}>{entry.state === "live" ? "LIVE" : "Queued"}</strong>
+          <span data-no-localize>{entry.layerLabel} · {entry.index + 1} · {entry.label}</span><span aria-hidden="true">↗</span>
+        </button>}</For>
+      </div>
+    </Portal></Show>
     <Show when={clipMenu()}>{menu => <Portal>
       <div ref={clipMenuElement} class="videoPerformClipMenu" role="menu" aria-label="Clip actions"
         data-video-perform-context-menu style={{ left: `${menu().x}px`, top: `${menu().y}px` }} onKeyDown={menuKeyDown}>

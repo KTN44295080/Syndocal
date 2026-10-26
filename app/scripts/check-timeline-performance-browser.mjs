@@ -64,8 +64,20 @@ class CdpClient {
     this.socket = new WebSocket(url);
     this.nextId = 0;
     this.pending = new Map();
+    this.diagnosticPhase = "startup";
+    this.recentDialogs = [];
     this.socket.onmessage = (event) => {
       const message = JSON.parse(event.data);
+      if (message.method === "Page.javascriptDialogOpening") {
+        this.recentDialogs.push({
+          phase: this.diagnosticPhase,
+          type: message.params.type,
+          message: String(message.params.message ?? "").slice(0, 500),
+          hasBrowserHandler: message.params.hasBrowserHandler,
+          expectedFixtureNavigation: this.expectedFixtureNavigation === true,
+        });
+        this.recentDialogs = this.recentDialogs.slice(-5);
+      }
       if (message.method === "Page.javascriptDialogOpening" && message.params.type === "beforeunload" && this.expectedFixtureNavigation) {
         void this.send("Page.handleJavaScriptDialog", { accept: true }).catch(() => {});
         return;
@@ -95,10 +107,16 @@ class CdpClient {
   send(method, params = {}) {
     if (this.socket.readyState !== WebSocket.OPEN) return Promise.reject(new Error("Timeline CDP socket is not open"));
     const id = ++this.nextId;
+    const diagnostic = {
+      phase: this.diagnosticPhase,
+      expression: method === "Runtime.evaluate" ? String(params.expression ?? "").slice(0, 1800) : undefined,
+      callsite: new Error("Timeline CDP request origin").stack,
+    };
     return new Promise((resolveSend, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`Timeline CDP timed out: ${method}`));
+        reject(new Error("Timeline CDP timed out: " + method + "\n"
+          + JSON.stringify({...diagnostic, recentDialogs: this.recentDialogs}, null, 2)));
       }, 30_000);
       this.pending.set(id, { resolve: resolveSend, reject, timeout });
       this.socket.send(JSON.stringify({ id, method, params }));
@@ -633,7 +651,7 @@ const measure = (client) => evaluate(client, `(() => {
   }).length;
   return {
     rect: [rect.width, rect.height],
-    bankOpen: bank instanceof HTMLDetailsElement && bank.open,
+    bankOpen: bank instanceof HTMLDetailsElement && bank.open && visible(bank),
     bankItems: bank?.querySelectorAll('.timelineBankList > li').length ?? 0,
     bankActive: bank?.querySelectorAll('.timelineBankList > li.active').length ?? 0,
     followLegend: [...(bank?.querySelectorAll('legend') ?? [])].some((node) => node.textContent?.includes('Follow to next Timeline')),
@@ -647,8 +665,11 @@ const measure = (client) => evaluate(client, `(() => {
       const bounds = element.getBoundingClientRect();
       return bounds.width > 0 && bounds.height > 0 && (bounds.width < 43.5 || bounds.height < 43.5);
     }).length,
-    phaseEditorOpen: Boolean(document.querySelector('.timelinePerformanceEditor .timelinePhaseEditor[open]')),
-    cueAudioOpen: Boolean(document.querySelector('.timelinePerformanceEditor .timelineCueAudioEditor[open]')),
+    phaseEditorOpen: visible(document.querySelector('.timelinePerformanceEditor .timelinePhaseEditor[open]')),
+    cueAudioOpen: visible(document.querySelector('.timelinePerformanceEditor .timelineCueAudioEditor[open]')),
+    activeToolsTab: document.querySelector('[data-timeline-tools-tab][aria-selected="true"]')?.getAttribute('data-timeline-tools-tab'),
+    visibleToolsPanels: [...document.querySelectorAll('[data-timeline-tools-panel]')].filter(visible).map((panel) => panel.getAttribute('data-timeline-tools-panel')),
+    hiddenToolsPanelsEffective: [...document.querySelectorAll('[data-timeline-tools-panel][hidden]')].every((panel) => getComputedStyle(panel).display === 'none' && panel.getClientRects().length === 0),
     cueAudioControls: document.querySelectorAll('.timelineCueAudioEditorBody input, .timelineCueAudioEditorBody select, .timelineCueAudioEditorBody button').length,
     cueAudioState: document.querySelector('.timelineCueAudioEditor > summary output')?.textContent?.trim() ?? '',
     cueAudioCheckboxes: document.querySelectorAll('.timelineCueAudioEditorBody input[type="checkbox"]').length,
@@ -964,7 +985,7 @@ try {
   }
   await waitFor(async () => (await fetch(baseUrl)).ok, "Vite fixture server");
   profileDir = await mkdtemp(join(tmpdir(), "syndocal-timeline-performance-"));
-  browser = spawn(browserPath, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${profileDir}`, "about:blank"], { stdio: "ignore" });
+  browser = spawn(browserPath, ["--headless=new", "--disable-gpu", "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding", "--no-first-run", "--no-default-browser-check", `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${profileDir}`, "about:blank"], { windowsHide: true, stdio: "ignore" });
   const target = await waitFor(async () => {
     const response = await fetch(`http://${host}:${cdpPort}/json/new?${encodeURIComponent(baseUrl)}`, { method: "PUT" });
     return response.ok ? response.json() : null;
@@ -975,7 +996,40 @@ try {
   await client.send("Runtime.enable");
   if (screenshotDir) await mkdir(screenshotDir, { recursive: true });
 
+  let pageTargetId = target.id;
+  let viewportIndex = 0;
   for (const viewport of viewports) {
+    if (viewportIndex++ > 0) {
+      // Match the existing Perform gate: a fresh target avoids carrying the
+      // dirty desk's beforeunload/renderer lifecycle into the next RAF test.
+      // This remains one owned browser/profile and preserves its preferences.
+      client.expectedFixtureNavigation = true;
+      const closingTargetId = pageTargetId;
+      const closeResponse = await fetch("http://" + host + ":" + cdpPort + "/json/close/" + closingTargetId);
+      assert.equal(closeResponse.ok, true, "The previous owned Timeline target accepts closure");
+      // /json/close acknowledges initiation. Keep its CDP/dialog handler alive
+      // until it disappears, before creating/activating the next target.
+      await waitFor(async () => {
+        const response = await fetch("http://" + host + ":" + cdpPort + "/json/list");
+        return response.ok && !(await response.json()).some(candidate => candidate.id === closingTargetId);
+      }, "previous Timeline viewport target completely closed");
+      client.close();
+      const nextTarget = await waitFor(async () => {
+        const response = await fetch("http://" + host + ":" + cdpPort + "/json/new?about:blank", { method: "PUT" });
+        return response.ok ? response.json() : null;
+      }, "fresh Timeline viewport target");
+      client = new CdpClient(nextTarget.webSocketDebuggerUrl);
+      pageTargetId = nextTarget.id;
+      await client.ready();
+      await client.send("Page.enable");
+      await client.send("Runtime.enable");
+      await client.send("Page.bringToFront");
+    }
+    const diagnosticPhase = (label) => {
+      client.diagnosticPhase = viewport.width + "x" + viewport.height + ": " + label;
+      console.log("Timeline phase " + client.diagnosticPhase);
+    };
+    diagnosticPhase("fixture navigation");
     await client.send("Emulation.setDeviceMetricsOverride", { ...viewport, deviceScaleFactor: 1, mobile: false });
     const viewportUrl = new URL(baseUrl);
     viewportUrl.searchParams.set("syndocalTimelineViewport", `${viewport.width}x${viewport.height}`);
@@ -988,6 +1042,12 @@ try {
     } finally {
       client.expectedFixtureNavigation = false;
     }
+    // Foreground this gate's own target after each fixture navigation. A
+    // background document may suspend animation frames while CDP stays live.
+    await client.send("Page.bringToFront");
+    assert.deepEqual(await evaluate(client, "({ state: document.visibilityState, hidden: document.hidden })"),
+      { state: "visible", hidden: false }, `Timeline fixture target is visible at ${viewport.width}x${viewport.height}`);
+    diagnosticPhase("Lighting and Video surfaces");
     assert.equal(await click(client, '[data-workspace-option="control"]'), true);
 
     assert.equal(await click(client, '[data-edit-domain-navigation] [data-control-mode-option="edit"]'), true);
@@ -1082,6 +1142,7 @@ try {
     assert.equal(await waitFor(() => click(client, '[data-timeline-desk-surface="show"]'), "Timeline Show tab"), true);
     await waitFor(() => evaluate(client, "document.querySelectorAll('.timelineVideoClip').length === 1 && document.querySelectorAll('.timelineAudioClip').length === 2"), "authored Timeline media clips");
     await exerciseTimelineWheel(client, viewport);
+    diagnosticPhase("Timeline geometry and Tools opening");
     const arrangerGeometry = await measureArrangerGeometry(client);
     assertArrangerGeometry(arrangerGeometry, viewport);
     if (viewport.width === 1280) {
@@ -1090,25 +1151,75 @@ try {
     await saveScreenshot(client, `control-timeline-${viewport.width}x${viewport.height}.png`);
     assert.equal(await click(client, '.timelineToolsDisclosure > summary'), true);
     await waitFor(() => evaluate(client, "document.querySelector('.timelineToolsDisclosure[open] .timelinePerformanceEditor')?.getBoundingClientRect().height > 0"), "Timeline performance disclosure");
-    assert.equal(await click(client, '.timelinePerformanceEditor [data-timeline-bank] > summary'), true);
-    assert.equal(await click(client, '.timelinePerformanceEditor .timelineCueAudioEditor > summary'), true);
-    assert.equal(await click(client, '.timelinePerformanceEditor .timelinePhaseEditor > summary'), true);
-    await sleep(100);
+    // Batch3 replaces three simultaneously expanded, nested scrollports with
+    // mounted exclusive tabs. Measure every tab while it is actually visible,
+    // preserving all original 44px controls and fixture/Follow/Audio guards.
     const targetProof = [];
-    for (const selector of ['.timelinePerformanceEditor [data-timeline-bank]', '.timelinePerformanceEditor .timelineCueAudioEditor', '.timelinePerformanceEditor .timelinePhaseEditor', '.timelineOperatorBar > .timelineLoopControls']) {
-      targetProof.push(await evaluate(client, `(() => {
+    const toolsStates = {};
+    for (const [tool, selector] of [['bank', '.timelinePerformanceEditor [data-timeline-bank]'], ['audio', '.timelinePerformanceEditor .timelineCueAudioEditor'], ['phases', '.timelinePerformanceEditor .timelinePhaseEditor'], [null, '.timelineOperatorBar > .timelineLoopControls']]) {
+      diagnosticPhase("Tools " + (tool ?? "loop") + " selection");
+      if (tool) {
+        assert.equal(await click(client, '[data-timeline-tools-tab="' + tool + '"]'), true, 'Select Timeline Tools ' + tool);
+        await sleep(50);
+        if (tool === 'bank') assert.equal(await click(client, '[data-timeline-bank-create-disclosure] > summary'), true, 'Reach New Timeline controls through disclosure');
+        diagnosticPhase("Tools " + tool + " state measurement");
+        toolsStates[tool] = await measure(client);
+        assert.deepEqual([toolsStates[tool].activeToolsTab, toolsStates[tool].visibleToolsPanels, toolsStates[tool].hiddenToolsPanelsEffective], [tool, [tool], true], 'Only selected Tools tab is actually rendered: ' + tool);
+      }
+      diagnosticPhase("Tools " + (tool ?? "loop") + " first and last control reach");
+      const probeControlReach = (edge, scrollToControl) => evaluate(client, `(() => {
+        const scope = document.querySelector(${JSON.stringify(selector)});
+        if (!(scope instanceof HTMLElement)) return false;
+        const owner = scope.closest('.timelineToolsDisclosurePanel');
+        const controls = [...scope.querySelectorAll('button, input, select')].filter((element) => {
+          const bounds = element.getBoundingClientRect();
+          return bounds.width > 0 && bounds.height > 0;
+        });
+        const control = ${JSON.stringify(edge)} === 'first' ? controls[0] : controls.at(-1);
+        if (!control) return false;
+        if (!owner) return true;
+        if (${scrollToControl}) {
+          const b=control.getBoundingClientRect(),p=owner.getBoundingClientRect();
+          if(b.top<p.top+2)owner.scrollTop-=p.top+2-b.top;
+          else if(b.bottom>p.top+owner.clientHeight-2)owner.scrollTop+=b.bottom-(p.top+owner.clientHeight-2);
+          return true;
+        }
+        const c=control.getBoundingClientRect(),o=owner.getBoundingClientRect();
+        const hit=document.elementFromPoint(c.left+c.width/2,c.top+c.height/2);
+        return c.left>=o.left-1&&c.right<=o.left+owner.clientWidth+1&&c.top>=o.top-1&&c.bottom<=o.top+owner.clientHeight+1&&(hit===control||control.contains(hit));
+      })()`);
+      const reached = [];
+      for (const edge of ['first', 'last']) {
+        assert.equal(await probeControlReach(edge, true), true, `Tools ${tool ?? 'loop'} ${edge} control exists`);
+        // Keep the paint/layout wait outside Runtime.evaluate: no pending
+        // renderer RAF promise may hold the whole CDP measurement open.
+        await sleep(50);
+        reached.push(await probeControlReach(edge, false));
+      }
+      const proof = await evaluate(client, `(() => {
         const scope = document.querySelector(${JSON.stringify(selector)});
         if (!(scope instanceof HTMLElement)) return null;
-        scope.scrollIntoView({ block: 'center' });
+        const owner = scope.closest('.timelineToolsDisclosurePanel');
         const rect = scope.getBoundingClientRect();
         const controls = [...scope.querySelectorAll('button, input, select')].filter((element) => {
           const bounds = element.getBoundingClientRect();
           return bounds.width > 0 && bounds.height > 0;
         });
-        return { rect: [rect.width, rect.height], count: controls.length, short: controls.filter((element) => element.getBoundingClientRect().height < 43.5).length };
-      })()`));
+        const children = owner ? [owner,...owner.querySelectorAll('*')].filter(node=>node instanceof HTMLElement&&node.checkVisibility()&&node.getBoundingClientRect().width>0&&node.getBoundingClientRect().height>0) : [];
+        const vertical=children.filter(node=>/auto|scroll/.test(getComputedStyle(node).overflowY)&&node.scrollHeight>node.clientHeight+1);
+        const horizontal=children.filter(node=>/auto|scroll/.test(getComputedStyle(node).overflowX)&&node.scrollWidth>node.clientWidth+1);
+        return { rect: [rect.width, rect.height], count: controls.length, short: controls.filter((element) => element.getBoundingClientRect().height < 43.5).length,
+          ownerOnly: !owner||vertical.every(node=>node===owner), horizontal: horizontal.length };
+      })()`);
+      targetProof.push(proof && { ...proof, firstAndLastReachable: reached.length > 0 && reached.every(Boolean) });
       await sleep(50);
     }
+    diagnosticPhase("Tools complete; selection and fixture callbacks");
+    await client.send("Page.bringToFront");
+    assert.deepEqual(await evaluate(client, "({ state: document.visibilityState, hidden: document.hidden })"),
+      { state: "visible", hidden: false }, "Timeline target is foreground before actual selection and Split actions");
+    assert.equal(await click(client, '[data-timeline-tools-tab="bank"]'), true);
+    assert.equal(await click(client, '[data-timeline-bank-create-disclosure] > summary'), true, 'New Timeline can return to its minimal disclosed state');
     const singleMemberSelected = await evaluate(client, `(() => {
       const clip = document.querySelector('[data-timeline-audio-clip-id="700"]');
       if (!(clip instanceof Element)) return false;
@@ -1144,6 +1255,9 @@ try {
     })()`);
     await sleep(50);
     assert.equal(await openTimelineContextMenuGroup(client, "timing"), true, "Timeline Timing disclosure opens for Split actions");
+    await client.send("Page.bringToFront");
+    assert.deepEqual(await evaluate(client, "({ state: document.visibilityState, hidden: document.hidden })"),
+      { state: "visible", hidden: false }, "Timeline target is foreground immediately before isolated Split");
     assert.equal(await evaluate(client, `(() => {
       const button = document.querySelector('[data-timeline-split-action]');
       if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
@@ -1154,7 +1268,16 @@ try {
       () => evaluate(client, "window.__syndocalTimelineSplitFixtureCalls?.length === 1"),
       "isolated Timeline Split fixture dispatch",
     );
-    await sleep(80);
+    // Production restores the returned item's focus in RAF after the fixture
+    // result mounts. Wait for that actual outcome; never focus it from the test.
+    await waitFor(
+      async () => {
+        const focus = await evaluate(client, '(() => { const nodes = document.querySelectorAll(\'[data-timeline-audio-clip-id="1700"]\'), target = nodes[0], active = document.activeElement; return { count: nodes.length, mounted: target?.isConnected === true, focused: !!target && active === target, visibility: document.visibilityState, activeTag: active?.tagName, activeClass: active?.getAttribute("class"), activeAudioId: active?.getAttribute("data-timeline-audio-clip-id") }; })()');
+        if (focus.count === 1 && focus.mounted && focus.focused) return true;
+        throw new Error(JSON.stringify(focus));
+      },
+      "isolated Timeline Split fresh item mounted and focus restored",
+    );
     const isolatedSplitProof = await evaluate(client, `(() => ({
       call: structuredClone(window.__syndocalTimelineSplitFixtureCalls[0]),
       focusedAudioId: document.activeElement?.getAttribute('data-timeline-audio-clip-id') ?? '',
@@ -1373,7 +1496,7 @@ try {
     );
     assert.equal(state.snapState, "Snap: Grid 500 ms · Edges: ON", "new Timeline sessions expose the Grid 500 ms + edge magnet defaults");
     assert.equal(state.edgeMagnetState, "on", "new Timeline sessions expose edge magnet enabled separately from grid quantization");
-    assert.deepEqual([state.bankOpen, state.bankItems, state.bankActive, state.followLegend], [true, 2, 1, true]);
+    assert.deepEqual([toolsStates.bank.bankOpen, toolsStates.bank.bankItems, toolsStates.bank.bankActive, toolsStates.bank.followLegend], [true, 2, 1, true]);
     assert.match(state.followState, /transitioning 50%/);
     assert.deepEqual(
       [state.followRuntimeDetails, state.followRuntimeBadges >= 1, state.operatorFollowState, state.operatorFollowAbort, state.followAbortButtons >= 1, state.followAbortShortTargets],
@@ -1531,13 +1654,13 @@ try {
     }
     assert.equal(await openTimelineVideoContextMenu(client), true, "Timeline item menu reopens for action execution");
     await sleep(30);
-    assert.equal(state.phaseEditorOpen, true);
+    assert.equal(toolsStates.phases.phaseEditorOpen, true);
     assert.deepEqual(
-      [state.cueAudioOpen, state.cueAudioControls, state.cueAudioState, state.cueAudioCheckboxes],
+      [toolsStates.audio.cueAudioOpen, toolsStates.audio.cueAudioControls, toolsStates.audio.cueAudioState, toolsStates.audio.cueAudioCheckboxes],
       [true, 0, 'Loading settings', 0],
       "Timeline keeps a read-only Cue Audio status surface; editable routing controls live only in Setup I/O Audio",
     );
-    assert.deepEqual(state.phaseLabels, ["Intro", "Verse", "Chorus"]);
+    assert.deepEqual(toolsStates.phases.phaseLabels, ["Intro", "Verse", "Chorus"]);
     assert.deepEqual([state.guidePressed, state.loopPressed, state.loopState, state.loopScaleControls], ["true", "true", "LOOP ×2", 2]);
     assert.deepEqual([state.videoClips, state.audioClips], [1, 3], "isolated Split mounts one fresh Audio right-side block");
     assert.deepEqual([state.selectedVideo, state.selectedAudio], [1, 1], "selecting either member selects the linked A/V group");
@@ -1777,7 +1900,7 @@ try {
         window.__syndocalTimelineLaneMoveItemKey = key;
       })()`);
       const laneDragGeometry = await evaluate(client, `(() => {
-        const performanceDetails = [...document.querySelectorAll('.timelinePerformanceEditor details')];
+        const performanceDetails = [...document.querySelectorAll('.timelinePerformanceEditor [data-timeline-bank-create-disclosure]')];
         for (const detail of performanceDetails) {
           if (detail instanceof HTMLDetailsElement && detail.open) {
             detail.querySelector(':scope > summary')?.click();
@@ -1998,6 +2121,7 @@ try {
       assert.equal(await evaluate(client, "window.__syndocalTimelineLaneMoveFixtureCalls.length"), beforeContextMove + 1, "boundary keyboard move emits no mutation request (fixture or native)");
     }
     assert.equal(targetProof.every((proof) => proof?.rect[0] > 0 && proof?.rect[1] > 0 && proof.count > 0 && proof.short === 0), true, `Timeline bank, Cue Audio, Phase, and loop controls preserve 44px targets at ${viewport.width}x${viewport.height}: ${JSON.stringify(targetProof)}`);
+    assert.equal(targetProof.every((proof) => proof.ownerOnly && proof.horizontal === 0 && proof.firstAndLastReachable), true, 'Every Tools section reaches its first and last controls through the single popover owner: ' + JSON.stringify(targetProof));
     assert.equal(state.shortTargets, 0, `Visible Timeline performance controls preserve 44px targets at ${viewport.width}x${viewport.height}`);
     assert.equal(state.fixedOuter, true, `Timeline disclosures keep app/document outer scroll fixed at ${viewport.width}x${viewport.height}: ${JSON.stringify(state.outerSize)}`);
     console.log(`${viewport.width}x${viewport.height}: phases=${state.phaseLabels.join('/')} bank=${state.bankItems} media=${state.videoClips}+${state.audioClips} selected=${state.selectedVideo}+${state.selectedAudio} (fixture request/DOM/geometry proof only -- not native or authoritative completion)`);
@@ -2010,10 +2134,12 @@ try {
     return response.ok ? response.json() : null;
   }, "direct-resize browser target");
   client = new CdpClient(directResizeTarget.webSocketDebuggerUrl);
+  client.diagnosticPhase = "direct resize fixture";
   await client.ready();
   await client.send("Page.enable");
   await client.send("Runtime.enable");
   await client.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
+  await client.send("Page.bringToFront");
   await waitFor(
     () => evaluate(client, "window.__timelineDirectResizeFixture?.ready === true"),
     "Timeline direct-resize fixture",

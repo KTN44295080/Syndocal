@@ -12,6 +12,7 @@ import { runLiveAudioBackendDisappearanceContract } from "./live-audio-backend-d
 import { exerciseRemoteDisclosureScrollReachability } from "./remote-disclosure-scroll-contract.mjs";
 import { runPatchProfileDensityChecks } from "./patch-profile-density-contract.mjs";
 import { exerciseBatch2DensityInPage, runUiDensityBatch2Checks } from "./ui-density-batch2-contract.mjs";
+import { exerciseBatch3DensityInPage, runUiDensityBatch3Checks } from "./ui-density-batch3-contract.mjs";
 import {
   exerciseSetupIoOperatorDeck,
   selectSetupIoConnection,
@@ -107,6 +108,7 @@ const timelineLayeredOnlyMode = process.argv.includes("--timeline-layered-only")
 const patchOnlyMode = process.argv.includes("--patch-only");
 const patchProfileDensityOnlyMode = process.argv.includes("--patch-profile-density-only");
 const uiDensityBatch2OnlyMode = process.argv.includes("--ui-density-batch2-only");
+const uiDensityBatch3OnlyMode = process.argv.includes("--ui-density-batch3-only");
 const fixtureGroupsOnlyMode = process.argv.includes("--fixture-groups-only");
 const patchEmptyStateOnlyMode = process.argv.includes("--patch-empty-state-only");
 const touchOnlyMode = process.argv.includes("--touch-only");
@@ -11378,6 +11380,9 @@ async function measure(client, label) {
       activeSceneSettingsEditorType: document.querySelector('[data-scene-settings-effect-editor]')
         ?.getAttribute('data-scene-settings-effect-editor') ?? '',
       visibleSceneFxChooserCount: visibleCount('[data-scene-fx-chooser]'),
+      sceneFxAddOpen: Boolean(document.querySelector('[data-scene-fx-disclosure="add"][open]')),
+      mountedSceneEffectFamilyButtonCount: document.querySelectorAll('[data-scene-fx-chooser] .effectFamilyChooser button').length,
+      mountedActiveSceneEffectFamilyButtonCount: document.querySelectorAll('[data-scene-fx-chooser] .effectFamilyChooser button.active[aria-pressed="true"]').length,
       visibleSceneOwnedEffectCount: visibleCount('[data-scene-owned-effect]'),
       visibleEffectEditorCount: visibleCount('.effectEditor'),
       visibleEffectWorkbenchCount: visibleCount('.effectWorkbench'),
@@ -12824,8 +12829,10 @@ function hasExpectedControlModeSurface(result) {
       hasSceneSettingsSurface &&
       result.activeSceneSettingsSurface === "fx" &&
       result.visibleSceneFxChooserCount === 1 &&
-      result.visibleEffectFamilyButtonCount === 8 &&
-      result.visibleActiveEffectFamilyButtonCount === 1;
+      result.mountedSceneEffectFamilyButtonCount === 8 &&
+      result.mountedActiveSceneEffectFamilyButtonCount === 1 &&
+      result.visibleEffectFamilyButtonCount === (result.sceneFxAddOpen ? 8 : 0) &&
+      result.visibleActiveEffectFamilyButtonCount === (result.sceneFxAddOpen ? 1 : 0);
     if (result.label.startsWith("control-live-scene-settings-fx-color-editor-")) {
       return (
         hasSceneFxSurface &&
@@ -18265,6 +18272,7 @@ async function runViewport(client, viewport, { recycleForLayeredTimeline = null 
       await sleep(100);
       await clickVisibleSelector(client, '[data-scene-settings-surface-control="fx"]');
       await sleep(100);
+      await setSceneFxDisclosure(client, "add", true);
       results.push(await measure(
         client,
         `control-live-scene-settings-fx-chooser-${viewport.width}x${viewport.height}`,
@@ -18293,6 +18301,7 @@ async function runViewport(client, viewport, { recycleForLayeredTimeline = null 
         client,
         `control-live-scene-settings-fx-color-editor-${viewport.width}x${viewport.height}`,
       ));
+      await setSceneFxDisclosure(client, "add", true);
       await clickVisibleSelector(client, '[data-scene-fx-chooser] [data-effect-family="CHASER FX"]');
       await waitForClientCondition(
         client,
@@ -18369,6 +18378,7 @@ async function runViewport(client, viewport, { recycleForLayeredTimeline = null 
         client,
         `control-live-scene-settings-fx-chaser-editor-${viewport.width}x${viewport.height}`,
       ));
+      await setSceneFxDisclosure(client, "add", true);
       await clickVisibleSelector(client, '[data-scene-fx-chooser] [data-effect-family="MOVE FX"]');
       await waitForClientCondition(
         client,
@@ -27244,6 +27254,9 @@ async function readSceneSettingsState(client) {
       if (!(element instanceof Element)) return false;
       const rect = element.getBoundingClientRect();
       const style = getComputedStyle(element);
+      for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        if (ancestor instanceof HTMLDetailsElement && !ancestor.open && !ancestor.querySelector(":scope > summary")?.contains(element)) return false;
+      }
       return rect.width > 0
         && rect.height > 0
         && style.display !== "none"
@@ -27515,6 +27528,10 @@ async function readSceneSettingsState(client) {
         : 0,
       chooserGridColumnCount: chooserGridColumns.length,
       chooserGridRowCount: chooserGridRows.length,
+      chooserButtonsContainedHorizontally: chooserButtonRects.every((box) => {
+        const owner = settingsScroller?.getBoundingClientRect();
+        return owner && box.left >= owner.left - 1 && box.right <= owner.left + settingsScroller.clientWidth + 1;
+      }),
       chooserVisibleDescriptionCount: visibleChooserDescriptionCount,
       minimumVisibleFontPx: settingsTextElements.length > 0
         ? Math.min(...settingsTextElements.map((element) =>
@@ -27548,22 +27565,25 @@ async function readSceneSettingsState(client) {
           })
           .sort((left, right) => left.size - right.size)[0]
         : null,
-      ownedFxCount: [...document.querySelectorAll("[data-scene-owned-effect]")]
-        .filter(isVisible).length,
+      // Cue ownership/selection is an inventory, independent of the open rack.
+      // Actual visibility, sizes and reachability are separately proved through
+      // the real disclosure paths by probeSceneFxDisclosurePaths below.
+      ownedFxCount: document.querySelectorAll("[data-scene-owned-effect]").length,
+      visibleOwnedFxCount: [...document.querySelectorAll("[data-scene-owned-effect]")].filter(isVisible).length,
       selectedOwnedFxIds: [...document.querySelectorAll(
         '.sceneOwnedFxList button[aria-pressed="true"]',
-      )].filter(isVisible).map((button) =>
+      )].map((button) =>
         button.closest("[data-scene-owned-effect]")
           ?.getAttribute("data-scene-owned-effect") ?? ""),
       enabledOwnedFxCount: [...document.querySelectorAll(
         '[data-scene-owned-effect][data-scene-owned-effect-enabled="true"]',
-      )].filter(isVisible).length,
+      )].length,
       ownedFxToggleCount: [...document.querySelectorAll(
         '[data-scene-owned-effect] .sceneOwnedFxToggle input[type="checkbox"]',
-      )].filter(isVisible).length,
+      )].length,
       ownedFxRemoveCount: [...document.querySelectorAll(
         '[data-scene-owned-effect] .sceneOwnedFxRemove',
-      )].filter(isVisible).length,
+      )].length,
       selectedSceneMatrixKind: document.querySelector(
         `[data-scene-matrix-cue-id="${pane?.getAttribute("data-selected-scene-id") ?? ""}"] [data-scene-matrix-kind]`,
       )?.getAttribute("data-scene-matrix-kind") ?? "",
@@ -27668,10 +27688,37 @@ async function readSceneSettingsState(client) {
   });
 }
 
+async function setSceneFxDisclosure(client, name, open) {
+  return await evaluatePageFunction(client, async (name, open) => {
+    const details = document.querySelector('[data-scene-fx-disclosure="' + name + '"]');
+    if (!(details instanceof HTMLDetailsElement)) throw new Error("Missing Scene FX disclosure: " + name);
+    if (details.open !== open) details.querySelector(":scope > summary").click();
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    if (details.open !== open) throw new Error("Scene FX disclosure did not change: " + name);
+    return true;
+  }, name, open);
+}
+
+async function probeSceneFxDisclosurePaths(client) {
+  const initial = await client.evaluate('[...document.querySelectorAll("[data-scene-fx-disclosure][open]")].map(node=>node.dataset.sceneFxDisclosure)');
+  const add = await client.evaluate('(' + exerciseBatch3DensityInPage.toString() + ')("scenefx-add")');
+  const addState = await readSceneSettingsState(client);
+  const rack = await client.evaluate('(' + exerciseBatch3DensityInPage.toString() + ')("scenefx-rack")');
+  const rackState = await readSceneSettingsState(client);
+  await setSceneFxDisclosure(client, "rack", false);
+  if (initial.length) await setSceneFxDisclosure(client, initial[0], true);
+  return { add, rack, addState, rackState, passed: Object.values(add.checks).every(Boolean) && Object.values(rack.checks).every(Boolean) };
+}
+
 async function clickSceneSettingsTarget(client, selector) {
-  return await evaluatePageFunction(client, (selector) => {
+  return await evaluatePageFunction(client, async (selector) => {
     const target = document.querySelector(selector);
     if (!(target instanceof HTMLElement)) return false;
+    const disclosure = target.closest("[data-scene-fx-disclosure]");
+    if (disclosure instanceof HTMLDetailsElement && !disclosure.open && !disclosure.querySelector(":scope > summary")?.contains(target)) {
+      disclosure.querySelector(":scope > summary").click();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }
     target.scrollIntoView({ block: "nearest", inline: "nearest" });
     target.click();
     return true;
@@ -27882,6 +27929,7 @@ async function exerciseSceneSettingsInputScroll(client) {
 }
 
 async function exerciseCueOwnedFxRemovalToZero(client) {
+  await setSceneFxDisclosure(client, "rack", true);
   return await evaluatePageFunction(client, async () => {
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
@@ -28256,6 +28304,7 @@ async function runSceneSettingsViewport(client, viewport, options = {}) {
   );
   await sleep(120);
   const createdFx = await readSceneSettingsState(client);
+  const createdFxDisclosures = await probeSceneFxDisclosurePaths(client);
   // One normal Curve editor fits at 1920×1080, so use real chooser gestures to
   // build a deliberately deep rack before proving the inspector scrolls. This
   // keeps the scroll test on the shipped authoring path rather than treating a
@@ -28276,6 +28325,9 @@ async function runSceneSettingsViewport(client, viewport, options = {}) {
       `Scene Settings scroll fixture owned FX ${expectedCount} ${viewport.width}x${viewport.height}`,
     );
   }
+  // The deep rack is intentionally disclosed before proving real wheel,
+  // PageDown and End movement. A closed optional rack need not consume height.
+  await setSceneFxDisclosure(client, "rack", true);
   const scrollFixtureFx = await readSceneSettingsState(client);
   const createdFxScrollExercise = await exerciseSceneSettingsInputScroll(client);
   const twoDMappingClicked = await clickSceneSettingsTarget(
@@ -28288,6 +28340,11 @@ async function runSceneSettingsViewport(client, viewport, options = {}) {
     `T26-A unified 2D Mapping editor ${viewport.width}x${viewport.height}`,
   );
   const twoDMappingColourDraft = await readSceneSettingsState(client);
+  // The selected form remains primary; inspect its active family by opening
+  // Add through the same disclosure path an operator uses, then restore it.
+  await setSceneFxDisclosure(client, "add", true);
+  const twoDMappingChooser = await readSceneSettingsState(client);
+  await setSceneFxDisclosure(client, "add", false);
   const twoDMappingFeatureClicked = await clickSceneSettingsTarget(
     client,
     '.colorMappingOutputMode [aria-label="2D Mapping output mode"] button:nth-child(2)',
@@ -28595,6 +28652,7 @@ async function runSceneSettingsViewport(client, viewport, options = {}) {
   );
   await sleep(120);
   const oneClickAdded = await readSceneSettingsState(client);
+  const oneClickAddedDisclosures = await probeSceneFxDisclosurePaths(client);
   const colorSweepSelected = await evaluatePageFunction(client, () => {
     const select = document.querySelector('[data-color-spatial-select]');
     if (!(select instanceof HTMLSelectElement)) return false;
@@ -28676,6 +28734,9 @@ async function runSceneSettingsViewport(client, viewport, options = {}) {
   );
   await sleep(80);
   const superSceneFxSurface = await readSceneSettingsState(client);
+  await setSceneFxDisclosure(client, "add", true);
+  const superSceneChooser = await readSceneSettingsState(client);
+  await setSceneFxDisclosure(client, "add", false);
   const activeBeforePointerOnlySelection = superSceneFxSurface.activeCardIds;
   const pointerOnlyStripGesture = await pointerOnlySceneSettingsStrip(
     client,
@@ -28721,7 +28782,10 @@ async function runSceneSettingsViewport(client, viewport, options = {}) {
       && superSceneFxSurfaceClicked
       && superSceneFxSurface.activeSurface === "fx"
       && superSceneFxSurface.kind === "TIMELINE"
-      && JSON.stringify(superSceneFxSurface.activeChooserFamilies) === JSON.stringify(["SUPER SCENE"])],
+      && superSceneChooser.chooserButtonCount === 8
+      && superSceneChooser.chooserMinimumHitSize >= 40
+      && superSceneChooser.chooserButtonsContainedHorizontally
+      && JSON.stringify(superSceneChooser.activeChooserFamilies) === JSON.stringify(["SUPER SCENE"])],
     ["cellBodyTriggersWithoutSelectingSceneSettings", () =>
       triggerClicked
       && triggeredOnly.settingsCount === 0
@@ -28753,7 +28817,10 @@ async function runSceneSettingsViewport(client, viewport, options = {}) {
       twoDMappingClicked
       && twoDMappingColourDraft.editorType === "ColorMapping"
       && twoDMappingColourDraft.twoDMappingEditorVisible
-      && JSON.stringify(twoDMappingColourDraft.activeChooserFamilies) === JSON.stringify(["2D MAPPING"])
+      && twoDMappingChooser.chooserButtonCount === 8
+      && twoDMappingChooser.chooserMinimumHitSize >= 40
+      && twoDMappingChooser.chooserButtonsContainedHorizontally
+      && JSON.stringify(twoDMappingChooser.activeChooserFamilies) === JSON.stringify(["2D MAPPING"])
       && JSON.stringify(twoDMappingColourDraft.twoDMappingOutputModes) === JSON.stringify(["Colour", "Feature"])
       && JSON.stringify(twoDMappingColourDraft.twoDMappingActiveOutputModes) === JSON.stringify(["Colour"])
       && twoDMappingColourDraft.twoDMappingOutputMinimumHitSize >= 40
@@ -28931,9 +28998,10 @@ async function runSceneSettingsViewport(client, viewport, options = {}) {
       && !fxSurface.advancedSettingsVisible
       && fxSurface.chooserButtonCount === 8
       && JSON.stringify(fxSurface.chooserFamilies) === JSON.stringify(expectedFamilies)
-      && (!standardSceneSettingsViewport
-        || (fxSurface.chooserGridColumnCount === 4
-          && fxSurface.chooserGridRowCount === 2))
+      && fxSurface.chooserGridColumnCount >= 1
+      && fxSurface.chooserGridRowCount >= 1
+      && fxSurface.chooserGridColumnCount * fxSurface.chooserGridRowCount >= 8
+      && fxSurface.chooserButtonsContainedHorizontally
       && fxSurface.chooserVisibleDescriptionCount === 0
       && fxSurface.chooserMinimumHitSize >= 40],
     ["advancedSurfaceContainsOnlyExistingSyndocalSettings", () =>
@@ -28964,6 +29032,16 @@ async function runSceneSettingsViewport(client, viewport, options = {}) {
       && createdFx.saveFxButtonVisible
       && createdFx.chooserVisibleDescriptionCount === 0
       && createdFx.activeCardIds.includes("302")],
+    ["sceneFxDisclosuresPreserveAllFamiliesAndOwnedControls", () =>
+      [createdFxDisclosures, oneClickAddedDisclosures].every((proof) =>
+        proof.passed
+        && proof.addState.chooserButtonCount === 8
+        && JSON.stringify(proof.addState.chooserFamilies) === JSON.stringify(expectedFamilies)
+        && proof.addState.chooserMinimumHitSize >= 40
+        && proof.addState.chooserButtonsContainedHorizontally
+        && proof.rackState.visibleOwnedFxCount === proof.rackState.ownedFxCount
+        && proof.rackState.ownedFxToggleCount === proof.rackState.ownedFxCount
+        && proof.rackState.ownedFxRemoveCount === proof.rackState.ownedFxCount)],
     ["everySceneFxEditorOwnsDaslightPlusColorPaletteLibrary", () =>
       createdFx.fxPaletteLibraryType === "Curve"
       && createdFx.fxPaletteBuiltInCount === 32
@@ -29120,7 +29198,7 @@ async function runSceneSettingsViewport(client, viewport, options = {}) {
       && oneClickAdded.documentAndAppScrollZero
       && oneClickAdded.settingsHorizontalOverflowPx <= 1
       && oneClickAdded.minimumVisibleFontPx >= 11
-      && oneClickAdded.chooserMinimumHitSize >= 40
+      && oneClickAddedDisclosures.addState.chooserMinimumHitSize >= 40
       && settingsTouchFloor(oneClickAdded)
       && oneClickAdded.ownedFxToggleCount === 1
       && oneClickAdded.ownedFxRemoveCount === 1],
@@ -29202,10 +29280,16 @@ async function runSceneSettingsViewport(client, viewport, options = {}) {
     advancedSurface,
     fxSurface,
     createdFx,
+    createdFxDisclosures,
     scrollFixtureOwnedFxTargetCount,
     scrollFixtureAdditions,
     scrollFixtureFx,
     createdFxScrollExercise,
+    twoDMappingClicked,
+    twoDMappingColourDraft,
+    twoDMappingChooser,
+    twoDMappingFeatureClicked,
+    twoDMappingFeatureDraft,
     valueGeneratorState,
     valueSweepState,
     valueCustomState,
@@ -29224,9 +29308,15 @@ async function runSceneSettingsViewport(client, viewport, options = {}) {
     oneClickEditContext,
     oneClickAddGesture,
     oneClickAdded,
+    oneClickAddedDisclosures,
     colorSweepState,
     oneClickPaletteCreated,
     oneClickPaletteApplied,
+    superSceneStripGesture,
+    selectedSuperScene,
+    superSceneFxSurfaceClicked,
+    superSceneFxSurface,
+    superSceneChooser,
     pointerOnlyStripGesture,
     pointerOnlySelected,
     cueOwnedFxRemoval,
@@ -36415,6 +36505,7 @@ async function runFxVisualViewport(client, viewport) {
   await selectControlSurface(client, "edit");
   await clickSceneSettingsStrip(client, '[data-scene-matrix-edit-strip="401"]');
   await clickSceneSettingsTarget(client, '[data-scene-settings-surface-control="fx"]');
+  await setSceneFxDisclosure(client, "add", true);
   await clickVisibleByText(client, "[data-scene-fx-chooser] .effectFamilyChooser button", "STEPS");
   await sleep(160);
   const cueEditOpened = await evaluatePageFunction(client, () => {
@@ -36479,6 +36570,7 @@ async function runFxVisualViewport(client, viewport) {
   await clickSceneSettingsStrip(client, '[data-scene-matrix-edit-strip="401"]');
   await clickSceneSettingsTarget(client, '[data-scene-settings-surface-control="fx"]');
   await waitForClientCondition(client, "document.querySelectorAll('[data-scene-fx-chooser] .effectFamilyChooser button').length === 8", "T16 Scene FX chooser reload");
+  await setSceneFxDisclosure(client, "add", true);
   await clickVisibleByText(client, "[data-scene-fx-chooser] .effectFamilyChooser button", "TIMELINE");
   await sleep(180);
   // Since the one-row Timeline header (9be5479b) the child-Timeline return
@@ -39572,7 +39664,7 @@ async function main() {
       "--disable-background-timer-throttling",
       "--disable-backgrounding-occluded-windows",
       "--disable-renderer-backgrounding",
-      ...(patchProfileDensityOnlyMode || uiDensityBatch2OnlyMode ? [] : ["--hide-scrollbars"]),
+      ...(patchProfileDensityOnlyMode || uiDensityBatch2OnlyMode || uiDensityBatch3OnlyMode ? [] : ["--hide-scrollbars"]),
       "--disable-crash-reporter",
       "--disable-crashpad",
       `--remote-debugging-port=${cdpPort}`,
@@ -39598,6 +39690,11 @@ async function main() {
 
     if (uiDensityBatch2OnlyMode) {
       await runUiDensityBatch2Checks({ CdpClient, cdpPort, appUrl: fixtureUrl("timeline-layered"), screenshotDir, waitForApp });
+      return;
+    }
+
+    if (uiDensityBatch3OnlyMode) {
+      await runUiDensityBatch3Checks({ CdpClient, cdpPort, appUrl, screenshotDir, waitForApp });
       return;
     }
 

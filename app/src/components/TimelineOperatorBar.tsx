@@ -17,6 +17,7 @@ import {
   type TimelineVisibleWindow,
 } from "../timelineViewport";
 import { TimelinePerformanceEditor } from "./TimelinePerformanceEditor";
+import "./TimelineTools.css";
 
 interface TimelineOperatorBarProps {
   childTimelineLabel: string | null;

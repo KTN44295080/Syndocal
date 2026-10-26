@@ -9,6 +9,8 @@ import type {
 } from "../types";
 
 interface TimelineBankPanelProps {
+  /** Tools supplies the heading and visibility; legacy hosts keep a disclosure. */
+  embedded?: boolean;
   timelines: TimelineSnapshot[];
   activeTimelineId: number;
   bpm: number;
@@ -119,7 +121,7 @@ export function TimelineBankPanel(props: TimelineBankPanelProps) {
   };
 
   return (
-    <details class="timelineBankPanel" data-timeline-bank>
+    <details class="timelineBankPanel" data-timeline-bank data-timeline-bank-embedded={props.embedded ? "true" : undefined} open={props.embedded ? true : undefined}>
       <summary>
         <span>Timeline Bank</span>
         <strong data-no-localize>{timelineLabel(activeTimeline() ?? {}, Math.max(0, activeIndex()))}</strong>
@@ -153,15 +155,18 @@ export function TimelineBankPanel(props: TimelineBankPanelProps) {
             }}
           </For>
         </ol>
-        <div class="timelineBankCreate">
-          <label>
-            New Timeline
-            <input value={newLabel()} placeholder="e.g. Encore" onInput={(event) => setNewLabel(event.currentTarget.value)} onKeyDown={(event) => {
-              if (event.key === "Enter") createTimeline();
-            }} />
-          </label>
-          <button type="button" class="primary" disabled={!newLabel().trim()} onClick={createTimeline}>Create</button>
-        </div>
+        <details class="timelineBankCreateDisclosure" data-timeline-bank-create-disclosure={props.embedded ? "" : undefined} open={props.embedded ? undefined : true}>
+          <summary hidden={!props.embedded}>New Timeline</summary>
+          <div class="timelineBankCreate">
+            <label>
+              New Timeline
+              <input value={newLabel()} placeholder="e.g. Encore" onInput={(event) => setNewLabel(event.currentTarget.value)} onKeyDown={(event) => {
+                if (event.key === "Enter") createTimeline();
+              }} />
+            </label>
+            <button type="button" class="primary" disabled={!newLabel().trim()} onClick={createTimeline}>Create</button>
+          </div>
+        </details>
         <fieldset class="timelineFollowEditor" disabled={!nextTimeline()}>
           <legend>Follow to next Timeline</legend>
           <label class="toggleRow">

@@ -1,4 +1,4 @@
-import { createSignal, For, Show, type ComponentProps, type JSX } from "solid-js";
+import { createEffect, createSignal, For, Show, type ComponentProps, type JSX } from "solid-js";
 import { authoredCueLiveModifier } from "../cueLiveModifier";
 import type { CueMetadataDraft } from "../editorDrafts";
 import { cueIdentityCss } from "../identityColor";
@@ -144,8 +144,8 @@ const readSceneFxWide = () => {
 };
 
 export function SceneSettingsPane(props: SceneSettingsPaneProps) {
-  // Wide FX editing is a per-machine layout preference: the pane takes most of
-  // the upper workspace and shows the FX rack beside the editor.
+  // Wide FX editing is a per-machine width preference. The selected form and
+  // its disclosures use the same scrollport in either width.
   const [fxWide, setFxWide] = createSignal(readSceneFxWide());
   const fxWideActive = () => fxWide() && props.activeSurface === "fx";
   const toggleFxWide = () => {
@@ -161,6 +161,33 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
     props.effects.find((effect) => effect.id === props.selectedEffectId) ?? null;
   const selectedEffectIndex = () =>
     props.effects.findIndex((effect) => effect.id === props.selectedEffectId);
+  type FxDisclosure = "add" | "rack" | "targets";
+  let sceneScroller: HTMLDivElement | undefined;
+  const [openFxDisclosure, setOpenFxDisclosure] = createSignal<FxDisclosure | null>(
+    props.effects.length === 0 ? "add" : null,
+  );
+  let disclosureCueId = props.cue.id;
+  createEffect(() => {
+    const cueId = props.cue.id;
+    const empty = props.effects.length === 0;
+    if (cueId !== disclosureCueId || empty) {
+      disclosureCueId = cueId;
+      setOpenFxDisclosure(empty ? "add" : null);
+    }
+  });
+  const onFxDisclosureToggle = (disclosure: FxDisclosure, open: boolean) => {
+    setOpenFxDisclosure((current) => open ? disclosure : current === disclosure ? null : current);
+  };
+  const returnToFxEditor = () => {
+    setOpenFxDisclosure(null);
+    queueMicrotask(() => {
+      if (sceneScroller) sceneScroller.scrollTop = 0;
+    });
+  };
+  const addSceneFx = async (family: EffectChooserFamily) => {
+    await props.onSelectFamily(family);
+    returnToFxEditor();
+  };
   const sceneKind = () => sceneCueKind(props.cue);
   const sceneKindClass = () => sceneKind() === "TIMELINE"
     ? "super"
@@ -248,6 +275,7 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
       <div class="sceneSettingsBody">
         <div
           class="sceneSettingsScroller"
+          ref={sceneScroller}
           role="region"
           aria-label="Scene settings editor"
           tabIndex={0}
@@ -377,18 +405,167 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
           </Show>
 
           <Show when={props.activeSurface === "fx"}>
-            <section class="sceneSettingsSection sceneFxChooserSection" data-scene-fx-chooser>
-              <header>
-                <strong class="uiMicroLabel">Add FX</strong>
-                <span>Each button adds a new FX to this scene.</span>
-              </header>
-              <p class="hint sceneFxCreationGuide">Pick a family to add an FX, then set 1 Target fixtures and 2 Channels to move below, adjust it, and Save.</p>
-              <EffectFamilyChooser
-                activeFamily={props.activeFamily}
-                onSelectFamily={props.onSelectFamily}
-                disabledFamilies={{ "MOVE FX": !props.moveFxEnabled }}
-              />
-            </section>
+            <div class="sceneFxDisclosureControls" data-scene-fx-controls>
+              <details
+                class="sceneSettingsSection sceneFxChooserSection"
+                data-scene-fx-chooser
+                data-scene-fx-disclosure="add"
+                open={openFxDisclosure() === "add"}
+                onToggle={(event) => onFxDisclosureToggle("add", event.currentTarget.open)}
+              >
+                <summary>
+                  <strong class="uiMicroLabel">Add FX</strong>
+                </summary>
+                <div class="sceneFxDisclosureBody">
+                  <p class="hint">Each button adds a new FX to this scene.</p>
+                  <p class="hint sceneFxCreationGuide">Pick a family to add an FX, then set 1 Target fixtures and 2 Channels to move below, adjust it, and Save.</p>
+                  <EffectFamilyChooser
+                    activeFamily={props.activeFamily}
+                    onSelectFamily={addSceneFx}
+                    disabledFamilies={{ "MOVE FX": !props.moveFxEnabled }}
+                  />
+                </div>
+              </details>
+
+              <Show when={props.effects.length > 0}>
+                <details
+                  class="sceneSettingsSection sceneOwnedFxSection"
+                  data-scene-fx-disclosure="rack"
+                  open={openFxDisclosure() === "rack"}
+                  onToggle={(event) => onFxDisclosureToggle("rack", event.currentTarget.open)}
+                >
+                  <summary>
+                    <strong class="uiMicroLabel">{props.effects.length} FX</strong>
+                    <span class="sceneFxSelectedLabel" data-scene-fx-selected-label data-no-localize title={selectedEffect()?.label}>{selectedEffect()?.label ?? "—"}</span>
+                  </summary>
+                  <div class="sceneFxDisclosureBody">
+                    <nav class="sceneOwnedFxList" aria-label="Cue-owned FX list">
+                      <For each={props.effects}>
+                        {(effect, index) => (
+                          <div
+                            class={`sceneOwnedFxRow ${effect.id === props.selectedEffectId ? "active" : ""}`}
+                            data-scene-owned-effect={effect.id}
+                            data-scene-owned-effect-enabled={effect.enabled ? "true" : "false"}
+                          >
+                            <button
+                              type="button"
+                              class="sceneOwnedFxSelect"
+                              aria-pressed={effect.id === props.selectedEffectId}
+                              onClick={() => {
+                                props.onSelectEffect(effect.id);
+                              returnToFxEditor();
+                              }}
+                            >
+                              <span>{index() + 1}</span>
+                              <strong data-no-localize title={effect.label}>{effect.label}</strong>
+                              <small>{effect.effect_type}</small>
+                            </button>
+                            <label class="sceneOwnedFxToggle">
+                              <input
+                                type="checkbox"
+                                checked={effect.enabled}
+                                aria-label={`${effect.enabled ? "Bypass" : "Enable"} FX ${index() + 1}`}
+                                onChange={(event) => void props.onSetEffectEnabled(
+                                  effect.id,
+                                  event.currentTarget.checked,
+                                )}
+                              />
+                              <span>{effect.enabled ? "Enabled" : "Disabled"}</span>
+                            </label>
+                            <button
+                              type="button"
+                              class="sceneOwnedFxRemove"
+                              aria-label={`Remove FX ${index() + 1}`}
+                              title={`Remove FX ${index() + 1}`}
+                              onClick={() => void props.onRemoveEffect(effect.id)}
+                            >
+                              <span aria-hidden="true" data-no-localize>×</span>
+                            </button>
+                          </div>
+                        )}
+                      </For>
+                    </nav>
+                    <Show when={selectedEffect()}>
+                      <div class="sceneOwnedFxToolbar" role="toolbar" aria-label="Cue-owned FX rack actions">
+                        <button
+                          type="button"
+                          disabled={selectedEffectIndex() <= 0}
+                          onClick={() => void props.onMoveEffect(props.selectedEffectId!, -1)}
+                        >
+                          Move up
+                        </button>
+                        <button
+                          type="button"
+                          disabled={selectedEffectIndex() < 0 || selectedEffectIndex() >= props.effects.length - 1}
+                          onClick={() => void props.onMoveEffect(props.selectedEffectId!, 1)}
+                        >
+                          Move down
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!selectedEffect()?.params}
+                          title={selectedEffect()?.params ? "Duplicate this cue-owned FX" : "Linked project FX must be made cue-owned before duplication"}
+                          onClick={() => void props.onDuplicateEffect(props.selectedEffectId!)}
+                        >
+                          Duplicate
+                        </button>
+                      </div>
+                    </Show>
+                  </div>
+                </details>
+              </Show>
+              <Show when={selectedEffect()}>
+                <details
+                  class="sceneFxTargetsDisclosure"
+                  data-scene-fx-disclosure="targets"
+                  open={openFxDisclosure() === "targets"}
+                  onToggle={(event) => onFxDisclosureToggle("targets", event.currentTarget.open)}
+                >
+                  <summary>
+                    <strong>Targets</strong>
+                    <span data-scene-fx-target-summary data-no-localize title={props.editor.target.summary}>{props.editor.target.summary}</span>
+                  </summary>
+                  <div class="sceneFxDisclosureBody">
+                    <SceneEffectTargetEditor {...props.editor.target} />
+                    <section class="sceneFxChannels" data-scene-fx-channels aria-label="FX channels">
+                      <h4 class="sceneFxStepTitle" data-fx-step="2">Channels to move</h4>
+                      <Show when={props.editor.effectType === "Color"}>
+                        <p class="sceneFxChannelNote">Whole-fixture colour: every patched colour channel moves together. To move only some channels, such as Green and Blue, use VALUE FX.</p>
+                      </Show>
+                      <Show when={props.editor.effectType === "ColorMapping"}>
+                        <p class="sceneFxChannelNote">Colour output drives each fixture's whole colour. Set Output mode to Feature below to choose channels.</p>
+                      </Show>
+                      <Show when={props.editor.effectType === "Move"}>
+                        <p class="sceneFxChannelNote">Pan and Tilt of fixtures with paired Pan/Tilt.</p>
+                      </Show>
+                      <Show when={props.editor.effectType === "Chaser"}>
+                        <p class="sceneFxChannelNote">Choose the chaser's channels under Features in the chaser settings below.</p>
+                      </Show>
+                      <Show
+                        when={["Lfo", "PositionWave"].includes(props.editor.effectType) && !props.editor.target.readOnly}
+                      >
+                        <label class="sceneSettingsAttribute">
+                          Attribute
+                          <select
+                            data-scene-property="effect-attribute"
+                            value={props.editor.attribute}
+                            disabled={props.editor.attributeOptions.length === 0}
+                            onInput={(event) => props.editor.onAttribute(event.currentTarget.value)}
+                          >
+                            <For each={props.editor.attributeOptions}>
+                              {(attribute) => <option value={attribute}>{attribute}</option>}
+                            </For>
+                          </select>
+                        </label>
+                      </Show>
+                      <Show when={["Value", "Curve", "Mapping"].includes(props.editor.effectType)}>
+                        <EffectFeatureEditorPanel {...props.editor.features} />
+                      </Show>
+                    </section>
+                  </div>
+                </details>
+              </Show>
+            </div>
 
             <Show
               when={props.effects.length > 0}
@@ -398,82 +575,6 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
                 </p>
               }
             >
-              <section class="sceneSettingsSection sceneOwnedFxSection">
-                <header>
-                  <strong class="uiMicroLabel">Cue-owned FX</strong>
-                  <span>{props.effects.length} FX</span>
-                </header>
-                <nav class="sceneOwnedFxList" aria-label="Cue-owned FX list">
-                  <For each={props.effects}>
-                    {(effect, index) => (
-                      <div
-                        class={`sceneOwnedFxRow ${effect.id === props.selectedEffectId ? "active" : ""}`}
-                        data-scene-owned-effect={effect.id}
-                        data-scene-owned-effect-enabled={effect.enabled ? "true" : "false"}
-                      >
-                        <button
-                          type="button"
-                          class="sceneOwnedFxSelect"
-                          aria-pressed={effect.id === props.selectedEffectId}
-                          onClick={() => props.onSelectEffect(effect.id)}
-                        >
-                          <span>{index() + 1}</span>
-                          <strong data-no-localize title={effect.label}>{effect.label}</strong>
-                          <small>{effect.effect_type}</small>
-                        </button>
-                        <label class="sceneOwnedFxToggle">
-                          <input
-                            type="checkbox"
-                            checked={effect.enabled}
-                            aria-label={`${effect.enabled ? "Bypass" : "Enable"} FX ${index() + 1}`}
-                            onChange={(event) => void props.onSetEffectEnabled(
-                              effect.id,
-                              event.currentTarget.checked,
-                            )}
-                          />
-                          <span>{effect.enabled ? "Enabled" : "Disabled"}</span>
-                        </label>
-                        <button
-                          type="button"
-                          class="sceneOwnedFxRemove"
-                          aria-label={`Remove FX ${index() + 1}`}
-                          title={`Remove FX ${index() + 1}`}
-                          onClick={() => void props.onRemoveEffect(effect.id)}
-                        >
-                          <span aria-hidden="true" data-no-localize>×</span>
-                        </button>
-                      </div>
-                    )}
-                  </For>
-                </nav>
-                <Show when={selectedEffect()}>
-                  <div class="sceneOwnedFxToolbar" role="toolbar" aria-label="Cue-owned FX rack actions">
-                    <button
-                      type="button"
-                      disabled={selectedEffectIndex() <= 0}
-                      onClick={() => void props.onMoveEffect(props.selectedEffectId!, -1)}
-                    >
-                      Move up
-                    </button>
-                    <button
-                      type="button"
-                      disabled={selectedEffectIndex() < 0 || selectedEffectIndex() >= props.effects.length - 1}
-                      onClick={() => void props.onMoveEffect(props.selectedEffectId!, 1)}
-                    >
-                      Move down
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!selectedEffect()?.params}
-                      title={selectedEffect()?.params ? "Duplicate this cue-owned FX" : "Linked project FX must be made cue-owned before duplication"}
-                      onClick={() => void props.onDuplicateEffect(props.selectedEffectId!)}
-                    >
-                      Duplicate
-                    </button>
-                  </div>
-                </Show>
-              </section>
-
               <Show
                 when={selectedEffect()}
                 fallback={<p class="sceneSettingsEmpty">Select a cue-owned FX to edit it.</p>}
@@ -481,49 +582,8 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
                 <section
                   class="sceneSettingsSection sceneFxEditor"
                   data-scene-settings-effect-editor={props.editor.effectType}
+                  aria-label={effectTypeLabel(props.editor.effectType)}
                 >
-                  <header>
-                    <strong class="uiMicroLabel">FX editor</strong>
-                    <span>{effectTypeLabel(props.editor.effectType)}</span>
-                  </header>
-                  {/* Step 1: which fixtures; step 2, directly below: which of their
-                      channels move. Family settings, palettes and Save follow. */}
-                  <SceneEffectTargetEditor {...props.editor.target} />
-                  <section class="sceneFxChannels" data-scene-fx-channels aria-label="FX channels">
-                  <h4 class="sceneFxStepTitle" data-fx-step="2">Channels to move</h4>
-                  <Show when={props.editor.effectType === "Color"}>
-                    <p class="sceneFxChannelNote">Whole-fixture colour: every patched colour channel moves together. To move only some channels, such as Green and Blue, use VALUE FX.</p>
-                  </Show>
-                  <Show when={props.editor.effectType === "ColorMapping"}>
-                    <p class="sceneFxChannelNote">Colour output drives each fixture's whole colour. Set Output mode to Feature below to choose channels.</p>
-                  </Show>
-                  <Show when={props.editor.effectType === "Move"}>
-                    <p class="sceneFxChannelNote">Pan and Tilt of fixtures with paired Pan/Tilt.</p>
-                  </Show>
-                  <Show when={props.editor.effectType === "Chaser"}>
-                    <p class="sceneFxChannelNote">Choose the chaser's channels under Features in the chaser settings below.</p>
-                  </Show>
-                  <Show
-                    when={["Lfo", "PositionWave"].includes(props.editor.effectType) && !props.editor.target.readOnly}
-                  >
-                    <label class="sceneSettingsAttribute">
-                      Attribute
-                      <select
-                        data-scene-property="effect-attribute"
-                        value={props.editor.attribute}
-                        disabled={props.editor.attributeOptions.length === 0}
-                        onInput={(event) => props.editor.onAttribute(event.currentTarget.value)}
-                      >
-                        <For each={props.editor.attributeOptions}>
-                          {(attribute) => <option value={attribute}>{attribute}</option>}
-                        </For>
-                      </select>
-                    </label>
-                  </Show>
-                  <Show when={["Value", "Curve", "Mapping"].includes(props.editor.effectType)}>
-                    <EffectFeatureEditorPanel {...props.editor.features} />
-                  </Show>
-                  </section>
                   <Show when={props.editor.effectType === "Lfo" && props.editor.daslightCustomCurve.source}>
                     <DaslightCustomCurvePanel {...props.editor.daslightCustomCurve} />
                   </Show>

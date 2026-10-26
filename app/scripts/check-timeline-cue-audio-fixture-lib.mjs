@@ -7,6 +7,11 @@ export const cueAudioEventTargets = {
   "syndocal://application-update-progress": { kind: "Any" },
   "syndocal://project-authority-replaced": { kind: "Any" },
   "syndocal://project-control-inputs-retired": { kind: "Any" },
+  "syndocal://midi-fader-input-v1": { kind: "Any" },
+  "syndocal://midi-perform-control-v1": { kind: "Any" },
+  "syndocal://osc-perform-control-v1": { kind: "Any" },
+  "syndocal://dmx-perform-control-v1": { kind: "Any" },
+  "syndocal://agent-request-v1": { kind: "Any" },
   "syndocal://show-serial-dmx-route-status-v1": { kind: "Any" },
   "syndocal://open-project": { kind: "Any" },
   "tauri://drag-enter": { kind: "Webview", label: "main" },
@@ -333,6 +338,7 @@ export const installCueAudioMock = (eventTargets) => {
     settings: { version: 1, route: "follow_program", device_name: null, topology_fingerprint: null, click_gain: 1, guide_gain: 0.85 },
     statusRevision: 0,
     registrationArgs: null,
+    agentBridgeRegistered: false,
     programAudioHandoffConfigs: [],
     nextCallbackId: 0,
     nextEventId: 0,
@@ -349,12 +355,21 @@ export const installCueAudioMock = (eventTargets) => {
       "plugin:window|is_maximized",
       "plugin:window|maximize",
       "register_project_transaction_owner",
+      "agent_bridge_register_v1",
       "get_operator_policy",
       "get_project_recovery_authority_status",
       "get_project_authority_bundle",
       "get_fixture_groups",
       "get_project_control_mappings",
       "get_video_output_window_statuses",
+      "get_show_clock_status",
+      "get_extensions_status",
+      "get_output_ownership_status",
+      "query_output_lease_authority_v1",
+      "get_video_runtime_status",
+      "video_output_recording_status",
+      "get_usb_dmx_universes_v1",
+      "get_live_video_output_health",
       "live_audio_input_status",
       "live_audio_input_backends",
       "set_operator_selection_context",
@@ -428,6 +443,12 @@ export const installCueAudioMock = (eventTargets) => {
         mock.registrationArgs = clone(args);
         return null;
       }
+      if (command === "agent_bridge_register_v1") {
+        if (!exactKeys(args, [])) throw new Error("Cue Audio agent bridge registration payload must be empty");
+        if (mock.agentBridgeRegistered) throw new Error("Cue Audio agent bridge registration must occur exactly once");
+        mock.agentBridgeRegistered = true;
+        return 1;
+      }
       if (command === "set_program_audio_handoff_config") {
         validateProgramAudioHandoff(args);
         mock.programAudioHandoffConfigs.push(clone(args));
@@ -497,6 +518,112 @@ export const installCueAudioMock = (eventTargets) => {
       }
       if (command === "get_video_output_window_statuses") {
         if (!exactKeys(args, [])) throw new Error("Cue Audio video-output startup payload must be empty");
+        return [];
+      }
+      // Organic startup polls use the production response shapes. These are
+      // read-only, stopped/uninitialized browser fixtures, not output grants.
+      // Keep each payload exact; unknown commands still reach the rejection.
+      if (command === "get_show_clock_status") {
+        if (!exactKeys(args, [])) throw new Error("Cue Audio show-clock status payload must be empty");
+        return {
+          running: false,
+          role: null,
+          state: "STOPPED",
+          local_address: null,
+          peer_address: null,
+          session_id: null,
+          node_id: null,
+          clock_generation: 0,
+          fencing_generation: 0,
+          accepted_samples: 0,
+          last_sequence: 0,
+          offset_us: 0,
+          sample_age_us: null,
+          output_armed: false,
+          show_clock_gate_armed: false,
+          fence_state: "DISARMED",
+          accepted_actions: 0,
+          scheduled_actions: 0,
+          last_action_sequence: 0,
+          last_action_id: null,
+          last_action_status: null,
+          dropped_datagrams: 0,
+          rejected_packets: 0,
+          last_rejection: null,
+          last_error: null,
+        };
+      }
+      if (command === "get_extensions_status") {
+        if (!exactKeys(args, [])) throw new Error("Cue Audio extensions status payload must be empty");
+        return { configured: true, dj_link_enabled: false, error: null };
+      }
+      if (command === "get_output_ownership_status") {
+        if (!exactKeys(args, [])) throw new Error("Cue Audio output ownership status payload must be empty");
+        return {
+          role: "Standby",
+          effective_role: "Standby",
+          desired_role: "Standby",
+          persisted_role: null,
+          state: "Failed",
+          generation: 0,
+          epoch: 0,
+          lighting_allowed: false,
+          video_allowed: false,
+          lighting_reason: "StartupDenied",
+          video_reason: "StartupDenied",
+          error: "Machine output ownership has not been initialized",
+        };
+      }
+      if (command === "query_output_lease_authority_v1") {
+        if (!exactKeys(args, [])) throw new Error("Cue Audio output lease authority query payload must be empty");
+        return {
+          operation_id: "syndocal.output.lease.authority.query.v1",
+          statuses: [{ status: "unavailable" }],
+        };
+      }
+      if (command === "get_video_runtime_status") {
+        if (!exactKeys(args, [])) throw new Error("Cue Audio video runtime status payload must be empty");
+        return { backends: [] };
+      }
+      if (command === "video_output_recording_status") {
+        if (!exactKeys(args, [])) throw new Error("Cue Audio video recording status payload must be empty");
+        // The idle startup shape mirrors App's VideoRecordingStatus baseline;
+        // status polling never grants recording admission or starts a take.
+        /** @type {import("../src/types").VideoRecordingStatus} */
+        const recordingStatus = {
+          state: "Idle",
+          active: false,
+          output_id: null,
+          path: null,
+          width: 0,
+          height: 0,
+          frame_rate: 30,
+          frames_written: 0,
+          dropped_frames: 0,
+          audio_requested: false,
+          audio_included: false,
+          audio_track_count: 0,
+          started_unix_ms: null,
+          renderer_process_isolated: true,
+          renderer_force_termination: true,
+          stop_deadline_ms: 10_000,
+          last_error: null,
+          take_id: null,
+          owner_epoch: null,
+          end_reason: null,
+          end_detail: null,
+          takeover: null,
+          admission_allowed: false,
+          admission_reason: null,
+        };
+        return recordingStatus;
+      }
+      if (command === "get_usb_dmx_universes_v1") {
+        if (!exactKeys(args, [])) throw new Error("Cue Audio USB-DMX universes status payload must be empty");
+        return { bindings: [], cables: [], persistenceError: null };
+      }
+      if (command === "get_live_video_output_health") {
+        if (!exactKeys(args, [])) throw new Error("Cue Audio live video output health payload must be empty");
         return [];
       }
       if (command === "live_audio_input_status") {
@@ -581,15 +708,22 @@ export const installCueAudioMock = (eventTargets) => {
           || (request.sampleRate !== null && (typeof request.sampleRate !== "number" || !Number.isFinite(request.sampleRate)))) {
           throw new Error("Cue Audio live-audio capabilities payload differs from the exact V1 startup contract");
         }
-        return {
+        /** @type {import("../src/types").LiveAudioInputCapabilities} */
+        const capabilities = {
           device_id: request.deviceId,
           device_name: "Program Audio",
           backend: request.backend,
           default_config: { channels: 2, sample_rate: request.sampleRate ?? 48_000, sample_format: "f32" },
           supported_configs: [],
-          resolved_config: { channels: 2, sample_rate: request.sampleRate ?? 48_000, sample_format: "f32" },
+          resolved_config: {
+            channels: 2,
+            sample_rate: request.sampleRate ?? 48_000,
+            sample_format: "f32",
+            buffer_size: { kind: "unknown" },
+          },
           max_capture_frames: 0,
         };
+        return capabilities;
       }
       if (command === "load_startup_project") {
         if (!exactKeys(args, ["ownerId", "expectedEpoch", "expectedRevision", "expectedCheckpointHash"])) throw new Error("Cue Audio startup-project payload differs from the exact authority contract");

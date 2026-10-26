@@ -38587,50 +38587,11 @@ html:not([data-window-mode="fullscreen"])
   gap: 3px;
 }
 
-/* Wide FX editing (operator toggle in the Scene Settings header): the Scene
-   Matrix stays usable at a narrower width while the FX rack and editor sit
-   side by side, each scrolling inside its own column. */
+/* Wide FX editing gives the selected editor more width while keeping the
+   Scene Matrix usable. The FX surface retains one disclosure/scroll flow. */
 .layout.layoutSharedWorkspace.layoutControl.controlModeEdit
   > .editDomainUpperPanel.lightingSceneSettingsVisible:has(.sceneSettingsPane[data-scene-settings-wide="true"]) {
   grid-template-columns: minmax(260px, 1fr) minmax(0, 2.6fr);
-}
-
-.sceneSettingsPane[data-scene-settings-wide="true"] .sceneSettingsScroller {
-  grid-template-columns: minmax(300px, 0.85fr) minmax(0, 1.6fr);
-  grid-template-rows: auto minmax(0, 1fr);
-  align-content: stretch;
-  overflow: hidden;
-  scrollbar-gutter: auto;
-}
-
-.sceneSettingsPane[data-scene-settings-wide="true"] .sceneSettingsScroller > .sceneFxChooserSection {
-  grid-column: 1;
-  grid-row: 1;
-}
-
-.sceneSettingsPane[data-scene-settings-wide="true"] .sceneSettingsScroller > .sceneOwnedFxSection {
-  grid-column: 1;
-  grid-row: 2;
-  align-self: start;
-  max-height: 100%;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.sceneSettingsPane[data-scene-settings-wide="true"] .sceneSettingsScroller > .sceneFxEditor,
-.sceneSettingsPane[data-scene-settings-wide="true"] .sceneSettingsScroller > .sceneSettingsEmpty {
-  grid-column: 2;
-  grid-row: 1 / -1;
-  align-self: stretch;
-  min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
-}
-
-.sceneSettingsPane[data-scene-settings-wide="true"] .sceneSettingsScroller > .sceneSettingsEmpty {
-  align-self: start;
 }
 
 .layout.layoutSharedWorkspace.layoutControl.controlModeEdit
@@ -39027,7 +38988,7 @@ html:not([data-window-mode="fullscreen"])
   width: min(356px, calc(100vw - 24px));
   max-width: min(356px, calc(100vw - 24px));
   max-height: min(680px, var(--timeline-tools-available-height, calc(100vh - 160px)));
-  overflow: hidden auto;
+  overflow: auto;
 }
 
 @media (max-height: 800px) {

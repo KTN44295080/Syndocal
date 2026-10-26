@@ -56,11 +56,11 @@ const inspectorTabs: { id: InspectorTab; label: string }[] = [
 ];
 
 // Height of a complete clip-matrix layer row (100px plus its 2px rule) and of the
-// pane chrome around the rows: pane borders, pane header, matrix head and the
-// horizontal scrollbar. The top pane never shrinks below the rows the desk must
-// keep visible.
+// pane chrome around the rows: pane borders, pane header and matrix head.
+// Column paging needs no horizontal scrollbar; its former height returns to
+// the lower panes without changing row sizes or persisted split ratios.
 const matrixRowPx = 102;
-const matrixChromePx = 2 + 44 + 44 + 16;
+const matrixChromePx = 2 + 44 + 44;
 
 /** A presentation adapter over the existing publication, transport and FX owners. */
 export function VideoPerformDesk(props: VideoControlPanelProps) {

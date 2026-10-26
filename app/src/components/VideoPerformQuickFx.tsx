@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, on, Show, type ComponentProps } from "solid-js";
+import { createEffect, createMemo, createSignal, createUniqueId, For, on, onCleanup, Show, type ComponentProps } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import type { VideoEffectCatalog, VideoIsfControlSummary, VideoIsfEffectStageSummary, VideoLayerSummary } from "../types";
 import { cloneFxStage, fxControlValueText, replaceFxStage } from "../fxParameterModel";
@@ -49,6 +49,84 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
   const [stages, setStages] = createStore<QuickStage[]>([]);
   const [selectedIndex, setSelectedIndex] = createSignal(0);
   const [removeIndex, setRemoveIndex] = createSignal<number | null>(null);
+  type FxView = "parameters" | "chain";
+  const viewIds: FxView[] = ["parameters", "chain"];
+  const [view, setView] = createSignal<FxView>("parameters");
+  const [compact, setCompact] = createSignal(false);
+  const viewId = createUniqueId();
+  let root: HTMLElement | undefined;
+  let body: HTMLDivElement | undefined;
+  let safety: HTMLDivElement | undefined;
+  let sizeObserver: ResizeObserver | undefined;
+  const scrollPositions: Record<FxView, number> = { parameters: 0, chain: 0 };
+  const changeView = (next: FxView) => {
+    if (next === view()) return;
+    if (body) scrollPositions[view()] = body.scrollTop;
+    setView(next);
+    queueMicrotask(() => { if (body) body.scrollTop = scrollPositions[next]; });
+  };
+  const showSafety = () => {
+    if (!body || !safety) return;
+    body.scrollTop += safety.getBoundingClientRect().top - body.getBoundingClientRect().top;
+    safety.querySelector<HTMLElement>("button:not(:disabled), summary")?.focus({ preventScroll: true });
+  };
+  const attachRoot = (element: HTMLElement) => {
+    root = element;
+    sizeObserver?.disconnect();
+    sizeObserver = new ResizeObserver(() => {
+      const next = element.clientWidth < 640;
+      if (next === compact()) return;
+      const focused = document.activeElement instanceof HTMLElement && element.contains(document.activeElement) ? document.activeElement : null;
+      const focusedView = focused?.closest<HTMLElement>("[data-perform-fx-view]")?.dataset.performFxView;
+      const focusedPicker = Boolean(focused?.closest("[data-perform-fx-stage-picker]"));
+      const focusedBypass = Boolean(focused?.closest("[data-perform-fx-selected-bypass]"));
+      const stageIndex = activeStage()?.index;
+      // A resize must not hide a focused editor or management control.
+      if (next && focused?.closest('[data-perform-fx-panel="chain"]')) setView("chain");
+      else if (next && focused?.closest('[data-perform-fx-panel="parameters"]')) setView("parameters");
+      setCompact(next);
+      queueMicrotask(() => {
+        if (!focused || !body || !element.isConnected) return;
+        const current = document.activeElement;
+        if (current !== focused && current !== document.body && current !== document.documentElement && current !== null) return;
+        const visible = (control: HTMLElement | null | undefined) => {
+          if (!control?.isConnected || !control.getClientRects().length || ("disabled" in control && control.disabled)) return false;
+          const bounds = control.getBoundingClientRect();
+          return bounds.width > 0 && bounds.height > 0;
+        };
+        let target = focused;
+        if (!next && (focusedView || focusedPicker || focusedBypass)) {
+          const stage = element.querySelector<HTMLElement>(`[data-perform-fx-stage="${stageIndex}"]`);
+          const controls = focusedView === "parameters"
+            ? [...element.querySelectorAll<HTMLElement>('[data-perform-fx-panel="parameters"] [data-perform-fx-control] :is(input, select, button)')]
+            : [];
+          const replacement = [
+            ...(focusedBypass ? [stage?.querySelector<HTMLElement>("[data-perform-fx-bypass]")] : []),
+            ...controls, stage?.querySelector<HTMLElement>("[data-perform-fx-select]"),
+            element.querySelector<HTMLElement>("[data-perform-fx-editor]"), element.querySelector<HTMLElement>("[data-perform-fx-scope]"),
+          ].find(visible);
+          if (!replacement) return;
+          replacement.focus({ preventScroll: true });
+          target = replacement;
+        }
+        if (!visible(target) || !body.contains(target)) return;
+        const viewport = body.getBoundingClientRect();
+        const bounds = target.getBoundingClientRect();
+        if (bounds.top < viewport.top) body.scrollTop -= viewport.top - bounds.top;
+        else if (bounds.bottom > viewport.bottom) body.scrollTop += bounds.bottom - viewport.bottom;
+      });
+    });
+    sizeObserver.observe(element);
+  };
+  onCleanup(() => sizeObserver?.disconnect());
+  const viewKeyDown = (event: KeyboardEvent, current: FxView) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault(); event.stopPropagation();
+    const index = viewIds.indexOf(current);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? viewIds.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + viewIds.length) % viewIds.length;
+    changeView(viewIds[next]);
+    root?.querySelector<HTMLButtonElement>(`[data-perform-fx-view="${viewIds[next]}"]`)?.focus();
+  };
   // While an audition is open the stages, parameters and edits belong to the
   // Preview-only draft; every other time they are the layer's live chain.
   const audition = () => props.audition?.active(props.layer?.id) ?? null;
@@ -113,21 +191,34 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
     ? { canUndo: () => props.audition!.canUndo(), undo: () => props.audition!.undo() }
     : undefined;
   return (
-    <section class="videoPerformQuickFx" data-perform-quick-fx data-video-perform-region="quick-fx" data-fx-auditioning={audition() ? "true" : undefined} aria-label="Selected layer effect chain">
+    <section ref={attachRoot} class="videoPerformQuickFx" data-perform-quick-fx data-video-perform-region="quick-fx" data-fx-compact={compact()} data-fx-auditioning={audition() ? "true" : undefined} aria-label="Selected layer effect chain">
       <header class="videoPerformQuickFxHeader">
-        <div class="videoPerformQuickFxLayer">
+        <div class="videoPerformQuickFxLayer" hidden={compact() && stages.length > 0}>
           <span class="videoPerformQuickFxLayerName" data-no-localize title={props.layer?.label ?? ""}>{props.layer?.label ?? ""}</span>
           <Show when={stages.length > 0}>
             <span class="videoPerformQuickFxCount"><span data-no-localize>{stages.length}</span> <span>{stages.length === 1 ? "stage" : "stages"}</span></span>
           </Show>
         </div>
+        <div class="videoPerformQuickFxViews" role="tablist" aria-label="Effect views" hidden={!compact() || stages.length === 0}>
+          <For each={viewIds}>{item => <button type="button" role="tab" data-perform-fx-view={item}
+            id={`${viewId}-${item}-tab`} aria-controls={`${viewId}-${item}-panel`} aria-selected={view() === item}
+            tabIndex={view() === item ? 0 : -1} onClick={() => changeView(item)} onKeyDown={event => viewKeyDown(event, item)}>
+            {item === "parameters" ? "Parameters" : "Chain"}
+          </button>}</For>
+        </div>
+        <button type="button" class="videoPerformQuickFxScope" data-perform-fx-scope={audition() ? "preview" : "live"}
+          aria-controls={`${viewId}-safety`} aria-label="FX output safety" onClick={showSafety}
+          title={audition() ? "AUDITION · PREVIEW ONLY" : "LIVE — affects Program"}>{audition() ? "PREVIEW ONLY" : "LIVE"}</button>
         <button type="button" data-perform-fx-editor data-video-perform-fx-editor disabled={!props.layer} onClick={props.onOpenEditor}>
           Full FX editor
         </button>
       </header>
-      <div class="videoPerformQuickFxBody" data-fx-empty={stages.length === 0}>
-        <div class="videoPerformQuickFxChain" role="list" aria-label="Selected layer effect chain">
-          <Show when={stages.length > 0} fallback={
+      <div ref={body} class="videoPerformQuickFxBody" data-perform-fx-scroll data-fx-empty={stages.length === 0}>
+        <div class="videoPerformQuickFxChain" data-perform-fx-panel="chain" id={`${viewId}-chain-panel`}
+          role={compact() ? "tabpanel" : undefined} aria-label="Selected layer effect chain" aria-labelledby={compact() ? `${viewId}-chain-tab` : undefined}
+          hidden={compact() && stages.length > 0 && view() !== "chain"}>
+          <div class="videoPerformQuickFxChainContext" hidden={!compact()}><strong data-no-localize>{props.layer?.label ?? ""}</strong><span><span data-no-localize>{stages.length}</span> <span>{stages.length === 1 ? "stage" : "stages"}</span></span></div>
+          <div class="videoPerformQuickFxStages" role="list" aria-label="Selected layer effect chain"><Show when={stages.length > 0} fallback={
             <p class="emptyState">{props.layer ? "No layer FX. Add effects in the full editor." : "Select a layer for Quick FX."}</p>
           }>
             <For each={stages}>
@@ -156,7 +247,7 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
                 </div>
               )}
             </For>
-          </Show>
+          </Show></div>
           <Show when={activeStage()}>{(stage) => <div class="videoPerformQuickFxActions">
             <button type="button" disabled={busy() || stage().index === 0} onClick={() => {
               const index = stage().index; void moveStage(stage().layerId, index, -1); setSelectedIndex(index - 1); setRemoveIndex(null);
@@ -169,17 +260,28 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
               <button type="button" onClick={() => setRemoveIndex(null)}>Cancel</button>
             </Show>
           </div>}</Show>
-          <Show when={props.audition} fallback={null}>
-            <VideoFxAuditionBar session={props.audition} layerId={props.layer?.id ?? null} locale={props.locale} />
-          </Show>
-          <Show when={!audition()}>
-            <VideoFxLiveSafety session={props.liveSession} layerId={props.layer?.id ?? null} />
-          </Show>
         </div>
-        <div class="videoPerformQuickFxParameters" data-perform-fx-detail={activeStage()?.index ?? ""} aria-label="Selected stage parameters">
+        <div class="videoPerformQuickFxParameters" data-perform-fx-panel="parameters" id={`${viewId}-parameters-panel`}
+          role={compact() ? "tabpanel" : undefined} aria-labelledby={compact() ? `${viewId}-parameters-tab` : undefined}
+          hidden={compact() && view() !== "parameters"} data-perform-fx-detail={activeStage()?.index ?? ""} aria-label="Selected stage parameters">
+          <div class="videoPerformQuickFxStagePicker" hidden={!compact()}>
+            <select data-perform-fx-stage-picker aria-label="Selected stage" title={activeStage()?.label ?? ""} value={activeStage()?.index ?? 0}
+              onChange={event => setSelectedIndex(Number(event.currentTarget.value))}>
+              <For each={stages}>{stage => <option value={stage.index} data-no-localize>{stage.index + 1} · {stage.label}</option>}</For>
+            </select>
+            <Show when={activeStage()}>{stage => <button type="button" class="videoPerformQuickFxSwitch" data-perform-fx-selected-bypass
+              aria-pressed={stage().enabled} aria-label={`${stage().label} FX enabled for ${props.layer?.label ?? "Video layer"} (layer ${stage().layerId})`}
+              classList={{ active: stage().enabled }} disabled={busy()}
+              {...controlMappingTargetData(!audition() && stage().stageId !== null
+                ? { action: "VideoIsfStageEnabled", label: `${props.layer?.label ?? "Layer"} FX ${stage().index + 1}`, layer_id: stage().layerId, isf_stage_id: stage().stageId }
+                : null)}
+              onClick={() => void setEnabled(stage().layerId, stage().index, !stage().enabled)}>
+              <span class="videoPerformQuickFxKnob" aria-hidden="true" /><span>{stage().enabled ? "On" : "Off"}</span>
+            </button>}</Show>
+          </div>
           <Show when={activeStage()}>
             {(stage) => (
-              <VideoFxParameterEditor availableLayers={props.layerList.layers} stage={stage().stage} identity={stage().id} busy={busy()} locale={props.locale} bpm={props.bpm}
+              <VideoFxParameterEditor availableLayers={props.layerList.layers} stage={stage().stage} identity={stage().id} busy={busy()} locale={props.locale} bpm={props.bpm} discloseImageInputs
                 projectEpoch={props.projectEpoch} layerId={stage().layerId} liveSession={props.liveSession} history={history()}
                 auditioning={Boolean(audition())} stageId={stage().stageId}
                 effectCatalog={props.effectCatalog} onApplyEffectCatalog={props.onApplyEffectCatalog}
@@ -194,6 +296,14 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
                   : props.layerList.onSetIsfControl(stage().layerId, stage().index, name, value)}
                 onTriggerEvent={(name) => audition() ? undefined : props.layerList.onTriggerIsfEvent(stage().layerId, stage().index, name)} />
             )}
+          </Show>
+        </div>
+        <div ref={safety} class="videoPerformQuickFxSafety" data-perform-fx-safety id={`${viewId}-safety`}>
+          <Show when={props.audition} fallback={null}>
+            <VideoFxAuditionBar session={props.audition} layerId={props.layer?.id ?? null} locale={props.locale} />
+          </Show>
+          <Show when={!audition()}>
+            <VideoFxLiveSafety session={props.liveSession} layerId={props.layer?.id ?? null} />
           </Show>
         </div>
       </div>

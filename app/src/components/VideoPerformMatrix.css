@@ -20,16 +20,17 @@
 .videoPerformMatrixHead,
 .videoPerformMatrixRow {
   display: grid;
-  grid-template-columns: 336px repeat(32, 100px);
-  width: max-content;
-  min-width: 100%;
+  grid-template-columns: 336px repeat(var(--perform-visible-columns, 1), 100px);
+  width: 100%;
+  min-width: 0;
 }
 
 .videoPerformMatrixHead {
   position: sticky;
   top: 0;
   z-index: 5;
-  height: 44px;
+  grid-template-columns: 336px minmax(0, 1fr);
+  min-height: 44px;
   background: var(--theme-raised);
 }
 
@@ -63,6 +64,15 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.videoPerformMatrixCorner [data-video-perform-page-range] { flex: 1 1 auto; min-width: 0; white-space: nowrap; font-variant-numeric: tabular-nums; text-align: center; }
+.videoPerformMatrixSelection { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; padding-inline: 10px; border-bottom: 1px solid var(--theme-line); }
+.videoPerformSelectedClip { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; overflow-wrap: anywhere; }
+.videoPerformSelectedClip > span { color: var(--theme-muted); }
+.videoPerformSelectedClip > strong { min-width: 0; font-weight: 400; }
+.videoPerformMatrix [data-video-perform-offpage-status] { display: flex; flex: 0 0 auto; align-items: center; flex-wrap: wrap; gap: 6px; padding: 0 8px; }
+.videoPerformOffpageLive { background: var(--theme-program); color: var(--theme-on-program); font-weight: 700; }
+.videoPerformOffpageQueued { background: var(--theme-queued); color: var(--theme-on-queued); font-weight: 700; }
 
 .videoPerformMatrix .videoPerformMatrixCorner > button {
   flex: 0 0 auto;
@@ -434,8 +444,8 @@
 .videoPerformClipMenu button:disabled { color: var(--theme-muted); }
 
 /* Group policy is a single 44px strip above its unchanged child controls. */
-.videoPerformGroupRow { width: 3536px; min-width: 100%; height: 44px; border-bottom: 1px solid var(--theme-line-strong); background: var(--theme-raised); }
-.videoPerformGroupStrip { position: sticky; left: 0; display: grid; grid-template-columns: 44px minmax(140px,1fr) minmax(140px,220px) 130px 64px 80px 80px; gap: 6px; width: min(1060px,calc(100vw - 42px)); height: 44px; padding-inline: 6px; box-sizing: border-box; align-items: center; background: var(--theme-raised); }
+.videoPerformGroupRow { width: 100%; min-width: 0; min-height: 44px; border-bottom: 1px solid var(--theme-line-strong); background: var(--theme-raised); }
+.videoPerformGroupStrip { position: sticky; left: 0; display: grid; grid-template-columns: 44px minmax(140px,1fr) minmax(140px,220px) 130px 64px 80px 80px; gap: 6px; width: min(1060px,100%); min-height: 44px; padding-inline: 6px; box-sizing: border-box; align-items: center; background: var(--theme-raised); }
 .videoPerformMatrix .videoPerformGroupStrip button, .videoPerformMatrix .videoPerformGroupStrip select, .videoPerformMatrix .videoPerformGroupStrip input { min-height: 44px; min-width: 44px; font-family: var(--theme-font-ui); font-size: 14px; margin: 0; }
 .videoPerformGroupStrip label { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0; }
 .videoPerformGroupStrip label input { width: 100%; min-width: 0; }
@@ -443,3 +453,12 @@
 .videoPerformGroupName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 .videoPerformGroupStrip button[aria-pressed="true"] { outline: 2px solid var(--theme-selected); outline-offset: -2px; }
 .videoPerformMatrixRow.grouped .videoPerformLayerName { padding-inline-start: 18px; box-shadow: inset 3px 0 var(--theme-line-strong); }
+
+/* Off-page runtime signals stay available without nesting a scroll area in the matrix. */
+.videoPerformOffpageList { position: fixed; z-index: 40; display: grid; gap: 6px; width: min(560px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; overscroll-behavior: contain; padding: 8px; box-sizing: border-box; border: 1px solid var(--theme-line-strong); background: var(--theme-panel); color: var(--theme-text); font-family: var(--theme-font-ui); font-size: 14px; }
+.videoPerformOffpageList header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.videoPerformOffpageList button { min-width: 44px; min-height: 44px; margin: 0; padding: 8px 12px; box-sizing: border-box; border: 1px solid var(--theme-line-strong); background: var(--theme-key); color: var(--theme-text); font: inherit; text-align: left; }
+.videoPerformOffpageList > button { display: flex; align-items: center; gap: 8px; }
+.videoPerformOffpageList > button > span[data-no-localize] { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.videoPerformOffpageList > button > strong { flex: 0 0 auto; }
+.videoPerformOffpageList button:focus-visible { outline: 3px solid var(--theme-focus); outline-offset: -3px; }

@@ -1,11 +1,11 @@
-import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import type { VideoEffectCatalog, VideoIsfControlSummary, VideoIsfEffectStageSummary, VideoIsfTempoSync, VideoIsfTempoSyncUnit, VideoLayerSummary } from "../types";
 import { boundedFxValue, builtinFxStagePresets, effectiveFxValue, FX_TEMPO_SYNC_COUNTS, fxControlLabel, fxControlValueText, fxDisplayScale, fxIsTimeControl, fxTempoSyncCountText, fxTempoSyncLabel, fxTempoSyncState, fxValidBpm, matchingFxStagePresets, randomizeFxStage, resyncFxStage, saveFxStagePreset, withFxTempoSync, type FxValue } from "../fxParameterModel";
 import "./VideoFxParameterEditor.css";
 import { VideoFxPointPad } from "./VideoFxPointPad";
 import { VideoFxImageInputs } from "./VideoFxImageInputs";
-import { fxImageInputs } from "../fxImageInputModel";
+import { fxAdditionalImageInputs, fxImageInputs } from "../fxImageInputModel";
 import { translateUiText } from "../uiLocalization";
 import type { FxLiveSession } from "../createFxLiveSession";
 import { controlMappingTargetData, type ControlMappingTarget } from "../controlMappingLearn";
@@ -22,6 +22,8 @@ interface VideoFxParameterEditorProps {
   history?: { canUndo: () => boolean; undo: () => unknown | Promise<unknown> };
   /** Event controls fire on Program, so an audition cannot offer them. */
   auditioning?: boolean;
+  /** Perform shows image routing on demand; full editors keep it inline. */
+  discloseImageInputs?: boolean;
   locale?: string;
   /** Global tempo (`snapshot.clock.bpm`) that beat and bar units are derived from. */
   bpm?: number;
@@ -43,6 +45,24 @@ export function VideoFxParameterEditor(props: VideoFxParameterEditorProps) {
   const [presetId, setPresetId] = createSignal("");
   const [pending, setPending] = createSignal(false);
   const [error, setError] = createSignal(false);
+  const [imagesOpen, setImagesOpen] = createSignal(false);
+  const [imageProblem, setImageProblem] = createSignal(false);
+  let imageObserver: MutationObserver | undefined;
+  const hasImageInputs = () => fxImageInputs(props.stage.source).length === 0 || fxAdditionalImageInputs(props.stage.source).length > 0;
+  const attachImageDisclosure = (element: HTMLDetailsElement) => {
+    imageObserver?.disconnect();
+    const revealProblem = () => {
+      const problem = Boolean(element.querySelector('[role="alert"]'));
+      setImageProblem(problem);
+      if (problem) { setImagesOpen(true); element.open = true; }
+    };
+    // The existing image editor owns validation and rejected-command messages.
+    // A disclosure observes that presentation only, never duplicating its rules.
+    imageObserver = new MutationObserver(revealProblem);
+    imageObserver.observe(element, { childList: true, subtree: true });
+    queueMicrotask(revealProblem);
+  };
+  onCleanup(() => imageObserver?.disconnect());
   const identity = createMemo(() => [props.projectEpoch, props.identity, props.stageId ?? "", props.stage.source_path ?? "", props.stage.source].join(":"));
   createEffect(() => { identity(); setPresetId(""); setName(""); });
   createEffect(() => setControls(reconcile(props.stage.controls, { key: "name" })));
@@ -120,9 +140,9 @@ export function VideoFxParameterEditor(props: VideoFxParameterEditorProps) {
   };
   return (
     <div class="videoFxParameterEditor" data-fx-parameter-editor>
-      <VideoFxImageInputs identity={identity()} layerId={props.layerId} stage={props.stage}
+      <Show when={!props.discloseImageInputs}><VideoFxImageInputs identity={identity()} layerId={props.layerId} stage={props.stage}
         layers={props.availableLayers} catalog={props.effectCatalog} locale={props.locale}
-        disabled={disabled()} onSetStage={applyImageStage} />
+        disabled={disabled()} onSetStage={applyImageStage} /></Show>
       <For each={controls}>{(control) => (
         <div class="videoFxParameter" data-perform-fx-control={control.name} data-perform-fx-kind={control.kind}
           data-video-isf-control-kind={control.kind} data-video-isf-control-name={control.name}>
@@ -176,6 +196,18 @@ export function VideoFxParameterEditor(props: VideoFxParameterEditorProps) {
           <Show when={control.kind !== "Event"}><div class="videoFxParameterFoot"><Show when={control.kind !== "Color"} fallback={<span />}><span><span>Range</span>: <span data-no-localize>{fxControlValueText(control, props.stage, control.minimum)} – {fxControlValueText(control, props.stage, control.maximum)}</span></span></Show><button type="button" disabled={disabled()} onClick={() => resetControl(control)}>Reset default</button></div></Show>
         </div>
       )}</For>
+      <Show when={props.discloseImageInputs && hasImageInputs()}>
+        <details ref={attachImageDisclosure} class="videoFxImageDisclosure" data-fx-image-disclosure data-fx-image-error-present={imageProblem()}
+          open={imagesOpen()} onToggle={event => {
+            if (imageProblem() && !event.currentTarget.open) event.currentTarget.open = true;
+            setImagesOpen(event.currentTarget.open);
+          }}>
+          <summary>{translateUiText("Image inputs", props.locale === "ja" ? "ja" : "en")}</summary>
+          <VideoFxImageInputs identity={identity()} layerId={props.layerId} stage={props.stage}
+            layers={props.availableLayers} catalog={props.effectCatalog} locale={props.locale}
+            disabled={disabled()} onSetStage={applyImageStage} />
+        </details>
+      </Show>
       <div class="videoFxParameterActions">
         <button type="button" data-fx-randomize disabled={disabled() || controls.every((control) => control.kind === "Event")} onClick={() => void apply(randomizeFxStage(props.stage))}>Randomize</button>
         <button type="button" data-fx-undo disabled={disabled() || !canUndo()} onClick={() => {

@@ -1,8 +1,7 @@
-/* ---- FX editor clarity pass (2026-10-14).
-   The editor reads top-down as numbered steps: 1 target fixtures, 2 the
-   channels that move, then the family settings, palettes, and the save
-   dock, which stays pinned to the bottom of whichever column scrolls. */
-.sceneFxEditor .sceneFxStepTitle {
+/* FX editing keeps the selected form in view. Creation, rack management, and
+   target selection are disclosed inside the same Scene Settings scrollport. */
+.sceneFxEditor .sceneFxStepTitle,
+.sceneSettingsPane [data-scene-fx-disclosure="targets"] .sceneFxStepTitle {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -13,7 +12,8 @@
   font-weight: 700;
 }
 
-.sceneFxEditor .sceneFxStepTitle::before {
+.sceneFxEditor .sceneFxStepTitle::before,
+.sceneSettingsPane [data-scene-fx-disclosure="targets"] .sceneFxStepTitle::before {
   content: attr(data-fx-step);
   display: inline-grid;
   flex: 0 0 auto;
@@ -164,4 +164,211 @@
 
 .sceneSettingsPane .sceneFxEditor .effectActionDock .effectSubmitActions:has(> .effectOutputModeBadge) {
   grid-template-columns: auto minmax(0, 1fr) minmax(120px, auto) minmax(90px, auto);
+}
+
+.sceneSettingsPane[data-scene-settings-surface="fx"] .sceneSettingsScroller {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: none;
+  grid-auto-rows: max-content;
+  align-content: start;
+  overflow: auto;
+}
+
+.sceneSettingsPane .sceneFxDisclosureControls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sceneSettingsPane .sceneFxDisclosureControls > details {
+  padding: 0;
+}
+
+.sceneSettingsPane .sceneFxDisclosureControls > details[open] {
+  grid-column: 1 / -1;
+}
+
+.sceneSettingsPane [data-scene-fx-disclosure] {
+  display: block;
+  min-width: 0;
+}
+
+.sceneSettingsPane [data-scene-fx-disclosure] > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px !important;
+  padding: 6px;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+.sceneSettingsPane [data-scene-fx-disclosure] > summary::before {
+  content: "+";
+  flex: 0 0 auto;
+  color: var(--theme-muted);
+}
+
+.sceneSettingsPane [data-scene-fx-disclosure][open] > summary::before {
+  content: "−";
+}
+
+.sceneSettingsPane [data-scene-fx-disclosure] > summary > strong {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.sceneSettingsPane [data-scene-fx-disclosure]:not([open]) > :not(summary) {
+  display: none !important;
+}
+
+.sceneSettingsPane .sceneFxDisclosureBody {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px;
+}
+
+.sceneSettingsPane .sceneFxDisclosureBody > p {
+  margin: 0;
+}
+
+.sceneSettingsPane .sceneFxChooserSection .effectFamilyChooser {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+}
+
+.sceneSettingsPane .sceneFxTargetsDisclosure {
+  border: 1px solid var(--theme-line);
+  background: var(--theme-panel);
+  padding: 0;
+}
+
+.sceneSettingsPane [data-scene-fx-target-summary] {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sceneSettingsPane .sceneFxSelectedLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sceneSettingsPane [data-scene-fx-disclosure="targets"] .sceneEffectTargetEditor {
+  min-inline-size: 0;
+}
+
+.sceneSettingsPane [data-scene-fx-disclosure="targets"] .sceneEffectTargetChipGrid {
+  max-height: none;
+  overflow: visible;
+}
+
+.sceneSettingsPane [data-scene-fx-disclosure="targets"] .sceneEffectTargetSummary > strong,
+.sceneSettingsPane [data-scene-fx-disclosure="targets"] .sceneEffectTargetSummary > span {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+/* Point lists belong to the Scene Settings scrollport, including MOVE's
+   formerly height-limited inspector and VALUE/CURVE's 168px lists. */
+.sceneSettingsPane .sceneFxEditor .moveEffectEditorPanel {
+  grid-template-rows: auto auto;
+  height: auto;
+  overflow: visible;
+}
+
+.sceneSettingsPane .sceneFxEditor .moveEffectEditorSurface,
+.sceneSettingsPane .sceneFxEditor .moveEffectInspector,
+.sceneSettingsPane .sceneFxEditor .moveEffectPointPanel {
+  overflow: visible;
+}
+
+.sceneSettingsPane .sceneFxEditor .moveEffectInspector,
+.sceneSettingsPane .sceneFxEditor .moveEffectPointPanel {
+  grid-template-rows: none;
+  grid-auto-rows: max-content;
+}
+
+.sceneSettingsPane .sceneFxEditor .moveEffectPointList {
+  max-height: none;
+  overflow: visible;
+}
+
+/* A 29px action track cannot contain the pane's existing 40px buttons.
+   Keep those targets and put numerical fields on the following row. */
+.sceneSettingsPane .sceneFxEditor .valueEffectPointPanel .moveEffectPointRow {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.sceneSettingsPane .sceneFxEditor .valueEffectPointPanel .moveEffectPointRow > .moveEffectPointSelect {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.sceneSettingsPane .sceneFxEditor .valueEffectPointPanel .moveEffectPointRow > .moveEffectPointAction {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+}
+
+.sceneSettingsPane .sceneFxEditor .moveEffectPointPanel .moveEffectPointRow {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.sceneSettingsPane .sceneFxEditor .moveEffectPointPanel .moveEffectPointRow > .moveEffectPointSelect {
+  grid-column: 1 / span 3;
+  grid-row: 1;
+}
+
+.sceneSettingsPane .sceneFxEditor .moveEffectPointPanel .moveEffectPointRow > label {
+  grid-column: span 3;
+}
+
+.sceneSettingsPane .sceneFxEditor .moveEffectPointPanel .moveEffectPointRow > .moveEffectPointAction {
+  grid-row: 1;
+  justify-self: end;
+}
+
+/* Keep colour and hex first; position needs a readable numerical field rather
+   than sharing the 40px action columns on a narrow Scene Settings pane. */
+.sceneSettingsPane .sceneFxEditor .colorEffectStopRow {
+  grid-template-columns: 16px 40px minmax(0, 1fr) repeat(3, 40px);
+}
+
+.sceneSettingsPane .sceneFxEditor .colorEffectStopNumber {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.sceneSettingsPane .sceneFxEditor .colorEffectStopPicker {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.sceneSettingsPane .sceneFxEditor .colorEffectStopHex {
+  grid-column: 3 / -1;
+  grid-row: 1;
+}
+
+.sceneSettingsPane .sceneFxEditor .colorEffectStopPosition {
+  grid-column: 1 / span 3;
+  grid-row: 2;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.sceneSettingsPane .sceneFxEditor .colorEffectStopPosition > span {
+  overflow: visible;
+  white-space: normal;
+}
+
+.sceneSettingsPane .sceneFxEditor .colorEffectStopAction {
+  grid-row: 2;
 }

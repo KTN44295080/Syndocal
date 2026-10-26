@@ -1,0 +1,126 @@
+/* The popover owns scrolling. Tool panels stay mounted so a draft survives
+   switching Bank / Phases / Audio, but only the selected panel is exposed. */
+.timelineBankCreateDisclosure > summary[hidden] {
+  display: none !important;
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineToolsTabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineToolsTabs > button {
+  min-width: 44px;
+  min-height: 44px;
+  height: auto;
+  white-space: nowrap;
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineToolsTabs > button[aria-selected="true"] {
+  border-color: var(--theme-focus);
+  background: var(--theme-key);
+  color: var(--theme-text);
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel [data-timeline-tools-panel] {
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel [data-timeline-tools-panel][hidden] {
+  display: none !important;
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel [data-timeline-tools-panel] > details > summary {
+  display: none;
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineBankBody,
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelinePhaseEditorBody,
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineCueAudioEditorBody,
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineCueAudioStatusSummary {
+  max-height: none;
+  min-width: 0;
+  overflow: visible;
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineBankBody {
+  padding-top: 10px;
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineBankCreateDisclosure {
+  margin-top: 10px;
+  min-width: 0;
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineBankCreateDisclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineBankCreateDisclosure > summary::before {
+  content: "+";
+  flex: 0 0 auto;
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineBankCreateDisclosure[open] > summary::before {
+  content: "−";
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineBankCreateDisclosure:not([open]) > .timelineBankCreate {
+  display: none;
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineBankSelect > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineFollowEditor {
+  min-inline-size: 0;
+}
+
+/* Preserve the 44px phase hit area inside the rail's two 1px borders. */
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelinePhaseRail {
+  box-sizing: border-box;
+  min-height: 46px;
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelinePhaseRow > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Keep the seven range actions at their existing target size. The readout
+   gets its own row instead of forcing a horizontal scroll at 336px inside. */
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineViewportToolbar,
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineDirectToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  box-sizing: border-box;
+  min-width: 0;
+  overflow: visible;
+  scrollbar-gutter: auto;
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineViewportToolbar > button,
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineDirectToolbar button {
+  flex-shrink: 0;
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.timelineOperatorBar .timelineToolsDisclosurePanel .timelineVisibleRange {
+  flex: 1 1 100%;
+  min-width: 0;
+  max-width: 100%;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
