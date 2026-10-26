@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
-const [controllerSource, appSource, outputControlSource, overlaySource, operatorPolicySource] = await Promise.all([
+const [controllerSource, appSource, workspaceViewSource, outputControlSource, overlaySource, operatorPolicySource] = await Promise.all([
   readFile(new URL("../src/safetyBlackoutRuntimeController.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../src/components/AppWorkspaceView.tsx", import.meta.url), "utf8"),
   readFile(new URL("../src/outputControlController.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/components/OperatorLockOverlay.tsx", import.meta.url), "utf8"),
   readFile(new URL("../src/operatorPolicy.ts", import.meta.url), "utf8"),
@@ -80,20 +81,21 @@ assert.equal(unknownCalls, 1);
 
 // Production wiring keeps engage separate from legacy release, while Full
 // Lock exposes only safer-direction button actions.
-assert.match(appSource, /targetBlackout\.engageSafetyBlackout\(\)/);
+// The Full Lock engage callback is wired by AppWorkspaceView (extracted from App).
+assert.match(workspaceViewSource, /onSetAllBlackout=\{\(\) => void targetBlackout\.engageSafetyBlackout\(\)\}/);
 const targetControllerSource = await readFile(new URL("../src/createTargetBlackoutController.ts", import.meta.url), "utf8");
 const chromeSource = await readFile(new URL("../src/components/WorkspaceChrome.tsx", import.meta.url), "utf8");
 assert.match(targetControllerSource, /!enabled && target !== "video" && options\.safetyBlackoutEngaged/);
 assert.match(targetControllerSource, /await executeBlackoutRelease\(options\.invoke\)/);
-assert.match(appSource, /blackout=\{snapshot\(\)\.authored_blackout \|\| snapshot\(\)\.safety_blackout_engaged\}/);
+assert.match(workspaceViewSource, /blackout=\{snapshot\(\)\.authored_blackout \|\| snapshot\(\)\.safety_blackout_engaged\}/);
 assert.doesNotMatch(chromeSource, /safety-blackout-release/, "user requested one DMX control instead of an independent SAFE control");
 assert.match(
   outputControlSource,
   /export async function executeBlackoutRelease[\s\S]*?return executeOutputControlOperation\([\s\S]*?kind: "release_blackout"/s,
   "Blackout release controller must use the authenticated R4 OutputControl operation",
 );
-assert.doesNotMatch(
-  appSource,
+for (const source of [appSource, workspaceViewSource]) assert.doesNotMatch(
+  source,
   /invoke\("set_blackout",\s*\{\s*enabled:\s*false\s*\}\)/,
   "S0 safety-blackout release must never fall back to the legacy setter",
 );

@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
-const [controllerSource, snapshotRefreshSource, appSource, automationSource, keyboardSource, shortcutSource, operatorSource, cuePanelSource, rustSource] = await Promise.all([
+const [controllerSource, snapshotRefreshSource, appSource, persistentViewSource, automationSource, keyboardSource, shortcutSource, operatorSource, cuePanelSource, rustSource] = await Promise.all([
   readFile(new URL("../src/timelineTransportRuntimeController.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/timelineSnapshotRefreshController.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../src/components/PersistentWorkspaceView.tsx", import.meta.url), "utf8"),
   readFile(new URL("../src/createTimelineAutomationController.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/createAppKeyboardController.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/appShortcutActions.ts", import.meta.url), "utf8"),
@@ -555,8 +556,9 @@ assert.match(
   /<TimelineOperatorBar[\s\S]*?onPause=\{pauseTimeline\}[\s\S]*?onPlay=\{playTimeline\}/,
   "rendered Timeline operator controls must use the shared callbacks",
 );
+// The cue panel is mounted by PersistentWorkspaceView (extracted from App).
 assert.match(
-  appSource,
+  persistentViewSource,
   /<TimelineCueEventsPanel[\s\S]*?onPause=\{pauseTimeline\}[\s\S]*?onPlay=\{playTimeline\}/,
   "rendered Timeline cue-panel controls must use the shared callbacks",
 );

@@ -4,8 +4,9 @@ import { readFile } from "node:fs/promises";
 const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
 
-const [app, controller, panel, types, localization] = await Promise.all([
+const [app, workspaceView, controller, panel, types, localization] = await Promise.all([
   read("src/App.tsx"),
+  read("src/components/AppWorkspaceView.tsx"),
   read("src/createVideoRuntimeController.ts"),
   read("src/components/VideoRuntimeStatusPanels.tsx"),
   read("src/types.ts"),
@@ -95,8 +96,9 @@ assert.match(
   /clearInterval\(externalVideoTransportStatusTimer\)/,
   "dedicated transport status poll must be cleaned up",
 );
+// The status panel props are assembled by AppWorkspaceView (extracted from App).
 assert.match(
-  app,
+  workspaceView,
   /get captureFaultRows\(\) \{ return externalVideoTransportCaptureFaultRows\(\); \}/,
   "structured fault rows must be wired to the status panel",
 );

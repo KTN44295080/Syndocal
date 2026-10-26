@@ -11,6 +11,7 @@ const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.u
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
 const dvcImportController = await readFile(new URL("../src/dvcImportController.ts", import.meta.url), "utf8");
 const types = await readFile(new URL("../src/types.ts", import.meta.url), "utf8");
+const setupIoView = await readFile(new URL("../src/components/SetupIoWorkspaceView.tsx", import.meta.url), "utf8");
 const midiPanel = await readFile(new URL("../src/components/MidiControlMappingPanel.tsx", import.meta.url), "utf8");
 const controlController = await readFile(new URL("../src/createControlInputController.ts", import.meta.url), "utf8");
 
@@ -55,7 +56,7 @@ const checks = [
     && !app.includes("replaceProjectControlMappings(report.midi_mappings ?? [], [], report.dmx_mappings ?? [])"),
   "DVC import publishes MIDI and DMX mappings in the paired backend project result instead of racing a frontend replacement"],
   [dvcImportController.includes("report.midi_mappings?.length ?? 0} MIDI and ${report.dmx_mappings?.length ?? 0} DMX mappings"), "operator import status reports the restored MIDI and DMX mapping counts"],
-  [controlController.includes("const updateMidiMapping") && app.includes("onUpdateMapping={updateMidiMapping}"), "operator can update feedback without replacing the mapping route"],
+  [controlController.includes("const updateMidiMapping") && setupIoView.includes("onUpdateMapping={updateMidiMapping}"), "operator can update feedback without replacing the mapping route"],
   [backend.includes('name("syndocal-midi-feedback".to_string())') && backend.includes("MIDI_FEEDBACK_REFRESH_INTERVAL") && backend.includes("TELEMETRY_DMX_TARGET_FRAME_RATE_HZ") && backend.includes("engine.inspect_snapshot"), "auto feedback reads the published snapshot without full clones at the engine's 44 Hz rate"],
   [backend.includes("fn set_midi_feedback_auto(") && backend.includes("fn midi_feedback_status("), "backend exposes explicit auto-feedback configuration and health commands"],
   [controlController.includes('"set_midi_feedback_auto"') && controlController.includes('"midi_feedback_status"') && !controlController.includes("midiFeedbackTimer"), "frontend configures the backend worker instead of sending feedback on a 500 ms UI timer"],

@@ -34,10 +34,18 @@ const localizationRuntime = await import(`data:text/javascript;base64,${Buffer.f
 const displayAddHelperStart = appSource.indexOf("const staleDisplayAddRecoveryMessages = new Set([");
 // App.tsx is checked out with CRLF in the Windows workspace. Search for the
 // declaration itself rather than assuming a particular blank-line encoding.
-const displayAddHelperEnd = appSource.indexOf("export default function App", displayAddHelperStart);
+// App.tsx now defines createAppView() (the view model factory) directly after
+// the helper block; `export default function App` follows it far later, so the
+// helper slice must stop at the factory declaration.
+const displayAddHelperEnd = appSource.indexOf("function createAppView()", displayAddHelperStart);
 assert.ok(
   displayAddHelperStart >= 0 && displayAddHelperEnd > displayAddHelperStart,
   "display Add post-commit refresh helper boundary must remain discoverable",
+);
+assert.ok(
+  appSource.slice(displayAddHelperStart, displayAddHelperEnd).length < 4000
+    && !appSource.slice(displayAddHelperStart, displayAddHelperEnd).includes("return ("),
+  "display Add helper slice must stay a small pure-helper block and never swallow the App view factory or JSX",
 );
 const displayAddHelperRuntime = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(
   `${appSource.slice(displayAddHelperStart, displayAddHelperEnd)}\nexport { displayAddPostCommitRefreshResult };`,

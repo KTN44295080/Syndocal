@@ -9,6 +9,7 @@ const selectionStorageSource = await readFile(
   "utf8",
 );
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const appWorkspaceView = await readFile(new URL("../src/components/AppWorkspaceView.tsx", import.meta.url), "utf8");
 const viewportContainment = await readFile(new URL("./check-viewport-containment.mjs", import.meta.url), "utf8");
 const disappearanceContract = await readFile(
   new URL("./live-audio-backend-disappearance-contract.mjs", import.meta.url),
@@ -1248,7 +1249,7 @@ assert.ok(
 assert.ok(app.includes("stale: false"), "the frontend status default must be healthy/stopped");
 assert.ok(app.includes("safety_clear_pending: false"));
 assert.ok(
-  app.includes("get graphs() { return snapshot().node_graphs; }"),
+  appWorkspaceView.includes("get graphs() { return snapshot().node_graphs; }"),
   "the compact Audio Reactive status strip must keep reading backend Node Graph state",
 );
 assert.ok(app.includes("const requestEpoch = liveAudioStatusRequests.beginPoll()"));
@@ -1295,7 +1296,7 @@ assert.match(
   "the stale device format must be localized instead of leaving its dynamic unavailable state English-only",
 );
 assert.ok(
-  [...app.matchAll(/localize: \(source(?:\s*:\s*string)?\) => translateUiText\(source, uiLocale\(\)\)/g)].length >= 3,
+  [...[app, appWorkspaceView].join("\n").matchAll(/localize: \(source(?:\s*:\s*string)?\) => translateUiText\(source, uiLocale\(\)\)/g)].length >= 3,
   "both mounted Live Audio rails must receive the same App-owned locale source without disturbing existing localized callers",
 );
 assert.ok(

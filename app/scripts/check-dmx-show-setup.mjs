@@ -15,7 +15,7 @@ const panel = read("src/components/DmxOutputConfigPanel.tsx");
 const outputDiagnosticsPanel = read("src/components/OutputDiagnosticsPanel.tsx");
 const styles = read("src/styles.css");
 const controller = read("src/createOutputDiagnosticsController.ts");
-const app = read("src/App.tsx");
+const setupIoView = read("src/components/SetupIoWorkspaceView.tsx");
 const nativeMain = read("src-tauri/src/main.rs");
 const ownershipStart = controller.indexOf("export const isBothOutputOwnershipReady =");
 const decisionStart = controller.indexOf("export const decideBothOutputLeasePreparation =");
@@ -229,9 +229,9 @@ assert.match(preparation, /if \(!options\.safetyBlackout\(\)\)/,
 assert.doesNotMatch(preparation, /enableShowSpoutOutputs|resetShowSpoutOutputs/,
   "quick setup must not alter the independent Spout route");
 
-assert.match(app, /showDmxPreparationBusy=\{showDmxPreparationBusy\(\)\}/);
-assert.match(app, /showDmxPreparationStage=\{showDmxPreparationStage\(\)\}/);
-assert.match(app, /onPrepareShowDmx=\{prepareShowDmx\}/);
+assert.match(setupIoView, /showDmxPreparationBusy=\{showDmxPreparationBusy\(\)\}/);
+assert.match(setupIoView, /showDmxPreparationStage=\{showDmxPreparationStage\(\)\}/);
+assert.match(setupIoView, /onPrepareShowDmx=\{prepareShowDmx\}/);
 
 assert.match(panel, /const explicitKey = selectedSerialPortKey\(\)/);
 assert.match(panel, /persistedBindingKey/);

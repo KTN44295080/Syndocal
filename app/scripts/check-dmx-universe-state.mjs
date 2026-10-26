@@ -75,13 +75,18 @@ assert.equal(sameNetworkDmxRoute(undefined, route("ArtNet", 2)), false);
 // One panel owns every DMX output universe; the former separate editors are
 // row groups of its table.
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const setupIoView = await readFile(new URL("../src/components/SetupIoWorkspaceView.tsx", import.meta.url), "utf8");
 const panel = await readFile(new URL("../src/components/DmxOutputConfigPanel.tsx", import.meta.url), "utf8");
 const usbRows = await readFile(new URL("../src/components/UsbDmxCablesPanel.tsx", import.meta.url), "utf8");
 const networkRows = await readFile(new URL("../src/components/NetworkDmxRoutesPanel.tsx", import.meta.url), "utf8");
-assert.doesNotMatch(app, /<UsbDmxCablesPanel|<NetworkDmxRoutesPanel|<DmxUniverseOverview/,
-  "the DMX zone must not mount separate cable, network or overview sections");
-assert.equal([...app.matchAll(/<DmxOutputConfigPanel\b/g)].length, 1);
-assert.match(app, /<DmxOutputConfigPanel[\s\S]*?onApplyNetworkRoutes=\{applyDmxOutputRoutes\}[\s\S]*?onStopUsbDmxUniverse=\{stopUsbDmxUniverse\}/);
+// The DMX zone is mounted by SetupIoWorkspaceView (extracted from App); neither may mount the former sections.
+for (const [name, mount] of [["App", app], ["SetupIoWorkspaceView", setupIoView]]) {
+  assert.doesNotMatch(mount, /<UsbDmxCablesPanel|<NetworkDmxRoutesPanel|<DmxUniverseOverview/,
+    `${name}: the DMX zone must not mount separate cable, network or overview sections`);
+}
+assert.equal([...app.matchAll(/<DmxOutputConfigPanel\b/g)].length, 0, "App must not mount a second DMX output panel");
+assert.equal([...setupIoView.matchAll(/<DmxOutputConfigPanel\b/g)].length, 1);
+assert.match(setupIoView, /<DmxOutputConfigPanel[\s\S]*?onApplyNetworkRoutes=\{applyDmxOutputRoutes\}[\s\S]*?onStopUsbDmxUniverse=\{stopUsbDmxUniverse\}/);
 assert.match(usbRows, /<tbody class="dmxUniverseGroup" data-usb-dmx-cables>/);
 assert.match(networkRows, /<tbody class="dmxUniverseGroup" data-network-dmx-routes>/);
 assert.match(panel, /<tfoot>[\s\S]*data-dmx-universe-add[\s\S]*<option value="Usb" disabled=\{!props\.usb\.canAddCable\(\)\}>USB-DMX<\/option>/,
