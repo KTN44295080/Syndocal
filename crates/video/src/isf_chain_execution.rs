@@ -56,6 +56,38 @@ pub(super) struct PendingLayerChain {
 }
 
 impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
+    #[cfg(test)]
+    pub(crate) fn prepare_native_cpu_invocation(
+        &mut self,
+        chain: ResolvedVideoEffectChain,
+        input: Arc<VideoFrame>,
+        render_input_key: Option<protocol::VideoRenderInputKey>,
+        cancellation: Option<&dyn VideoRenderCancellation>,
+    ) -> Result<crate::isf_native_gpu::PreparedNativeCpuInvocation, VideoRuntimeError> {
+        check_runtime_cancellation(cancellation)?;
+        let prepared = if resolved_chain_executes(&chain) {
+            self.prepare_effect_chain(
+                Cow::Owned(chain),
+                input.layer_id,
+                render_input_key,
+                cancellation,
+            )?
+        } else {
+            PreparedChain {
+                source: Cow::Owned(chain),
+                stages: Vec::new(),
+                keys: Vec::new(),
+                faults: Vec::new(),
+            }
+        };
+        Ok(crate::isf_native_gpu::PreparedNativeCpuInvocation::new(
+            input,
+            prepared,
+            self.isf_frame_inputs.date,
+            self.isf_audio_frame.clone(),
+        ))
+    }
+
     fn prepare_effect_chain<'chain>(
         &mut self,
         chain: Cow<'chain, ResolvedVideoEffectChain>,
@@ -159,7 +191,22 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             }
         };
         if prepared.stages.is_empty() {
-            runtime.advance_stage_local_chain_without_prepared_stages();
+            if let Err(error) = runtime.advance_stage_local_chain_without_prepared_stages() {
+                let mut faults = prepared.faults;
+                faults.push(video_effect_fault(
+                    VideoEffectFaultContext {
+                        scope: prepared.source.scope.clone(),
+                        chain_id: prepared.source.chain_id,
+                        stage_id: None,
+                        effect_id: None,
+                        render_input_key: None,
+                        stage_index: None,
+                        stage_label: None,
+                    },
+                    error.message,
+                ));
+                return Ok((frame, faults));
+            }
             return Ok((frame, prepared.faults));
         }
         check_runtime_cancellation(cancellation)?;

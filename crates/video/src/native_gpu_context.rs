@@ -1019,6 +1019,57 @@ impl NativeGpuOwner {
         self.core.budget.snapshot()
     }
 
+    /// Validate and return a wholly unused serial CPU admission envelope.
+    /// The caller keeps exclusive `&mut NativeGpuOwner` until all exact chunk
+    /// transactions finish; no resource, clock, upload or FX has run yet.
+    pub(crate) fn admit_serial_cpu_plan(
+        &mut self,
+        reservation: FrameReservation,
+        plan: &NativeAllocationPlan,
+    ) -> Result<(), (NativeGpuFault, FrameReservation)> {
+        let valid = self
+            .core
+            .budget
+            .validate_unused_exact_plan(&reservation, plan)
+            .and_then(|()| self.check_device())
+            .and_then(|()| {
+                if !self.core.frames.is_empty() {
+                    return Err(self.core.fault(
+                        Some(plan.frame()),
+                        GpuPhase::IsfBatch,
+                        NativeGpuFaultKind::StateMismatch,
+                        "serial CPU admission requires a drained GPU owner",
+                    ));
+                }
+                Ok(())
+            });
+        // Release only a matching own root. On any failure return the token;
+        // foreign/bound/child capacity is neither refunded nor orphaned.
+        let valid = valid.and_then(|()| self.core.budget.refund_unused_root(&reservation));
+        valid.map_err(|fault| (fault, reservation))
+    }
+
+    pub(crate) fn discard_unsubmitted_reservation(
+        &mut self,
+        reservation: FrameReservation,
+    ) -> Result<(), (NativeGpuFault, FrameReservation)> {
+        if !self.core.frames.is_empty() {
+            return Err((
+                self.core.fault(
+                    Some(reservation.frame()),
+                    GpuPhase::IsfBatch,
+                    NativeGpuFaultKind::StateMismatch,
+                    "cannot discard a reservation while a frame is pending",
+                ),
+                reservation,
+            ));
+        }
+        self.core
+            .budget
+            .refund_unused_root(&reservation)
+            .map_err(|fault| (fault, reservation))
+    }
+
     pub(crate) fn begin_frame(
         &mut self,
         frame: NativeFrameId,

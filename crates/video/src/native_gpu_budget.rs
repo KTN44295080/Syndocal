@@ -28,9 +28,11 @@ pub(crate) enum ChargeKind {
     CpuSnapshot,
     CpuLastValid,
     CachedEffectResource,
+    /// Reserved peak capacity only. Never bound to a physical allocation.
+    SerialCpuAdmission,
 }
 
-const KIND_COUNT: usize = 10;
+const KIND_COUNT: usize = 11;
 
 #[derive(Clone, Debug)]
 struct PlannedAllocation {
@@ -51,6 +53,8 @@ impl PartialEq for PlannedAllocation {
 impl Eq for PlannedAllocation {}
 
 /// Exact new allocations plus aliases of allocations already in the ledger.
+/// SerialCpuAdmission is an explicit, non-bindable whole-call peak envelope;
+/// the serial executor returns it before issuing exact physical chunk plans.
 /// `merge` permits G and P to contribute to one reservation before execution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NativeAllocationPlan {
@@ -189,6 +193,7 @@ pub(crate) struct FrameReservation {
     context: GpuContextId,
     frame: NativeFrameId,
     remaining: u64,
+    granted: u64,
 }
 
 impl FrameReservation {
@@ -399,6 +404,7 @@ impl NativeGpuBudget {
             context: self.context,
             frame: quote.plan.frame,
             remaining: quote.plan.requested,
+            granted: quote.plan.requested,
         };
         self.reservations.insert(
             id,
@@ -520,6 +526,64 @@ impl NativeGpuBudget {
         Ok(())
     }
 
+    /// A serial CPU admission is an unused whole-call envelope, not a G/P
+    /// sub-plan. It may be returned before issuing exact, drained chunk plans
+    /// only when every original slot and alias is still present at the root.
+    pub(crate) fn validate_unused_exact_plan(
+        &self,
+        reservation: &FrameReservation,
+        plan: &NativeAllocationPlan,
+    ) -> Result<(), NativeGpuFault> {
+        self.validate_unused_root(reservation)?;
+        self.validate_reserved_plan(reservation, plan)?;
+        let root = &self.reservations[&reservation.id];
+        if root.entries != plan.new
+            || root.existing != plan.existing
+            || reservation.remaining != plan.requested
+            || self
+                .reservations
+                .iter()
+                .any(|(id, record)| *id != reservation.id && record.root == reservation.id)
+        {
+            return Err(self.fault(
+                Some(plan.frame),
+                NativeGpuFaultKind::IdentityMismatch,
+                "serial admission requires its exact wholly unused root reservation",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_unused_root(&self, reservation: &FrameReservation) -> Result<(), NativeGpuFault> {
+        self.validate_frame_reservation(reservation, reservation.frame)?;
+        if reservation.remaining != reservation.granted
+            || self
+                .reservations
+                .iter()
+                .any(|(id, record)| *id != reservation.id && record.root == reservation.id)
+        {
+            return Err(self.fault(
+                Some(reservation.frame),
+                NativeGpuFaultKind::StateMismatch,
+                "serial reservation has already been bound or split",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Borrow the affine token until all validation/revision checks succeed;
+    /// the caller can return it intact on any error instead of stranding bytes.
+    pub(crate) fn refund_unused_root(
+        &mut self,
+        reservation: &FrameReservation,
+    ) -> Result<(), NativeGpuFault> {
+        self.validate_unused_root(reservation)?;
+        let revision = self.next_revision(Some(reservation.frame))?;
+        self.reservations.remove(&reservation.id);
+        self.revision = revision;
+        Ok(())
+    }
+
     /// A phase may spend only the sub-reservation split from its admitted
     /// frame root, not another independently reserved plan for the same frame.
     pub(crate) fn validate_subreservation(
@@ -549,6 +613,13 @@ impl NativeGpuBudget {
         actual_capacity_bytes: u64,
     ) -> Result<AllocationCharge, NativeGpuFault> {
         self.validate_reservation(reservation, reservation.frame)?;
+        if kind == ChargeKind::SerialCpuAdmission {
+            return Err(self.fault(
+                Some(reservation.frame),
+                NativeGpuFaultKind::StateMismatch,
+                "a serial admission envelope is not a physical allocation",
+            ));
+        }
         if id.context != self.context
             || !self.unbound_ids.contains(&id)
             || self.allocations.contains_key(&id)
@@ -668,6 +739,7 @@ impl NativeGpuBudget {
             context: self.context,
             frame: plan.frame,
             remaining: plan.requested,
+            granted: plan.requested,
         })
     }
 

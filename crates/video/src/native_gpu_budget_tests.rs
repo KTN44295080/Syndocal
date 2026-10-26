@@ -1,10 +1,246 @@
 use super::*;
 
+#[test]
+fn serial_cpu_unused_root_refund_rejects_forged_foreign_split_and_bound_authority() {
+    let mut budget = NativeGpuBudget::new(context());
+    let original = plan(ChargeKind::SerialCpuAdmission, 128);
+    let forged = plan(ChargeKind::SerialCpuAdmission, 128);
+    let reservation = budget.reserve(budget.quote(&original).unwrap()).unwrap();
+    let before = budget.snapshot();
+    assert_eq!(
+        budget
+            .validate_unused_exact_plan(&reservation, &forged)
+            .unwrap_err()
+            .kind,
+        NativeGpuFaultKind::IdentityMismatch,
+        "an equal-size independently authored envelope is not admission authority"
+    );
+    assert_eq!(budget.snapshot(), before);
+    budget
+        .validate_unused_exact_plan(&reservation, &original)
+        .unwrap();
+    budget.refund_unused_root(&reservation).unwrap();
+    assert_eq!(budget.snapshot().managed_bytes(), 0);
+
+    let mut foreign = NativeGpuBudget::new(context());
+    let reservation = foreign.reserve(foreign.quote(&original).unwrap()).unwrap();
+    let before = budget.snapshot();
+    let foreign_before = foreign.snapshot();
+    assert_eq!(
+        budget.refund_unused_root(&reservation).unwrap_err().kind,
+        NativeGpuFaultKind::IdentityMismatch
+    );
+    assert_eq!(budget.snapshot(), before);
+    assert_eq!(foreign.snapshot(), foreign_before);
+    foreign.refund_unused_root(&reservation).unwrap();
+    assert_eq!(foreign.snapshot().managed_bytes(), 0);
+
+    let child_plan = plan(ChargeKind::MappingBuffer, 64);
+    let mut whole = plan(ChargeKind::ActiveCpuInput, 32);
+    whole.merge(&child_plan).unwrap();
+    let mut root = budget.reserve(budget.quote(&whole).unwrap()).unwrap();
+    let child = budget.split_reservation(&mut root, &child_plan).unwrap();
+    let split = budget.snapshot();
+    assert_eq!(
+        budget
+            .validate_unused_exact_plan(&root, &whole)
+            .unwrap_err()
+            .kind,
+        NativeGpuFaultKind::StateMismatch
+    );
+    assert_eq!(
+        budget.refund_unused_root(&root).unwrap_err().kind,
+        NativeGpuFaultKind::StateMismatch
+    );
+    assert_eq!(
+        budget.refund_unused_root(&child).unwrap_err().kind,
+        NativeGpuFaultKind::StateMismatch,
+        "a valid child has the wrong lifecycle role for a root refund"
+    );
+    assert_eq!(
+        budget.snapshot(),
+        split,
+        "serial refusal must preserve both root and child capacity"
+    );
+    budget.cancel_reservation_tree(root).unwrap();
+    drop(child);
+    assert_eq!(budget.snapshot().managed_bytes(), 0);
+
+    let mut root = budget.reserve(budget.quote(&whole).unwrap()).unwrap();
+    let id = budget.next_allocation_id().unwrap();
+    let charge = budget
+        .bind_allocation(&mut root, id, ChargeKind::ActiveCpuInput, 32)
+        .unwrap();
+    let bound = budget.snapshot();
+    assert_eq!(
+        budget
+            .validate_unused_exact_plan(&root, &whole)
+            .unwrap_err()
+            .kind,
+        NativeGpuFaultKind::StateMismatch
+    );
+    assert_eq!(
+        budget.refund_unused_root(&root).unwrap_err().kind,
+        NativeGpuFaultKind::StateMismatch
+    );
+    assert_eq!(
+        budget.snapshot(),
+        bound,
+        "serial refusal must preserve physical charge and unused reservation"
+    );
+    budget.cancel_reservation_tree(root).unwrap();
+    assert_eq!(budget.snapshot().allocated_bytes, 32);
+    drop(charge);
+    let reaped = budget.try_reap(id).unwrap().unwrap();
+    budget.release_reaped(reaped).unwrap();
+    assert_eq!(budget.snapshot().managed_bytes(), 0);
+}
+
 fn context() -> GpuContextId {
     GpuContextId {
         owner_id: 7,
         device_generation: 1,
     }
+}
+
+#[test]
+fn canonical_cpu_cache_lru_credit_preserves_protected_and_external_owners_at_budget_limit() {
+    use crate::isf_runtime::{IsfInstanceKey, NativeCpuCacheEntry, NativeCpuCacheModel};
+    const MIB: u64 = 1024 * 1024;
+    let key = |stage| IsfInstanceKey {
+        namespace: (11, Some(3), false),
+        scope: Some(protocol::VideoEffectScope::Layer { layer_id: 1 }),
+        input: None,
+        chain_id: Some(protocol::VideoEffectChainId(901)),
+        stage_id: Some(protocol::VideoEffectStageId(stage)),
+        effect_id: None,
+        legacy_stage_index: stage as usize,
+        layer_id: 1,
+    };
+    // The reused stage is the oldest, two eviction candidates tie, and the
+    // 96 MiB cached image also has a live external owner outside the cache.
+    let weighted = [
+        (0, 64, 0, true),
+        (1, 160, 1, true),
+        (2, 80, 1, true),
+        (3, 96, 2, false),
+        (4, 48, 3, true),
+    ];
+    let entries = weighted
+        .into_iter()
+        .map(|(stage, mib, last_used, reclaimable)| {
+            (
+                key(stage),
+                NativeCpuCacheEntry {
+                    bytes: mib * MIB,
+                    last_used,
+                    reclaimable,
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+    let original = NativeCpuCacheModel::new(entries, 4);
+    let protected = key(0);
+    let initial_credit = original.reclaimable_bytes();
+    assert_eq!(initial_credit, 352 * MIB);
+    let mut exact = original.clone();
+    assert!(
+        exact.evict(128 * MIB, Some(&protected)).is_empty(),
+        "protected 64 MiB plus 64 MiB scratch reaches 512 MiB exactly"
+    );
+
+    let mut accepted = original.clone();
+    assert_eq!(
+        accepted.evict(368 * MIB, Some(&protected)),
+        vec![key(1), key(2)],
+        "LRU ties use key order and the protected oldest stage survives"
+    );
+    let admitted_peak = accepted.reclaimable_bytes() + 304 * MIB;
+    let additional = NativeCpuCacheModel::additional_peak(initial_credit, admitted_peak);
+    assert_eq!(additional, 64 * MIB);
+
+    let mut budget = NativeGpuBudget::new(context());
+    let mut owners = weighted
+        .into_iter()
+        .map(|(_, mib, _, _)| {
+            Some(allocate(
+                &mut budget,
+                ChargeKind::CachedEffectResource,
+                mib * MIB,
+            ))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(budget.snapshot().allocated_bytes, 448 * MIB);
+    let envelope = plan(ChargeKind::SerialCpuAdmission, additional);
+    let reservation = budget.reserve(budget.quote(&envelope).unwrap()).unwrap();
+    assert_eq!(budget.snapshot().managed_bytes(), NATIVE_MANAGED_LIMIT);
+    budget.refund_unused_root(&reservation).unwrap();
+
+    let mut rejected = original.clone();
+    assert_eq!(
+        rejected.evict(416 * MIB, Some(&protected)),
+        vec![key(1), key(2), key(3)]
+    );
+    let additional = NativeCpuCacheModel::additional_peak(
+        initial_credit,
+        rejected.reclaimable_bytes() + 352 * MIB,
+    );
+    assert_eq!(additional, 112 * MIB);
+    assert_eq!(
+        budget
+            .quote(&plan(ChargeKind::SerialCpuAdmission, additional))
+            .unwrap_err(),
+        NativeGpuDecline::BudgetExceeded {
+            live: 448 * MIB,
+            requested: 112 * MIB,
+            limit: NATIVE_MANAGED_LIMIT
+        }
+    );
+    assert_eq!(
+        owners[3].as_ref().unwrap().capacity(),
+        96 * MIB,
+        "evicting metadata cannot credit an externally retained image"
+    );
+    assert_eq!(budget.snapshot().allocated_bytes, 448 * MIB);
+
+    // Apply only the accepted eviction: real ledger charges disappear after
+    // their owners release and reap, then the predicted physical peak fits.
+    let release = |budget: &mut NativeGpuBudget, charge: AllocationCharge| {
+        let id = charge.id();
+        drop(charge);
+        let reaped = budget.try_reap(id).unwrap().unwrap();
+        budget.release_reaped(reaped).unwrap();
+    };
+    release(&mut budget, owners[1].take().unwrap());
+    release(&mut budget, owners[2].take().unwrap());
+    let scratch = allocate(&mut budget, ChargeKind::IsfScratch, 304 * MIB);
+    assert_eq!(budget.snapshot().managed_bytes(), NATIVE_MANAGED_LIMIT);
+    release(&mut budget, scratch);
+    for owner in owners.into_iter().flatten() {
+        release(&mut budget, owner);
+    }
+    assert_eq!(budget.snapshot().managed_bytes(), 0);
+
+    let entries = (0..65)
+        .map(|stage| {
+            (
+                key(stage),
+                NativeCpuCacheEntry {
+                    bytes: 1,
+                    last_used: 1,
+                    reclaimable: true,
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+    let mut capacity = NativeCpuCacheModel::new(entries, 1);
+    assert_eq!(capacity.evict(0, None), vec![key(0)]);
+    assert!(
+        capacity.evict(0, None).is_empty(),
+        "64 cached entries fit exactly"
+    );
 }
 
 fn frame(sequence: u64) -> NativeFrameId {

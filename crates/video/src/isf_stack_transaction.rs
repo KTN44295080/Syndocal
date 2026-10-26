@@ -283,7 +283,14 @@ impl IsfGpuRuntime {
         )];
         let started = Instant::now();
         let result = self
-            .encode_pass_stack(&mut pending[0], frame, stages, None)
+            .encode_pass_stack(
+                &mut pending[0],
+                frame,
+                stages,
+                None,
+                #[cfg(test)]
+                None,
+            )
             .and_then(|()| self.submit_and_complete_stacks(&mut pending));
         let result = self.finish_stack_transaction(&mut pending, result);
         #[cfg(feature = "qa-native-frame-timing")]
@@ -366,7 +373,14 @@ impl IsfGpuRuntime {
             .iter()
             .zip(pending.iter_mut())
             .try_for_each(|(request, pending)| {
-                self.encode_pass_stack(pending, &request.frame, request.stages, Some(reservation))
+                self.encode_pass_stack(
+                    pending,
+                    &request.frame,
+                    request.stages,
+                    Some(reservation),
+                    #[cfg(test)]
+                    None,
+                )
             })
             .and_then(|()| self.submit_and_complete_stacks(&mut pending));
         let result = self.finish_stack_transaction(&mut pending, result);
@@ -517,23 +531,7 @@ impl IsfGpuRuntime {
             crate::native_frame_timing::span(crate::native_frame_timing::Phase::IsfCleanup);
         // Preserve the canonical single-stack feedback commit. Validation
         // scope failure below invalidates the same ownership keys as before.
-        for stack in pending.iter_mut() {
-            for (key, state) in stack.states.drain(..) {
-                if state.bytes != 0 {
-                    self.resources.entries.insert(key, state);
-                }
-            }
-        }
-        while self.resources.entries.len() > RESOURCE_CACHE_CAPACITY {
-            let oldest = self
-                .resources
-                .entries
-                .iter()
-                .min_by_key(|(_, state)| state.last_used)
-                .map(|(key, _)| key.clone())
-                .unwrap();
-            self.resources.entries.remove(&oldest);
-        }
+        self.commit_stage_states(pending.iter_mut().flat_map(|stack| stack.states.drain(..)));
         #[cfg(test)]
         if let Some(timing) = self.resources.phase_timing.as_mut() {
             timing.mark(7);
@@ -590,9 +588,7 @@ impl IsfGpuRuntime {
         }
         if validation.is_some() || allocation.is_some() || cleanup_failure.is_some() {
             for stack in pending.iter() {
-                for key in stack.keys.iter() {
-                    self.resources.entries.remove(key);
-                }
+                self.invalidate_stage_states(&stack.keys);
             }
         }
         if let Some(reason) = cleanup_failure {

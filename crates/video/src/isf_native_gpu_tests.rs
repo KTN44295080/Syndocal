@@ -830,3 +830,1093 @@ fn isf_native_gpu_replay_setup_rejection_returns_retirement_and_reclaims_reserva
     drop(layers);
     stop(&mut fixture.owner);
 }
+
+// Shared-owner canonical CPU bridge (§4.5). These oracles reuse the existing
+// fixture shaders and CPU entry points rather than a second shader executor.
+const CPU_BRIDGE_DATE: [f32; 4] = [2026.0, 10.0, 26.0, 512.0];
+const CPU_BRIDGE_MULTIPASS: &str = include_str!("isf_fixtures/multipass.fs");
+const CPU_BRIDGE_PERSISTENT: &str = include_str!("isf_fixtures/persistent.fs");
+const CPU_BRIDGE_FLOAT: &str = include_str!("isf_fixtures/float.fs");
+const CPU_BRIDGE_IMPORTED: &str = include_str!("isf_fixtures/imported.fs");
+const CPU_BRIDGE_TWO_IMAGES: &str = include_str!("isf_fixtures/two_images.fs");
+
+fn cpu_bridge_input(width: u32, height: u32, pixel: [u8; 4]) -> Arc<VideoFrame> {
+    Arc::new(VideoFrame {
+        layer_id: 1,
+        width,
+        height,
+        pts_ms: 1000,
+        duration_ms: 16,
+        format: VideoPixelFormat::Rgba8,
+        data: pixel
+            .into_iter()
+            .cycle()
+            .take((width * height * 4) as usize)
+            .collect(),
+    })
+}
+fn cpu_bridge_chain(
+    scope: protocol::VideoEffectScope,
+    sources: &[&str],
+) -> ResolvedVideoEffectChain {
+    ResolvedVideoEffectChain {
+        chain_id: Some(protocol::VideoEffectChainId(901)),
+        scope,
+        bypassed: false,
+        stages: sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| ResolvedVideoEffectStage {
+                stage_id: Some(protocol::VideoEffectStageId(910 + index as u64)),
+                effect_id: Some(protocol::VideoEffectId(920 + index as u64)),
+                enabled: true,
+                label: format!("cpu-stage-{index}"),
+                effect: protocol::VideoIsfEffectSummary {
+                    enabled: true,
+                    label: format!("cpu-stage-{index}"),
+                    source: Arc::from(*source),
+                    source_path: None,
+                    description: None,
+                    categories: Vec::new(),
+                    controls: Vec::new(),
+                    image_bindings: Vec::new(),
+                    stack: Vec::new(),
+                },
+            })
+            .collect(),
+    }
+}
+fn cpu_bridge_renderer() -> crate::VideoPreviewRenderer {
+    let mut renderer = crate::VideoPreviewRenderer::new(crate::VideoRuntimeConfig::default());
+    renderer.isf_render_namespace = (7, Some(101), false);
+    renderer.set_isf_date_override(Some(CPU_BRIDGE_DATE));
+    renderer
+}
+fn cpu_bridge_input_key() -> protocol::VideoRenderInputKey {
+    protocol::VideoRenderInputKey {
+        project_render_epoch: 7,
+        input_id: protocol::VideoRenderInputId(1001),
+    }
+}
+fn cpu_bridge_oracle(
+    renderer: &mut crate::VideoPreviewRenderer,
+    chain: &ResolvedVideoEffectChain,
+    input: &Arc<VideoFrame>,
+) -> (VideoFrame, Vec<VideoEffectStageFault>) {
+    let (frame, faults) = renderer
+        .apply_resolved_effect_chain_cow_with_cancellation(
+            chain,
+            Cow::Borrowed(input.as_ref()),
+            Some(cpu_bridge_input_key()),
+            None,
+        )
+        .unwrap();
+    (frame.into_owned(), faults)
+}
+fn cpu_bridge_run_prepared(
+    fixture: &mut Fixture,
+    prepared: PreparedNativeInputs,
+) -> NativeCpuResults {
+    let context = Arc::clone(fixture.owner.context());
+    assert!(Arc::ptr_eq(
+        fixture.runtime.native_context().unwrap(),
+        &context
+    ));
+    let quote = fixture
+        .owner
+        .quote(prepared.allocation_plan().unwrap())
+        .unwrap();
+    let reservation = fixture.owner.reserve(quote).unwrap();
+    let result = fixture.runtime.render_native_cpu_fallback(
+        &mut fixture.owner,
+        prepared,
+        reservation,
+        &|| false,
+    );
+    let result = result
+        .unwrap_or_else(|error| panic!("canonical shared-owner CPU bridge failed: {error:?}"));
+    assert!(Arc::ptr_eq(
+        fixture.runtime.native_context().unwrap(),
+        &context
+    ));
+    for outcome in result.outcomes() {
+        assert!(outcome
+            .allocation_ids()
+            .iter()
+            .all(|allocation| allocation.context == context.id()));
+    }
+    result
+}
+fn cpu_bridge_run(
+    fixture: &mut Fixture,
+    preparer: &mut crate::VideoPreviewRenderer,
+    sequence: u64,
+    chain: ResolvedVideoEffectChain,
+    input: Arc<VideoFrame>,
+) -> NativeCpuResults {
+    let invocation = preparer
+        .prepare_native_cpu_invocation(chain, input, Some(cpu_bridge_input_key()), None)
+        .unwrap();
+    let prepared = fixture
+        .runtime
+        .prepare_native_cpu_inputs(request(sequence), invocation)
+        .unwrap();
+    cpu_bridge_run_prepared(fixture, prepared)
+}
+fn cpu_bridge_assert(
+    result: &NativeCpuResults,
+    expected: &(VideoFrame, Vec<VideoEffectStageFault>),
+    scope: &protocol::VideoEffectScope,
+) {
+    assert_eq!(
+        result.outcomes().len(),
+        1,
+        "a group/output invocation stays one result"
+    );
+    let actual = &result.outcomes()[0];
+    assert_eq!(actual.frame().as_ref(), &expected.0);
+    assert_eq!(actual.faults(), expected.1.as_slice());
+    assert_eq!(actual.scope(), scope);
+}
+fn cpu_bridge_stop(fixture: Fixture) {
+    let Fixture { mut owner, runtime } = fixture;
+    drop(runtime); // runtime-owned feedback remains charged until its owner retires
+    stop(&mut owner);
+}
+fn cpu_bridge_scope(job: &mut PreparedNativeLayer, scope: protocol::VideoEffectScope) {
+    job.chain.source.to_mut().scope = scope.clone();
+    for key in &mut job.chain.keys {
+        key.scope = Some(scope.clone());
+    }
+    for stage in &mut job.chain.stages {
+        stage.fault_context.scope = scope.clone();
+    }
+}
+fn cpu_bridge_runtime_oracle(
+    runtime: &mut IsfGpuRuntime,
+    job: &PreparedNativeLayer,
+) -> (VideoFrame, Vec<VideoEffectStageFault>) {
+    let images = job
+        .chain
+        .stages
+        .iter()
+        .map(|stage| {
+            stage
+                .images
+                .iter()
+                .map(|(name, frame)| crate::isf_runtime::IsfImageInput { name, frame })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let stages = job
+        .chain
+        .stages
+        .iter()
+        .zip(&images)
+        .map(|(stage, images)| IsfStageInputs {
+            shader: &stage.shader,
+            controls: &stage.controls,
+            images,
+        })
+        .collect::<Vec<_>>();
+    let (frame, failures) = runtime.apply_stack_stage_local_with_inputs_and_keys(
+        &job.input,
+        &stages,
+        job.input.pts_ms as f32 / 1000.0,
+        job.input.duration_ms as f32 / 1000.0,
+        job.date,
+        &job.chain.keys,
+    );
+    (frame, job.chain.clone().finish_faults(failures))
+}
+fn cpu_bridge_run_job(
+    fixture: &mut Fixture,
+    sequence: u64,
+    job: &PreparedNativeLayer,
+) -> NativeCpuResults {
+    let invocation =
+        PreparedNativeCpuInvocation::new(Arc::clone(&job.input), job.chain.clone(), job.date, None);
+    let prepared = fixture
+        .runtime
+        .prepare_native_cpu_inputs(request(sequence), invocation)
+        .unwrap();
+    cpu_bridge_run_prepared(fixture, prepared)
+}
+
+#[test]
+fn isf_native_gpu_cpu_bridge_group_composition_output_match_canonical_multipass_and_float() {
+    let mut fixture = gpu();
+    let mut preparer = cpu_bridge_renderer();
+    let mut reference = cpu_bridge_renderer();
+    let input = cpu_bridge_input(8, 4, [0, 0, 0, 255]);
+    let scopes = [
+        protocol::VideoEffectScope::Group {
+            group_id: protocol::VideoLayerGroupId(7),
+        },
+        protocol::VideoEffectScope::Composition { composition_id: 5 },
+        protocol::VideoEffectScope::Output { output_id: 101 },
+    ];
+    for (index, scope) in scopes.into_iter().enumerate() {
+        let chain = cpu_bridge_chain(scope.clone(), &[CPU_BRIDGE_MULTIPASS]);
+        let expected = cpu_bridge_oracle(&mut reference, &chain, &input);
+        let result = cpu_bridge_run(
+            &mut fixture,
+            &mut preparer,
+            index as u64 + 1,
+            chain,
+            Arc::clone(&input),
+        );
+        cpu_bridge_assert(&result, &expected, &scope);
+        assert!(result.outcomes()[0].faults().is_empty());
+        assert!(result.outcomes()[0]
+            .frame()
+            .data
+            .chunks_exact(4)
+            .all(|pixel| pixel == [128, 128, 255, 255]));
+        assert_eq!(
+            result.outcomes()[0].clocks().unwrap().frame_index,
+            index as u32
+        );
+        assert_eq!(fixture.runtime.native_frame_index(), index as u32 + 1);
+    }
+    let scope = protocol::VideoEffectScope::Output { output_id: 101 };
+    let chain = cpu_bridge_chain(scope.clone(), &[CPU_BRIDGE_FLOAT]);
+    let input = cpu_bridge_input(2, 1, [0, 0, 0, 255]);
+    let expected = cpu_bridge_oracle(&mut reference, &chain, &input);
+    let result = cpu_bridge_run(&mut fixture, &mut preparer, 4, chain, input);
+    cpu_bridge_assert(&result, &expected, &scope);
+    let float_supported = fixture
+        .owner
+        .capabilities()
+        .enabled_features
+        .contains(wgpu::Features::FLOAT32_FILTERABLE);
+    eprintln!(
+        "native CPU FLOAT32_FILTERABLE={float_supported}; pixel oracle exercised only when true"
+    );
+    if float_supported {
+        assert!(result.outcomes()[0].faults().is_empty());
+        assert!(result.outcomes()[0]
+            .frame()
+            .data
+            .chunks_exact(4)
+            .all(|pixel| pixel == [255, 128, 128, 255]));
+    } else {
+        assert_eq!(result.outcomes()[0].faults().len(), 1);
+        assert!(result.outcomes()[0].faults()[0]
+            .message
+            .contains("32-bit float texture filtering"));
+    }
+    assert_eq!(fixture.runtime.native_frame_index(), 4);
+    drop(result);
+    cpu_bridge_stop(fixture);
+}
+
+#[test]
+fn isf_native_gpu_cpu_bridge_feedback_failure_and_dynamic_images_match_canonical_ticks() {
+    let mut fixture = gpu();
+    let mut reference = IsfGpuRuntime::new().unwrap();
+    let increment = shader(INCREMENT);
+    let mut invalid = shader(IDENTITY);
+    Arc::make_mut(&mut invalid.1).wgsl = "not valid WGSL".into();
+    let mut job = jobs(
+        3,
+        2,
+        &[
+            increment.clone(),
+            increment.clone(),
+            shader(CPU_BRIDGE_PERSISTENT),
+            invalid,
+            increment.clone(),
+            increment,
+        ],
+    )
+    .into_iter()
+    .next()
+    .unwrap();
+    cpu_bridge_scope(
+        &mut job,
+        protocol::VideoEffectScope::Group {
+            group_id: protocol::VideoLayerGroupId(7),
+        },
+    );
+    for tick in 0..3 {
+        let expected = cpu_bridge_runtime_oracle(&mut reference, &job);
+        let result = cpu_bridge_run_job(&mut fixture, tick + 1, &job);
+        cpu_bridge_assert(&result, &expected, &job.chain.source.scope);
+        let actual = &result.outcomes()[0];
+        assert!(actual
+            .frame()
+            .data
+            .chunks_exact(4)
+            .all(|pixel| pixel == [tick as u8 + 3, 0, 0, 255]));
+        assert_eq!(actual.faults().len(), 1);
+        assert_eq!(actual.faults()[0].stage_index, Some(3));
+        assert_eq!(
+            actual.faults()[0].stage_id,
+            Some(protocol::VideoEffectStageId(13))
+        );
+        assert_eq!(
+            actual.faults()[0].effect_id,
+            Some(protocol::VideoEffectId(103))
+        );
+        assert_eq!(
+            actual.faults()[0].stage_label.as_deref(),
+            Some("layer-1-stage-3")
+        );
+        assert_eq!(actual.clocks().unwrap().frame_index, tick as u32);
+        assert_eq!(fixture.runtime.native_frame_index(), tick as u32 + 1);
+    }
+    const DYNAMIC: &str = r#"/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"},{"NAME":"overlayImage","TYPE":"image"}],
+        "PASSES":[{"TARGET":"historyBuffer","PERSISTENT":true},{}]}*/
+        void main() {
+          if(PASSINDEX==0) { gl_FragColor=vec4(IMG_THIS_NORM_PIXEL(historyBuffer).r + IMG_THIS_NORM_PIXEL(overlayImage).r,0.0,0.0,1.0); }
+          else { gl_FragColor=IMG_THIS_NORM_PIXEL(historyBuffer); }
+        }"#;
+    let mut job = jobs(1, 1, &[shader(DYNAMIC)]).into_iter().next().unwrap();
+    cpu_bridge_scope(
+        &mut job,
+        protocol::VideoEffectScope::Group {
+            group_id: protocol::VideoLayerGroupId(8),
+        },
+    );
+    for (index, (red, expected_red)) in [(Some(1), 1), (Some(2), 3), (None, 3), (Some(4), 7)]
+        .into_iter()
+        .enumerate()
+    {
+        job.chain.stages[0].images = red
+            .map(|red| {
+                (
+                    "overlayImage".into(),
+                    cpu_bridge_input(1, 1, [red, 0, 0, 255]),
+                )
+            })
+            .into_iter()
+            .collect();
+        let expected = cpu_bridge_runtime_oracle(&mut reference, &job);
+        let result = cpu_bridge_run_job(&mut fixture, index as u64 + 4, &job);
+        cpu_bridge_assert(&result, &expected, &job.chain.source.scope);
+        assert_eq!(result.outcomes()[0].frame().data, [expected_red, 0, 0, 255]);
+        assert!(result.outcomes()[0].faults().is_empty());
+        assert_eq!(fixture.runtime.native_frame_index(), index as u32 + 4);
+    }
+    cpu_bridge_stop(fixture);
+}
+
+struct CpuBridgePack(std::path::PathBuf);
+impl CpuBridgePack {
+    fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("native-cpu-bridge-fixtures")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("imported.fs"), CPU_BRIDGE_IMPORTED).unwrap();
+        std::fs::write(path.join("bound.fs"), CPU_BRIDGE_TWO_IMAGES).unwrap();
+        image::save_buffer_with_format(
+            path.join("two-pixels.png"),
+            &[255, 0, 0, 255, 0, 255, 0, 255],
+            2,
+            1,
+            image::ColorType::Rgba8,
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        image::save_buffer_with_format(
+            path.join("still.png"),
+            &[255, 0, 0, 255],
+            1,
+            1,
+            image::ColorType::Rgba8,
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        Self(path)
+    }
+}
+impl Drop for CpuBridgePack {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0)
+            .expect("remove only the test-owned native CPU image fixture");
+    }
+}
+
+#[test]
+fn isf_native_gpu_cpu_bridge_imported_and_bound_images_use_canonical_pack_pixels() {
+    let pack = CpuBridgePack::new();
+    let mut fixture = gpu();
+    let mut preparer = cpu_bridge_renderer();
+    let mut reference = cpu_bridge_renderer();
+    let scope = protocol::VideoEffectScope::Output { output_id: 101 };
+    let mut imported = cpu_bridge_chain(scope.clone(), &[CPU_BRIDGE_IMPORTED]);
+    imported.stages[0].effect.source_path =
+        Some(pack.0.join("imported.fs").to_string_lossy().into_owned());
+    let input = cpu_bridge_input(4, 1, [0, 0, 0, 255]);
+    let expected = cpu_bridge_oracle(&mut reference, &imported, &input);
+    let result = cpu_bridge_run(&mut fixture, &mut preparer, 1, imported, input);
+    cpu_bridge_assert(&result, &expected, &scope);
+    assert_eq!(
+        result.outcomes()[0].frame().data,
+        [0, 255, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255]
+    );
+    drop(result);
+    let mut bound = cpu_bridge_chain(scope.clone(), &[CPU_BRIDGE_TWO_IMAGES]);
+    bound.stages[0].effect.source_path =
+        Some(pack.0.join("bound.fs").to_string_lossy().into_owned());
+    bound.stages[0].effect.image_bindings = vec![protocol::VideoIsfImageBinding {
+        name: "overlayImage".into(),
+        source: protocol::VideoIsfImageSource::Imported {
+            path: "still.png".into(),
+        },
+    }];
+    let input = cpu_bridge_input(2, 1, [0, 0, 255, 255]);
+    let expected = cpu_bridge_oracle(&mut reference, &bound, &input);
+    let result = cpu_bridge_run(&mut fixture, &mut preparer, 2, bound, input);
+    cpu_bridge_assert(&result, &expected, &scope);
+    assert!(result.outcomes()[0]
+        .frame()
+        .data
+        .chunks_exact(4)
+        .all(|pixel| pixel == [128, 0, 128, 255]));
+    assert_eq!(fixture.runtime.native_frame_index(), 2);
+    drop(result);
+    cpu_bridge_stop(fixture);
+}
+
+#[test]
+fn isf_native_gpu_cpu_bridge_audio_images_date_multipass_never_reuses_stale_inputs() {
+    const MIXED: &str = r#"/*{"INPUTS":[{"NAME":"overlayImage","TYPE":"image"},{"NAME":"audioWave","TYPE":"audio","MAX":2},
+      {"NAME":"inputImage","TYPE":"image"},{"NAME":"audioSpectrum","TYPE":"audioFFT","MAX":2}],
+      "PASSES":[{"TARGET":"mixedBuffer"},{}]}*/
+      void main() {
+        if(PASSINDEX==0) gl_FragColor=vec4((IMG_THIS_NORM_PIXEL(inputImage).r+IMG_THIS_NORM_PIXEL(overlayImage).r)*0.5,
+          IMG_NORM_PIXEL(audioWave,vec2(0.0,0.5)).r,IMG_NORM_PIXEL(audioSpectrum,vec2(0.0,0.5)).r,DATE.w/1024.0);
+        else gl_FragColor=IMG_THIS_NORM_PIXEL(mixedBuffer);
+      }"#;
+    let mut fixture = gpu();
+    let mut preparer = cpu_bridge_renderer();
+    let mut reference = cpu_bridge_renderer();
+    let scope = protocol::VideoEffectScope::Composition { composition_id: 5 };
+    let mut chain = cpu_bridge_chain(scope.clone(), &[MIXED]);
+    chain.stages[0].effect.image_bindings = vec![protocol::VideoIsfImageBinding {
+        name: "overlayImage".into(),
+        source: protocol::VideoIsfImageSource::Layer { layer_id: 2 },
+    }];
+    let input = cpu_bridge_input(1, 1, [64, 0, 0, 255]);
+    let audio = |sequence, wave, fft| protocol::LiveAudioTextureFrame {
+        generation: 1,
+        feature_sequence: sequence,
+        sample_rate: 48_000,
+        waveform: [wave; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+        fft: [fft; protocol::LIVE_AUDIO_TEXTURE_SAMPLES],
+    };
+    let samples = [
+        (Some(audio(1, -0.5, 0.75)), 192, [128, 64, 191, 128]),
+        (Some(audio(1, 0.5, 0.25)), 32, [48, 64, 191, 128]),
+        (Some(audio(2, 0.5, 0.25)), 32, [48, 191, 64, 128]),
+        (None, 32, [48, 128, 0, 128]),
+        (Some(audio(3, f32::NAN, 1.0)), 32, [48, 128, 0, 128]),
+    ];
+    for (index, (audio, red, known)) in samples.into_iter().enumerate() {
+        let mut overlay = cpu_bridge_input(1, 1, [red, 0, 0, 255]);
+        Arc::make_mut(&mut overlay).layer_id = 2;
+        for renderer in [&mut preparer, &mut reference] {
+            renderer
+                .isf_frame_inputs
+                .layers
+                .insert(2, Ok(Arc::clone(&overlay)));
+            renderer.set_isf_audio_frame(audio.as_ref());
+        }
+        let expected = cpu_bridge_oracle(&mut reference, &chain, &input);
+        let result = cpu_bridge_run(
+            &mut fixture,
+            &mut preparer,
+            index as u64 + 1,
+            chain.clone(),
+            Arc::clone(&input),
+        );
+        cpu_bridge_assert(&result, &expected, &scope);
+        assert_eq!(result.outcomes()[0].frame().data, known);
+        assert!(result.outcomes()[0].faults().is_empty());
+        assert_eq!(fixture.runtime.native_frame_index(), index as u32 + 1);
+    }
+    assert_eq!(input.data, [64, 0, 0, 255]);
+    cpu_bridge_stop(fixture);
+}
+
+#[test]
+fn isf_native_gpu_cpu_bridge_noop_prepare_and_runtime_failure_keep_pixels_faults_and_clocks() {
+    let mut fixture = gpu();
+    let mut preparer = cpu_bridge_renderer();
+    let mut reference = cpu_bridge_renderer();
+    let scope = protocol::VideoEffectScope::Output { output_id: 101 };
+    let mut bypassed = cpu_bridge_chain(scope.clone(), &["not valid ISF"]);
+    bypassed.bypassed = true;
+    let mut disabled = cpu_bridge_chain(scope.clone(), &["not valid ISF"]);
+    disabled.stages[0].enabled = false;
+    let cases = [
+        (cpu_bridge_chain(scope.clone(), &[]), false, 0, 0),
+        (bypassed, false, 0, 0),
+        (disabled, false, 0, 0),
+        (
+            cpu_bridge_chain(
+                scope.clone(),
+                &["not valid ISF first", "not valid ISF second"],
+            ),
+            true,
+            2,
+            1,
+        ),
+    ];
+    for (index, (chain, bgra, fault_count, clock)) in cases.into_iter().enumerate() {
+        let mut input = cpu_bridge_input(1, 1, [10, 20, 30, 177]);
+        if bgra {
+            Arc::make_mut(&mut input).format = VideoPixelFormat::Bgra8;
+        }
+        let before = input.as_ref().clone();
+        let expected = cpu_bridge_oracle(&mut reference, &chain, &input);
+        let result = cpu_bridge_run(
+            &mut fixture,
+            &mut preparer,
+            index as u64 + 1,
+            chain,
+            Arc::clone(&input),
+        );
+        cpu_bridge_assert(&result, &expected, &scope);
+        assert_eq!(result.outcomes()[0].frame().as_ref(), &before);
+        assert_eq!(result.outcomes()[0].faults().len(), fault_count);
+        assert_eq!(fixture.runtime.native_frame_index(), clock);
+        if clock == 0 {
+            assert!(result.outcomes()[0].clocks().is_none());
+        } else {
+            assert_eq!(result.outcomes()[0].clocks().unwrap().frame_index, 0);
+        }
+        assert_eq!(input.as_ref(), &before);
+    }
+    let input = cpu_bridge_input(1, 1, [10, 20, 30, 177]);
+    let chain = cpu_bridge_chain(scope.clone(), &[IDENTITY, IDENTITY]);
+    for renderer in [&mut preparer, &mut reference] {
+        renderer.set_isf_date_override(Some([2026.0, 13.0, 26.0, 0.0]));
+    }
+    let expected = cpu_bridge_oracle(&mut reference, &chain, &input);
+    let result = cpu_bridge_run(&mut fixture, &mut preparer, 5, chain, Arc::clone(&input));
+    cpu_bridge_assert(&result, &expected, &scope);
+    assert_eq!(result.outcomes()[0].frame().as_ref(), input.as_ref());
+    assert_eq!(result.outcomes()[0].faults().len(), 2);
+    assert!(result.outcomes()[0]
+        .faults()
+        .iter()
+        .all(|fault| fault.message.contains("DATE")));
+    assert_eq!(fixture.runtime.native_frame_index(), 2);
+    drop(result);
+    cpu_bridge_stop(fixture);
+}
+
+#[test]
+fn isf_native_gpu_cpu_bridge_reuses_all_three_declined_prepared_jobs_without_duplicate_ticks() {
+    let mut fixture = gpu();
+    let mut reference_runtime = IsfGpuRuntime::new().unwrap();
+    let spec = shader(CPU_BRIDGE_MULTIPASS);
+    let prepared_jobs = jobs(8, 4, &[spec.clone()]);
+    let inputs = prepared_jobs
+        .iter()
+        .map(|job| Arc::clone(&job.input))
+        .collect::<Vec<_>>();
+    let originals = inputs
+        .iter()
+        .map(|input| input.as_ref().clone())
+        .collect::<Vec<_>>();
+    let expected = reference(&mut reference_runtime, &prepared_jobs);
+    let prepared = fixture
+        .runtime
+        .prepare_native_inputs(
+            request(1),
+            prepared_jobs,
+            NativeBatchRestrictions::default(),
+        )
+        .unwrap();
+    let empty = NativeAllocationPlan::new(request(1));
+    let empty_quote = fixture.owner.quote(&empty).unwrap();
+    let declined = match fixture.runtime.admit_native_batch(prepared, &empty_quote) {
+        NativeBatchAdmission::Declined {
+            reason:
+                NativeGpuDecline::UnsupportedChain {
+                    reason: UnsupportedNativeFx::Multipass,
+                },
+            prepared,
+        } => prepared,
+        _ => panic!("resourceful Batch3 must decline before execution"),
+    };
+    let input_refs = inputs.iter().map(Arc::strong_count).collect::<Vec<_>>();
+    let shader_refs = Arc::strong_count(&spec.1);
+    assert_eq!(fixture.runtime.native_frame_index(), 0);
+    let prepared = fixture
+        .runtime
+        .prepare_native_cpu_fallback(declined)
+        .unwrap();
+    assert!(
+        inputs
+            .iter()
+            .zip(input_refs)
+            .all(|(input, previous)| Arc::strong_count(input) >= previous),
+        "conversion must retain every original prepared input Arc"
+    );
+    assert_eq!(
+        Arc::strong_count(&spec.1),
+        shader_refs,
+        "conversion reuses the prepared shader Arcs"
+    );
+    let result = cpu_bridge_run_prepared(&mut fixture, prepared);
+    assert_eq!(result.outcomes().len(), 3);
+    for (index, ((actual, expected), original)) in result
+        .outcomes()
+        .iter()
+        .zip(&expected)
+        .zip(&originals)
+        .enumerate()
+    {
+        assert_eq!(actual.frame().as_ref(), &expected.0);
+        assert_eq!(actual.faults(), expected.1.as_slice());
+        assert_eq!(actual.frame().layer_id, original.layer_id);
+        assert_eq!(
+            actual.scope(),
+            &protocol::VideoEffectScope::Layer {
+                layer_id: original.layer_id
+            }
+        );
+        assert_eq!(actual.clocks().unwrap().frame_index, index as u32);
+        assert_eq!(inputs[index].as_ref(), original);
+    }
+    assert_eq!(fixture.runtime.native_frame_index(), 3);
+    drop(result);
+    assert!(inputs.iter().all(|input| Arc::strong_count(input) == 1));
+    cpu_bridge_stop(fixture);
+}
+
+#[test]
+fn isf_native_gpu_cpu_bridge_budget_rejects_before_execution_then_reuses_prepared_input() {
+    let mut fixture = gpu();
+    let mut preparer = cpu_bridge_renderer();
+    let input = cpu_bridge_input(8, 4, [17, 23, 41, 255]);
+    let chain = cpu_bridge_chain(
+        protocol::VideoEffectScope::Group {
+            group_id: protocol::VideoLayerGroupId(7),
+        },
+        &[CPU_BRIDGE_MULTIPASS],
+    );
+    let invocation = preparer
+        .prepare_native_cpu_invocation(
+            chain.clone(),
+            Arc::clone(&input),
+            Some(cpu_bridge_input_key()),
+            None,
+        )
+        .unwrap();
+    let prepared = fixture
+        .runtime
+        .prepare_native_cpu_inputs(request(1), invocation)
+        .unwrap();
+    let wrong_invocation = preparer
+        .prepare_native_cpu_invocation(
+            chain,
+            Arc::clone(&input),
+            Some(cpu_bridge_input_key()),
+            None,
+        )
+        .unwrap();
+    let wrong_inputs = fixture
+        .runtime
+        .prepare_native_cpu_inputs(request(1), wrong_invocation)
+        .unwrap();
+    let mut foreign = gpu();
+    let before = submission_probe(&mut foreign.owner, 70);
+    let quote = foreign
+        .owner
+        .quote(wrong_inputs.allocation_plan().unwrap())
+        .unwrap();
+    let foreign_reservation = foreign.owner.reserve(quote).unwrap();
+    let rejected = fixture.runtime.render_native_cpu_fallback(
+        &mut foreign.owner,
+        wrong_inputs,
+        foreign_reservation,
+        &|| false,
+    );
+    assert!(matches!(
+        rejected,
+        Err(NativeCpuRenderFailure::Fault {
+            fault: NativeGpuFault {
+                kind: NativeGpuFaultKind::IdentityMismatch,
+                ..
+            },
+            retirement: None,
+        })
+    ));
+    assert_eq!(fixture.runtime.native_frame_index(), 0);
+    assert_eq!(foreign.owner.budget_snapshot().reserved_bytes, 0);
+    assert_eq!(foreign.owner.budget_snapshot().allocated_bytes, 0);
+    assert_eq!(
+        submission_probe(&mut foreign.owner, 71),
+        before + 1,
+        "foreign-owner rejection cannot dispatch canonical CPU work"
+    );
+    cpu_bridge_stop(foreign);
+    let mut pressure = NativeAllocationPlan::new(request(80));
+    pressure
+        .add_new(
+            ChargeKind::CpuLastValid,
+            crate::native_gpu_budget::NATIVE_MANAGED_LIMIT,
+        )
+        .unwrap();
+    let reservation = fixture
+        .owner
+        .reserve(fixture.owner.quote(&pressure).unwrap())
+        .unwrap();
+    assert!(matches!(
+        fixture.owner.quote(prepared.allocation_plan().unwrap()),
+        Err(NativeGpuDecline::BudgetExceeded { .. })
+    ));
+    assert_eq!(fixture.runtime.native_frame_index(), 0);
+    assert_eq!(fixture.owner.budget_snapshot().allocated_bytes, 0);
+    assert_eq!(
+        fixture.owner.budget_snapshot().reserved_bytes,
+        crate::native_gpu_budget::NATIVE_MANAGED_LIMIT
+    );
+    assert_eq!(input.data[..4], [17, 23, 41, 255]);
+    let pending = fixture
+        .owner
+        .begin_frame(request(80), reservation)
+        .unwrap()
+        .finish();
+    await_transaction(&mut fixture.owner, pending, &|| false).unwrap();
+    let result = cpu_bridge_run_prepared(&mut fixture, prepared);
+    assert_eq!(result.outcomes().len(), 1);
+    assert!(result.outcomes()[0]
+        .frame()
+        .data
+        .chunks_exact(4)
+        .all(|pixel| pixel == [128, 128, 255, 255]));
+    assert_eq!(fixture.runtime.native_frame_index(), 1);
+    drop(result);
+    cpu_bridge_stop(fixture);
+}
+
+#[test]
+fn isf_native_gpu_cpu_bridge_admission_and_stale_cache_return_reusable_inputs_and_tokens() {
+    let mut fixture = gpu();
+    let job = jobs(8, 4, &[shader(CPU_BRIDGE_MULTIPASS)])
+        .into_iter()
+        .next()
+        .unwrap();
+    let original = job.input.as_ref().clone();
+    let make_invocation = || {
+        PreparedNativeCpuInvocation::new(Arc::clone(&job.input), job.chain.clone(), job.date, None)
+    };
+    let first = fixture
+        .runtime
+        .prepare_native_cpu_inputs(request(1), make_invocation())
+        .unwrap();
+    let equal_shape = fixture
+        .runtime
+        .prepare_native_cpu_inputs(request(1), make_invocation())
+        .unwrap();
+    let bytes = first.allocation_plan().unwrap().requested_bytes();
+    assert_eq!(
+        bytes,
+        equal_shape.allocation_plan().unwrap().requested_bytes()
+    );
+    let before = submission_probe(&mut fixture.owner, 80);
+    let quote = fixture
+        .owner
+        .quote(equal_shape.allocation_plan().unwrap())
+        .unwrap();
+    let wrong_envelope = fixture.owner.reserve(quote).unwrap();
+    drop(equal_shape);
+    let (returned, reservation) = match fixture.runtime.render_native_cpu_fallback(
+        &mut fixture.owner,
+        first,
+        wrong_envelope,
+        &|| false,
+    ) {
+        Err(NativeCpuRenderFailure::Admission {
+            fault,
+            prepared,
+            reservation,
+        }) => {
+            assert_eq!(fault.kind, NativeGpuFaultKind::IdentityMismatch);
+            (prepared, reservation)
+        }
+        other => {
+            panic!("wrong envelope must return the untouched inputs and affine token: {other:?}")
+        }
+    };
+    assert_eq!(fixture.runtime.native_frame_index(), 0);
+    assert_eq!(fixture.owner.budget_snapshot().allocated_bytes, 0);
+    assert_eq!(fixture.owner.budget_snapshot().reserved_bytes, bytes);
+    assert_eq!(reservation.context(), fixture.owner.context().id());
+    assert_eq!(reservation.frame(), request(1));
+    assert_eq!(reservation.capacity_bytes(), bytes);
+    assert_eq!(returned.allocation_plan().unwrap().frame(), request(1));
+    assert!(
+        Arc::strong_count(&job.input) > 1,
+        "returned invocation retains the original input Arc"
+    );
+    fixture
+        .owner
+        .discard_unsubmitted_reservation(reservation)
+        .unwrap();
+    assert_eq!(fixture.owner.budget_snapshot().reserved_bytes, 0);
+    assert_eq!(submission_probe(&mut fixture.owner, 81), before + 1);
+    let returned = fixture
+        .runtime
+        .prepare_native_cpu_fallback(returned)
+        .unwrap();
+    let first_result = cpu_bridge_run_prepared(&mut fixture, returned);
+    assert_eq!(fixture.runtime.native_frame_index(), 1);
+    assert!(first_result.outcomes()[0].faults().is_empty());
+    assert!(first_result.outcomes()[0]
+        .frame()
+        .data
+        .chunks_exact(4)
+        .all(|pixel| pixel == [128, 128, 255, 255]));
+    drop(first_result);
+
+    let stale = fixture
+        .runtime
+        .prepare_native_cpu_inputs(request(2), make_invocation())
+        .unwrap();
+    let cache_before = fixture.runtime.native_cpu_cache_stamp();
+    let mut preparer = cpu_bridge_renderer();
+    let prime = cpu_bridge_run(
+        &mut fixture,
+        &mut preparer,
+        3,
+        cpu_bridge_chain(
+            protocol::VideoEffectScope::Group {
+                group_id: protocol::VideoLayerGroupId(7),
+            },
+            &[CPU_BRIDGE_PERSISTENT],
+        ),
+        cpu_bridge_input(8, 4, [0, 0, 0, 255]),
+    );
+    assert!(prime.outcomes()[0].faults().is_empty());
+    drop(prime);
+    assert_ne!(
+        fixture.runtime.native_cpu_cache_stamp(),
+        cache_before,
+        "the stale plan must be caused by an actual canonical resourceful call"
+    );
+    let clock = fixture.runtime.native_frame_index();
+    assert_eq!(clock, 2);
+    let before = submission_probe(&mut fixture.owner, 82);
+    let quote = fixture
+        .owner
+        .quote(stale.allocation_plan().unwrap())
+        .unwrap();
+    let reservation = fixture.owner.reserve(quote).unwrap();
+    let returned = match fixture.runtime.render_native_cpu_fallback(
+        &mut fixture.owner,
+        stale,
+        reservation,
+        &|| false,
+    ) {
+        Err(NativeCpuRenderFailure::Declined { reason, prepared }) => {
+            assert_eq!(reason, NativeGpuDecline::QuoteExpired);
+            prepared
+        }
+        other => {
+            panic!("a changed resource cache must decline with the original invocation: {other:?}")
+        }
+    };
+    assert_eq!(fixture.runtime.native_frame_index(), clock);
+    assert_eq!(fixture.owner.budget_snapshot().reserved_bytes, 0);
+    assert_eq!(submission_probe(&mut fixture.owner, 83), before + 1);
+    assert_eq!(job.input.as_ref(), &original);
+    assert!(Arc::strong_count(&job.input) > 1);
+    let shader_refs = Arc::strong_count(&job.chain.stages[0].shader);
+    let returned = fixture
+        .runtime
+        .prepare_native_cpu_fallback(returned)
+        .unwrap();
+    assert_eq!(
+        Arc::strong_count(&job.chain.stages[0].shader),
+        shader_refs,
+        "replanning retains the prepared shader rather than preparing a replacement"
+    );
+    assert!(Arc::strong_count(&job.input) > 1);
+    let result = cpu_bridge_run_prepared(&mut fixture, returned);
+    assert_eq!(result.outcomes().len(), 1);
+    assert!(result.outcomes()[0].faults().is_empty());
+    assert_eq!(result.outcomes()[0].clocks().unwrap().frame_index, clock);
+    assert_eq!(fixture.runtime.native_frame_index(), clock + 1);
+    assert!(result.outcomes()[0]
+        .frame()
+        .data
+        .chunks_exact(4)
+        .all(|pixel| pixel == [128, 128, 255, 255]));
+    assert_eq!(job.input.as_ref(), &original);
+    drop(result);
+    assert_eq!(Arc::strong_count(&job.input), 1);
+    cpu_bridge_stop(fixture);
+}
+
+#[test]
+fn isf_native_gpu_cpu_bridge_handover_stop_and_post_submit_cancel_retain_charged_owners() {
+    let mut fixture = gpu();
+    let mut preparer = cpu_bridge_renderer();
+    let source = cpu_bridge_input(8, 4, [17, 23, 41, 255]);
+    let chain = cpu_bridge_chain(
+        protocol::VideoEffectScope::Output { output_id: 101 },
+        &[CPU_BRIDGE_MULTIPASS],
+    );
+    let result = cpu_bridge_run(
+        &mut fixture,
+        &mut preparer,
+        1,
+        chain.clone(),
+        Arc::clone(&source),
+    );
+    assert!(result.outcomes()[0]
+        .frame()
+        .data
+        .chunks_exact(4)
+        .all(|pixel| pixel == [128, 128, 255, 255]));
+    let cpu_bytes = result.outcomes()[0].frame().data.capacity() as u64;
+    let ids = result.outcomes()[0].allocation_ids();
+    assert!(
+        !ids.is_empty(),
+        "owned post-FX CPU result has a live ledger owner"
+    );
+    let handed_over = result.outcomes()[0].charged_owner();
+    assert!(Arc::ptr_eq(
+        &handed_over.frame,
+        result.outcomes()[0].frame()
+    ));
+    drop(result);
+    let Fixture { mut owner, runtime } = fixture;
+    drop(runtime);
+    owner.begin_stop();
+    assert!(matches!(
+        owner.poll_retirement().unwrap(),
+        RetirementProgress::Pending { .. }
+    ));
+    let snapshot = owner.budget_snapshot();
+    let cpu = snapshot.for_kind(ChargeKind::CpuSnapshot);
+    assert!(
+        cpu.active_bytes + cpu.retired_bytes + cpu.quarantined_bytes >= cpu_bytes,
+        "handover owner must keep packed CPU capacity charged after Stop"
+    );
+    assert!(ids.iter().all(|id| id.context == owner.context().id()));
+    assert!(handed_over
+        .frame
+        .data
+        .chunks_exact(4)
+        .all(|pixel| pixel == [128, 128, 255, 255]));
+    drop(handed_over);
+    stop(&mut owner);
+
+    // Discover the after-submit cancellation boundary from real broker
+    // submission IDs rather than claiming that an arbitrary callback count is
+    // after GPU work. Each attempt has a fresh owner and an untouched input.
+    let mut observed_post_submit_cancel = false;
+    for cancel_at in 1..=16 {
+        let mut fixture = gpu();
+        let mut preparer = cpu_bridge_renderer();
+        let source = cpu_bridge_input(8, 4, [17, 23, 41, 255]);
+        let original = source.as_ref().clone();
+        let invocation = preparer
+            .prepare_native_cpu_invocation(
+                chain.clone(),
+                Arc::clone(&source),
+                Some(cpu_bridge_input_key()),
+                None,
+            )
+            .unwrap();
+        let prepared = fixture
+            .runtime
+            .prepare_native_cpu_inputs(request(1), invocation)
+            .unwrap();
+        let before = submission_probe(&mut fixture.owner, 50);
+        let quote = fixture
+            .owner
+            .quote(prepared.allocation_plan().unwrap())
+            .unwrap();
+        let reservation = fixture.owner.reserve(quote).unwrap();
+        let checks = std::cell::Cell::new(0);
+        let cancel = || {
+            let next = checks.get() + 1;
+            checks.set(next);
+            next >= cancel_at
+        };
+        let result = fixture.runtime.render_native_cpu_fallback(
+            &mut fixture.owner,
+            prepared,
+            reservation,
+            &cancel,
+        );
+        let retirement = match &result {
+            Err(NativeCpuRenderFailure::Cancelled { retirement }) => *retirement,
+            Err(error) => panic!("cancellation must remain typed Cancelled: {error:?}"),
+            Ok(_) => None,
+        };
+        let snapshot = fixture.owner.budget_snapshot();
+        let retained = snapshot.allocated_bytes;
+        let render_bytes = [ChargeKind::IsfScratch, ChargeKind::SnapshotReadback]
+            .into_iter()
+            .map(|kind| {
+                let charge = snapshot.for_kind(kind);
+                charge.active_bytes + charge.retired_bytes + charge.quarantined_bytes
+            })
+            .sum::<u64>();
+        let clock = fixture.runtime.native_frame_index();
+        let was_cancelled = result.is_err();
+        assert_eq!(source.as_ref(), &original);
+        drop(result);
+        // Cancellation returns ownership to the retirement registry. Drain
+        // that transaction before issuing another frame through this owner;
+        // the one-output-inflight guard must remain active until it retires.
+        let drain_started = Instant::now();
+        loop {
+            match fixture.owner.poll_retirement().unwrap() {
+                RetirementProgress::Pending {
+                    transactions: 0, ..
+                }
+                | RetirementProgress::Reaped => break,
+                RetirementProgress::Pending { .. } => {
+                    assert!(
+                        drain_started.elapsed() < Duration::from_secs(5),
+                        "cancelled CPU transaction must drain before a new frame"
+                    );
+                    std::thread::yield_now();
+                }
+            }
+        }
+        let after = submission_probe(&mut fixture.owner, 51);
+        let submitted_during_bridge = after - before - 1;
+        eprintln!("native CPU cancellation checkpoint={cancel_at} checks={} cancelled={was_cancelled} submissions={submitted_during_bridge} render_bytes={render_bytes} clock={clock} retirement={retirement:?}", checks.get());
+        if was_cancelled && submitted_during_bridge > 0 && retirement.is_some() && render_bytes > 0
+        {
+            assert_eq!(retirement.unwrap().context, fixture.owner.context().id());
+            assert!(
+                retained > 0,
+                "inflight/cancelled CPU resources remain charged before drain"
+            );
+            assert_eq!(
+                clock, 1,
+                "cancel never retries the original canonical chain"
+            );
+            observed_post_submit_cancel = true;
+        }
+        cpu_bridge_stop(fixture);
+        if observed_post_submit_cancel {
+            break;
+        }
+    }
+    assert!(
+        observed_post_submit_cancel,
+        "must observe a real submitted canonical CPU transaction cancelled without output"
+    );
+}

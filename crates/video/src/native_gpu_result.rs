@@ -16,6 +16,72 @@ use crate::{VideoEffectStageFault, VideoFrame, VideoRenderCancellation};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
+/// A CPU frame and its actual allocation charge share one lifetime. Native
+/// canonical invocations alias this owner instead of charging a shared Arc twice.
+#[derive(Debug)]
+pub(crate) struct NativeCpuFrameOwner {
+    pub(crate) frame: Arc<VideoFrame>,
+    pub(crate) charge: Option<Arc<AllocationCharge>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct NativeCpuOutcome {
+    owner: Arc<NativeCpuFrameOwner>,
+    faults: Vec<VideoEffectStageFault>,
+    scope: protocol::VideoEffectScope,
+    clocks: Option<FrozenChainClocks>,
+}
+impl NativeCpuOutcome {
+    pub(crate) fn new(
+        owner: Arc<NativeCpuFrameOwner>,
+        faults: Vec<VideoEffectStageFault>,
+        scope: protocol::VideoEffectScope,
+        clocks: Option<FrozenChainClocks>,
+    ) -> Self {
+        Self {
+            owner,
+            faults,
+            scope,
+            clocks,
+        }
+    }
+    /// Active output consumers retain this whole owner. A raw frame Arc from
+    /// the read-only accessor does not carry allocation accounting by itself.
+    pub(crate) fn charged_owner(&self) -> Arc<NativeCpuFrameOwner> {
+        Arc::clone(&self.owner)
+    }
+    pub(crate) fn frame(&self) -> &Arc<VideoFrame> {
+        &self.owner.frame
+    }
+    pub(crate) fn faults(&self) -> &[VideoEffectStageFault] {
+        &self.faults
+    }
+    pub(crate) fn scope(&self) -> &protocol::VideoEffectScope {
+        &self.scope
+    }
+    pub(crate) fn clocks(&self) -> Option<FrozenChainClocks> {
+        self.clocks
+    }
+    pub(crate) fn allocation_ids(&self) -> Vec<GpuAllocationId> {
+        self.owner.charge.iter().map(|charge| charge.id()).collect()
+    }
+}
+
+/// Ordinary canonical results do not mint historical materialization proofs or
+/// invent Layer identities for Group, Composition or Output scopes.
+#[derive(Debug)]
+pub(crate) struct NativeCpuResults {
+    outcomes: Vec<NativeCpuOutcome>,
+}
+impl NativeCpuResults {
+    pub(crate) fn new(outcomes: Vec<NativeCpuOutcome>) -> Self {
+        Self { outcomes }
+    }
+    pub(crate) fn outcomes(&self) -> &[NativeCpuOutcome] {
+        &self.outcomes
+    }
+}
+
 /// The charge lives exactly as long as this physical image or any GPU read.
 pub(crate) struct NativeTextureAllocation {
     image: IsfGpuImage,

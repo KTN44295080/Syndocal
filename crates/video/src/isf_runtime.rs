@@ -44,7 +44,9 @@ mod resources;
 use resources::{IsfDimension, IsfImportedImage};
 
 #[cfg(test)]
-pub(crate) use pass_runtime::{GpuImage as IsfGpuImage, NativeStackResources};
+pub(crate) use pass_runtime::{
+    GpuImage as IsfGpuImage, NativeCpuCacheEntry, NativeCpuCacheModel, NativeStackResources,
+};
 
 #[cfg(test)]
 pub(crate) fn native_queue_upload_pitch(adapter: &wgpu::Adapter) -> Option<u64> {
@@ -479,10 +481,15 @@ impl IsfGpuRuntime {
     /// all failed before GPU preparation. This keeps FRAMEINDEX independent of
     /// prepare-failure topology without changing the legacy `apply_stack`
     /// success-only advancement contract.
-    pub(crate) fn advance_stage_local_chain_without_prepared_stages(&mut self) {
+    pub(crate) fn advance_stage_local_chain_without_prepared_stages(
+        &mut self,
+    ) -> Result<(), IsfRuntimeError> {
+        #[cfg(test)]
+        self.reject_ownerless_native_entry()?;
         self.frame_index = self.frame_index.wrapping_add(1);
         self.last_stack_stage_count = 0;
         self.last_stack_render_us = 0;
+        Ok(())
     }
 
     pub fn pipeline_count(&self) -> usize {
@@ -515,7 +522,23 @@ pub(crate) fn run_stage_local_chain<'f, 's>(
         &[IsfInstanceKey],
     ) -> Result<VideoFrame, IsfRuntimeError>,
 ) -> (Cow<'f, VideoFrame>, Vec<(usize, IsfRuntimeError)>) {
-    let mut current = Cow::Borrowed(frame);
+    run_stage_local_values(
+        Cow::Borrowed(frame),
+        stages,
+        keys,
+        |current, stages, keys| render(current, stages, keys).map(Cow::Owned),
+    )
+}
+
+/// One ordering/recovery policy for borrowed CPU frames and native charged
+/// owners. The latter can retain an Arc through cancellation without copying
+/// the current CPU pixels merely to satisfy a GPU ticket's lifetime.
+pub(crate) fn run_stage_local_values<'s, T>(
+    mut current: T,
+    stages: &[IsfStageInputs<'s>],
+    keys: &[IsfInstanceKey],
+    mut render: impl FnMut(&T, &[IsfStageInputs<'s>], &[IsfInstanceKey]) -> Result<T, IsfRuntimeError>,
+) -> (T, Vec<(usize, IsfRuntimeError)>) {
     let mut failures = Vec::new();
     let mut index = 0;
     while index < stages.len() {
@@ -536,7 +559,7 @@ pub(crate) fn run_stage_local_chain<'f, 's>(
         }
         if end > index + 1 {
             if let Ok(rendered) = render(&current, &stages[index..end], &keys[index..end]) {
-                current = Cow::Owned(rendered);
+                current = rendered;
                 index = end;
                 continue;
             }
@@ -555,7 +578,7 @@ pub(crate) fn run_stage_local_chain<'f, 's>(
                 std::slice::from_ref(&stages[stage_index]),
                 std::slice::from_ref(stage_key),
             ) {
-                Ok(rendered) => current = Cow::Owned(rendered),
+                Ok(rendered) => current = rendered,
                 Err(error) => failures.push((stage_index, error)),
             }
         }
@@ -613,6 +636,42 @@ impl IsfGpuRuntime {
 
     pub(crate) fn native_frame_index(&self) -> u32 {
         self.frame_index
+    }
+
+    pub(crate) fn native_audio_snapshot(&self) -> Option<protocol::LiveAudioTextureFrame> {
+        self.audio_frame.clone()
+    }
+
+    pub(crate) fn native_record_cpu_metrics(&mut self, count: usize, elapsed_us: u64) {
+        self.last_stack_stage_count = count;
+        self.last_stack_render_us = elapsed_us;
+    }
+
+    pub(crate) fn native_cpu_cached_inputs(
+        &self,
+    ) -> Vec<Arc<crate::native_gpu_result::NativeCpuFrameOwner>> {
+        self.resources
+            .native_cpu_inputs
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+            .collect()
+    }
+
+    pub(crate) fn remember_native_cpu_frame(
+        &mut self,
+        frame: &Arc<crate::native_gpu_result::NativeCpuFrameOwner>,
+    ) {
+        self.resources
+            .native_cpu_inputs
+            .retain(|item| item.strong_count() != 0);
+        if !self
+            .resources
+            .native_cpu_inputs
+            .iter()
+            .any(|item| item.ptr_eq(&Arc::downgrade(frame)))
+        {
+            self.resources.native_cpu_inputs.push(Arc::downgrade(frame));
+        }
     }
 }
 

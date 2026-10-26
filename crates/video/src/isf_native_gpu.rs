@@ -78,15 +78,23 @@ pub(crate) struct NativeBatchRestrictions {
 pub(crate) struct PreparedNativeInputs {
     frame: NativeFrameId,
     context: GpuContextId,
-    jobs: StackBatch<Arc<PreparedNativeLayer>>,
+    work: PreparedNativeWork,
+    audio: Option<protocol::LiveAudioTextureFrame>,
     plan: Result<NativeAllocationPlan, NativeGpuDecline>,
+}
+enum PreparedNativeWork {
+    Layers(StackBatch<Arc<PreparedNativeLayer>>),
+    Cpu(cpu::PreparedCpuWork),
 }
 impl PreparedNativeInputs {
     pub(crate) fn allocation_plan(&self) -> Result<&NativeAllocationPlan, NativeGpuDecline> {
         self.plan.as_ref().map_err(|reason| *reason)
     }
     pub(crate) fn into_layers(self) -> StackBatch<Arc<PreparedNativeLayer>> {
-        self.jobs
+        match self.work {
+            PreparedNativeWork::Layers(jobs) => jobs,
+            PreparedNativeWork::Cpu(_) => panic!("canonical CPU inputs are not Layer identities"),
+        }
     }
 }
 pub(crate) struct PreparedNativeBatch {
@@ -266,7 +274,8 @@ impl IsfGpuRuntime {
         Ok(PreparedNativeInputs {
             frame,
             context: context.id(),
-            jobs,
+            work: PreparedNativeWork::Layers(jobs),
+            audio: self.native_audio_snapshot(),
             plan,
         })
     }
@@ -276,12 +285,15 @@ impl IsfGpuRuntime {
         inputs: PreparedNativeInputs,
         quote: &BudgetQuote,
     ) -> NativeBatchAdmission {
-        let reason = match &inputs.plan {
-            Err(reason) => Some(*reason),
-            Ok(plan) if quote.context() != inputs.context || !quote.covers_plan(plan) => {
+        let reason = match (&inputs.work, &inputs.plan) {
+            (PreparedNativeWork::Cpu(_), _) => {
+                Some(unsupported(UnsupportedNativeFx::UnsupportedJobCount))
+            }
+            (_, Err(reason)) => Some(*reason),
+            (_, Ok(plan)) if quote.context() != inputs.context || !quote.covers_plan(plan) => {
                 Some(NativeGpuDecline::QuoteExpired)
             }
-            Ok(_) => None,
+            (_, Ok(_)) => None,
         };
         match reason {
             Some(reason) => NativeBatchAdmission::Declined {
@@ -311,13 +323,20 @@ impl IsfGpuRuntime {
         }
         let transaction = txn.id();
         let context = txn.context().id();
-        let logical = self.reserve_independent_clocks(inputs.jobs.len());
-        let clocks = StackBatch::from_fn(inputs.jobs.len(), |index| {
-            inputs.jobs[index].clocks(logical.at(index))
-        });
+        let PreparedNativeWork::Layers(jobs) = inputs.work else {
+            return Err(fault(
+                context,
+                inputs.frame,
+                GpuPhase::IsfBatch,
+                NativeGpuFaultKind::StateMismatch,
+                "CPU invocation cannot enter resident Batch3",
+            ));
+        };
+        let logical = self.reserve_independent_clocks(jobs.len());
+        let clocks = StackBatch::from_fn(jobs.len(), |index| jobs[index].clocks(logical.at(index)));
         let mut phase = txn.begin_phase(GpuPhase::IsfBatch)?;
         let mut managed_inputs = StackBatch::Empty;
-        for job in &*inputs.jobs {
+        for job in &*jobs {
             let charge = phase
                 .bind_allocation(ChargeKind::ActiveCpuInput, job.input.data.capacity() as u64)?;
             let managed = Arc::new(NativeInputAllocation {
@@ -332,9 +351,9 @@ impl IsfGpuRuntime {
         self.commit_independent_clocks(logical);
         let mut final_images = StackBatch::Empty;
         let mut bindings = StackBatch::Empty;
-        let mut commands = Vec::with_capacity(inputs.jobs.len());
+        let mut commands = Vec::with_capacity(jobs.len());
         let mut failed = false;
-        for (index, job) in inputs.jobs.iter().enumerate() {
+        for (index, job) in jobs.iter().enumerate() {
             let result = self.encode_resident_job(
                 &mut phase,
                 job,
@@ -365,7 +384,7 @@ impl IsfGpuRuntime {
             let mut candidates = StackBatch::Empty;
             for (index, image) in final_images.into_iter().enumerate() {
                 candidates.push(EncodedLayerCandidate::from_encoded(
-                    inputs.jobs[index].identity(context, inputs.frame, clocks[index]),
+                    jobs[index].identity(context, inputs.frame, clocks[index]),
                     image,
                     transaction,
                     submission,
@@ -377,7 +396,7 @@ impl IsfGpuRuntime {
         Ok(EncodedIsfBatch {
             candidates,
             pending: PendingIsfReceipt::new(receipt),
-            jobs: inputs.jobs,
+            jobs,
             clocks,
             bindings,
             inputs: managed_inputs,
@@ -842,6 +861,7 @@ fn receive_map(
     owner: &mut NativeGpuOwner,
     mapping: &mut NativeReadbackMap,
     frame: NativeFrameId,
+    phase: GpuPhase,
     cancel: &dyn VideoRenderCancellation,
 ) -> Result<(), MaterializationFailure> {
     let started = Instant::now();
@@ -853,7 +873,7 @@ fn receive_map(
                 return Err(materialization_fault(fault(
                     owner.context().id(),
                     frame,
-                    GpuPhase::HistoricalReplay,
+                    phase,
                     NativeGpuFaultKind::Map,
                     error,
                 )))
@@ -866,7 +886,7 @@ fn receive_map(
                 return Err(materialization_fault(fault(
                     owner.context().id(),
                     frame,
-                    GpuPhase::HistoricalReplay,
+                    phase,
                     NativeGpuFaultKind::Map,
                     "native map callback deadline expired",
                 )))
@@ -1047,7 +1067,7 @@ impl IsfGpuRuntime {
                 .map_err(materialization_fault)?
                 .into_validation()
                 .map_err(materialization_fault)?;
-            receive_map(owner, &mut mapping, request, cancel)?;
+            receive_map(owner, &mut mapping, request, GpuPhase::IsfBatch, cancel)?;
             let frame = packed_copy(buffer, frame);
             check_cancel(cancel)?;
             ensure_publication_active(owner, request, GpuPhase::IsfBatch)?;
@@ -1459,6 +1479,921 @@ impl IsfGpuRuntime {
             .take_phase(receipt)
             .map_err(materialization_fault)?;
         copy.complete(phase, owner, cancel)
+    }
+}
+
+pub(crate) use cpu::{NativeCpuRenderFailure, PreparedNativeCpuInvocation};
+
+// The shared-context CPU bridge is a separate policy/lifecycle section. It
+// delegates every shader pass and stage-local decision to the canonical code.
+mod cpu {
+    use super::*;
+    use crate::native_gpu_budget::FrameReservation;
+    use std::collections::HashSet;
+
+    pub(crate) struct PreparedNativeCpuInvocation {
+        input: Arc<VideoFrame>,
+        chain: PreparedChain<'static>,
+        date: [f32; 4],
+        audio: Option<Arc<protocol::LiveAudioTextureFrame>>,
+    }
+    impl PreparedNativeCpuInvocation {
+        pub(crate) fn new(
+            input: Arc<VideoFrame>,
+            chain: PreparedChain<'static>,
+            date: [f32; 4],
+            audio: Option<protocol::LiveAudioTextureFrame>,
+        ) -> Self {
+            Self {
+                input,
+                chain,
+                date,
+                audio: audio
+                    .filter(protocol::LiveAudioTextureFrame::is_valid)
+                    .map(Arc::new),
+            }
+        }
+    }
+
+    pub(crate) enum NativeCpuRenderFailure {
+        Admission {
+            fault: NativeGpuFault,
+            prepared: PreparedNativeInputs,
+            reservation: FrameReservation,
+        },
+        Declined {
+            reason: NativeGpuDecline,
+            prepared: PreparedNativeInputs,
+        },
+        Cancelled {
+            retirement: Option<RetirementId>,
+        },
+        Fault {
+            fault: NativeGpuFault,
+            retirement: Option<RetirementId>,
+        },
+    }
+    impl std::fmt::Debug for NativeCpuRenderFailure {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Admission {
+                    fault, reservation, ..
+                } => f
+                    .debug_struct("Admission")
+                    .field("fault", fault)
+                    .field("reservation", reservation)
+                    .finish_non_exhaustive(),
+                Self::Declined { reason, .. } => f
+                    .debug_struct("Declined")
+                    .field("reason", reason)
+                    .finish_non_exhaustive(),
+                Self::Cancelled { retirement } => f
+                    .debug_struct("Cancelled")
+                    .field("retirement", retirement)
+                    .finish(),
+                Self::Fault { fault, retirement } => f
+                    .debug_struct("Fault")
+                    .field("fault", fault)
+                    .field("retirement", retirement)
+                    .finish(),
+            }
+        }
+    }
+    impl From<MaterializationFailure> for NativeCpuRenderFailure {
+        fn from(value: MaterializationFailure) -> Self {
+            match value {
+                MaterializationFailure::Cancelled { retirement } => Self::Cancelled { retirement },
+                MaterializationFailure::Fault { fault, retirement } => {
+                    Self::Fault { fault, retirement }
+                }
+            }
+        }
+    }
+
+    enum CpuInput {
+        Frame(Arc<VideoFrame>),
+        Existing(Arc<NativeCpuFrameOwner>),
+        Bytes(Arc<[u8]>),
+        Audio(Arc<protocol::LiveAudioTextureFrame>),
+    }
+    impl CpuInput {
+        fn identity(&self) -> (u8, usize) {
+            match self {
+                Self::Frame(frame) => (0, Arc::as_ptr(frame) as usize),
+                Self::Existing(owner) => (0, Arc::as_ptr(&owner.frame) as usize),
+                Self::Bytes(bytes) => (1, Arc::as_ptr(bytes) as *const u8 as usize),
+                Self::Audio(audio) => (2, Arc::as_ptr(audio) as usize),
+            }
+        }
+        fn new_bytes(&self) -> u64 {
+            match self {
+                Self::Frame(frame) => frame.data.capacity() as u64,
+                Self::Existing(_) => 0,
+                Self::Bytes(bytes) => bytes.len() as u64,
+                Self::Audio(_) => std::mem::size_of::<protocol::LiveAudioTextureFrame>() as u64,
+            }
+        }
+    }
+    pub(super) struct PreparedCpuWork {
+        invocations: Vec<Arc<PreparedNativeCpuInvocation>>,
+        inputs: Vec<CpuInput>,
+        cache_stamp: (u64, Vec<(GpuAllocationId, usize)>),
+    }
+
+    struct AuxiliaryCpuOwner {
+        _input: CpuInput,
+        charge: Option<Arc<AllocationCharge>>,
+    }
+    struct HeldCpuInputs {
+        frames: Vec<Arc<NativeCpuFrameOwner>>,
+        auxiliary: Vec<Arc<AuxiliaryCpuOwner>>,
+    }
+    impl HeldCpuInputs {
+        fn ids(&self) -> Vec<GpuAllocationId> {
+            self.frames
+                .iter()
+                .flat_map(|owner| &owner.charge)
+                .map(|charge| charge.id())
+                .chain(
+                    self.auxiliary
+                        .iter()
+                        .flat_map(|owner| &owner.charge)
+                        .map(|charge| charge.id()),
+                )
+                .collect()
+        }
+        fn frame(&self, input: &Arc<VideoFrame>) -> Arc<NativeCpuFrameOwner> {
+            Arc::clone(
+                self.frames
+                    .iter()
+                    .find(|owner| Arc::ptr_eq(&owner.frame, input))
+                    .expect("admitted input owner"),
+            )
+        }
+    }
+    enum CpuChunkFailure {
+        Canonical(IsfRuntimeError),
+        Terminal(MaterializationFailure),
+    }
+    impl From<MaterializationFailure> for CpuChunkFailure {
+        fn from(value: MaterializationFailure) -> Self {
+            Self::Terminal(value)
+        }
+    }
+
+    fn retain_inputs(
+        owner: &mut NativeGpuOwner,
+        frame: NativeFrameId,
+        inputs: Vec<CpuInput>,
+        cancel: &dyn VideoRenderCancellation,
+    ) -> Result<Arc<HeldCpuInputs>, MaterializationFailure> {
+        let mut plan = NativeAllocationPlan::new(frame);
+        for input in &inputs {
+            if let CpuInput::Existing(prior) = input {
+                if let Some(charge) = &prior.charge {
+                    plan.add_existing(charge.id());
+                }
+            } else if input.new_bytes() != 0 {
+                plan.add_new(ChargeKind::ActiveCpuInput, input.new_bytes())
+                    .map_err(|reason| {
+                        materialization_fault(fault(
+                            owner.context().id(),
+                            frame,
+                            GpuPhase::IsfBatch,
+                            NativeGpuFaultKind::OutOfMemory,
+                            format!("CPU source plan: {reason:?}"),
+                        ))
+                    })?;
+            }
+        }
+        let reservation = reserve_plan(owner, &plan, GpuPhase::IsfBatch)?;
+        let mut txn = owner
+            .begin_frame(frame, reservation)
+            .map_err(materialization_fault)?;
+        let retirement = txn.id();
+        let pending_fault = |fault| MaterializationFailure::Fault {
+            fault,
+            retirement: Some(retirement),
+        };
+        let mut held = HeldCpuInputs {
+            frames: Vec::new(),
+            auxiliary: Vec::new(),
+        };
+        for input in inputs {
+            let bytes = input.new_bytes();
+            let charge = if bytes == 0 {
+                None
+            } else {
+                Some(Arc::new(
+                    txn.bind_allocation(ChargeKind::ActiveCpuInput, bytes)
+                        .map_err(pending_fault)?,
+                ))
+            };
+            match input {
+                CpuInput::Existing(prior) => {
+                    txn.retain_resource(
+                        Arc::clone(&prior),
+                        &prior
+                            .charge
+                            .iter()
+                            .map(|charge| charge.id())
+                            .collect::<Vec<_>>(),
+                    )
+                    .map_err(pending_fault)?;
+                    held.frames.push(prior);
+                }
+                CpuInput::Frame(frame) => {
+                    let retained = Arc::new(NativeCpuFrameOwner { frame, charge });
+                    txn.retain_resource(
+                        Arc::clone(&retained),
+                        &retained
+                            .charge
+                            .iter()
+                            .map(|charge| charge.id())
+                            .collect::<Vec<_>>(),
+                    )
+                    .map_err(pending_fault)?;
+                    held.frames.push(retained);
+                }
+                input => {
+                    let retained = Arc::new(AuxiliaryCpuOwner {
+                        _input: input,
+                        charge,
+                    });
+                    txn.retain_resource(
+                        Arc::clone(&retained),
+                        &retained
+                            .charge
+                            .iter()
+                            .map(|charge| charge.id())
+                            .collect::<Vec<_>>(),
+                    )
+                    .map_err(pending_fault)?;
+                    held.auxiliary.push(retained);
+                }
+            }
+        }
+        let held = Arc::new(held);
+        let pending = txn.finish();
+        await_transaction(owner, pending, cancel)?;
+        Ok(held)
+    }
+
+    fn with_stages<T>(
+        invocation: &PreparedNativeCpuInvocation,
+        run: impl FnOnce(&[IsfStageInputs<'_>]) -> T,
+    ) -> T {
+        let images = invocation
+            .chain
+            .stages
+            .iter()
+            .map(|stage| {
+                stage
+                    .images
+                    .iter()
+                    .map(|(name, frame)| crate::isf_runtime::IsfImageInput { name, frame })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let stages = invocation
+            .chain
+            .stages
+            .iter()
+            .zip(&images)
+            .map(|(stage, images)| IsfStageInputs {
+                shader: &stage.shader,
+                controls: &stage.controls,
+                images,
+            })
+            .collect::<Vec<_>>();
+        run(&stages)
+    }
+
+    fn checked_sum(left: u64, right: u64) -> Result<u64, NativeGpuDecline> {
+        left.checked_add(right)
+            .ok_or(NativeGpuDecline::BudgetExceeded {
+                live: 0,
+                requested: u64::MAX,
+                limit: crate::native_gpu_budget::NATIVE_MANAGED_LIMIT,
+            })
+    }
+
+    impl IsfGpuRuntime {
+        pub(crate) fn render_native_cpu_fallback(
+            &mut self,
+            owner: &mut NativeGpuOwner,
+            inputs: PreparedNativeInputs,
+            reservation: FrameReservation,
+            cancel: &dyn VideoRenderCancellation,
+        ) -> Result<NativeCpuResults, NativeCpuRenderFailure> {
+            let plan = match &inputs.plan {
+                Ok(plan) => plan,
+                Err(reason) => {
+                    let reason = *reason;
+                    if let Err((fault, reservation)) =
+                        owner.discard_unsubmitted_reservation(reservation)
+                    {
+                        return Err(NativeCpuRenderFailure::Admission {
+                            fault,
+                            prepared: inputs,
+                            reservation,
+                        });
+                    }
+                    return Err(NativeCpuRenderFailure::Declined {
+                        reason,
+                        prepared: inputs,
+                    });
+                }
+            };
+            if let Err((fault, reservation)) = owner.admit_serial_cpu_plan(reservation, plan) {
+                return Err(NativeCpuRenderFailure::Admission {
+                    fault,
+                    prepared: inputs,
+                    reservation,
+                });
+            }
+            if inputs.context != owner.context().id()
+                || self
+                    .native_context()
+                    .is_none_or(|context| !Arc::ptr_eq(context, owner.context()))
+            {
+                return Err(NativeCpuRenderFailure::Fault {
+                    fault: fault(
+                        owner.context().id(),
+                        inputs.frame,
+                        GpuPhase::IsfBatch,
+                        NativeGpuFaultKind::IdentityMismatch,
+                        "CPU invocation belongs to another shared GPU context",
+                    ),
+                    retirement: None,
+                });
+            }
+            check_cancel(cancel)?;
+            ensure_publication_active(owner, inputs.frame, GpuPhase::IsfBatch)?;
+            let PreparedNativeWork::Cpu(work) = &inputs.work else {
+                return Err(NativeCpuRenderFailure::Declined {
+                    reason: NativeGpuDecline::QuoteExpired,
+                    prepared: inputs,
+                });
+            };
+            if work.cache_stamp != self.native_cpu_cache_stamp() {
+                return Err(NativeCpuRenderFailure::Declined {
+                    reason: NativeGpuDecline::QuoteExpired,
+                    prepared: inputs,
+                });
+            }
+            let request = inputs.frame;
+            let PreparedNativeWork::Cpu(work) = inputs.work else {
+                unreachable!()
+            };
+            if let Some(first) = work.invocations.iter().find(|invocation| {
+                crate::resolved_chain_executes(&invocation.chain.source)
+                    && !invocation.chain.stages.is_empty()
+                    && !invocation.chain.keys.is_empty()
+                    && crate::isf_runtime::native_valid_date(invocation.date)
+            }) {
+                let _ = self.native_cpu_apply_baseline_evictions(&first.input);
+                owner.poll_retirement().map_err(materialization_fault)?;
+            }
+            let held = retain_inputs(owner, request, work.inputs, cancel)?;
+            let mut outcomes = Vec::with_capacity(work.invocations.len());
+            for invocation in work.invocations {
+                check_cancel(cancel)?;
+                ensure_publication_active(owner, request, GpuPhase::IsfBatch)?;
+                let input = held.frame(&invocation.input);
+                let executes = crate::resolved_chain_executes(&invocation.chain.source);
+                let clocks = if executes {
+                    let logical = self.reserve_independent_clocks(1);
+                    let clocks = FrozenChainClocks {
+                        frame_index: logical.at(0),
+                        time_seconds_bits: (invocation.input.pts_ms as f32 / 1000.0).to_bits(),
+                        time_delta_seconds_bits: (invocation.input.duration_ms as f32 / 1000.0)
+                            .to_bits(),
+                        date_bits: invocation.date.map(f32::to_bits),
+                    };
+                    self.commit_independent_clocks(logical);
+                    Some(clocks)
+                } else {
+                    None
+                };
+                self.set_audio_frame(invocation.audio.as_deref());
+                let started = Instant::now();
+                let (rendered, failures) = if let Some(clocks) = clocks {
+                    let mut terminal = None;
+                    let result = with_stages(&invocation, |stages| {
+                        crate::isf_runtime::run_stage_local_values(
+                            input,
+                            stages,
+                            &invocation.chain.keys,
+                            |current, stages, keys| {
+                                if terminal.is_some() {
+                                    return Err(IsfRuntimeError {
+                                        message: "native CPU chain cancelled or owner retained"
+                                            .into(),
+                                    });
+                                }
+                                match self.render_native_cpu_chunk(
+                                    owner,
+                                    request,
+                                    Arc::clone(current),
+                                    Arc::clone(&held),
+                                    stages,
+                                    keys,
+                                    clocks,
+                                    cancel,
+                                ) {
+                                    Ok(output) => Ok(output),
+                                    Err(CpuChunkFailure::Canonical(error)) => Err(error),
+                                    Err(CpuChunkFailure::Terminal(error)) => {
+                                        terminal = Some(error);
+                                        Err(IsfRuntimeError {
+                                            message: "native CPU chain cancelled or owner retained"
+                                                .into(),
+                                        })
+                                    }
+                                }
+                            },
+                        )
+                    });
+                    if let Some(error) = terminal {
+                        return Err(error.into());
+                    }
+                    result
+                } else {
+                    (input, Vec::new())
+                };
+                if executes {
+                    self.native_record_cpu_metrics(
+                        invocation.chain.stages.len(),
+                        if invocation.chain.stages.is_empty() {
+                            0
+                        } else {
+                            started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
+                        },
+                    );
+                }
+                check_cancel(cancel)?;
+                ensure_publication_active(owner, request, GpuPhase::IsfBatch)?;
+                self.remember_native_cpu_frame(&rendered);
+                let faults = invocation.chain.clone().finish_faults(failures);
+                outcomes.push(NativeCpuOutcome::new(
+                    rendered,
+                    faults,
+                    invocation.chain.source.scope.clone(),
+                    clocks,
+                ));
+                owner.poll_retirement().map_err(materialization_fault)?;
+            }
+            drop(held);
+            owner.poll_retirement().map_err(materialization_fault)?;
+            Ok(NativeCpuResults::new(outcomes))
+        }
+
+        fn render_native_cpu_chunk(
+            &mut self,
+            owner: &mut NativeGpuOwner,
+            request: NativeFrameId,
+            current: Arc<NativeCpuFrameOwner>,
+            held: Arc<HeldCpuInputs>,
+            stages: &[IsfStageInputs<'_>],
+            keys: &[IsfInstanceKey],
+            clocks: FrozenChainClocks,
+            cancel: &dyn VideoRenderCancellation,
+        ) -> Result<Arc<NativeCpuFrameOwner>, CpuChunkFailure> {
+            check_cancel(cancel)?;
+            ensure_publication_active(owner, request, GpuPhase::IsfBatch)?;
+            if !crate::isf_runtime::native_valid_date(clocks.date_bits.map(f32::from_bits)) {
+                return Err(CpuChunkFailure::Canonical(IsfRuntimeError {
+                    message: "ISF DATE contains an invalid date or time".into(),
+                }));
+            }
+            self.native_cpu_apply_baseline_evictions(&current.frame)
+                .map_err(CpuChunkFailure::Canonical)?;
+            owner.poll_retirement().map_err(materialization_fault)?;
+            self.native_cpu_validate_input(&current.frame)
+                .map_err(CpuChunkFailure::Canonical)?;
+            let pipeline_pins = self.prepare_cpu_pipeline_chunk(
+                owner, request, &current, &held, stages, keys, cancel,
+            )?;
+            check_cancel(cancel)?;
+            self.native_cpu_apply_take_evictions(&current.frame, stages, keys)
+                .map_err(CpuChunkFailure::Canonical)?;
+            owner.poll_retirement().map_err(materialization_fault)?;
+            let audio = self.native_audio_snapshot();
+            let mut chunk_plan = self
+                .native_cpu_chunk_plan(request, &current.frame, stages, keys, audio.as_ref())
+                .map_err(CpuChunkFailure::Canonical)?;
+            let held_ids = held.ids();
+            for id in &held_ids {
+                chunk_plan.plan.add_existing(*id);
+            }
+            let current_ids: Vec<_> = current.charge.iter().map(|charge| charge.id()).collect();
+            for id in &current_ids {
+                chunk_plan.plan.add_existing(*id);
+            }
+            // The admission envelope was validated without intervening owners.
+            // A late mismatch/OOM is terminal, never an unexecuted decline.
+            let reservation = reserve_plan(owner, &chunk_plan.plan, GpuPhase::IsfBatch)?;
+            let mut txn = owner
+                .begin_frame(request, reservation)
+                .map_err(materialization_fault)?;
+            let retirement = txn.id();
+            let pending_fault = |fault| MaterializationFailure::Fault {
+                fault,
+                retirement: Some(retirement),
+            };
+            txn.retain_resource(Arc::clone(&held), &held_ids)
+                .map_err(pending_fault)?;
+            txn.retain_resource(Arc::clone(&current), &current_ids)
+                .map_err(pending_fault)?;
+            let mut phase = txn.begin_phase(GpuPhase::IsfBatch).map_err(pending_fault)?;
+            phase
+                .retain_resource(pipeline_pins, &[])
+                .map_err(pending_fault)?;
+            let (mut encoded, encode_failure) = match self.native_encode_cpu_chunk(
+                &mut phase,
+                &current.frame,
+                stages,
+                keys,
+                clocks,
+            ) {
+                Ok(chunk) => (Some(chunk), None),
+                Err(fault) => {
+                    phase.record_failure(fault.kind, fault.message.clone());
+                    (None, Some(fault))
+                }
+            };
+            let commands = encoded
+                .as_mut()
+                .map(|chunk| chunk.take_commands())
+                .unwrap_or_default();
+            let phase = phase.finish(commands);
+            let receipt = txn.submit_phase(phase).map_err(pending_fault)?;
+            let pending = txn.finish();
+            let mut mapping = encoded
+                .as_ref()
+                .filter(|chunk| chunk.host_error().is_none())
+                .map(|chunk| NativeReadbackMap::start(chunk.readback()));
+            let completed = await_transaction(owner, pending, cancel);
+            let mut completed = match completed {
+                Ok(completed) => completed,
+                Err(error) => {
+                    if let Some(mapping) = &mut mapping {
+                        mapping.unmap();
+                    }
+                    drop(mapping);
+                    if let Some(chunk) = encoded {
+                        self.native_finish_cpu_chunk(chunk, false, true);
+                    }
+                    return Err(CpuChunkFailure::Terminal(error));
+                }
+            };
+            let validation = completed
+                .take_phase(receipt)
+                .and_then(|phase| phase.into_validation());
+            if let Some(fault) = encode_failure {
+                if let Some(mapping) = &mut mapping {
+                    mapping.unmap();
+                }
+                drop(mapping);
+                if let Some(chunk) = encoded {
+                    self.native_finish_cpu_chunk(chunk, false, true);
+                }
+                return Err(CpuChunkFailure::Terminal(materialization_fault(fault)));
+            }
+            let chunk = encoded.expect("canonical encoder owns its completed CPU resources");
+            if let Err(fault) = validation {
+                if let Some(mapping) = &mut mapping {
+                    mapping.unmap();
+                }
+                drop(mapping);
+                self.native_finish_cpu_chunk(chunk, false, true);
+                owner.poll_retirement().map_err(materialization_fault)?;
+                return Err(CpuChunkFailure::Canonical(IsfRuntimeError {
+                    message: format!("ISF GPU pass failed: {}", fault.message),
+                }));
+            }
+            if let Some(error) = chunk.host_error().cloned() {
+                self.native_finish_cpu_chunk(chunk, false, false);
+                owner.poll_retirement().map_err(materialization_fault)?;
+                return Err(CpuChunkFailure::Canonical(error));
+            }
+            let mut mapping = mapping.expect("successful CPU encoder has a readback map");
+            if let Err(error) =
+                receive_map(owner, &mut mapping, request, GpuPhase::IsfBatch, cancel)
+            {
+                mapping.unmap();
+                drop(mapping);
+                self.native_finish_cpu_chunk(chunk, false, false);
+                return match error {
+                    MaterializationFailure::Fault {
+                        fault,
+                        retirement: None,
+                    } if fault.kind == NativeGpuFaultKind::Map => {
+                        Err(CpuChunkFailure::Canonical(IsfRuntimeError {
+                            message: format!("ISF readback failed: {}", fault.message),
+                        }))
+                    }
+                    other => Err(CpuChunkFailure::Terminal(other)),
+                };
+            }
+            let output = chunk.copy_mapped();
+            mapping.unmap();
+            drop(mapping);
+            self.native_finish_cpu_chunk(chunk, true, false);
+            // Canonical feedback is committed after successful readback even if
+            // the publication checkpoint immediately observes cancellation.
+            check_cancel(cancel)?;
+            ensure_publication_active(owner, request, GpuPhase::IsfBatch)?;
+            owner.poll_retirement().map_err(materialization_fault)?;
+            Ok(output)
+        }
+
+        fn prepare_cpu_pipeline_chunk(
+            &mut self,
+            owner: &mut NativeGpuOwner,
+            request: NativeFrameId,
+            current: &Arc<NativeCpuFrameOwner>,
+            held: &Arc<HeldCpuInputs>,
+            stages: &[IsfStageInputs<'_>],
+            keys: &[IsfInstanceKey],
+            cancel: &dyn VideoRenderCancellation,
+        ) -> Result<Arc<Vec<Arc<crate::isf_runtime::IsfGpuPipeline>>>, CpuChunkFailure> {
+            check_cancel(cancel)?;
+            let mut plan = NativeAllocationPlan::new(request);
+            let held_ids = held.ids();
+            let current_ids: Vec<_> = current.charge.iter().map(|charge| charge.id()).collect();
+            for id in held_ids.iter().chain(&current_ids) {
+                plan.add_existing(*id);
+            }
+            let reservation = reserve_plan(owner, &plan, GpuPhase::IsfBatch)?;
+            let mut txn = owner
+                .begin_frame(request, reservation)
+                .map_err(materialization_fault)?;
+            let retirement = txn.id();
+            let pending_fault = |fault| MaterializationFailure::Fault {
+                fault,
+                retirement: Some(retirement),
+            };
+            txn.retain_resource(Arc::clone(held), &held_ids)
+                .map_err(pending_fault)?;
+            txn.retain_resource(Arc::clone(current), &current_ids)
+                .map_err(pending_fault)?;
+            let mut phase = txn.begin_phase(GpuPhase::IsfBatch).map_err(pending_fault)?;
+            let (pins, prepared) = self.native_prepare_cpu_pipelines(&phase, stages);
+            let pins = Arc::new(pins);
+            let host_error = prepared.err();
+            phase
+                .retain_resource(Arc::clone(&pins), &[])
+                .map_err(pending_fault)?;
+            let phase = phase.finish(Vec::new());
+            let receipt = txn.submit_phase(phase).map_err(pending_fault)?;
+            let pending = txn.finish();
+            let mut resolved = await_transaction(owner, pending, cancel)?;
+            if let Err(fault) = resolved
+                .take_phase(receipt)
+                .and_then(|phase| phase.into_validation())
+            {
+                self.native_cpu_invalidate_keys(keys);
+                owner.poll_retirement().map_err(materialization_fault)?;
+                return Err(CpuChunkFailure::Canonical(IsfRuntimeError {
+                    message: format!("ISF GPU pass failed: {}", fault.message),
+                }));
+            }
+            if let Some(error) = host_error {
+                return Err(CpuChunkFailure::Canonical(error));
+            }
+            check_cancel(cancel)?;
+            ensure_publication_active(owner, request, GpuPhase::IsfBatch)?;
+            Ok(pins)
+        }
+
+        pub(crate) fn prepare_native_cpu_inputs(
+            &self,
+            frame: NativeFrameId,
+            invocation: PreparedNativeCpuInvocation,
+        ) -> Result<PreparedNativeInputs, NativeGpuFault> {
+            self.prepare_cpu_invocations(frame, vec![Arc::new(invocation)])
+        }
+
+        pub(crate) fn prepare_native_cpu_fallback(
+            &self,
+            inputs: PreparedNativeInputs,
+        ) -> Result<PreparedNativeInputs, NativeGpuFault> {
+            match inputs.work {
+                PreparedNativeWork::Cpu(work) => {
+                    self.prepare_cpu_invocations(inputs.frame, work.invocations)
+                }
+                PreparedNativeWork::Layers(jobs) => {
+                    let invocations = jobs
+                        .into_iter()
+                        .map(|job| {
+                            let (input, chain, date) = match Arc::try_unwrap(job) {
+                                Ok(job) => (job.input, job.chain, job.date),
+                                Err(job) => (Arc::clone(&job.input), job.chain.clone(), job.date),
+                            };
+                            Arc::new(PreparedNativeCpuInvocation::new(
+                                input,
+                                chain,
+                                date,
+                                inputs.audio.clone(),
+                            ))
+                        })
+                        .collect();
+                    self.prepare_cpu_invocations(inputs.frame, invocations)
+                }
+            }
+        }
+
+        fn prepare_cpu_invocations(
+            &self,
+            frame: NativeFrameId,
+            invocations: Vec<Arc<PreparedNativeCpuInvocation>>,
+        ) -> Result<PreparedNativeInputs, NativeGpuFault> {
+            let context = self.native_context().ok_or_else(|| {
+                fault(
+                    GpuContextId {
+                        owner_id: frame.output_id,
+                        device_generation: 0,
+                    },
+                    frame,
+                    GpuPhase::IsfBatch,
+                    NativeGpuFaultKind::StateMismatch,
+                    "native CPU preparation requires its shared runtime",
+                )
+            })?;
+            let known = self.native_cpu_cached_inputs();
+            let mut inputs = Vec::new();
+            let mut seen = HashSet::new();
+            let mut collect = |input: CpuInput| {
+                if seen.insert(input.identity()) {
+                    let input = match input {
+                        CpuInput::Frame(frame) => known
+                            .iter()
+                            .find(|prior| Arc::ptr_eq(&prior.frame, &frame))
+                            .map(|prior| CpuInput::Existing(Arc::clone(prior)))
+                            .unwrap_or(CpuInput::Frame(frame)),
+                        other => other,
+                    };
+                    inputs.push(input);
+                }
+            };
+            for invocation in &invocations {
+                collect(CpuInput::Frame(Arc::clone(&invocation.input)));
+                for stage in &invocation.chain.stages {
+                    for (_, image) in &stage.images {
+                        collect(CpuInput::Frame(Arc::clone(image)));
+                    }
+                    for image in stage
+                        .shader
+                        .imported_images
+                        .iter()
+                        .chain(&stage.shader.bound_images)
+                    {
+                        collect(CpuInput::Bytes(Arc::clone(&image.rgba)));
+                    }
+                }
+                if let Some(audio) = &invocation.audio {
+                    collect(CpuInput::Audio(Arc::clone(audio)));
+                }
+            }
+            let cache_stamp = self.native_cpu_cache_stamp();
+            let plan = (|| {
+                let mut plan = NativeAllocationPlan::new(frame);
+                let mut active_inputs = 0;
+                for input in &inputs {
+                    active_inputs = checked_sum(active_inputs, input.new_bytes())?;
+                    if let CpuInput::Existing(owner) = input {
+                        if let Some(charge) = &owner.charge {
+                            plan.add_existing(charge.id());
+                        }
+                    }
+                }
+                for (id, _) in &cache_stamp.1 {
+                    plan.add_existing(*id);
+                }
+                let mut cache = self.native_cpu_cache_model();
+                let initial_credit = cache.reclaimable_bytes();
+                if let Some(first) = invocations.iter().find(|invocation| {
+                    crate::resolved_chain_executes(&invocation.chain.source)
+                        && !invocation.chain.stages.is_empty()
+                        && !invocation.chain.keys.is_empty()
+                        && crate::isf_runtime::native_valid_date(invocation.date)
+                }) {
+                    // The matching baseline eviction runs before importing the
+                    // newly admitted CPU owners. No GPU resources are created.
+                    let _ = self.native_cpu_simulate_baseline(&mut cache, &first.input);
+                }
+                let mut serial_peak = checked_sum(active_inputs, cache.reclaimable_bytes())?;
+                let mut completed_outputs = 0;
+                for invocation in &invocations {
+                    if !crate::resolved_chain_executes(&invocation.chain.source)
+                        || !crate::isf_runtime::native_valid_date(invocation.date)
+                    {
+                        continue;
+                    }
+                    let pixels =
+                        rgba_bytes(invocation.input.width, invocation.input.height).unwrap_or(0);
+                    let mut has_output = false;
+                    with_stages(invocation, |stages| -> Result<(), NativeGpuDecline> {
+                        let mut index = 0;
+                        while index < stages.len() {
+                            if index >= invocation.chain.keys.len() {
+                                break;
+                            }
+                            let mut end = index + 1;
+                            if stages[index].can_share_host_buffers() {
+                                while end < stages.len()
+                                    && end < invocation.chain.keys.len()
+                                    && stages[end].can_share_host_buffers()
+                                {
+                                    end += 1;
+                                }
+                            }
+                            let before = cache.clone();
+                            let prior_output = has_output;
+                            let live_cpu = checked_sum(
+                                checked_sum(active_inputs, completed_outputs)?,
+                                if has_output { pixels } else { 0 },
+                            )?;
+                            let success = match self.native_cpu_simulate_chunk(
+                                &mut cache,
+                                frame,
+                                &invocation.input,
+                                !has_output,
+                                &stages[index..end],
+                                &invocation.chain.keys[index..end],
+                                invocation.audio.as_deref(),
+                            ) {
+                                Ok(peak) => {
+                                    serial_peak = serial_peak.max(checked_sum(live_cpu, peak)?);
+                                    true
+                                }
+                                Err(_) => {
+                                    serial_peak = serial_peak
+                                        .max(checked_sum(live_cpu, cache.reclaimable_bytes())?);
+                                    false
+                                }
+                            };
+                            has_output |= success;
+                            if end > index + 1 {
+                                let mut recovery_cache = before;
+                                let mut recovery_output = prior_output;
+                                for stage_index in index..end {
+                                    let live_cpu = checked_sum(
+                                        checked_sum(active_inputs, completed_outputs)?,
+                                        if recovery_output { pixels } else { 0 },
+                                    )?;
+                                    if let Ok(peak) = self.native_cpu_simulate_chunk(
+                                        &mut recovery_cache,
+                                        frame,
+                                        &invocation.input,
+                                        !recovery_output,
+                                        std::slice::from_ref(&stages[stage_index]),
+                                        std::slice::from_ref(&invocation.chain.keys[stage_index]),
+                                        invocation.audio.as_deref(),
+                                    ) {
+                                        serial_peak = serial_peak.max(checked_sum(live_cpu, peak)?);
+                                        recovery_output = true;
+                                    }
+                                }
+                                if !success {
+                                    cache = recovery_cache;
+                                    has_output = recovery_output;
+                                }
+                            }
+                            index = end;
+                        }
+                        Ok(())
+                    })?;
+                    if has_output {
+                        completed_outputs = checked_sum(completed_outputs, pixels)?;
+                    }
+                }
+                // Only capacity whose sole physical cache owner can retire is
+                // credited. Aliases/retired/external owners remain in the live
+                // ledger and are never counted as free by this envelope.
+                let peak = crate::isf_runtime::NativeCpuCacheModel::additional_peak(
+                    initial_credit,
+                    serial_peak,
+                );
+                if peak != 0 {
+                    plan.add_new(ChargeKind::SerialCpuAdmission, peak)?;
+                }
+                Ok(plan)
+            })();
+            Ok(PreparedNativeInputs {
+                frame,
+                context: context.id(),
+                audio: None,
+                work: PreparedNativeWork::Cpu(PreparedCpuWork {
+                    invocations,
+                    inputs,
+                    cache_stamp,
+                }),
+                plan,
+            })
+        }
     }
 }
 
