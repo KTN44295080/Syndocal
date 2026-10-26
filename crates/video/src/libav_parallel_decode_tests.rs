@@ -336,7 +336,7 @@ fn decoding_ahead_returns_exactly_the_frames_decoding_on_demand_does() {
 }
 
 #[test]
-fn retaining_or_releasing_joins_the_frames_being_decoded_ahead() {
+fn retaining_preserves_active_lookaheads_and_releasing_reaps_removed_owners() {
     let path = fixture("ahead-release", 1);
     let mut decoder = LibavFrameDecoder::software_for_tests();
     decoder
@@ -348,7 +348,11 @@ fn retaining_or_releasing_joins_the_frames_being_decoded_ahead() {
     assert_eq!(decoder.session_diagnostics().active_sessions, 2);
     decoder.retain_inputs(&[input(2, &path, 0)]);
     assert_eq!(decoder.session_diagnostics().active_sessions, 1);
-    assert!(decoder.lookaheads.is_empty());
+    // Retention no longer forces an active owner's speculative decode to
+    // finish. The removed owner is acknowledged and cannot return later.
+    assert_eq!(decoder.lookaheads.len(), 1);
+    assert_eq!(decoder.lookaheads[0].layer_id, 2);
+    assert!(decoder.sessions.iter().all(|session| session.layer_id == 2));
     decoder.release_layer(2);
     assert_eq!(decoder.session_diagnostics().active_sessions, 0);
 }
@@ -457,7 +461,10 @@ fn sixteen_playing_inputs_retain_their_sessions_across_ticks() {
         assert_eq!(frames.len(), 16);
         assert!(frames.iter().all(|frame| matches!(frame, Ok(Some(_)))));
         let counters = decoder.session_diagnostics();
-        assert_eq!(counters.opens, 16, "sessions must not churn at {position_ms}ms");
+        assert_eq!(
+            counters.opens, 16,
+            "sessions must not churn at {position_ms}ms"
+        );
         assert_eq!(counters.evictions, 0);
         assert_eq!(counters.active_sessions, 16);
     }
@@ -480,7 +487,10 @@ fn sixteen_live_shared_inputs_keep_lookahead_owners_until_release() {
         assert_eq!(frames.len(), 16);
         assert!(frames.iter().all(|frame| matches!(frame, Ok(Some(_)))));
         let counters = decoder.session_diagnostics();
-        assert_eq!(counters.opens, 16, "live sessions must not churn at {position_ms}ms");
+        assert_eq!(
+            counters.opens, 16,
+            "live sessions must not churn at {position_ms}ms"
+        );
         assert_eq!(counters.evictions, 0);
         assert_eq!(counters.active_sessions, 16);
     }
@@ -491,7 +501,10 @@ fn sixteen_live_shared_inputs_keep_lookahead_owners_until_release() {
         decoder.release_input(&input(layer, &path, 100));
     }
     assert_eq!(decoder.session_diagnostics().active_sessions, 0);
-    assert!(decoder.lookaheads.is_empty(), "release must reap every live owner");
+    assert!(
+        decoder.lookaheads.is_empty(),
+        "release must reap every live owner"
+    );
     assert_eq!(decoder.cache_len(), 0);
 }
 
@@ -507,7 +520,10 @@ fn decode_timing_counts_one_demand_call_for_a_mixed_batch() {
     assert!(matches!(frames[0], Ok(Some(_))));
     assert!(matches!(frames[1], Ok(None)));
     let diagnostics = decoder.diagnostics();
-    assert_eq!(diagnostics.decode_call_count, 1, "mixed batches must not double count nested calls");
+    assert_eq!(
+        diagnostics.decode_call_count, 1,
+        "mixed batches must not double count nested calls"
+    );
     assert_eq!(diagnostics.total_requests, 2);
     assert!(diagnostics.decode_wall_us > 0);
     let _ = decoder.decode_input_frame(&input(1, &path, 33)).unwrap();
@@ -520,13 +536,17 @@ fn decode_timing_counts_one_demand_call_for_a_mixed_batch() {
 #[test]
 #[ignore = "explicit release QA benchmark; requires SYNDOCAL_PERF_MEDIA_DIR and SYNDOCAL_PERF_RESULT"]
 fn task20_decode_demand_benchmark() {
-    let media = PathBuf::from(std::env::var_os("SYNDOCAL_PERF_MEDIA_DIR").expect("media directory"));
+    let media =
+        PathBuf::from(std::env::var_os("SYNDOCAL_PERF_MEDIA_DIR").expect("media directory"));
     let result = PathBuf::from(std::env::var_os("SYNDOCAL_PERF_RESULT").expect("result JSON path"));
     let expected_capacity: usize = std::env::var("SYNDOCAL_PERF_EXPECT_CAPACITY")
         .expect("expected source capacity")
         .parse()
         .expect("integer source capacity");
-    assert_eq!(LIBAV_WORKING_SET_CAPACITY, expected_capacity, "stale benchmark executable");
+    assert_eq!(
+        LIBAV_WORKING_SET_CAPACITY, expected_capacity,
+        "stale benchmark executable"
+    );
     // The supervising QA process opens this gate after builds and browser
     // checks settle, keeping their resource contention out of the samples.
     let gate = result.with_extension("ready");
@@ -534,7 +554,11 @@ fn task20_decode_demand_benchmark() {
     while !gate.is_file() && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    assert!(gate.is_file(), "QA start gate was not opened: {}", gate.display());
+    assert!(
+        gate.is_file(),
+        "QA start gate was not opened: {}",
+        gate.display()
+    );
     let mut rows = Vec::new();
     for source in ["h264_1080p30.mp4", "h264_2160p30.mp4"] {
         let path = media.join(source);
@@ -591,4 +615,351 @@ fn task20_decode_demand_benchmark() {
         }
     }
     std::fs::write(result, serde_json::to_vec_pretty(&rows).unwrap()).unwrap();
+}
+
+/// A real native session behind a deterministic, test-only worker admission
+/// gate. Drop always releases and reaps it, including assertion failures.
+struct HeldLookahead {
+    release: Option<std::sync::mpsc::Sender<()>>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl HeldLookahead {
+    fn release(&mut self) {
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+        if let Some(worker) = self.worker.take() {
+            worker.join().unwrap();
+        }
+    }
+}
+
+impl Drop for HeldLookahead {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+fn hold_next_frame(
+    decoder: &mut LibavFrameDecoder,
+    input: &VideoRenderInput,
+    served: &Arc<VideoFrame>,
+) -> HeldLookahead {
+    assert!(decoder.lookaheads.is_empty());
+    let index = decoder.session_index(input.key, input.layer_id()).unwrap();
+    let mut session = decoder.sessions.swap_remove(index);
+    let last_request_ms = session.last_request_ms;
+    let mut request = input.request.clone();
+    request.position_ms = served.pts_ms.saturating_add(1);
+    let terminal = Arc::clone(served);
+    let (release, gate) = std::sync::mpsc::channel();
+    let (sender, done) = std::sync::mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        let _ = gate.recv();
+        let mut hardware_frames = 0;
+        let result = decode_libav_session_frame(
+            &request,
+            &mut session,
+            false,
+            Some(&terminal),
+            &mut hardware_frames,
+        );
+        let _ = sender.send(LibavLookaheadDone {
+            session,
+            result,
+            hardware_frames,
+        });
+    });
+    decoder.lookaheads.push(LibavLookahead {
+        key: input.key,
+        layer_id: input.layer_id(),
+        served_pts_ms: served.pts_ms,
+        last_request_ms,
+        hardware: false,
+        done,
+    });
+    HeldLookahead {
+        release: Some(release),
+        worker: Some(worker),
+    }
+}
+
+#[test]
+fn covered_60hz_tail_ticks_do_not_join_or_synchronously_decode_pending_lookahead() {
+    let path = fixture("pending-covered", 2);
+    let first = input(1, &path, 16);
+    let mut decoder = LibavFrameDecoder::software_for_tests();
+    let served = Arc::new(decoder.decode_input_frame(&first).unwrap().unwrap());
+    // The real cache owns a separate Arc in the owned entry point.
+    let cached = Arc::clone(&decoder.entries[0].frame);
+    assert_eq!(served.pts_ms, 33);
+    let mut gate = hold_next_frame(&mut decoder, &first, &cached);
+    let before = decoder.session_diagnostics();
+    let (finished, ready) = std::sync::mpsc::sync_channel(1);
+    let path_worker = path.clone();
+    let checking = std::thread::spawn(move || {
+        decoder.retain_inputs(std::slice::from_ref(&first));
+        decoder.retain_layers(&[1]);
+        let frames = [16, 20, 33].map(|position| {
+            decoder
+                .decode_input_frame_shared(&input(1, &path_worker, position))
+                .unwrap()
+                .unwrap()
+        });
+        let saved = decoder.lookaheads[0].last_request_ms;
+        let counters = decoder.session_diagnostics();
+        finished.send((frames, saved, counters)).unwrap();
+        decoder
+    });
+    // Success must arrive while no worker is allowed to decode. The timeout is
+    // only a regression watchdog; the gate, not elapsed speed, proves reuse.
+    let result = ready.recv_timeout(std::time::Duration::from_secs(2));
+    gate.release();
+    let mut decoder = checking.join().unwrap();
+    let (frames, saved, after) = result.expect("covered ticks must finish before worker admission");
+    assert!(frames.iter().all(|frame| Arc::ptr_eq(&cached, frame)));
+    assert_eq!(
+        saved,
+        Some(33),
+        "join must restore the latest covered request"
+    );
+    assert_eq!(after.sequential_continues, before.sequential_continues);
+    assert_eq!(after.opens, before.opens);
+    assert_eq!(after.lookahead_decodes, before.lookahead_decodes);
+    assert_eq!(after.frame_reuses - before.frame_reuses, 3);
+    assert_eq!(decoder.lookaheads.len(), 1);
+    assert_eq!(decoder.entries[0].position_ms, 33);
+
+    let mut oracle = LibavFrameDecoder::software_for_tests();
+    for position in [16, 20, 33] {
+        oracle
+            .decode_input_frame(&input(1, &path, position))
+            .unwrap();
+    }
+    // Passed-next catch-up, exact PTS ties, a seek, loop reversal and EOF all
+    // retain the on-demand oracle. Integer rational targets cover 60/30 Hz.
+    // Reversal inside the cached PTS must reset from the saved 33ms request,
+    // rather than reuse as if the worker's original saved 16ms still applied.
+    let resets = decoder.session_diagnostics().resets;
+    let positions = [
+        20, 34, 50, 66, 67, 100, 1_500, 0, 16, 33, 50, 1_966, 2_100, 0,
+    ];
+    for position in positions
+        .into_iter()
+        .chain((0..120).map(|tick| tick * 1_000 / 60))
+    {
+        assert_same_frames(
+            &mut oracle,
+            &mut decoder,
+            &[input(1, &path, position)],
+            &format!("after delayed worker at {position}"),
+        );
+    }
+    assert!(decoder.session_diagnostics().resets > resets);
+    decoder.retain_inputs(&[]);
+    assert_eq!(decoder.session_diagnostics().active_sessions, 0);
+}
+
+#[test]
+fn pending_cached_reuse_rejects_changed_identity_extent_signature_and_backward_time() {
+    let path = fixture("pending-invalid", 2);
+    let other_path = fixture("pending-other", 2);
+    let first = input(1, &path, 16);
+    let mut decoder = LibavFrameDecoder::software_for_tests();
+    decoder.decode_input_frame(&first).unwrap().unwrap();
+    let served = Arc::clone(&decoder.entries[0].frame);
+    let mut gate = hold_next_frame(&mut decoder, &first, &served);
+    let signature = StillImageSignature::from_path(&path);
+    let target = input(1, &path, 20);
+    let mut extent = target.clone();
+    extent.request.width += 1;
+    let mut owner = target.clone();
+    owner.key = protocol::VideoRenderInputKey {
+        project_render_epoch: 1,
+        input_id: protocol::VideoRenderInputId(999),
+    };
+    let mut layer = target.clone();
+    layer.request.layer_id = 2;
+    for invalid in [
+        extent,
+        owner,
+        layer,
+        input(1, &path, 0),
+        input(1, &path, 67),
+    ] {
+        assert!(decoder
+            .reuse_pending_cached_frame(&invalid, &path, &signature)
+            .is_none());
+    }
+    assert!(decoder
+        .reuse_pending_cached_frame(&target, &other_path, &signature)
+        .is_none());
+    let mut changed_signature = signature.clone();
+    changed_signature.len = Some(changed_signature.len.unwrap_or(0).wrapping_add(1));
+    assert!(decoder
+        .reuse_pending_cached_frame(&target, &path, &changed_signature)
+        .is_none());
+    assert_eq!(decoder.lookaheads[0].last_request_ms, Some(16));
+    assert_eq!(decoder.entries[0].position_ms, 16);
+    gate.release();
+    let mut oracle = LibavFrameDecoder::software_for_tests();
+    oracle.decode_input_frame(&first).unwrap();
+    let mut resized = target;
+    resized.request.width += 1;
+    assert_same_frames(&mut oracle, &mut decoder, &[resized], "extent invalidation");
+    assert_same_frames(
+        &mut oracle,
+        &mut decoder,
+        &[input(1, &other_path, 20)],
+        "path replacement",
+    );
+}
+
+#[test]
+fn pending_cached_stop_reaps_worker_and_never_returns_success() {
+    let path = fixture("pending-stop", 1);
+    let external = Arc::new(AtomicBool::new(false));
+    let mut decoder = LibavFrameDecoder::software_for_tests().with_stop_signal(external.clone());
+    let first = input(1, &path, 16);
+    decoder.decode_input_frame(&first).unwrap().unwrap();
+    let served = Arc::clone(&decoder.entries[0].frame);
+    let mut gate = hold_next_frame(&mut decoder, &first, &served);
+    external.store(true, std::sync::atomic::Ordering::Release);
+    assert!(decoder
+        .reuse_pending_cached_frame(
+            &input(1, &path, 20),
+            &path,
+            &StillImageSignature::from_path(&path)
+        )
+        .is_none());
+    let (finished, ready) = std::sync::mpsc::sync_channel(1);
+    let checking = std::thread::spawn(move || {
+        let result = decoder.decode_input_frame_shared(&first);
+        finished.send(result).unwrap();
+        decoder
+    });
+    assert!(matches!(
+        ready.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    gate.release();
+    let decoder = checking.join().unwrap();
+    assert_eq!(ready.recv().unwrap(), Err(VideoDecodeError::Cancelled));
+    assert!(decoder.lookaheads.is_empty());
+    drop(decoder);
+    assert_eq!(Arc::strong_count(&external), 1);
+}
+
+#[test]
+fn removing_a_pending_owner_waits_for_acknowledgement_and_does_not_restore_it() {
+    let path = fixture("pending-retire", 1);
+    let first = input(1, &path, 16);
+    let mut decoder = LibavFrameDecoder::software_for_tests();
+    decoder.decode_input_frame(&first).unwrap().unwrap();
+    let served = Arc::clone(&decoder.entries[0].frame);
+    let mut gate = hold_next_frame(&mut decoder, &first, &served);
+    let (started, starting) = std::sync::mpsc::sync_channel(1);
+    let (finished, ready) = std::sync::mpsc::sync_channel(1);
+    let checking = std::thread::spawn(move || {
+        started.send(()).unwrap();
+        decoder.retain_inputs(&[]);
+        finished.send(decoder.session_diagnostics()).unwrap();
+        decoder
+    });
+    starting.recv().unwrap();
+    let before_release = ready.recv_timeout(std::time::Duration::from_millis(100));
+    gate.release();
+    let decoder = checking.join().unwrap();
+    assert!(matches!(
+        before_release,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    ));
+    let counters = ready.recv().unwrap();
+    assert_eq!(counters.active_sessions, 0);
+    assert_eq!(counters.lookahead_discards, 1);
+    assert_eq!(decoder.cache_len(), 0);
+    assert!(decoder.lookaheads.is_empty());
+    assert!(decoder.sessions.is_empty());
+    assert!(decoder.working_set_lru.is_empty());
+}
+#[cfg(feature = "qa-native-frame-timing")]
+#[test]
+fn native_frame_timing_links_real_parallel_decoder_and_provider_cache_requests() {
+    use crate::native_frame_timing as timing;
+    use crate::VideoFrameProvider;
+    let _serial = timing::TIMING_TEST_SERIAL.lock().unwrap();
+    let path = fixture("request-timing", 2);
+    let mut provider =
+        crate::DecoderBackedFrameProvider::new(LibavFrameDecoder::software_for_tests());
+    timing::enable_for_tests();
+    timing::start().unwrap();
+    timing::prepare_thread().unwrap();
+    for position in [0, 16, 20, 100, 0] {
+        let inputs = [input(1, &path, position), input(2, &path, position)];
+        let _parent = timing::begin_parent(10, 1, 48, 27);
+        {
+            let _retention = timing::span(timing::Phase::Retention);
+            provider.retain_inputs(&inputs);
+        }
+        {
+            let _demand = timing::span(timing::Phase::Demand);
+            provider.decode_inputs_ahead(&inputs);
+        }
+        for input in &inputs {
+            let _demand = timing::span(timing::Phase::Demand);
+            provider
+                .decode_or_placeholder_for_input_shared(input)
+                .unwrap();
+        }
+        timing::set_outcome(timing::Outcome::Presented);
+    }
+    provider.retain_inputs(&[]);
+    timing::stop_capture().unwrap();
+    timing::retire_thread();
+    timing::acknowledge_stop().unwrap();
+    let snapshot = timing::snapshot().unwrap();
+    assert_eq!(snapshot.parents.len(), 5);
+    for parent in &snapshot.parents {
+        assert_eq!(parent.flags, 0, "{parent:?}");
+        assert_eq!(parent.decoder_requests.len(), 4);
+        for index in 0..2 {
+            let request = &parent.decoder_requests[index];
+            let access = &parent.decoder_requests[index + 2];
+            assert_eq!(request.layer_id, index as u64 + 1);
+            assert_eq!(access.paths, timing::DECODER_PROVIDER);
+            assert_eq!(access.source_request_id, Some(index as u8));
+            assert_eq!(access.selected_pts_ms, request.selected_pts_ms);
+            assert_eq!(access.work_count, 0);
+            assert_ne!(access.demand_span_id, request.demand_span_id);
+            assert!(request.complete);
+            if request.paths & timing::DECODER_SYNC != 0 {
+                assert_eq!(request.work_count, 1);
+                assert_ne!(request.work.worker_id, 0);
+                assert_eq!(
+                    u64::from(request.work.decode_io_us)
+                        + u64::from(request.work.hardware_download_us)
+                        + u64::from(request.work.swscale_us)
+                        + u64::from(request.work.alloc_copy_us),
+                    request.work.end_us - request.work.start_us
+                );
+            } else {
+                assert_eq!(request.work_count, 0);
+            }
+        }
+    }
+    for (parent, expected) in snapshot.parents.iter().zip([
+        timing::DECODER_SYNC | timing::DECODER_REOPEN,
+        timing::DECODER_PREFETCH,
+        timing::DECODER_CACHED,
+        timing::DECODER_SYNC,
+        timing::DECODER_SYNC | timing::DECODER_RESET,
+    ]) {
+        assert!(
+            parent.decoder_requests[..2]
+                .iter()
+                .all(|request| request.paths == expected),
+            "{parent:?}"
+        );
+    }
 }

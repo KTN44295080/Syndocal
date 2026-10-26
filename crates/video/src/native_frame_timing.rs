@@ -16,6 +16,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 pub const MAX_PARENTS: usize = 3072;
 pub const MAX_CHILDREN: usize = 64;
 const MAX_ATTEMPTS: usize = 8;
+pub const MAX_DECODER_REQUESTS: usize = 8;
 const ROOT: u8 = u8::MAX;
 const PARTIAL: u32 = 1;
 const CHILD_OVERFLOW: u32 = 2;
@@ -96,6 +97,53 @@ pub struct IsfAttempt {
     pub span_id: u8,
 }
 
+pub const DECODER_CACHED: u8 = 1;
+pub const DECODER_PREFETCH: u8 = 2;
+pub const DECODER_SYNC: u8 = 4;
+pub const DECODER_RESET: u8 = 8;
+pub const DECODER_REOPEN: u8 = 16;
+pub const DECODER_PROVIDER: u8 = 32;
+
+/// Worker host-wall times are metadata, never children of the caller's tree.
+/// Their sum across parallel requests must not be used as parent elapsed time.
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+pub struct DecoderWorkSample {
+    pub worker_id: u64,
+    pub last_worker_id: u64,
+    pub queued_us: u64,
+    pub start_us: u64,
+    pub end_us: u64,
+    pub decode_io_us: u32,
+    pub hardware_download_us: u32,
+    pub swscale_us: u32,
+    pub alloc_copy_us: u32,
+    pub invalid: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+pub struct DecoderRequestSnapshot {
+    pub layer_id: u64,
+    pub project_render_epoch: u64,
+    pub input_id: u64,
+    pub position_ms: u64,
+    pub previous_request_ms: Option<u64>,
+    pub cached_pts_ms: Option<u64>,
+    pub next_pts_ms: Option<u64>,
+    pub selected_pts_ms: Option<u64>,
+    pub width: u32,
+    pub height: u32,
+    pub start_us: u32,
+    pub end_us: u32,
+    pub demand_span_id: u8,
+    pub source_request_id: Option<u8>,
+    /// Bitset: cached=1, prefetch=2, synchronous=4, reset=8, reopen=16, provider=32.
+    pub paths: u8,
+    pub complete: bool,
+    pub cancelled: bool,
+    pub work_count: u8,
+    pub work: DecoderWorkSample,
+}
+
 #[derive(Clone, Copy)]
 struct Parent {
     id: u64,
@@ -114,6 +162,7 @@ struct Parent {
     attempt_count: u8,
     requested_count: u8,
     failed_count: u8,
+    decoder_request_count: u8,
     requested_layers: [u64; 8],
     failed: [(u64, u64); 3],
     retired_requested: u32,
@@ -121,6 +170,7 @@ struct Parent {
     demand_before: [u64; 4],
     demand_after: [u64; 4],
     attempts: [IsfAttempt; MAX_ATTEMPTS],
+    decoder_requests: [DecoderRequestSnapshot; MAX_DECODER_REQUESTS],
     children: [Child; MAX_CHILDREN],
 }
 
@@ -143,6 +193,7 @@ impl Default for Parent {
             attempt_count: 0,
             requested_count: 0,
             failed_count: 0,
+            decoder_request_count: 0,
             requested_layers: [0; 8],
             failed: [(0, 0); 3],
             retired_requested: 0,
@@ -150,6 +201,7 @@ impl Default for Parent {
             demand_before: [0; 4],
             demand_after: [0; 4],
             attempts: [IsfAttempt::default(); MAX_ATTEMPTS],
+            decoder_requests: [DecoderRequestSnapshot::default(); MAX_DECODER_REQUESTS],
             children: [Child::default(); MAX_CHILDREN],
         }
     }
@@ -167,7 +219,10 @@ struct Buffer {
 
 pub const RETAINED_BYTES: usize =
     MAX_PARENTS * std::mem::size_of::<Parent>() + std::mem::size_of::<Buffer>();
-const _: () = assert!(RETAINED_BYTES <= 4 * 1024 * 1024);
+// Eight compact request records per parent retain explicit worker attribution
+// without expanding the 64-child tree. Allocation remains cold and bounded.
+pub const MAX_RETAINED_BYTES: usize = 8 * 1024 * 1024;
+const _: () = assert!(RETAINED_BYTES <= MAX_RETAINED_BYTES);
 
 #[derive(Default)]
 struct Control {
@@ -623,6 +678,327 @@ fn with_current(f: impl FnOnce(&mut Parent)) {
         }
     });
 }
+
+/// Caller-owned address into its prepared parent. Workers only receive a copy
+/// for timing admission; they return samples and never dereference this address.
+#[derive(Clone, Copy, Default)]
+pub struct DecoderRequest {
+    generation: u64,
+    parent: usize,
+    request: u8,
+    queued_us: u64,
+}
+
+pub fn begin_decoder_request(
+    layer_id: u64,
+    project_render_epoch: u64,
+    input_id: u64,
+    position_ms: u64,
+) -> DecoderRequest {
+    if !process_enabled() {
+        return DecoderRequest::default();
+    }
+    BUFFER.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        let Some(buffer) = slot.as_mut() else {
+            return DecoderRequest::default();
+        };
+        let Some(parent) = buffer.current else {
+            return DecoderRequest::default();
+        };
+        let p = &mut buffer.parents[parent];
+        let mut demand = p.stack;
+        while demand != ROOT && p.children[usize::from(demand)].phase != Phase::Demand {
+            demand = p.children[usize::from(demand)].parent;
+        }
+        if demand == ROOT {
+            return DecoderRequest::default();
+        }
+        if usize::from(p.decoder_request_count) == MAX_DECODER_REQUESTS {
+            p.flags |= PARTIAL | METADATA_OVERFLOW;
+            return DecoderRequest::default();
+        }
+        let request = p.decoder_request_count;
+        let start_us = relative_us(p);
+        p.decoder_requests[usize::from(request)] = DecoderRequestSnapshot {
+            layer_id,
+            project_render_epoch,
+            input_id,
+            position_ms,
+            start_us,
+            demand_span_id: demand,
+            ..DecoderRequestSnapshot::default()
+        };
+        p.decoder_request_count += 1;
+        DecoderRequest {
+            generation: buffer.generation,
+            parent,
+            request,
+            queued_us: p.start_us.saturating_add(u64::from(start_us)),
+        }
+    })
+}
+
+/// Preparation executes in request order on the caller, before parallel jobs.
+impl DecoderRequest {
+    pub fn is_active(self) -> bool {
+        self.generation != 0
+    }
+
+    pub fn state(
+        self,
+        previous_request_ms: Option<u64>,
+        cached_pts_ms: Option<u64>,
+        next_pts_ms: Option<u64>,
+        width: u32,
+        height: u32,
+    ) {
+        update_parent(self.generation, self.parent, |p| {
+            let request = &mut p.decoder_requests[usize::from(self.request)];
+            request.previous_request_ms = previous_request_ms;
+            request.cached_pts_ms = cached_pts_ms;
+            request.next_pts_ms = next_pts_ms;
+            request.width = width;
+            request.height = height;
+        });
+    }
+    pub fn mark(self, paths: u8) {
+        update_parent(self.generation, self.parent, |p| {
+            p.decoder_requests[usize::from(self.request)].paths |= paths;
+        });
+    }
+
+    pub fn queued(mut self) -> Self {
+        if !process_enabled() {
+            return self;
+        }
+        if self.generation != 0 {
+            self.queued_us = now_us();
+        }
+        self
+    }
+
+    pub fn finish(self, selected_pts_ms: Option<u64>, cancelled: bool) {
+        update_parent(self.generation, self.parent, |p| {
+            let end_us = relative_us(p);
+            let request = &mut p.decoder_requests[usize::from(self.request)];
+            if request.complete {
+                p.flags |= PARTIAL | INVALID_TREE;
+            }
+            request.end_us = end_us;
+            request.selected_pts_ms = selected_pts_ms;
+            request.cancelled = cancelled;
+            request.complete = true;
+        });
+    }
+
+    pub fn record_work(self, sample: DecoderWorkSample) {
+        update_parent(self.generation, self.parent, |p| {
+            let request = &mut p.decoder_requests[usize::from(self.request)];
+            if sample.invalid || sample.worker_id == 0 || request.complete {
+                p.flags |= PARTIAL | INVALID_TREE;
+            }
+            if request.work_count == 0 {
+                request.work = sample;
+            } else {
+                let work = &mut request.work;
+                work.last_worker_id = sample.last_worker_id;
+                work.queued_us = work.queued_us.min(sample.queued_us);
+                work.start_us = work.start_us.min(sample.start_us);
+                work.end_us = work.end_us.max(sample.end_us);
+                let totals = [
+                    (&mut work.decode_io_us, sample.decode_io_us),
+                    (&mut work.hardware_download_us, sample.hardware_download_us),
+                    (&mut work.swscale_us, sample.swscale_us),
+                    (&mut work.alloc_copy_us, sample.alloc_copy_us),
+                ];
+                for (total, extra) in totals {
+                    match total.checked_add(extra) {
+                        Some(sum) => *total = sum,
+                        None => p.flags |= PARTIAL | TIME_OVERFLOW,
+                    }
+                }
+            }
+            match request.work_count.checked_add(1) {
+                Some(count) => request.work_count = count,
+                None => p.flags |= PARTIAL | METADATA_OVERFLOW,
+            }
+        });
+    }
+
+    pub fn work(self) -> DecoderWorkGuard {
+        if !process_enabled() || self.generation == 0 {
+            return DecoderWorkGuard::default();
+        }
+        let start_us = now_us();
+        let worker_id = DECODER_WORKER_ID.with(|id| *id);
+        let previous = DECODER_WORK.with(|work| {
+            work.replace(Some(DecoderWorkState {
+                sample: DecoderWorkSample {
+                    worker_id,
+                    last_worker_id: worker_id,
+                    queued_us: self.queued_us,
+                    start_us,
+                    ..DecoderWorkSample::default()
+                },
+                phase_active: false,
+            }))
+        });
+        if previous.is_some() {
+            DECODER_WORK.with(|work| work.borrow_mut().as_mut().unwrap().sample.invalid = true);
+        }
+        DecoderWorkGuard {
+            active: true,
+            previous,
+        }
+    }
+}
+
+/// A per-layer provider cache hit links to the batch record in this parent.
+/// It is an access record: no worker costs are counted a second time.
+pub fn link_decoder_access(layer: u64, epoch: u64, input_id: u64, position_ms: u64) {
+    if !process_enabled() {
+        return;
+    }
+    let token = begin_decoder_request(layer, epoch, input_id, position_ms);
+    update_parent(token.generation, token.parent, |p| {
+        let source = p.decoder_requests[..usize::from(token.request)]
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, request)| {
+                request.layer_id == layer
+                    && request.project_render_epoch == epoch
+                    && request.input_id == input_id
+                    && request.position_ms == position_ms
+                    && request.paths & DECODER_PROVIDER == 0
+            })
+            .map(|(index, request)| (index as u8, *request));
+        let end_us = relative_us(p);
+        let request = &mut p.decoder_requests[usize::from(token.request)];
+        request.paths = DECODER_PROVIDER;
+        request.end_us = end_us;
+        request.complete = true;
+        if let Some((source_id, source)) = source {
+            request.source_request_id = Some(source_id);
+            request.selected_pts_ms = source.selected_pts_ms;
+            request.cancelled = source.cancelled;
+        }
+    });
+}
+
+#[derive(Clone, Copy)]
+struct DecoderWorkState {
+    sample: DecoderWorkSample,
+    phase_active: bool,
+}
+
+static NEXT_DECODER_WORKER: AtomicU64 = AtomicU64::new(1);
+thread_local! {
+    static DECODER_WORK: RefCell<Option<DecoderWorkState>> = const { RefCell::new(None) };
+    static DECODER_WORKER_ID: u64 = NEXT_DECODER_WORKER.fetch_add(1, Ordering::Relaxed);
+}
+
+#[derive(Default)]
+pub struct DecoderWorkGuard {
+    active: bool,
+    previous: Option<DecoderWorkState>,
+}
+
+impl DecoderWorkGuard {
+    pub fn finish(mut self) -> DecoderWorkSample {
+        if !self.active {
+            return DecoderWorkSample::default();
+        }
+        let end_us = now_us();
+        let mut sample = DECODER_WORK.with(|work| {
+            let state = work.replace(self.previous.take()).unwrap();
+            let mut sample = state.sample;
+            sample.invalid |= state.phase_active;
+            sample
+        });
+        self.active = false;
+        sample.end_us = end_us;
+        let total = end_us.saturating_sub(sample.start_us);
+        let projection = u64::from(sample.hardware_download_us)
+            + u64::from(sample.swscale_us)
+            + u64::from(sample.alloc_copy_us);
+        sample.invalid |= projection > total || total > u64::from(u32::MAX);
+        sample.decode_io_us = total.saturating_sub(projection).min(u64::from(u32::MAX)) as u32;
+        sample
+    }
+}
+
+impl Drop for DecoderWorkGuard {
+    fn drop(&mut self) {
+        if self.active {
+            DECODER_WORK.with(|work| work.replace(self.previous.take()));
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum DecoderWorkPhase {
+    HardwareDownload,
+    Swscale,
+    AllocCopy,
+}
+
+pub struct DecoderWorkPhaseGuard {
+    phase: DecoderWorkPhase,
+    start_us: Option<u64>,
+}
+
+pub fn work_phase(phase: DecoderWorkPhase) -> DecoderWorkPhaseGuard {
+    let inactive = || DecoderWorkPhaseGuard {
+        phase,
+        start_us: None,
+    };
+    if !process_enabled() {
+        return inactive();
+    }
+    DECODER_WORK.with(|work| {
+        let mut work = work.borrow_mut();
+        let Some(state) = work.as_mut() else {
+            return inactive();
+        };
+        if state.phase_active {
+            state.sample.invalid = true;
+            return inactive();
+        }
+        state.phase_active = true;
+        DecoderWorkPhaseGuard {
+            phase,
+            start_us: Some(now_us()),
+        }
+    })
+}
+
+impl Drop for DecoderWorkPhaseGuard {
+    fn drop(&mut self) {
+        let Some(start_us) = self.start_us else {
+            return;
+        };
+        let elapsed = now_us().saturating_sub(start_us);
+        DECODER_WORK.with(|work| {
+            if let Some(state) = work.borrow_mut().as_mut() {
+                let target = match self.phase {
+                    DecoderWorkPhase::HardwareDownload => &mut state.sample.hardware_download_us,
+                    DecoderWorkPhase::Swscale => &mut state.sample.swscale_us,
+                    DecoderWorkPhase::AllocCopy => &mut state.sample.alloc_copy_us,
+                };
+                match u32::try_from(elapsed)
+                    .ok()
+                    .and_then(|elapsed| target.checked_add(elapsed))
+                {
+                    Some(sum) => *target = sum,
+                    None => state.sample.invalid = true,
+                }
+                state.phase_active = false;
+            }
+        });
+    }
+}
 pub fn set_outcome(outcome: Outcome) {
     with_current(|p| p.outcome = outcome);
 }
@@ -799,6 +1175,7 @@ pub struct ParentSnapshot {
     pub demand_before: [u64; 4],
     pub demand_after: [u64; 4],
     pub attempts: Vec<IsfAttempt>,
+    pub decoder_requests: Vec<DecoderRequestSnapshot>,
     pub children: Vec<ChildSnapshot>,
 }
 #[derive(Debug, Serialize)]
@@ -851,6 +1228,36 @@ fn export_parent(p: &Parent, control: &Control) -> ParentSnapshot {
     if root_total > duration {
         flags |= PARTIAL | INVALID_TREE;
     }
+    for (index, request) in p.decoder_requests[..usize::from(p.decoder_request_count)]
+        .iter()
+        .enumerate()
+    {
+        let demand = source.get(usize::from(request.demand_span_id));
+        if !request.complete
+            || request.end_us < request.start_us
+            || !demand.is_some_and(|demand| {
+                demand.phase == Phase::Demand
+                    && request.start_us >= demand.start_us
+                    && request.end_us <= demand.end_us
+            })
+            || request
+                .source_request_id
+                .is_some_and(|id| usize::from(id) >= index)
+        {
+            flags |= PARTIAL | INVALID_TREE;
+        }
+        if request.work_count != 0 {
+            let work = &request.work;
+            if work.invalid
+                || work.queued_us > work.start_us
+                || work.start_us > work.end_us
+                || work.queued_us < p.start_us.saturating_add(u64::from(request.start_us))
+                || work.end_us > p.start_us.saturating_add(u64::from(request.end_us))
+            {
+                flags |= PARTIAL | INVALID_TREE;
+            }
+        }
+    }
     let children = source
         .iter()
         .enumerate()
@@ -891,6 +1298,7 @@ fn export_parent(p: &Parent, control: &Control) -> ParentSnapshot {
         demand_before: p.demand_before,
         demand_after: p.demand_after,
         attempts: p.attempts[..usize::from(p.attempt_count)].to_vec(),
+        decoder_requests: p.decoder_requests[..usize::from(p.decoder_request_count)].to_vec(),
         children,
     }
 }
@@ -942,9 +1350,12 @@ pub fn snapshot() -> Result<Snapshot, &'static str> {
 }
 
 #[cfg(test)]
+pub(crate) static TIMING_TEST_SERIAL: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
 mod tests {
+    use super::TIMING_TEST_SERIAL as SERIAL;
     use super::*;
-    static SERIAL: Mutex<()> = Mutex::new(());
     fn start() -> Result<u64, &'static str> {
         enable_for_tests();
         super::start()
@@ -980,6 +1391,17 @@ mod tests {
             set_requested_layers(&[1]);
             add_retired_owner_for_layer(1);
             set_demand_counters([0; 4], [1; 4]);
+            let request = begin_decoder_request(1, 2, 3, 4);
+            request.mark(DECODER_CACHED);
+            request.state(Some(0), Some(33), None, 48, 27);
+            request.mark(DECODER_REOPEN);
+            let work = request.queued().work();
+            drop(work_phase(DecoderWorkPhase::HardwareDownload));
+            drop(work_phase(DecoderWorkPhase::Swscale));
+            drop(work_phase(DecoderWorkPhase::AllocCopy));
+            request.record_work(work.finish());
+            request.finish(Some(33), false);
+            link_decoder_access(1, 2, 3, 4);
             set_isf_metadata(IsfPath::Ordinary, 3, 4);
             set_isf_metadata_for_layer(IsfPath::Batch3, 1, 3, 4);
             mark_isf_failed(4, 1);
@@ -994,7 +1416,10 @@ mod tests {
         // a hook would panic while this exclusive borrow remains held.
         BUFFER.with(|cell| {
             let _exclusive = cell.borrow_mut();
-            exercise_hooks();
+            DECODER_WORK.with(|work| {
+                let _work_exclusive = work.borrow_mut();
+                exercise_hooks();
+            });
         });
         assert_eq!(GENERATION.load(Ordering::Relaxed), 0);
         assert!(CLOCK.get().is_none());
@@ -1058,7 +1483,122 @@ mod tests {
         assert_eq!(snapshot.attempted_parents, MAX_PARENTS as u64 + 1);
         assert_eq!(snapshot.parents.len(), MAX_PARENTS);
         assert_ne!(snapshot.parents[0].flags & CHILD_OVERFLOW, 0);
-        assert!(snapshot.retained_bytes <= 4 * 1024 * 1024);
+        assert!(snapshot.retained_bytes <= MAX_RETAINED_BYTES);
+    }
+
+    #[test]
+    fn native_timing_decoder_requests_return_explicit_worker_samples_and_provider_links() {
+        let _serial = SERIAL.lock().unwrap();
+        start().unwrap();
+        prepare_thread().unwrap();
+        {
+            let _parent = begin_parent(10, 20, 48, 27);
+            let demand = span(Phase::Demand);
+            let first = begin_decoder_request(1, 20, 100, 50);
+            first.mark(DECODER_SYNC | DECODER_RESET);
+            first.state(Some(33), Some(33), Some(66), 48, 27);
+            let second = begin_decoder_request(2, 20, 200, 66);
+            second.mark(DECODER_SYNC | DECODER_REOPEN);
+            let run = |token: DecoderRequest| {
+                let token = token.queued();
+                std::thread::spawn(move || {
+                    // A worker must not touch the render caller's Parent TLS.
+                    BUFFER.with(|buffer| {
+                        let _exclusive = buffer.borrow_mut();
+                        let guard = token.work();
+                        drop(work_phase(DecoderWorkPhase::HardwareDownload));
+                        drop(work_phase(DecoderWorkPhase::Swscale));
+                        drop(work_phase(DecoderWorkPhase::AllocCopy));
+                        guard.finish()
+                    })
+                })
+            };
+            let first_worker = run(first);
+            let second_worker = run(second);
+            let second_sample = second_worker.join().unwrap();
+            let first_sample = first_worker.join().unwrap();
+            assert_ne!(first_sample.worker_id, second_sample.worker_id);
+            second.record_work(second_sample);
+            second.finish(Some(67), false);
+            first.record_work(first_sample);
+            first.finish(Some(66), false);
+            drop(demand);
+            {
+                let _access = span(Phase::Demand);
+                link_decoder_access(1, 20, 100, 50);
+            }
+            {
+                let _access = span(Phase::Demand);
+                let cancelled = begin_decoder_request(3, 20, 300, 0);
+                cancelled.finish(None, true);
+            }
+        }
+        let snapshot = finish();
+        let parent = &snapshot.parents[0];
+        assert_eq!(parent.flags, 0);
+        assert_eq!(parent.decoder_requests.len(), 4);
+        let first = &parent.decoder_requests[0];
+        let second = &parent.decoder_requests[1];
+        assert_eq!(first.paths, DECODER_SYNC | DECODER_RESET);
+        assert_eq!(second.paths, DECODER_SYNC | DECODER_REOPEN);
+        assert_eq!(first.previous_request_ms, Some(33));
+        assert_eq!(first.cached_pts_ms, Some(33));
+        assert_eq!(first.next_pts_ms, Some(66));
+        assert_eq!(first.selected_pts_ms, Some(66));
+        for request in [first, second] {
+            assert_eq!(request.demand_span_id, 0);
+            assert_eq!(request.work_count, 1);
+            let work = request.work;
+            assert_eq!(
+                u64::from(work.decode_io_us)
+                    + u64::from(work.hardware_download_us)
+                    + u64::from(work.swscale_us)
+                    + u64::from(work.alloc_copy_us),
+                work.end_us - work.start_us
+            );
+        }
+        let access = &parent.decoder_requests[2];
+        assert_eq!(access.paths, DECODER_PROVIDER);
+        assert_eq!(access.source_request_id, Some(0));
+        assert_eq!(access.demand_span_id, 1);
+        assert_eq!(access.selected_pts_ms, Some(66));
+        assert_eq!(access.work_count, 0);
+        assert!(parent.decoder_requests[3].cancelled);
+        assert_eq!(
+            parent.residual_us + parent.children.iter().map(|c| c.exclusive_us).sum::<u64>(),
+            parent.end_us - parent.start_us
+        );
+        assert_eq!(snapshot.retained_bytes, RETAINED_BYTES);
+        assert!(RETAINED_BYTES <= MAX_RETAINED_BYTES);
+    }
+
+    #[test]
+    fn native_timing_decoder_metadata_overflow_and_unfinished_requests_are_invalid() {
+        let _serial = SERIAL.lock().unwrap();
+        start().unwrap();
+        prepare_thread().unwrap();
+        {
+            let _parent = begin_parent(0, 0, 1, 1);
+            let _demand = span(Phase::Demand);
+            for index in 0..=MAX_DECODER_REQUESTS {
+                let request = begin_decoder_request(index as u64, 0, index as u64, 0);
+                request.mark(DECODER_CACHED);
+                request.finish(Some(0), false);
+            }
+        }
+        {
+            let _parent = begin_parent(0, 0, 1, 1);
+            let _demand = span(Phase::Demand);
+            let _unfinished = begin_decoder_request(1, 0, 1, 0);
+        }
+        let snapshot = finish();
+        assert_eq!(
+            snapshot.parents[0].decoder_requests.len(),
+            MAX_DECODER_REQUESTS
+        );
+        assert_ne!(snapshot.parents[0].flags & METADATA_OVERFLOW, 0);
+        assert_ne!(snapshot.parents[0].flags & PARTIAL, 0);
+        assert_ne!(snapshot.parents[1].flags & INVALID_TREE, 0);
     }
 
     #[test]
@@ -1186,6 +1726,12 @@ mod tests {
         assert_eq!(GENERATION.load(Ordering::Acquire), generation);
         prepare_thread().unwrap();
         let parent = begin_parent(44, 1, 65, 3);
+        {
+            let _demand = span(Phase::Demand);
+            let request = begin_decoder_request(44, 1, 9, 33);
+            request.mark(DECODER_CACHED);
+            request.finish(Some(33), false);
+        }
         assert!(automatic.export_once().is_err());
         assert!(!output.exists());
         stop_capture().unwrap();
@@ -1204,6 +1750,14 @@ mod tests {
         let exported: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(exported["parents"].as_array().unwrap().len(), 1);
         assert_eq!(exported["parents"][0]["flags"], 0);
+        assert_eq!(
+            exported["parents"][0]["decoder_requests"][0]["paths"],
+            DECODER_CACHED
+        );
+        assert_eq!(
+            exported["parents"][0]["decoder_requests"][0]["selected_pts_ms"],
+            33
+        );
         assert_eq!(
             exported["parents"][0]["start_unix_us"].as_u64().unwrap(),
             exported["start_unix_us"].as_u64().unwrap()

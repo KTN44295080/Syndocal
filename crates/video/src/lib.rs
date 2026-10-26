@@ -4172,6 +4172,13 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
             .decoded_ahead
             .iter()
             .position(|(ahead, _)| ahead == input)?;
+        #[cfg(feature = "qa-native-frame-timing")]
+        native_frame_timing::link_decoder_access(
+            input.layer_id(),
+            input.key.project_render_epoch,
+            input.key.input_id.0,
+            input.request.position_ms,
+        );
         Some(self.decoded_ahead.swap_remove(index).1)
     }
 

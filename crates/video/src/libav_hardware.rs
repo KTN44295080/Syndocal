@@ -60,6 +60,10 @@ pub(super) fn transfer(
     if !hardware {
         return Ok(None);
     }
+    #[cfg(feature = "qa-native-frame-timing")]
+    let _download = crate::native_frame_timing::work_phase(
+        crate::native_frame_timing::DecoderWorkPhase::HardwareDownload,
+    );
     #[cfg(target_os = "windows")]
     {
         use ffmpeg::ffi;
