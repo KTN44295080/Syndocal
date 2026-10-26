@@ -617,7 +617,7 @@ export function main(options = {}) {
       copyFileSync(join(sourceDir, runtime.filename), join(releaseDir, runtime.filename));
     }
     validatePinnedFfmpegRuntimeDirectory(releaseDir, "Windows staged runtime directory", inventory);
-    console.log("Staged " + inventory.runtime_dlls.length + " pinned FFmpeg DLLs in " + releaseDir);
+    console.log("Staged " + inventory.runtime_dlls.length + " pinned LGPL FFmpeg " + inventory.ffmpeg_build.version + " DLLs in " + releaseDir);
   }
   validateAsioPackagingBoundary(undefined, { workspace, verifyWindowsRuntimeSources: true });
   return { stagedDirectories: releaseDirs };

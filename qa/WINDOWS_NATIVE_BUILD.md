@@ -44,3 +44,42 @@ Direct Cargo commands must satisfy the same environment contract.
 The ASIO and soak PowerShell harnesses currently retain their narrower Community
 preflight; Build Tools support here applies to the Tauri wrapper and direct Cargo
 commands initialized and verified against the exact paths above.
+
+## Pinned normal Windows FFmpeg SDK
+
+Use the LGPL shared 8.1 branch build recorded in
+[FFMPEG_WINDOWS_RUNTIME_INVENTORY.json](FFMPEG_WINDOWS_RUNTIME_INVENTORY.json)
+(schema 2, exact provenance, configure line and seven DLL identities):
+
+- Version: `n8.1.3-9-g29e619e767-20260930` (BtbN).
+- Archive: <https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip>.
+- SHA-256: `3e47bda1607740550141e37c0e49d1e5182b34699f15adfd137ee266d346811a`.
+- Archive root: `ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1`.
+- Exact source: <https://github.com/FFmpeg/FFmpeg/archive/29e619e767cde9045a75c29bc9a8278ae7b3a98b.tar.gz>.
+- Pinned build recipes/dependency locators:
+  <https://github.com/BtbN/FFmpeg-Builds/tree/6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b>.
+
+Download and verify the archive hash before extraction. Set `FFMPEG_DIR` to
+that extracted root (containing `include`, `lib`, `bin`) and prepend its `bin`
+to the process-local `PATH` before the MSVC/Cargo invocation. Do not substitute
+the floating `latest` URL, the previous Gyan GPL DLLs or an arbitrary PATH SDK.
+`avcodec_configuration()` must match the inventory; `avutil_license()` reports
+`LGPL version 3 or later`, without `--enable-gpl` or `--enable-nonfree`.
+`prepare-release-runtime.mjs` verifies the exact seven DLLs; it never bundles
+the SDK's `ffmpeg.exe` as a recording encoder.
+
+For the Task 53 trial, use an absolute `CARGO_TARGET_DIR` below
+`target/qa/ffmpeg-lgpl-20261026/`, run `pnpm --dir app tauri build --no-bundle`,
+and place only the hash-verified seven candidate DLLs beside that isolated
+executable before launching it. Preserve `target/release/syndocal.exe` and its
+runtime DLLs. The regular bundling hook still stages `target/release`; an
+isolated **installer** build needs separate resource-path isolation and is not
+established by this no-bundle trial.
+
+BtbN retains monthly releases for two years. Before publication, preserve and
+serve the exact binary and complete corresponding source/dependency closure,
+including patches, build environment, license texts and notices. A fixed
+recipe commit still uses upstream moving build-image tags; it is not complete
+reproducibility evidence. This SDK selection does not close signing,
+clean-machine, ASIO or recording-encoder gates. See
+[the alignment evidence](FFMPEG_LICENSE_ALIGNMENT_2026-10-26.md).

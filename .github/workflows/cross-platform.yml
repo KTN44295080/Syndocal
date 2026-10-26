@@ -65,23 +65,23 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg-8.1.2-full_build-shared.zip'
-          $extractRoot = Join-Path $env:RUNNER_TEMP 'syndocal-ffmpeg-8.1.2'
-          $uri = 'https://github.com/GyanD/codexffmpeg/releases/download/8.1.2/ffmpeg-8.1.2-full_build-shared.zip'
+          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip'
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'syndocal-ffmpeg-lgpl-8.1.3'
+          $uri = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip'
           Invoke-WebRequest -Uri $uri -OutFile $archive
           $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
-          $expectedHash = '274923C68904A9B76C73B908F57923DAFBA81155856CD742138515DED570D066'
+          $expectedHash = '3E47BDA1607740550141E37C0E49D1E5182B34699F15ADFD137EE266D346811A'
           if (-not [StringComparer]::OrdinalIgnoreCase.Equals($actualHash, $expectedHash)) {
-            throw "Pinned Gyan FFmpeg 8.1.2 shared SDK archive hash mismatch: expected $expectedHash, got $actualHash."
+            throw "Pinned BtbN FFmpeg 8.1.3 LGPL shared SDK archive hash mismatch: expected $expectedHash, got $actualHash."
           }
           New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
           Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot -Force
-          $sdk = Join-Path $extractRoot 'ffmpeg-8.1.2-full_build-shared'
+          $sdk = Join-Path $extractRoot 'ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1'
           if (-not (Test-Path -LiteralPath $sdk -PathType Container)) {
-            throw "Pinned Gyan FFmpeg 8.1.2 shared SDK archive did not contain the expected root: $sdk"
+            throw "Pinned BtbN FFmpeg 8.1.3 LGPL shared SDK archive did not contain the expected root: $sdk"
           }
           if (-not (Test-Path -LiteralPath (Join-Path $sdk 'bin\avcodec-62.dll') -PathType Leaf)) {
-            throw "Pinned Gyan FFmpeg 8.1.2 shared runtime is incomplete: $sdk"
+            throw "Pinned BtbN FFmpeg 8.1.3 LGPL shared runtime is incomplete: $sdk"
           }
           "FFMPEG_DIR=$sdk" >> $env:GITHUB_ENV
           "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV

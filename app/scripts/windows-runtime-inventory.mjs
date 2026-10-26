@@ -41,18 +41,29 @@ export const anchoredAmd64PeIdentity = Object.freeze({
   optional_magic: 0x20b,
 });
 
+// Measured from the hash-verified monthly LGPL shared archive; independent of inventory edits.
+export const canonicalPinnedFfmpegBuild = Object.freeze({
+  "version": "n8.1.3-9-g29e619e767-20260930",
+  "archive_url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip",
+  "archive_sha256": "3e47bda1607740550141e37c0e49d1e5182b34699f15adfd137ee266d346811a",
+  "license": "LGPL version 3 or later",
+  "configure": "--prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-config --cross-prefix=x86_64-w64-mingw32- --arch=x86_64 --target-os=mingw32 --enable-version3 --disable-debug --enable-shared --disable-static --disable-w32threads --enable-pthreads --enable-iconv --enable-zlib --enable-libxml2 --enable-libvmaf --enable-fontconfig --enable-libharfbuzz --enable-libfreetype --enable-libfribidi --enable-vulkan --enable-libshaderc --enable-libdav1d --enable-libvorbis --enable-librav1e --enable-librsvg --disable-libxcb --disable-xlib --disable-libpulse --enable-gmp --enable-lzma --enable-liblcevc-dec --enable-opencl --enable-amf --enable-libaom --disable-avisynth --enable-chromaprint --disable-libdavs2 --disable-libdvdread --disable-libdvdnav --disable-libfdk-aac --enable-ffnvcodec --enable-cuda-llvm --disable-frei0r --enable-libgme --enable-libkvazaar --enable-libaribb24 --enable-libaribcaption --enable-libass --enable-libbluray --enable-libjxl --enable-libmp3lame --enable-libopus --enable-libplacebo --enable-librist --enable-libssh --enable-libtheora --enable-libvpx --enable-libwebp --enable-libzmq --enable-lv2 --enable-libvpl --enable-openal --enable-liboapv --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenh264 --enable-libopenjpeg --enable-libopenmpt --disable-librubberband --enable-schannel --enable-sdl2 --enable-libsnappy --enable-libsoxr --enable-libsrt --enable-libsvtav1 --enable-libtwolame --enable-libuavs3d --disable-libdrm --enable-vaapi --disable-libvidstab --enable-libvvenc --disable-whisper --disable-libx264 --disable-libx265 --disable-libxavs2 --disable-libxvid --enable-libzimg --enable-libzvbi --extra-cflags=-DLIBTWOLAME_STATIC --extra-cxxflags= --extra-libs=-lgomp --extra-ldflags=-pthread --extra-ldexeflags= --cc=x86_64-w64-mingw32-gcc --cxx=x86_64-w64-mingw32-g++ --ar=x86_64-w64-mingw32-gcc-ar --ranlib=x86_64-w64-mingw32-gcc-ranlib --nm=x86_64-w64-mingw32-gcc-nm --extra-version=20260930",
+  "source_url": "https://github.com/FFmpeg/FFmpeg/archive/29e619e767cde9045a75c29bc9a8278ae7b3a98b.tar.gz",
+  "build_recipe_url": "https://github.com/BtbN/FFmpeg-Builds/tree/6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b"
+});
+
 export const canonicalPinnedRuntimeIdentity = Object.freeze(new Map([
-  ["avcodec-62.dll", Object.freeze({ byte_size: 97454080, sha256: "34f5b1baac01c4be3edf464309c79db05ffbd4a9c905c94b4a4651cd15370296" })],
-  ["avdevice-62.dll", Object.freeze({ byte_size: 6323200, sha256: "d213d6cad9f3a526f7664ebb3f93d6882669540db7164daecd03f52e0f5288cc" })],
-  ["avfilter-11.dll", Object.freeze({ byte_size: 124344320, sha256: "e318cac83d648869180d0b57c45f21aad1e4db34a467000c157da2938ff7f63f" })],
-  ["avformat-62.dll", Object.freeze({ byte_size: 20179968, sha256: "c04e6ed2f9f36d42325d4f4df5babb5d6ce7c55dbffeb7ef1007e25e97bcb716" })],
-  ["avutil-60.dll", Object.freeze({ byte_size: 3148288, sha256: "6f172b5d10224fcc3f729c8baa6fd36a97bb58042bb3b1417078d77d2da59b87" })],
-  ["swresample-6.dll", Object.freeze({ byte_size: 486912, sha256: "72e2721672c11fd37d983b05cc2370f612784e4e3218362a0cb4315d08c917fb" })],
-  ["swscale-9.dll", Object.freeze({ byte_size: 12748288, sha256: "3d07972cada6ba38c492e92b0f6c025a6835607fe00cdf83afc604c2fbdfe550" })],
+  ["avcodec-62.dll", Object.freeze({ byte_size: 90992128, sha256: "4f817870cfaeaced3e34a083c50a1b4be0389202d7fb821632d47cf9b3f4d82a" })],
+  ["avdevice-62.dll", Object.freeze({ byte_size: 4947456, sha256: "34bc695cfdd3106de29551c6868f1c2cdc0fa36903494506f1708251e6a3075e" })],
+  ["avfilter-11.dll", Object.freeze({ byte_size: 31212544, sha256: "28e202431dc0643af97c307dc6437da13f8c08aa016fc28d1f9ec8fd0336e172" })],
+  ["avformat-62.dll", Object.freeze({ byte_size: 22722560, sha256: "bcf514a394dc5ec43fe64e4f1624ba63b23e9c25967081ea2d03d95b0dc359ef" })],
+  ["avutil-60.dll", Object.freeze({ byte_size: 3014144, sha256: "481620c7b5cd8e831a50762fae55699c821091e96c42226d04fee725a4aae2f5" })],
+  ["swresample-6.dll", Object.freeze({ byte_size: 734720, sha256: "3baad8ac0c8f0050cfd5742f5104603a27127397521409bf7d1742e6d02f955b" })],
+  ["swscale-9.dll", Object.freeze({ byte_size: 12900864, sha256: "d217a08bcd92b3a4b7ecb02e841724460a5c94a103d957370cfe75e892ac3dc2" })],
 ]));
 
 export const canonicalPinnedCommonResourceIdentity = Object.freeze(new Map([
-  ["../../THIRD_PARTY_NOTICES.md\0THIRD_PARTY_NOTICES.md", Object.freeze({ byte_size: 3318, sha256: "9c194c6b24445d8e9dbe39898b7aa20ee7b6e2a75972dd458c6011f79b47f175" })],
+  ["../../THIRD_PARTY_NOTICES.md\0THIRD_PARTY_NOTICES.md", Object.freeze({ byte_size: 5750, sha256: "6eb708d0392132a3783e65939bc6f2afc2d3d4f8b6047c0c76a689b224f59194" })],
   ["../../licenses/FFmpeg-LGPL-3.0.txt\0licenses/FFmpeg-LGPL-3.0.txt", Object.freeze({ byte_size: 7652, sha256: "97628afebc60f026f5c2b25d7491c46a5c4ee61f693e7cfa07fbd2c03605979b" })],
   ["../../licenses/Spout2-BSD-2-Clause.txt\0licenses/Spout2-BSD-2-Clause.txt", Object.freeze({ byte_size: 2726, sha256: "04514504b4636462450722a84452b6fe5f671d1f74f22d68867256267f3030f6" })],
   ["../../licenses/bcdec_rs-MIT.txt\0licenses/bcdec_rs-MIT.txt", Object.freeze({ byte_size: 1060, sha256: "0194fa871df6d82a26d58f3b6e035bed033afdc413e2a6ac0ae2f15b7becbb20" })],
@@ -283,6 +294,7 @@ function freezeInventory(inventory) {
     Object.freeze(runtime);
   }
   for (const resource of inventory.common_resources) Object.freeze(resource);
+  Object.freeze(inventory.ffmpeg_build);
   Object.freeze(inventory.runtime_dlls);
   Object.freeze(inventory.common_resources);
   Object.freeze(inventory.known_asio_bridge_sha256);
@@ -290,9 +302,15 @@ function freezeInventory(inventory) {
 }
 
 export function validateWindowsRuntimeInventory(inventory, label = runtimeInventoryRelativePath) {
-  assertExactKeys(inventory, ["schema_version", "platform", "runtime_dlls", "common_resources", "known_asio_bridge_sha256"], label);
-  if (inventory.schema_version !== 1 || inventory.platform !== "windows-x86_64") {
-    throw new Error(label + " must be schema_version 1 for windows-x86_64.");
+  assertExactKeys(inventory, ["schema_version", "platform", "ffmpeg_build", "runtime_dlls", "common_resources", "known_asio_bridge_sha256"], label);
+  if (inventory.schema_version !== 2 || inventory.platform !== "windows-x86_64") {
+    throw new Error(label + " must be schema_version 2 for windows-x86_64 (legacy or future inventories are rejected).");
+  }
+  assertExactKeys(inventory.ffmpeg_build, Object.keys(canonicalPinnedFfmpegBuild), label + " FFmpeg provenance");
+  for (const [key, expected] of Object.entries(canonicalPinnedFfmpegBuild)) {
+    if (inventory.ffmpeg_build[key] !== expected) {
+      throw new Error(label + " FFmpeg provenance " + key + " contradicts the independently anchored LGPL build authority.");
+    }
   }
   if (!Array.isArray(inventory.runtime_dlls) || inventory.runtime_dlls.length !== canonicalWindowsFfmpegRuntimeDllNames.length) {
     throw new Error(label + " runtime_dlls must be the exact seven-entry approved set.");

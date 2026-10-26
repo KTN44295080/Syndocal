@@ -9,6 +9,7 @@ import {
   assertNoBlockedAsioPayload,
   assertSafeExternalDirectory,
   loadWindowsRuntimeInventory,
+  enforceWindowsRuntimeInventoryAnchors,
   readVerifiedRegularFile,
   validateWindowsRuntimeInventory,
   verifyPinnedCommonResource,
@@ -983,6 +984,49 @@ function selfTest() {
     assert.throws(action, pattern);
     assertions += 1;
   };
+  pass(
+    inventory.schema_version === 2
+      && inventory.ffmpeg_build.license === "LGPL version 3 or later"
+      && !/--enable-(?:gpl|nonfree)(?:\s|$)/u.test(inventory.ffmpeg_build.configure),
+    "the approved normal Windows runtime has exact LGPL provenance",
+  );
+  for (const schemaVersion of [1, 3]) {
+    rejects(
+      () => validateWindowsRuntimeInventory({ ...structuredClone(inventory), schema_version: schemaVersion }),
+      /must be schema_version 2/u,
+    );
+  }
+  for (const [key, value] of [
+    ["license", "GPL version 3 or later"],
+    ["configure", inventory.ffmpeg_build.configure + " --enable-gpl"],
+    ["configure", inventory.ffmpeg_build.configure + " --enable-nonfree"],
+    ["archive_url", "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg.zip"],
+    ["archive_sha256", "a".repeat(64)],
+    ["source_url", "https://ffmpeg.org/"],
+    ["build_recipe_url", "https://github.com/BtbN/FFmpeg-Builds/tree/master"],
+  ]) {
+    const altered = structuredClone(inventory);
+    altered.ffmpeg_build[key] = value;
+    rejects(() => validateWindowsRuntimeInventory(altered), /FFmpeg provenance .* contradicts/u);
+  }
+  const retiredNotice = structuredClone(inventory);
+  Object.assign(retiredNotice.common_resources.find((resource) => resource.destination === "THIRD_PARTY_NOTICES.md"), {
+    byte_size: 3318,
+    sha256: "9c194c6b24445d8e9dbe39898b7aa20ee7b6e2a75972dd458c6011f79b47f175",
+  });
+  rejects(
+    () => enforceWindowsRuntimeInventoryAnchors(validateWindowsRuntimeInventory(retiredNotice)),
+    /common resource .* contradicts the independently anchored/u,
+  );
+  const retiredGplDll = structuredClone(inventory);
+  Object.assign(retiredGplDll.runtime_dlls.find((runtime) => runtime.filename === "avcodec-62.dll"), {
+    byte_size: 97454080,
+    sha256: "34f5b1baac01c4be3edf464309c79db05ffbd4a9c905c94b4a4651cd15370296",
+  });
+  rejects(
+    () => enforceWindowsRuntimeInventoryAnchors(validateWindowsRuntimeInventory(retiredGplDll)),
+    /runtime DLL avcodec-62.dll contradicts the independently anchored/u,
+  );
   const rejectsCandidate = (action, pattern) => {
     let thrown;
     try {

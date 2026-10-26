@@ -1,17 +1,35 @@
 # Third-party notices
 
-Syndocal dynamically links FFmpeg 8.1 shared libraries for H.264, H.265, and
-ProRes decoding. Release bundles use an LGPLv3-compatible FFmpeg build with GPL
-components disabled.
+Syndocal dynamically links FFmpeg shared libraries for video decoding, including
+H.264, H.265, HAP, DXV, ProRes, VP9 and AV1. The normal Windows variant uses
+BtbN FFmpeg `n8.1.3-9-g29e619e767-20260930`, reporting LGPL version 3 or later.
+Its measured configure line enables shared libraries and version 3 licensing,
+and contains neither `--enable-gpl` nor `--enable-nonfree`.
 
 - Project: FFmpeg
-- Source: https://ffmpeg.org/
-- License: GNU Lesser General Public License version 3
+- Copyright (c) 2000-2026 the FFmpeg developers
+- License: GNU Lesser General Public License version 3 or later
 - License text: `licenses/FFmpeg-LGPL-3.0.txt`
+- Exact Windows binary archive: https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip
+- Archive SHA-256: `3e47bda1607740550141e37c0e49d1e5182b34699f15adfd137ee266d346811a`
+- Exact FFmpeg source: https://github.com/FFmpeg/FFmpeg/archive/29e619e767cde9045a75c29bc9a8278ae7b3a98b.tar.gz
+- Build recipes, dependency source revisions and patches: https://github.com/BtbN/FFmpeg-Builds/tree/6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b
+- Full measured configuration and per-DLL identities:
+  `qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json` in the Syndocal source distribution
+
+FFmpeg includes code derived from the Independent JPEG Group's software.
+FFmpeg and its dependencies retain their respective copyrights and licenses;
+consult the pinned source and build recipes for individual notices. Syndocal
+makes no modifications to these supplied DLLs. Source and dependency archives,
+patches and applicable notices must accompany the final distribution through
+its corresponding-source download; the locators above are provenance and do
+not claim that this release-publication gate has been completed.
 
 FFmpeg is not part of the Syndocal MIT-licensed source code. Recipients may
 replace the dynamically linked FFmpeg libraries with a compatible build, as
-permitted by the LGPL.
+permitted by the LGPL. The normal decode payload contains seven DLLs and no
+recording encoder executable. A separately supplied recording encoder and the
+optional ASIO bridge have their own distribution requirements.
 
 Windows x86_64 builds include Spout2 2.007.017 through the `spout2-rs` static
 binding for local inter-application video texture transport.
