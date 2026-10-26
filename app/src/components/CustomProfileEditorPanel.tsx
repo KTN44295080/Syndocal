@@ -21,6 +21,7 @@ export interface CustomProfileDmxCell {
 }
 
 interface CustomProfileEditorPanelProps {
+  onBack: () => void;
   manufacturer: string;
   profileName: string;
   modeName: string;
@@ -53,30 +54,34 @@ export function CustomProfileEditorPanel(props: CustomProfileEditorPanelProps) {
 
   return (
     <div class="customProfileForm">
-      <header class="customProfileWorkspaceHeader">
-        <h3>Custom Profile</h3>
+      <header class="customProfileWorkspaceHeader" data-custom-workbench-bar>
+        <div class="customProfileHeading">
+          <button type="button" class="customWorkbenchBack" data-custom-workbench-back onClick={props.onBack}>Back to Patch</button>
+          <h3>Custom Profile</h3>
+        </div>
         <div class="buttonRow customProfileActions">
-          <button onClick={props.onLoad}>Load</button>
-          <button onClick={props.onSave} disabled={!canCreate()}>Save</button>
-          <button class="primary" onClick={props.onCreate} disabled={!canCreate()}>Create Profile</button>
+          <button data-custom-profile-action="load" onClick={props.onLoad}>Load</button>
+          <button data-custom-profile-action="save" onClick={props.onSave} disabled={!canCreate()}>Save</button>
+          <button data-custom-profile-action="create" class="primary" onClick={props.onCreate} disabled={!canCreate()}>Create Profile</button>
         </div>
       </header>
       <div class="customProfileMetadataGrid">
         <label>
           Maker
-          <input value={props.manufacturer} onInput={(event) => props.onManufacturer(event.currentTarget.value)} />
+          <input data-custom-profile-field="manufacturer" value={props.manufacturer} onInput={(event) => props.onManufacturer(event.currentTarget.value)} />
         </label>
         <label>
           Name
-          <input value={props.profileName} onInput={(event) => props.onProfileName(event.currentTarget.value)} />
+          <input data-custom-profile-field="name" value={props.profileName} onInput={(event) => props.onProfileName(event.currentTarget.value)} />
         </label>
         <label>
           Mode
-          <input value={props.modeName} onInput={(event) => props.onModeName(event.currentTarget.value)} />
+          <input data-custom-profile-field="mode" value={props.modeName} onInput={(event) => props.onModeName(event.currentTarget.value)} />
         </label>
         <label class="customProfileRawAttributes">
           Raw Attributes
           <input
+            data-custom-profile-field="attributes"
             value={props.attributesText}
             onInput={(event) => props.onAttributesText(event.currentTarget.value)}
             placeholder="Dimmer@1:8, Pan@2:16, Tilt@4:16, ColorRed@6:8"
@@ -91,8 +96,8 @@ export function CustomProfileEditorPanel(props: CustomProfileEditorPanelProps) {
           </div>
         <div class="customProfileTemplateGrid" aria-label="Custom profile attribute templates">
           <For each={props.templates}>
-            {(template) => (
-              <button type="button" onClick={() => props.onAppendTemplate(template.rows)}>
+            {(template, index) => (
+              <button type="button" data-custom-profile-template={index()} onClick={() => props.onAppendTemplate(template.rows)}>
                 {template.label}
               </button>
             )}
@@ -112,6 +117,7 @@ export function CustomProfileEditorPanel(props: CustomProfileEditorPanelProps) {
                 <label>
                   Attribute
                   <input
+                    data-custom-profile-attribute={index()}
                     value={draft.attribute}
                     onInput={(event) => props.onUpdateDraft(index(), { attribute: event.currentTarget.value })}
                   />
@@ -119,6 +125,7 @@ export function CustomProfileEditorPanel(props: CustomProfileEditorPanelProps) {
                 <label>
                   Bits
                   <select
+                    data-custom-profile-bits={index()}
                     value={draft.resolution}
                     onInput={(event) =>
                       props.onUpdateDraft(index(), {
@@ -133,6 +140,7 @@ export function CustomProfileEditorPanel(props: CustomProfileEditorPanelProps) {
                 <label>
                   Start
                   <input
+                    data-custom-profile-start={index()}
                     value={draft.startOffset}
                     inputMode="numeric"
                     placeholder="auto"
@@ -144,6 +152,7 @@ export function CustomProfileEditorPanel(props: CustomProfileEditorPanelProps) {
                 </span>
                 <button
                   type="button"
+                  data-custom-profile-remove={index()}
                   class="iconButton"
                   title={`Remove ${draft.attribute || "attribute"}`}
                   onClick={(event) => {
@@ -158,9 +167,10 @@ export function CustomProfileEditorPanel(props: CustomProfileEditorPanelProps) {
           </For>
         </div>
         <div class="buttonRow">
-          <button type="button" onClick={props.onAddDraft}>Add Attribute</button>
+          <button type="button" data-custom-profile-action="add" onClick={props.onAddDraft}>Add Attribute</button>
           <button
             type="button"
+            data-custom-profile-action="up"
             onClick={() => {
               if (props.selectedIndex !== null) {
                 props.onMoveDraft(props.selectedIndex, -1);
@@ -172,6 +182,7 @@ export function CustomProfileEditorPanel(props: CustomProfileEditorPanelProps) {
           </button>
           <button
             type="button"
+            data-custom-profile-action="down"
             onClick={() => {
               if (props.selectedIndex !== null) {
                 props.onMoveDraft(props.selectedIndex, 1);
@@ -181,7 +192,7 @@ export function CustomProfileEditorPanel(props: CustomProfileEditorPanelProps) {
           >
             Move Down
           </button>
-          <button type="button" onClick={props.onClearDrafts} disabled={props.drafts.length === 0}>
+          <button type="button" data-custom-profile-action="clear" onClick={props.onClearDrafts} disabled={props.drafts.length === 0}>
             Clear
           </button>
         </div>
@@ -197,6 +208,8 @@ export function CustomProfileEditorPanel(props: CustomProfileEditorPanelProps) {
               {(cell) => (
                 <button
                   type="button"
+                  data-custom-profile-channel={cell.channel}
+                  title={cell.control ? `${cell.control.attribute} / CH ${cell.channel}` : `CH ${cell.channel}`}
                   class={[
                     "customProfileDmxCell",
                     cell.control ? "" : "empty",

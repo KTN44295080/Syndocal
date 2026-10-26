@@ -16,16 +16,18 @@ export async function loadPanel<T>(load: () => Promise<T>, timeoutMs = 15_000): 
   }
 }
 
-export function LazyPanelBoundary(props: { label: string; children: JSX.Element }) {
+export function LazyPanelBoundary(props: { label: string; children: JSX.Element; fallbackAction?: JSX.Element }) {
   return (
     <ErrorBoundary fallback={
       <div class="empty" role="alert" aria-label={props.label}>
         <p>Panel could not load. Restart Syndocal and try again.</p>
+        {props.fallbackAction}
       </div>
     }>
       <Suspense fallback={
         <div class="empty" role="status" aria-label={props.label} aria-busy="true">
           <p>Loading panel…</p>
+          {props.fallbackAction}
         </div>
       }>
         {props.children}

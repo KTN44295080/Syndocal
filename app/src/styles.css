@@ -22040,11 +22040,16 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 
 .loadedProfileSummaryPanel {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  align-content: start;
   gap: 5px;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
+}
+
+.loadedProfileSummaryPanel .loadedProfileHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .loadedProfileHeader strong {
@@ -22064,25 +22069,46 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 
 .loadedProfileDetailGrid {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(270px, 0.8fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 5px;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
-.loadedProfileChannelPane,
-.loadedProfileGeometryPane {
-  display: grid;
-  align-content: start;
+.loadedProfileTabs {
+  display: flex;
+  flex-wrap: wrap;
   gap: 5px;
   min-width: 0;
+}
+
+.loadedProfileTabs > button {
+  flex: 1 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.loadedProfileTabs > button.active {
+  background: var(--theme-key-hover);
+  color: var(--theme-text);
+  box-shadow: inset 0 -2px 0 var(--theme-selected);
+}
+
+.loadedProfileTabPanel {
+  min-width: 0;
   min-height: 0;
-  overflow: auto;
+}
+
+.loadedProfileTabPanel[hidden] {
+  display: none;
 }
 
 .loadedProfileSummaryPanel .profileDmxGrid {
-  grid-template-columns: repeat(8, minmax(62px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(62px, 1fr));
+  max-height: none;
+  overflow: visible;
 }
 
 .loadedProfileSummaryPanel .profileDmxSummary,
@@ -22094,6 +22120,85 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 
 .loadedProfileSummaryPanel .profileGeometryList {
   max-height: none;
+  overflow: visible;
+}
+
+.loadedProfileSummaryPanel .customProfilePreviewHeader {
+  flex-wrap: wrap;
+}
+
+.loadedProfileSummaryPanel .customProfilePreviewHeader > strong {
+  white-space: nowrap;
+}
+
+.loadedProfileSummaryPanel .profileFunctionRow {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.loadedProfileSummaryPanel .profileFunctionRow > small {
+  display: grid;
+  grid-column: 1 / -1;
+}
+
+.loadedProfileSummaryPanel .profileFunctionRow :is(strong, small, b) {
+  max-width: none;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.loadedProfileFunctionPaging {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.loadedProfileFunctionPaging > button {
+  min-height: 44px;
+}
+
+.loadedProfileSummaryPanel .profileGeometryRow {
+  display: block;
+}
+
+.loadedProfileSummaryPanel .profileGeometryRow > summary {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.loadedProfileSummaryPanel .profileGeometryRow > summary::before {
+  content: "▸";
+}
+
+.loadedProfileSummaryPanel .profileGeometryRow[open] > summary::before {
+  content: "▾";
+}
+
+.profileGeometryDetails {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 6px;
+}
+
+.loadedProfileSummaryPanel .profileGeometryDetails :is(strong, small, span),
+.loadedProfileSummaryPanel .warnings {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.profileGeometryDetails .profileGeometryPosition {
+  display: flex;
+  flex-wrap: wrap;
 }
 
 .layoutSetup.setupMode-profiles > .setupPanel {
@@ -29100,22 +29205,115 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
   min-width: 0;
 }
 
-/* #63: former Profiles tab, now a workbench surface opened from Patch. */
-.customWorkbenchBar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 28px;
-  border-bottom: 1px solid var(--theme-line);
-  padding-bottom: 4px;
-  color: var(--theme-muted);
-  font-size: var(--fs-text);
+/* A temporary editing surface: keep the user's Patch split ratios unchanged. */
+.layoutSharedWorkspace.layoutSetup.setupMode-patch[data-custom-profile-workspace-open] {
+  grid-template-columns: minmax(0, 1fr);
 }
 
-.customWorkbenchBar > .customWorkbenchBack {
-  min-height: 24px;
+.layoutSharedWorkspace.layoutSetup.setupMode-patch > .customProfileWorkspace {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  container: custom-profile-workspace / inline-size;
+}
+
+.customProfileWorkspace .customProfileForm {
+  flex: 0 0 auto;
+  grid-template-rows: none;
+  align-content: start;
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+}
+
+.customProfileWorkspace .customProfileWorkspaceHeader {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+
+.customProfileHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.customProfileHeading > h3 {
+  white-space: nowrap;
+}
+
+.customProfileWorkspace .customWorkbenchBack {
+  flex: 0 0 auto;
+  min-height: 44px;
   padding: 2px 8px;
   font-size: var(--fs-text);
+  white-space: nowrap;
+}
+
+.customProfileWorkspace .customProfileActions {
+  grid-template-columns: repeat(3, max-content);
+}
+
+.customProfileWorkspace .customProfileActions > button {
+  min-width: 72px;
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.customProfileWorkspace .customProfileWorkbench {
+  align-items: start;
+  overflow: visible;
+}
+
+.customProfileWorkspace .customProfileAttributePane {
+  grid-template-rows: auto;
+}
+
+.customProfileWorkspace :is(.customProfileAttributePane, .customProfilePreviewDesk,
+  .customProfileAttributeRows, .customProfileDmxGrid, .customProfileChannelList) {
+  max-height: none;
+  overflow: visible;
+}
+
+.customProfileWorkspace .customProfileDmxGrid {
+  grid-template-columns: repeat(auto-fit, minmax(62px, 1fr));
+}
+
+.customProfileWorkspace .customProfileDmxCell {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 2px;
+  min-width: 0;
+}
+
+.customProfileWorkspace .customProfileDmxCell > :is(small, strong, span) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container custom-profile-workspace (max-width: 1000px) {
+  .customProfileWorkbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .customProfileMetadataGrid {
+    grid-template-columns: repeat(2, minmax(280px, 1fr));
+  }
+}
+
+@container custom-profile-workspace (max-width: 600px) {
+  .customProfileMetadataGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .customProfileAttributeRow {
+    grid-template-columns: minmax(120px, 1fr) 74px 86px;
+  }
 }
 
 /* #63: selected fixture with a broken profile source (former catalog repair). */

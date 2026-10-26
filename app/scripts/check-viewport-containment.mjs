@@ -10,6 +10,7 @@ import ts from "typescript";
 import { runPaneBrowserFallbackRuntimeProof } from "./check-pane-browser-fallback-runtime.mjs";
 import { runLiveAudioBackendDisappearanceContract } from "./live-audio-backend-disappearance-contract.mjs";
 import { exerciseRemoteDisclosureScrollReachability } from "./remote-disclosure-scroll-contract.mjs";
+import { runPatchProfileDensityChecks } from "./patch-profile-density-contract.mjs";
 import {
   exerciseSetupIoOperatorDeck,
   selectSetupIoConnection,
@@ -103,6 +104,7 @@ const timelineSourcePlacementOnlyMode = process.argv.includes("--timeline-source
 const editIaVideoOnlyMode = process.argv.includes("--edit-ia-video-only");
 const timelineLayeredOnlyMode = process.argv.includes("--timeline-layered-only");
 const patchOnlyMode = process.argv.includes("--patch-only");
+const patchProfileDensityOnlyMode = process.argv.includes("--patch-profile-density-only");
 const fixtureGroupsOnlyMode = process.argv.includes("--fixture-groups-only");
 const patchEmptyStateOnlyMode = process.argv.includes("--patch-empty-state-only");
 const touchOnlyMode = process.argv.includes("--touch-only");
@@ -149,7 +151,7 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
       ? "setup-io"
     : setupVideoOnlyMode
       ? "timeline"
-    : patchOnlyMode || fixtureGroupsOnlyMode
+    : patchOnlyMode || patchProfileDensityOnlyMode || fixtureGroupsOnlyMode
       ? "patch"
       : patchEmptyStateOnlyMode
         ? "none"
@@ -39443,7 +39445,7 @@ async function main() {
       "--disable-background-timer-throttling",
       "--disable-backgrounding-occluded-windows",
       "--disable-renderer-backgrounding",
-      "--hide-scrollbars",
+      ...(patchProfileDensityOnlyMode ? [] : ["--hide-scrollbars"]),
       "--disable-crash-reporter",
       "--disable-crashpad",
       `--remote-debugging-port=${cdpPort}`,
@@ -39454,6 +39456,18 @@ async function main() {
     ];
     browserProcess = startProcess(browser, browserArgs);
     await waitForHttp(`http://127.0.0.1:${cdpPort}/json/version`, "Chrome DevTools Protocol");
+
+    if (patchProfileDensityOnlyMode) {
+      await runPatchProfileDensityChecks({
+        CdpClient,
+        cdpPort,
+        appUrl: fixtureUrl("patch"),
+        screenshotDir,
+        waitForApp,
+        installShareMock: installPatchGdtfShareMockInPage,
+      });
+      return;
+    }
 
     client = await createCdpClient();
     // Long-lived headless sessions freeze their renderer main thread after

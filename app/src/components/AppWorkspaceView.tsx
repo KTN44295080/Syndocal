@@ -188,7 +188,7 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
     projectDropState,
     touchLayoutClass,
     sharedWorkspaceVisible,
-    persistentBandVisible,
+    persistentBandVisible: configuredPersistentBandVisible,
     activeTopSplitRatio,
     lowerSplitRatio,
     selectedSceneCue,
@@ -465,7 +465,6 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
     selectedModeSummary,
     selectedModeDmxCells,
     selectedModeFunctionEntries,
-    visibleSelectedModeFunctionEntries,
     selectedModeGeometryRows,
     selectedModeUnresolvedGeometryReferences,
     setSelectedMode,
@@ -720,6 +719,10 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
     fixtureGroupDeleteUndoAvailable,
     undoDeleteFixtureGroup
   } = props.model;
+  const customProfileWorkspaceVisible = () => workspaceTab() === "setup"
+    && setupSubTab() === "patch" && customWorkbenchOpen();
+  // The workbench temporarily owns the workspace; saved split ratios stay intact.
+  const persistentBandVisible = () => configuredPersistentBandVisible() && !customProfileWorkspaceVisible();
   return (
     <main
       class={`app${paneWindow ? ` paneWindow paneWindow-${paneWindow}` : ""}`}
@@ -1062,6 +1065,7 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
 
       <section
         class={`layout ${touchLayoutClass()}`}
+        data-custom-profile-workspace-open={customProfileWorkspaceVisible() ? "true" : undefined}
         style={
           paneWindow || (sharedWorkspaceVisible() && !persistentBandVisible())
             ? "grid-template-rows: minmax(0, 1fr) !important"
@@ -1583,6 +1587,8 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
         <Show when={workspaceTab() === "setup" && setupSubTab() === "patch"}>
         <aside
           class={setupPanelClass("panel setup setupPanel", ["patch"])}
+          classList={{ customProfileWorkspace: customWorkbenchOpen() }}
+          data-custom-profile-workspace={customWorkbenchOpen() ? "true" : undefined}
           ref={registerSetupPanel(["patch"])}
           tabIndex={-1}
         >
@@ -1666,19 +1672,16 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
             />
           </Show>
           <Show when={customWorkbenchOpen()}>
-          <div class="customWorkbenchBar" data-custom-workbench-bar>
-            <button
-              type="button"
-              class="customWorkbenchBack"
-              onClick={() => setCustomWorkbenchOpen(false)}
-              data-custom-workbench-back
-            >
-              Back to Patch
-            </button>
-            <span>Custom profile workbench</span>
-          </div>
-          <LazyPanelBoundary label="Custom profile workbench">
+          <LazyPanelBoundary
+            label="Custom profile workbench"
+            fallbackAction={
+              <button type="button" class="customWorkbenchBack" data-custom-workbench-back onClick={() => setCustomWorkbenchOpen(false)}>
+                Back to Patch
+              </button>
+            }
+          >
           <CustomProfileEditorPanel
+            onBack={() => setCustomWorkbenchOpen(false)}
             manufacturer={customManufacturer()}
             profileName={customProfileName()}
             modeName={customModeName()}
@@ -1710,7 +1713,7 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
         </aside>
         </Show>
 
-        <Show when={workspaceTab() === "setup" && setupSubTab() === "patch"}>
+        <Show when={workspaceTab() === "setup" && setupSubTab() === "patch" && !customWorkbenchOpen()}>
         <SetupMappingWorkspace
           className={setupPanelClass("panel fixtures setupPanel", ["patch"])}
           panelRef={registerSetupPanel(["patch"])}
@@ -1749,7 +1752,6 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
             selectedFootprint: selectedFootprint(),
             dmxCells: selectedModeDmxCells(),
             functionEntries: selectedModeFunctionEntries(),
-            visibleFunctionEntries: visibleSelectedModeFunctionEntries(),
             geometryRows: selectedModeGeometryRows(),
             unresolvedGeometryReferences: selectedModeUnresolvedGeometryReferences(),
             functionLabel: channelFunctionLabel,
