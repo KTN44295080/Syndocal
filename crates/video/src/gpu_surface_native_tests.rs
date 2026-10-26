@@ -245,9 +245,19 @@ impl OffscreenTarget {
     /// A different image format than the pipeline's injects a real
     /// validation error into the present phase.
     fn with_image_format(env: &Env, image_format: wgpu::TextureFormat) -> Self {
+        Self::with_formats(env, wgpu::TextureFormat::Rgba8Unorm, image_format)
+    }
+
+    /// `format` is the pipeline's target format (the surface configuration);
+    /// `image_format` is what acquire hands out.
+    fn with_formats(
+        env: &Env,
+        format: wgpu::TextureFormat,
+        image_format: wgpu::TextureFormat,
+    ) -> Self {
         Self {
             device: env.fixture.owner.context().device().clone(),
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format,
             image_format,
             extent: None,
             script: VecDeque::new(),
@@ -617,7 +627,8 @@ fn shared_present_maps_committed_premapping_once_and_matches_cpu_oracle() {
         (receipt.sequence(), receipt.extent(), receipt.frame()),
         (1, size, snapshot.frame)
     );
-    assert_eq!(receipt.snapshot(), snapshot);
+    assert_eq!(receipt.snapshot(), Some(snapshot));
+    assert_eq!(receipt.content(), NativePresentContent::Resident(snapshot));
     assert_eq!(
         receipt.submission().context,
         env.fixture.owner.context().id()
@@ -1192,5 +1203,893 @@ fn shared_present_rejects_foreign_generation_and_faults_on_first_use_validation(
         presenter.target.acquires, 1,
         "a faulted presenter never acquires"
     );
+    stop_and_reap(&mut presenter, &mut env.fixture.owner);
+}
+
+// P53: CPU Artistic display and payload-less HardBlackout on the same shared
+// owner, presenter and target as `present_ready`.
+
+fn display_frame_id(sequence: u64) -> NativeFrameId {
+    NativeFrameId {
+        output_id: 9,
+        project_epoch: 7,
+        request_sequence: sequence,
+        geometry_generation: GENERATION,
+    }
+}
+
+/// I's CPU Artistic stand-in: the canonical post-FX frame, its frozen
+/// mapping and (in production) its CPU charge owner. Drop is observable.
+struct TestArtistic {
+    frame_id: NativeFrameId,
+    frame: VideoFrame,
+    mapping: VideoOutputMapping,
+    dropped: Arc<AtomicBool>,
+}
+
+impl Drop for TestArtistic {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+
+impl CpuArtisticPresentation for TestArtistic {
+    fn frame_id(&self) -> NativeFrameId {
+        self.frame_id
+    }
+    fn frame(&self) -> &VideoFrame {
+        &self.frame
+    }
+    fn mapping(&self) -> &VideoOutputMapping {
+        &self.mapping
+    }
+}
+
+/// I's payload-less blackout stand-in: identity only.
+struct TestBlackout {
+    frame_id: NativeFrameId,
+    dropped: Arc<AtomicBool>,
+}
+
+impl Drop for TestBlackout {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+
+impl HardBlackoutPresentation for TestBlackout {
+    fn frame_id(&self) -> NativeFrameId {
+        self.frame_id
+    }
+}
+
+fn blackout(sequence: u64) -> (TestBlackout, Arc<AtomicBool>) {
+    let dropped = Arc::new(AtomicBool::new(false));
+    (
+        TestBlackout {
+            frame_id: display_frame_id(sequence),
+            dropped: Arc::clone(&dropped),
+        },
+        dropped,
+    )
+}
+
+fn artistic_frame((width, height): (u32, u32), seed: u8) -> VideoFrame {
+    let mut data = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            let value = (x as u8)
+                .wrapping_mul(37)
+                .wrapping_add((y as u8).wrapping_mul(53))
+                .wrapping_add(seed.wrapping_mul(17));
+            data.extend_from_slice(&[value, value.wrapping_mul(3), 255 - value, 255]);
+        }
+    }
+    VideoFrame {
+        layer_id: 0,
+        width,
+        height,
+        pts_ms: 1_000,
+        duration_ms: 16,
+        format: VideoPixelFormat::Rgba8,
+        data,
+    }
+}
+
+fn with_frame(
+    sequence: u64,
+    frame: VideoFrame,
+    mapping: VideoOutputMapping,
+) -> (TestArtistic, VideoFrame, Arc<AtomicBool>) {
+    let dropped = Arc::new(AtomicBool::new(false));
+    (
+        TestArtistic {
+            frame_id: display_frame_id(sequence),
+            frame: frame.clone(),
+            mapping,
+            dropped: Arc::clone(&dropped),
+        },
+        frame,
+        dropped,
+    )
+}
+
+fn artistic(
+    sequence: u64,
+    size: (u32, u32),
+    mapping: VideoOutputMapping,
+) -> (TestArtistic, VideoFrame, Arc<AtomicBool>) {
+    with_frame(sequence, artistic_frame(size, sequence as u8), mapping)
+}
+
+type Outcome<R> = Result<PresentOutcome<R, NativePresentReceipt>, NativeGpuFault>;
+
+fn presented<R>(result: Outcome<R>) -> NativePresentReceipt {
+    match result {
+        Ok(PresentOutcome::Presented(receipt)) => receipt,
+        Ok(PresentOutcome::NotPresented { reason, .. }) => panic!("not presented: {reason:?}"),
+        Err(fault) => panic!("present failed: {fault:?}"),
+    }
+}
+
+fn returned<R>(result: Outcome<R>, expected: PresentRejection) -> R {
+    match result {
+        Ok(PresentOutcome::NotPresented {
+            reason,
+            retry: Some(input),
+        }) => {
+            assert_eq!(reason, expected);
+            input
+        }
+        Ok(PresentOutcome::NotPresented {
+            reason,
+            retry: None,
+        }) => {
+            panic!("input was not returned with {reason:?}")
+        }
+        Ok(PresentOutcome::Presented(_)) => panic!("unexpected present; wanted {expected:?}"),
+        Err(fault) => panic!("unexpected fault {fault:?}; wanted {expected:?}"),
+    }
+}
+
+fn faulted<R>(result: Outcome<R>, kind: NativeGpuFaultKind) -> NativeGpuFault {
+    match result {
+        Err(fault) => {
+            assert_eq!(fault.kind, kind, "{fault:?}");
+            assert_eq!(fault.phase, GpuPhase::MappingPresent);
+            fault
+        }
+        Ok(PresentOutcome::Presented(_)) => panic!("unexpected present; wanted {kind:?}"),
+        Ok(PresentOutcome::NotPresented { reason, .. }) => {
+            panic!("unexpected {reason:?}; wanted fault {kind:?}")
+        }
+    }
+}
+
+fn reap<T: NativePresentTarget>(
+    presenter: &mut SharedSurfacePresenter<T>,
+    owner: &mut NativeGpuOwner,
+) {
+    let started = Instant::now();
+    while presenter.poll_retirements(owner).unwrap() != 0 {
+        assert!(started.elapsed() < Duration::from_secs(5));
+        std::thread::yield_now();
+    }
+}
+
+/// The legacy presenter's own CPU Artistic MapOnce encoding
+/// (`NativeGpuFrameBuffers::encode_mapped_artistic`, used by
+/// `GpuSurfacePresenter::present_output_artistic_result`) into an offscreen
+/// image of `format`: the pixel-parity oracle. Test-only, on the same
+/// adapter, outside the presenter path.
+fn legacy_artistic_image(
+    env: &Env,
+    format: wgpu::TextureFormat,
+    frame: &VideoFrame,
+    mapping: &VideoOutputMapping,
+) -> Vec<u8> {
+    let device = env.fixture.owner.context().device();
+    let queue = env.fixture.owner.context().queue();
+    let composite = crate::gpu_compositor::create_gpu_composite_pipelines(device);
+    let output_layout = create_buffer_output_bind_group_layout(device);
+    let blit = create_buffer_output_pipeline(device, &output_layout, format);
+    let buffers = super::super::NativeGpuFrameBuffers::new(
+        device,
+        &composite.bind_group_layout,
+        &output_layout,
+        frame.data.len() as u64,
+    );
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Syndocal legacy artistic parity image"),
+        size: wgpu::Extent3d {
+            width: frame.width,
+            height: frame.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let encoder = buffers.encode_mapped_artistic(
+        device,
+        queue,
+        (&composite.output_mapping, &blit),
+        (frame, mapping),
+        (frame.width, frame.height),
+        &view,
+    );
+    queue.submit(Some(encoder.finish()));
+    read_image(env, &texture)
+}
+
+fn exact_black(image: &[u8]) -> bool {
+    image.chunks_exact(4).all(|pixel| pixel == [0, 0, 0, 255])
+}
+
+#[test]
+fn shared_cpu_artistic_and_blackout_contract_types_join_i_present_policy() {
+    fn assert_sink<S, R>()
+    where
+        S: NativePresentSink<Ready = R, Permit = ScriptedGate, Receipt = NativePresentReceipt>,
+    {
+    }
+    assert_sink::<
+        SharedPresentSink<'static, OffscreenTarget, TestArtistic, ScriptedGate, CpuArtisticContent>,
+        TestArtistic,
+    >();
+    assert_sink::<
+        SharedPresentSink<
+            'static,
+            OffscreenTarget,
+            TestBlackout,
+            ScriptedGate,
+            HardBlackoutContent,
+        >,
+        TestBlackout,
+    >();
+    // The default content is unchanged for the existing Resident sink.
+    assert_sink::<SharedPresentSink<'static, OffscreenTarget, TestReady, ScriptedGate>, TestReady>(
+    );
+}
+
+#[test]
+fn shared_cpu_artistic_uploads_once_maps_once_and_matches_legacy_presenter_pixels() {
+    let mut env = shared_env();
+    eprintln!(
+        "REAL_ADAPTER shared CPU Artistic: {:?}",
+        env.fixture.owner.capabilities().adapter_info
+    );
+    let size = (41, 29);
+    let packed = u64::from(size.0 * size.1 * 4);
+    let target = OffscreenTarget::new(&env);
+    let mut presenter = new_presenter(&mut env, target);
+    let (input, frame, dropped) = artistic(1, size, projection());
+
+    // Never configured: Suspended, zero acquires, the input comes back intact.
+    let gate = ScriptedGate::default();
+    let input = returned(
+        presenter.present_cpu_artistic(input, &gate, &mut env.fixture.owner),
+        PresentRejection::Suspended,
+    );
+    assert_eq!(presenter.target.acquires, 0);
+    assert!(gate.events.borrow().is_empty());
+
+    presenter
+        .configure_admitted(geometry(size), &mut env.fixture.owner)
+        .unwrap();
+    let receipt = {
+        let mut sink =
+            presenter.cpu_artistic_sink::<TestArtistic, ScriptedGate>(&mut env.fixture.owner);
+        presented(sink.present_once(input, ScriptedGate::default()))
+    };
+    assert_eq!(
+        (receipt.sequence(), receipt.extent(), receipt.frame()),
+        (1, size, display_frame_id(1))
+    );
+    assert_eq!(receipt.content(), NativePresentContent::CpuArtistic);
+    assert_eq!(receipt.snapshot(), None);
+    assert_eq!(
+        receipt.submission().context,
+        env.fixture.owner.context().id()
+    );
+    assert_eq!(
+        (presenter.presents(), presenter.hard_blackout_presents()),
+        (1, 0)
+    );
+    assert_eq!(
+        (presenter.target.acquires, presenter.target.discards),
+        (1, 0)
+    );
+    // The consumed input (its CPU charge owner) stays with the presenter.
+    assert!(!dropped.load(Ordering::SeqCst));
+    assert_eq!(
+        presenter.poll_retirements(&mut env.fixture.owner).unwrap(),
+        0
+    );
+    assert!(dropped.load(Ordering::SeqCst));
+
+    let image = read_image(&env, &presenter.target.presented[0]);
+    let mapped = apply_video_output_mapping(frame.clone(), &projection());
+    assert_eq!(
+        image, mapped.data,
+        "one output mapping over the uploaded canonical CPU bytes, exactly"
+    );
+    assert_ne!(image, frame.data, "the mapping is visible");
+    let twice = apply_video_output_mapping(mapped, &projection());
+    assert_ne!(image, twice.data, "the mapping is applied exactly once");
+    assert_eq!(
+        image,
+        legacy_artistic_image(&env, wgpu::TextureFormat::Rgba8Unorm, &frame, &projection()),
+        "byte parity with the legacy presenter's CPU Artistic arm"
+    );
+
+    // Pooled: mapped buffer + dimensions, params + mask, CPU source. The
+    // upload staging and the mask staging were released after completion.
+    wait_for_allocations(&mut env.fixture.owner, 5);
+    let budget = env.fixture.owner.budget_snapshot();
+    assert_eq!(
+        budget.for_kind(ChargeKind::CompositionBuffer).active_bytes,
+        packed
+    );
+    assert_eq!(
+        budget.for_kind(ChargeKind::QueueUploadStaging).active_bytes,
+        0
+    );
+    assert_eq!(
+        budget.for_kind(ChargeKind::MappingBuffer).active_bytes,
+        packed + DIMENSIONS_BYTES + MAPPING_PARAMS_BYTES + MASK_TEXTURE_BYTES
+    );
+
+    // Steady state: no host wait, the submission and the input (with its
+    // upload charge) are held until G resolves the present submission.
+    let (input, frame, dropped) = artistic(2, size, projection());
+    let gate = ScriptedGate::default();
+    let receipt = presented(presenter.present_cpu_artistic(input, &gate, &mut env.fixture.owner));
+    assert_eq!(receipt.sequence(), 2);
+    assert_eq!(
+        *gate.events.borrow(),
+        vec!["before_acquire", "before_present"]
+    );
+    assert_eq!(presenter.retirements.len(), 1);
+    assert!(presenter.retirements[0].pending.is_some());
+    assert!(!dropped.load(Ordering::SeqCst), "retained until completion");
+    let budget = env.fixture.owner.budget_snapshot();
+    assert_eq!(
+        budget.for_kind(ChargeKind::QueueUploadStaging).active_bytes,
+        packed,
+        "the upload charge lives with its submission"
+    );
+    assert_eq!(
+        budget.for_kind(ChargeKind::CompositionBuffer).active_bytes,
+        packed,
+        "the CPU source is pooled, not reallocated"
+    );
+    reap(&mut presenter, &mut env.fixture.owner);
+    assert!(dropped.load(Ordering::SeqCst));
+    wait_for_allocations(&mut env.fixture.owner, 5);
+    assert_eq!(
+        env.fixture
+            .owner
+            .budget_snapshot()
+            .for_kind(ChargeKind::QueueUploadStaging)
+            .active_bytes,
+        0
+    );
+    let image = read_image(&env, &presenter.target.presented[1]);
+    assert_eq!(image, apply_video_output_mapping(frame, &projection()).data);
+    assert_eq!(presenter.target.configures, vec![size], "no reconfigure");
+    stop_and_reap(&mut presenter, &mut env.fixture.owner);
+}
+
+#[test]
+fn shared_cpu_artistic_on_default_srgb_surface_format_keeps_legacy_byte_parity() {
+    let mut env = shared_env();
+    let size = (33, 21);
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let target = OffscreenTarget::with_formats(&env, format, format);
+    let mut presenter = new_presenter(&mut env, target);
+    presenter
+        .configure_admitted(geometry(size), &mut env.fixture.owner)
+        .unwrap();
+    let (input, frame, _) = artistic(1, size, fit_wide());
+    presented(presenter.present_cpu_artistic(
+        input,
+        &ScriptedGate::default(),
+        &mut env.fixture.owner,
+    ));
+    reap(&mut presenter, &mut env.fixture.owner);
+    let image = read_image(&env, &presenter.target.presented[0]);
+    assert_eq!(
+        image,
+        legacy_artistic_image(&env, format, &frame, &fit_wide()),
+        "same byte/255 blit into the sRGB surface format as the legacy presenter"
+    );
+    assert_ne!(
+        image,
+        apply_video_output_mapping(frame, &fit_wide()).data,
+        "the sRGB target encodes the blit output, as the legacy presenter does"
+    );
+    stop_and_reap(&mut presenter, &mut env.fixture.owner);
+}
+
+#[test]
+fn shared_hard_blackout_clears_exact_black_without_payload_mapping_or_allocation() {
+    let mut env = shared_env();
+    eprintln!(
+        "REAL_ADAPTER shared HardBlackout: {:?}",
+        env.fixture.owner.capabilities().adapter_info
+    );
+    let size = (37, 23);
+    // The production default surface format.
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let target = OffscreenTarget::with_formats(&env, format, format);
+    let mut presenter = new_presenter(&mut env, target);
+    presenter
+        .configure_admitted(geometry(size), &mut env.fixture.owner)
+        .unwrap();
+
+    // A cold blackout: no pooled resource exists or is created.
+    let (input, dropped) = blackout(1);
+    let receipt = {
+        let mut sink =
+            presenter.hard_blackout_sink::<TestBlackout, ScriptedGate>(&mut env.fixture.owner);
+        presented(sink.present_once(input, ScriptedGate::default()))
+    };
+    assert_eq!(
+        (
+            receipt.sequence(),
+            receipt.extent(),
+            receipt.frame(),
+            receipt.content(),
+            receipt.snapshot()
+        ),
+        (
+            1,
+            size,
+            display_frame_id(1),
+            NativePresentContent::HardBlackout,
+            None
+        )
+    );
+    assert_eq!(
+        (presenter.presents(), presenter.hard_blackout_presents()),
+        (1, 1)
+    );
+    assert!(presenter.mapped.is_none() && presenter.inputs.is_none());
+    assert!(presenter.cpu_source.is_none());
+    assert!(!dropped.load(Ordering::SeqCst));
+    reap(&mut presenter, &mut env.fixture.owner);
+    assert!(dropped.load(Ordering::SeqCst));
+    wait_for_allocations(&mut env.fixture.owner, 0);
+    assert_eq!(env.fixture.owner.budget_snapshot().managed_bytes(), 0);
+    let image = read_image(&env, &presenter.target.presented[0]);
+    assert_eq!(image.len(), (size.0 * size.1 * 4) as usize);
+    assert!(exact_black(&image), "opaque exact black [0, 0, 0, 255]");
+
+    // A hostile mapping lifts a black CPU frame (the reason for the bypass).
+    let mut hostile = projection();
+    hostile.black_level = 0.9;
+    let (input, _, _) = with_frame(2, crate::video_output_black_frame(size.0, size.1), hostile);
+    presented(presenter.present_cpu_artistic(
+        input,
+        &ScriptedGate::default(),
+        &mut env.fixture.owner,
+    ));
+    reap(&mut presenter, &mut env.fixture.owner);
+    assert!(!exact_black(&read_image(
+        &env,
+        &presenter.target.presented[1]
+    )));
+    wait_for_allocations(&mut env.fixture.owner, 5);
+    let before = env.fixture.owner.budget_snapshot();
+
+    // Blackout after it: same gate boundaries, nothing uploaded, mapped or
+    // allocated, and still exact black.
+    let (input, _) = blackout(3);
+    let gate = ScriptedGate::default();
+    let receipt = presented(presenter.present_hard_blackout(input, &gate, &mut env.fixture.owner));
+    assert_eq!(receipt.sequence(), 3);
+    assert_eq!(
+        *gate.events.borrow(),
+        vec!["before_acquire", "before_present"]
+    );
+    let during = env.fixture.owner.budget_snapshot();
+    assert_eq!(during.managed_bytes(), before.managed_bytes());
+    assert_eq!(
+        during.for_kind(ChargeKind::QueueUploadStaging).active_bytes,
+        0
+    );
+    reap(&mut presenter, &mut env.fixture.owner);
+    wait_for_allocations(&mut env.fixture.owner, 5);
+    assert_eq!(
+        env.fixture.owner.budget_snapshot().managed_bytes(),
+        before.managed_bytes()
+    );
+    assert!(exact_black(&read_image(
+        &env,
+        &presenter.target.presented[2]
+    )));
+    assert_eq!(
+        (presenter.presents(), presenter.hard_blackout_presents()),
+        (3, 2)
+    );
+    stop_and_reap(&mut presenter, &mut env.fixture.owner);
+}
+
+#[test]
+fn shared_cpu_artistic_and_blackout_stop_or_revocation_before_present_never_present() {
+    let mut env = shared_env();
+    let size = (23, 17);
+    let target = OffscreenTarget::new(&env);
+    let mut presenter = new_presenter(&mut env, target);
+    presenter
+        .configure_admitted(geometry(size), &mut env.fixture.owner)
+        .unwrap();
+    // Validate first use of both contents, so later presents leave a real
+    // pending submission.
+    let (input, _, _) = artistic(1, size, projection());
+    presented(presenter.present_cpu_artistic(
+        input,
+        &ScriptedGate::default(),
+        &mut env.fixture.owner,
+    ));
+    presented(presenter.present_hard_blackout(
+        blackout(2).0,
+        &ScriptedGate::default(),
+        &mut env.fixture.owner,
+    ));
+    reap(&mut presenter, &mut env.fixture.owner);
+    assert_eq!(presenter.target.acquires, 2);
+
+    // Boundary 1: Stop/revocation before acquire. Zero acquires, the
+    // reservation is returned, the input comes back intact.
+    for reason in [PresentRejection::Cancelled, PresentRejection::Revoked] {
+        let gate = ScriptedGate {
+            acquire: Some(reason),
+            ..Default::default()
+        };
+        let (input, _, dropped) = artistic(3, size, projection());
+        let input = returned(
+            presenter.present_cpu_artistic(input, &gate, &mut env.fixture.owner),
+            reason,
+        );
+        assert!(!dropped.load(Ordering::SeqCst));
+        drop(input);
+        let gate_blackout = ScriptedGate {
+            acquire: Some(reason),
+            ..Default::default()
+        };
+        let input = returned(
+            presenter.present_hard_blackout(blackout(4).0, &gate_blackout, &mut env.fixture.owner),
+            reason,
+        );
+        drop(input);
+        assert_eq!(*gate.events.borrow(), vec!["before_acquire"]);
+        assert_eq!(*gate_blackout.events.borrow(), vec!["before_acquire"]);
+        assert_eq!(
+            presenter.target.acquires, 2,
+            "no acquire after a revoked permit"
+        );
+        assert_eq!(env.fixture.owner.budget_snapshot().reservation_count, 0);
+    }
+
+    // Boundary 2: Stop after acquire and submit, before present. The image is
+    // discarded, never presented; the submitted work stays in the presenter's
+    // retirement list until G resolves it; the input comes back intact.
+    let gate = ScriptedGate {
+        present: Some(PresentRejection::Cancelled),
+        ..Default::default()
+    };
+    let (input, _, dropped) = artistic(5, size, projection());
+    let input = returned(
+        presenter.present_cpu_artistic(input, &gate, &mut env.fixture.owner),
+        PresentRejection::Cancelled,
+    );
+    assert_eq!(
+        *gate.events.borrow(),
+        vec!["before_acquire", "before_present"]
+    );
+    assert_eq!(
+        (
+            presenter.target.acquires,
+            presenter.target.discards,
+            presenter.presents()
+        ),
+        (3, 1, 2)
+    );
+    assert_eq!(presenter.retirements.len(), 1, "submitted owners retained");
+    assert!(presenter.retirements[0].pending.is_some());
+    assert!(presenter.retirements[0]._ready.is_none());
+    drop(input);
+    assert!(dropped.load(Ordering::SeqCst));
+
+    let gate = ScriptedGate {
+        present: Some(PresentRejection::Revoked),
+        ..Default::default()
+    };
+    let (input, dropped) = blackout(6);
+    let input = returned(
+        presenter.present_hard_blackout(input, &gate, &mut env.fixture.owner),
+        PresentRejection::Revoked,
+    );
+    assert_eq!(
+        (
+            presenter.target.acquires,
+            presenter.target.discards,
+            presenter.presents(),
+            presenter.hard_blackout_presents()
+        ),
+        (4, 2, 2, 1)
+    );
+    assert_eq!(presenter.retirements.len(), 1);
+    assert!(presenter.retirements[0].pending.is_some());
+    assert!(!dropped.load(Ordering::SeqCst));
+    drop(input);
+    reap(&mut presenter, &mut env.fixture.owner);
+    assert_eq!(presenter.target.presented.len(), 2);
+
+    // After Stop the owner is not Active: zero acquires, inputs returned.
+    presenter.release_for_stop();
+    env.fixture.owner.begin_stop();
+    let (input, _, _) = artistic(7, size, projection());
+    drop(returned(
+        presenter.present_cpu_artistic(input, &ScriptedGate::default(), &mut env.fixture.owner),
+        PresentRejection::Cancelled,
+    ));
+    drop(returned(
+        presenter.present_hard_blackout(
+            blackout(8).0,
+            &ScriptedGate::default(),
+            &mut env.fixture.owner,
+        ),
+        PresentRejection::Cancelled,
+    ));
+    assert_eq!(presenter.target.acquires, 4);
+    assert_eq!(presenter.presents(), 2);
+    stop_and_reap(&mut presenter, &mut env.fixture.owner);
+}
+
+#[test]
+fn shared_cpu_artistic_and_blackout_reject_stale_or_malformed_input_and_validate_first_use() {
+    let mut env = shared_env();
+    let size = (19, 13);
+    let target = OffscreenTarget::new(&env);
+    let mut presenter = new_presenter(&mut env, target);
+    presenter
+        .configure_admitted(geometry(size), &mut env.fixture.owner)
+        .unwrap();
+
+    // Another extent, or another geometry generation: StaleGeometry before
+    // any reservation or acquire; inputs come back intact.
+    let (input, _, _) = artistic(1, (size.0 + 1, size.1), projection());
+    drop(returned(
+        presenter.present_cpu_artistic(input, &ScriptedGate::default(), &mut env.fixture.owner),
+        PresentRejection::StaleGeometry,
+    ));
+    let (mut input, _, _) = artistic(2, size, projection());
+    input.frame_id.geometry_generation = GENERATION + 1;
+    drop(returned(
+        presenter.present_cpu_artistic(input, &ScriptedGate::default(), &mut env.fixture.owner),
+        PresentRejection::StaleGeometry,
+    ));
+    let (mut input, _) = blackout(3);
+    input.frame_id.geometry_generation = GENERATION + 1;
+    drop(returned(
+        presenter.present_hard_blackout(input, &ScriptedGate::default(), &mut env.fixture.owner),
+        PresentRejection::StaleGeometry,
+    ));
+    assert_eq!(presenter.target.acquires, 0);
+    assert_eq!(env.fixture.owner.budget_snapshot().reservation_count, 0);
+
+    // A partial CPU payload is a fault; the input is retained, not dropped.
+    let (mut input, _, dropped) = artistic(4, size, projection());
+    let truncated = input.frame.data.len() - 4;
+    input.frame.data.truncate(truncated);
+    let gate = ScriptedGate::default();
+    faulted(
+        presenter.present_cpu_artistic(input, &gate, &mut env.fixture.owner),
+        NativeGpuFaultKind::IdentityMismatch,
+    );
+    assert!(gate.events.borrow().is_empty());
+    assert_eq!(presenter.target.acquires, 0);
+    assert!(!dropped.load(Ordering::SeqCst));
+    assert_eq!(
+        presenter.poll_retirements(&mut env.fixture.owner).unwrap(),
+        0
+    );
+    assert!(dropped.load(Ordering::SeqCst));
+    // Not a sticky fault: the next well-formed frame presents.
+    let (input, frame, _) = artistic(5, size, projection());
+    presented(presenter.present_cpu_artistic(
+        input,
+        &ScriptedGate::default(),
+        &mut env.fixture.owner,
+    ));
+    reap(&mut presenter, &mut env.fixture.owner);
+    assert_eq!(
+        read_image(&env, &presenter.target.presented[0]),
+        apply_video_output_mapping(frame, &projection()).data
+    );
+    stop_and_reap(&mut presenter, &mut env.fixture.owner);
+    drop(presenter);
+    drop(env);
+
+    // A real validation error in the first CPU Artistic present phase: the
+    // image is discarded before present and the presenter stays faulted, so
+    // a later blackout never acquires either.
+    let mut env = shared_env();
+    let target = OffscreenTarget::with_image_format(&env, wgpu::TextureFormat::Bgra8Unorm);
+    let mut presenter = new_presenter(&mut env, target);
+    presenter
+        .configure_admitted(geometry(size), &mut env.fixture.owner)
+        .unwrap();
+    let (input, _, dropped) = artistic(1, size, projection());
+    faulted(
+        presenter.present_cpu_artistic(input, &ScriptedGate::default(), &mut env.fixture.owner),
+        NativeGpuFaultKind::Validation,
+    );
+    assert_eq!(
+        (
+            presenter.target.acquires,
+            presenter.target.discards,
+            presenter.presents()
+        ),
+        (1, 1, 0)
+    );
+    assert!(!dropped.load(Ordering::SeqCst));
+    assert_eq!(env.fixture.owner.state(), GpuOwnerState::Active);
+    let fault = faulted(
+        presenter.present_hard_blackout(
+            blackout(2).0,
+            &ScriptedGate::default(),
+            &mut env.fixture.owner,
+        ),
+        NativeGpuFaultKind::Validation,
+    );
+    assert!(fault.message.contains("faulted"), "{fault:?}");
+    assert_eq!(presenter.target.acquires, 1);
+    stop_and_reap(&mut presenter, &mut env.fixture.owner);
+}
+
+#[test]
+fn shared_cpu_artistic_and_blackout_device_loss_never_present_and_retain_inputs() {
+    let mut env = shared_env();
+    let size = (17, 11);
+    let target = OffscreenTarget::new(&env);
+    let mut presenter = new_presenter(&mut env, target);
+    presenter
+        .configure_admitted(geometry(size), &mut env.fixture.owner)
+        .unwrap();
+    env.fixture.owner.context().device().destroy();
+    let started = Instant::now();
+    while env.fixture.owner.state() != GpuOwnerState::DeviceLostRetained {
+        let _ = env.fixture.owner.poll_retirement();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "loss not observed"
+        );
+        std::thread::yield_now();
+    }
+    let (input, _, artistic_dropped) = artistic(1, size, projection());
+    let gate = ScriptedGate::default();
+    faulted(
+        presenter.present_cpu_artistic(input, &gate, &mut env.fixture.owner),
+        NativeGpuFaultKind::DeviceLost,
+    );
+    let (input, blackout_dropped) = blackout(2);
+    faulted(
+        presenter.present_hard_blackout(input, &gate, &mut env.fixture.owner),
+        NativeGpuFaultKind::DeviceLost,
+    );
+    assert!(gate.events.borrow().is_empty());
+    assert_eq!((presenter.target.acquires, presenter.presents()), (0, 0));
+    assert!(!artistic_dropped.load(Ordering::SeqCst));
+    assert!(!blackout_dropped.load(Ordering::SeqCst));
+    presenter.release_for_stop();
+    assert!(artistic_dropped.load(Ordering::SeqCst));
+    assert!(blackout_dropped.load(Ordering::SeqCst));
+}
+
+#[test]
+fn shared_present_drives_resident_cpu_artistic_and_blackout_through_one_retirement_path() {
+    let mut env = shared_env();
+    let size = (41, 29);
+    let target = OffscreenTarget::new(&env);
+    let mut presenter = new_presenter(&mut env, target);
+    presenter
+        .configure_admitted(geometry(size), &mut env.fixture.owner)
+        .unwrap();
+    let (ready, resident_pixels, ready_dropped) = real_ready(&mut env, 1, size, projection());
+    let resident =
+        presented(presenter.present_ready(ready, &ScriptedGate::default(), &mut env.fixture.owner));
+    let (input, frame, cpu_dropped) = artistic(2, size, projection());
+    let cpu = presented(presenter.present_cpu_artistic(
+        input,
+        &ScriptedGate::default(),
+        &mut env.fixture.owner,
+    ));
+    let (input, blackout_dropped) = blackout(3);
+    let black = presented(presenter.present_hard_blackout(
+        input,
+        &ScriptedGate::default(),
+        &mut env.fixture.owner,
+    ));
+    let (ready, last_pixels, _) = real_ready(&mut env, 4, size, projection());
+    let last =
+        presented(presenter.present_ready(ready, &ScriptedGate::default(), &mut env.fixture.owner));
+    assert_eq!(
+        [
+            resident.sequence(),
+            cpu.sequence(),
+            black.sequence(),
+            last.sequence()
+        ],
+        [1, 2, 3, 4]
+    );
+    assert!(matches!(
+        resident.content(),
+        NativePresentContent::Resident(_)
+    ));
+    assert_eq!(cpu.content(), NativePresentContent::CpuArtistic);
+    assert_eq!(black.content(), NativePresentContent::HardBlackout);
+    let snapshot = resident
+        .snapshot()
+        .expect("a Resident receipt names its snapshot");
+    assert_eq!(resident.snapshot(), snapshot);
+    assert_ne!(
+        cpu.snapshot(),
+        snapshot,
+        "no snapshot is claimed for CPU pixels"
+    );
+    assert_ne!(
+        black.snapshot(),
+        snapshot,
+        "no snapshot is claimed for blackout"
+    );
+    assert!(matches!(last.content(), NativePresentContent::Resident(_)));
+    let submissions = [
+        resident.submission().sequence,
+        cpu.submission().sequence,
+        black.submission().sequence,
+        last.submission().sequence,
+    ];
+    assert!(
+        submissions.windows(2).all(|pair| pair[0] < pair[1]),
+        "one owner, ordered submissions: {submissions:?}"
+    );
+    // Each present drained its predecessor; earlier inputs were released
+    // once their submissions resolved, the last one is still held.
+    assert!(ready_dropped.load(Ordering::SeqCst));
+    assert!(cpu_dropped.load(Ordering::SeqCst));
+    assert!(blackout_dropped.load(Ordering::SeqCst));
+    assert_eq!(presenter.retirements.len(), 1);
+    reap(&mut presenter, &mut env.fixture.owner);
+    assert_eq!(
+        (presenter.presents(), presenter.hard_blackout_presents()),
+        (4, 1)
+    );
+    assert_eq!(
+        read_image(&env, &presenter.target.presented[0]),
+        apply_video_output_mapping(resident_pixels, &projection()).data
+    );
+    assert_eq!(
+        read_image(&env, &presenter.target.presented[1]),
+        apply_video_output_mapping(frame, &projection()).data
+    );
+    assert!(exact_black(&read_image(
+        &env,
+        &presenter.target.presented[2]
+    )));
+    assert_eq!(
+        read_image(&env, &presenter.target.presented[3]),
+        apply_video_output_mapping(last_pixels, &projection()).data
+    );
+    // Pools: mapped target, mapping inputs and the CPU source; every Ready
+    // premapping, upload and staging charge was released.
+    wait_for_allocations(&mut env.fixture.owner, 5);
     stop_and_reap(&mut presenter, &mut env.fixture.owner);
 }

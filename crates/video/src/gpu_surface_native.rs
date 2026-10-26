@@ -16,6 +16,14 @@
 //! until the present submission completes; a consumed Ready stays in this
 //! presenter's retirement list until then. The existing CPU-upload
 //! `GpuSurfacePresenter` is unchanged and remains the production path.
+//!
+//! The same presenter also displays the two non-resident contents of the
+//! Artistic Display route on the same owner (P53): a canonical CPU Artistic
+//! result (uploaded once through G's broker/ledger into a pooled source, then
+//! the same single mapping pass and blit as the legacy MapOnce arm) and a
+//! payload-less HardBlackout (a direct exact-black clear of the acquired
+//! image; no upload, no mapping, no Ready/LastValid). All three share one
+//! outcome/retirement shape, so I drives them through one path.
 
 use std::any::Any;
 use std::marker::PhantomData;
@@ -27,7 +35,7 @@ use wgpu::util::DeviceExt;
 
 use super::{
     create_buffer_output_bind_group_layout, create_buffer_output_pipeline, dimensions_uniform,
-    UnconfiguredNativeSurface,
+    UnconfiguredNativeSurface, HARD_BLACKOUT_CLEAR_COLOR,
 };
 use crate::gpu_compositor::{
     create_blank_mapping_mask_texture, create_compositor_bind_group_layout,
@@ -35,6 +43,7 @@ use crate::gpu_compositor::{
     output_mapping_params, MAPPING_MASK_DIMENSION, MAPPING_MASK_PADDED_BYTES_PER_ROW,
 };
 use crate::native_gpu_budget::{AllocationCharge, ChargeKind, NativeAllocationPlan};
+use crate::native_gpu_composition::NativeChargedBuffer;
 use crate::native_gpu_context::{
     ContextCreateError, GpuPhaseEncoder, NativeGpuOwner, PendingGpuTransaction, PendingPhaseReceipt,
 };
@@ -45,7 +54,7 @@ use crate::native_gpu_contract::{
 };
 use crate::native_gpu_output::{NativeOutputAuthority, NativePresentPermit, ReadyNativeGpuOutput};
 use crate::native_gpu_snapshot::NativeSnapshotGpu;
-use crate::VideoPixelFormat;
+use crate::{VideoFrame, VideoPixelFormat};
 
 const MAPPING_PARAMS_BYTES: u64 = 256;
 const DIMENSIONS_BYTES: u64 = 16;
@@ -63,6 +72,152 @@ pub(crate) trait FrozenPresentation {
     fn snapshot_gpu(&self) -> &NativeSnapshotGpu;
     /// The output ticket's frozen mapping, applied here exactly once.
     fn mapping(&self) -> &VideoOutputMapping;
+}
+
+/// A canonical CPU post-FX (premapping) Artistic result shown on the shared
+/// owner. The presenter uploads `frame()` once, applies `mapping()` exactly
+/// once and blits, as the legacy `present_output_artistic_result` MapOnce arm.
+pub(crate) trait CpuArtisticPresentation {
+    /// This display tick; its geometry generation must be the admitted one.
+    fn frame_id(&self) -> NativeFrameId;
+    /// Packed RGBA8 at the admitted extent (`data.len() == w * h * 4`).
+    fn frame(&self) -> &VideoFrame;
+    /// The output ticket's frozen mapping, applied here exactly once.
+    fn mapping(&self) -> &VideoOutputMapping;
+}
+
+/// A payload-less hard blackout: the acquired image is cleared to opaque
+/// exact black. There are no pixels to read, map, cache or retain.
+pub(crate) trait HardBlackoutPresentation {
+    /// This display tick; its geometry generation must be the admitted one.
+    fn frame_id(&self) -> NativeFrameId;
+}
+
+/// What one present reads from its input, borrowed for planning and encode.
+#[derive(Clone, Copy)]
+pub(crate) enum PresentSource<'a> {
+    Premapping {
+        buffer: &'a Arc<NativeChargedBuffer>,
+        mapping: &'a VideoOutputMapping,
+    },
+    Cpu {
+        frame: &'a VideoFrame,
+        mapping: &'a VideoOutputMapping,
+    },
+    ExactBlack,
+}
+
+/// Content markers. Each selects one present entry and its input trait;
+/// `SharedPresentSink` defaults to `ResidentContent` (`present_ready`).
+pub(crate) struct ResidentContent;
+pub(crate) struct CpuArtisticContent;
+pub(crate) struct HardBlackoutContent;
+
+/// Dispatch from a content marker to the input it presents. The input's
+/// shape/identity checks run before any reservation, acquire or GPU work.
+pub(crate) trait PresentContentKind<R> {
+    fn frame_id(input: &R) -> NativeFrameId;
+    /// The extent the input was rendered at; `None` for payload-less input,
+    /// which always uses the admitted extent.
+    fn input_extent(input: &R) -> Option<(u32, u32)>;
+    fn validate(input: &R, context: GpuContextId, extent: (u32, u32)) -> Result<(), &'static str>;
+    fn source(input: &R) -> PresentSource<'_>;
+    fn content(input: &R) -> NativePresentContent;
+}
+
+impl<R: FrozenPresentation> PresentContentKind<R> for ResidentContent {
+    fn frame_id(input: &R) -> NativeFrameId {
+        input.cache_receipt().descriptor().snapshot.frame
+    }
+
+    fn input_extent(input: &R) -> Option<(u32, u32)> {
+        let snapshot = input.cache_receipt().descriptor().snapshot;
+        Some((snapshot.width, snapshot.height))
+    }
+
+    fn validate(input: &R, context: GpuContextId, extent: (u32, u32)) -> Result<(), &'static str> {
+        let snapshot = input.cache_receipt().descriptor().snapshot;
+        let premapping = input.snapshot_gpu().premapping_owner();
+        let valid = snapshot.format == VideoPixelFormat::Rgba8
+            && snapshot.allocation == premapping.allocation_id()
+            && snapshot.allocation.context == context
+            && snapshot.completed_submission.context == context
+            && packed_bytes(extent).is_some_and(|bytes| premapping.capacity() >= bytes);
+        if valid {
+            Ok(())
+        } else {
+            Err("Ready does not carry its committed premapping source")
+        }
+    }
+
+    fn source(input: &R) -> PresentSource<'_> {
+        PresentSource::Premapping {
+            buffer: input.snapshot_gpu().premapping_owner(),
+            mapping: input.mapping(),
+        }
+    }
+
+    fn content(input: &R) -> NativePresentContent {
+        NativePresentContent::Resident(input.cache_receipt().descriptor().snapshot)
+    }
+}
+
+impl<R: CpuArtisticPresentation> PresentContentKind<R> for CpuArtisticContent {
+    fn frame_id(input: &R) -> NativeFrameId {
+        input.frame_id()
+    }
+
+    fn input_extent(input: &R) -> Option<(u32, u32)> {
+        Some((input.frame().width, input.frame().height))
+    }
+
+    fn validate(input: &R, _context: GpuContextId, extent: (u32, u32)) -> Result<(), &'static str> {
+        let frame = input.frame();
+        if frame.format == VideoPixelFormat::Rgba8
+            && packed_bytes(extent) == u64::try_from(frame.data.len()).ok()
+        {
+            Ok(())
+        } else {
+            Err("CPU Artistic frame is not packed RGBA8 of its extent")
+        }
+    }
+
+    fn source(input: &R) -> PresentSource<'_> {
+        PresentSource::Cpu {
+            frame: input.frame(),
+            mapping: input.mapping(),
+        }
+    }
+
+    fn content(_input: &R) -> NativePresentContent {
+        NativePresentContent::CpuArtistic
+    }
+}
+
+impl<R: HardBlackoutPresentation> PresentContentKind<R> for HardBlackoutContent {
+    fn frame_id(input: &R) -> NativeFrameId {
+        input.frame_id()
+    }
+
+    fn input_extent(_input: &R) -> Option<(u32, u32)> {
+        None
+    }
+
+    fn validate(
+        _input: &R,
+        _context: GpuContextId,
+        _extent: (u32, u32),
+    ) -> Result<(), &'static str> {
+        Ok(())
+    }
+
+    fn source(_input: &R) -> PresentSource<'_> {
+        PresentSource::ExactBlack
+    }
+
+    fn content(_input: &R) -> NativePresentContent {
+        NativePresentContent::HardBlackout
+    }
 }
 
 /// The two physical-boundary rechecks of INTERFACE-01 section 6.4.
@@ -183,11 +338,31 @@ pub(crate) struct AdmittedPhysicalGeometry {
     pub geometry_generation: u64,
 }
 
-/// Evidence that `present` was called for one Ready; not GPU completion.
+/// What one present put on the image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativePresentContent {
+    /// P's committed premapping snapshot (`present_ready`).
+    Resident(SnapshotIdentity),
+    /// A canonical CPU Artistic result (`present_cpu_artistic`).
+    CpuArtistic,
+    /// Payload-less exact black (`present_hard_blackout`).
+    HardBlackout,
+}
+
+/// `receipt.snapshot() == identity` holds only for the Resident present of
+/// exactly that snapshot; a CPU Artistic or HardBlackout receipt (`None`)
+/// never equals any snapshot.
+impl PartialEq<SnapshotIdentity> for Option<SnapshotIdentity> {
+    fn eq(&self, other: &SnapshotIdentity) -> bool {
+        self.as_ref() == Some(other)
+    }
+}
+
+/// Evidence that `present` was called for one input; not GPU completion.
 #[derive(Debug)]
 pub(crate) struct NativePresentReceipt {
     frame: NativeFrameId,
-    snapshot: SnapshotIdentity,
+    content: NativePresentContent,
     submission: GpuSubmissionId,
     extent: (u32, u32),
     sequence: u64,
@@ -197,8 +372,17 @@ impl NativePresentReceipt {
     pub(crate) fn frame(&self) -> NativeFrameId {
         self.frame
     }
-    pub(crate) fn snapshot(&self) -> SnapshotIdentity {
-        self.snapshot
+    pub(crate) fn content(&self) -> NativePresentContent {
+        self.content
+    }
+    /// The presented snapshot; only Resident presents have one. Existing
+    /// callers that compare it with a `SnapshotIdentity` keep compiling (see
+    /// the `PartialEq` impl below): only a Resident receipt can be equal.
+    pub(crate) fn snapshot(&self) -> Option<SnapshotIdentity> {
+        match self.content {
+            NativePresentContent::Resident(snapshot) => Some(snapshot),
+            NativePresentContent::CpuArtistic | NativePresentContent::HardBlackout => None,
+        }
     }
     pub(crate) fn submission(&self) -> GpuSubmissionId {
         self.submission
@@ -275,24 +459,61 @@ impl MappingInputs {
     }
 }
 
-/// Per-present owners retained in G's registry with the submission.
+/// Pooled per admitted extent: the storage buffer a CPU Artistic frame is
+/// uploaded into; the single mapping pass reads it like a premapping source.
+struct CpuArtisticSource {
+    extent: (u32, u32),
+    source: Charged<wgpu::Buffer>,
+}
+
+impl CpuArtisticSource {
+    fn id(&self) -> GpuAllocationId {
+        self.source.charge.id()
+    }
+}
+
+/// Per-present owners retained in G's registry with the submission: the
+/// mapping bind group, a new mask staging buffer and the queue-upload charge
+/// of a CPU Artistic frame (wgpu's staging copy of it).
 struct PresentFrameResources {
     _bind_group: wgpu::BindGroup,
     _staging: Option<Charged<wgpu::Buffer>>,
+    _upload: Option<AllocationCharge>,
 }
 
-/// A consumed Ready and its (possibly) still pending present submission.
+/// A consumed input and its (possibly) still pending present submission.
 struct PresentRetirement {
     pending: Option<PendingGpuTransaction>,
     receipt: Option<PendingPhaseReceipt>,
     _ready: Option<Box<dyn Any + Send>>,
 }
 
-/// What this present must allocate: a mapped target for a new extent, and
-/// mapping inputs (exact params and mask bytes) for a new frozen mapping.
+/// What this present must allocate: a mapped target for a new extent,
+/// mapping inputs (exact params and mask bytes) for a new frozen mapping, and
+/// a CPU Artistic source for a new extent.
 struct PresentNeeds {
     mapped: bool,
     inputs: Option<([u8; 256], Vec<u8>)>,
+    cpu_source: bool,
+}
+
+/// First-use validation-before-present, per content: each has its own cold
+/// resources (premapping source, CPU upload, bare clear). Reset on configure.
+#[derive(Clone, Copy, Debug, Default)]
+struct FirstUseValidated {
+    resident: bool,
+    cpu_artistic: bool,
+    hard_blackout: bool,
+}
+
+impl FirstUseValidated {
+    fn slot(&mut self, content: NativePresentContent) -> &mut bool {
+        match content {
+            NativePresentContent::Resident(_) => &mut self.resident,
+            NativePresentContent::CpuArtistic => &mut self.cpu_artistic,
+            NativePresentContent::HardBlackout => &mut self.hard_blackout,
+        }
+    }
 }
 
 enum FirstUse {
@@ -308,14 +529,16 @@ pub(crate) struct SharedSurfacePresenter<T: NativePresentTarget> {
     retirements: Vec<PresentRetirement>,
     mapped: Option<Arc<MappedTarget>>,
     inputs: Option<Arc<MappingInputs>>,
+    cpu_source: Option<Arc<CpuArtisticSource>>,
     pipelines: Arc<NativePresentPipelines>,
     target: T,
     context: GpuContextId,
     configured: Option<(u32, u32)>,
     geometry: Option<AdmittedPhysicalGeometry>,
-    validated: bool,
+    validated: FirstUseValidated,
     fault: Option<(NativeGpuFaultKind, String)>,
     presents: u64,
+    hard_blackouts: u64,
 }
 
 impl SharedSurfacePresenter<NativeSurfaceTarget> {
@@ -357,14 +580,16 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
             retirements: Vec::new(),
             mapped: None,
             inputs: None,
+            cpu_source: None,
             pipelines: Arc::new(pipelines),
             target,
             context: owner.context().id(),
             configured: None,
             geometry: None,
-            validated: false,
+            validated: FirstUseValidated::default(),
             fault: None,
             presents: 0,
+            hard_blackouts: 0,
         })
     }
 
@@ -372,8 +597,14 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
         self.configured
     }
 
+    /// Every physical present: Resident, CPU Artistic and HardBlackout.
     pub(crate) fn presents(&self) -> u64 {
         self.presents
+    }
+
+    /// HardBlackout presents only (also counted in `presents`).
+    pub(crate) fn hard_blackout_presents(&self) -> u64 {
+        self.hard_blackouts
     }
 
     /// A borrowed `NativePresentSink` for I's present policy.
@@ -381,6 +612,30 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
         &'p mut self,
         owner: &'p mut NativeGpuOwner,
     ) -> SharedPresentSink<'p, T, R, P> {
+        SharedPresentSink {
+            presenter: self,
+            owner,
+            _types: PhantomData,
+        }
+    }
+
+    /// The `NativePresentSink` over `present_cpu_artistic`.
+    pub(crate) fn cpu_artistic_sink<'p, R, P>(
+        &'p mut self,
+        owner: &'p mut NativeGpuOwner,
+    ) -> SharedPresentSink<'p, T, R, P, CpuArtisticContent> {
+        SharedPresentSink {
+            presenter: self,
+            owner,
+            _types: PhantomData,
+        }
+    }
+
+    /// The `NativePresentSink` over `present_hard_blackout`.
+    pub(crate) fn hard_blackout_sink<'p, R, P>(
+        &'p mut self,
+        owner: &'p mut NativeGpuOwner,
+    ) -> SharedPresentSink<'p, T, R, P, HardBlackoutContent> {
         SharedPresentSink {
             presenter: self,
             owner,
@@ -486,13 +741,20 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
     ) -> Result<(), NativeGpuFault> {
         self.drain_retirements(owner)?;
         self.configured = None;
-        self.validated = false;
+        self.validated = FirstUseValidated::default();
         if self
             .mapped
             .as_ref()
             .is_some_and(|mapped| mapped.extent != extent)
         {
             self.mapped = None;
+        }
+        if self
+            .cpu_source
+            .as_ref()
+            .is_some_and(|source| source.extent != extent)
+        {
+            self.cpu_source = None;
         }
         let target = &mut self.target;
         owner.initialize(|device, _| target.configure(device, extent))?;
@@ -580,6 +842,7 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
         self.retirements.clear();
         self.mapped = None;
         self.inputs = None;
+        self.cpu_source = None;
     }
 
     /// Surface lifetime is separate from the device's (ADR-01 section 8.2):
@@ -620,49 +883,90 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
         R: FrozenPresentation + Send + 'static,
         P: NativePresentGate<R>,
     {
-        let not_presented = |reason, ready| {
+        self.present_content::<ResidentContent, R, P>(ready, gate, owner)
+    }
+
+    /// Display one canonical CPU Artistic result on the shared owner: one
+    /// upload of `frame()` through G's broker/ledger into the pooled source,
+    /// the single output mapping pass and the existing blit (the legacy
+    /// MapOnce arm's pixels). Outcome and retirement are `present_ready`'s:
+    /// `Presented` retains the whole input (its CPU charge owner) with the
+    /// submission until G resolves it; `NotPresented` returns it intact;
+    /// `Err` keeps it in the retirement list.
+    pub(crate) fn present_cpu_artistic<R, P>(
+        &mut self,
+        artistic: R,
+        gate: &P,
+        owner: &mut NativeGpuOwner,
+    ) -> Result<PresentOutcome<R, NativePresentReceipt>, NativeGpuFault>
+    where
+        R: CpuArtisticPresentation + Send + 'static,
+        P: NativePresentGate<R>,
+    {
+        self.present_content::<CpuArtisticContent, R, P>(artistic, gate, owner)
+    }
+
+    /// Payload-less HardBlackout: clear the acquired image to opaque exact
+    /// black in a G MappingPresent phase on the shared device. No upload, no
+    /// mapping pass, no pooled resource, no Ready or LastValid. Same gate,
+    /// first-use validation, outcome and retirement as `present_ready`.
+    pub(crate) fn present_hard_blackout<R, P>(
+        &mut self,
+        blackout: R,
+        gate: &P,
+        owner: &mut NativeGpuOwner,
+    ) -> Result<PresentOutcome<R, NativePresentReceipt>, NativeGpuFault>
+    where
+        R: HardBlackoutPresentation + Send + 'static,
+        P: NativePresentGate<R>,
+    {
+        self.present_content::<HardBlackoutContent, R, P>(blackout, gate, owner)
+    }
+
+    /// The one present protocol for every content kind.
+    fn present_content<K, R, P>(
+        &mut self,
+        input: R,
+        gate: &P,
+        owner: &mut NativeGpuOwner,
+    ) -> Result<PresentOutcome<R, NativePresentReceipt>, NativeGpuFault>
+    where
+        K: PresentContentKind<R>,
+        R: Send + 'static,
+        P: NativePresentGate<R>,
+    {
+        let not_presented = |reason, input| {
             Ok(PresentOutcome::NotPresented {
                 reason,
-                retry: Some(ready),
+                retry: Some(input),
             })
         };
-        let snapshot = ready.cache_receipt().descriptor().snapshot;
-        let frame = snapshot.frame;
+        let frame = K::frame_id(&input);
+        let content = K::content(&input);
         match self.check_owner(owner, Some(frame)) {
             Ok(true) => {}
-            Ok(false) => return not_presented(PresentRejection::Cancelled, ready),
-            Err(fault) => return self.retain_failure(ready, None, None, fault),
+            Ok(false) => return not_presented(PresentRejection::Cancelled, input),
+            Err(fault) => return self.retain_failure(input, None, None, fault),
         }
         if let Err(fault) = self.drain_retirements(owner) {
-            return self.retain_failure(ready, None, None, fault);
+            return self.retain_failure(input, None, None, fault);
         }
         let Some(geometry) = self.geometry else {
-            return not_presented(PresentRejection::Suspended, ready);
+            return not_presented(PresentRejection::Suspended, input);
         };
         if geometry.extent.0 == 0 || geometry.extent.1 == 0 {
-            return not_presented(PresentRejection::Suspended, ready);
+            return not_presented(PresentRejection::Suspended, input);
         }
-        let extent = (snapshot.width, snapshot.height);
+        let extent = K::input_extent(&input).unwrap_or(geometry.extent);
         if extent != geometry.extent
             || self.configured != Some(extent)
             || frame.geometry_generation != geometry.geometry_generation
         {
-            return not_presented(PresentRejection::StaleGeometry, ready);
+            return not_presented(PresentRejection::StaleGeometry, input);
         }
-        let premapping = Arc::clone(ready.snapshot_gpu().premapping_owner());
-        let output_bytes = packed_bytes(extent);
-        if snapshot.format != VideoPixelFormat::Rgba8
-            || snapshot.allocation != premapping.allocation_id()
-            || snapshot.allocation.context != self.context
-            || snapshot.completed_submission.context != self.context
-            || output_bytes.is_none_or(|bytes| premapping.capacity() < bytes)
-        {
-            let fault = self.fault_at(
-                Some(frame),
-                NativeGpuFaultKind::IdentityMismatch,
-                "Ready does not carry its committed premapping source",
-            );
-            return self.retain_failure(ready, None, None, fault);
+        if let Err(message) = K::validate(&input, self.context, extent) {
+            let fault = self.fault_at(Some(frame), NativeGpuFaultKind::IdentityMismatch, message);
+            return self.retain_failure(input, None, None, fault);
         }
         let Some(sequence) = self.presents.checked_add(1) else {
             let fault = self.fault_at(
@@ -670,15 +974,12 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
                 NativeGpuFaultKind::SequenceExhausted,
                 "present sequence exhausted",
             );
-            return self.retain_failure(ready, None, None, fault);
+            return self.retain_failure(input, None, None, fault);
         };
-        let params_bytes = output_mapping_params(extent.0, extent.1, ready.mapping());
-        let mask_bytes = mapping_mask_texture_bytes(ready.mapping());
-        let (plan, needs) =
-            match self.present_plan(frame, extent, params_bytes, mask_bytes, &premapping) {
-                Ok(planned) => planned,
-                Err(fault) => return self.retain_failure(ready, None, None, fault),
-            };
+        let (plan, needs) = match self.present_plan(frame, extent, K::source(&input)) {
+            Ok(planned) => planned,
+            Err(fault) => return self.retain_failure(input, None, None, fault),
+        };
         let reservation = match owner.quote(&plan).and_then(|quote| owner.reserve(quote)) {
             Ok(reservation) => reservation,
             Err(decline) => {
@@ -687,15 +988,15 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
                     NativeGpuFaultKind::StateMismatch,
                     &format!("mapping/present reservation declined: {decline:?}"),
                 );
-                return self.retain_failure(ready, None, None, fault);
+                return self.retain_failure(input, None, None, fault);
             }
         };
 
         // Physical boundary 1: authority/Stop/epoch immediately before acquire.
-        if let Err(reason) = gate.before_acquire(&ready) {
+        if let Err(reason) = gate.before_acquire(&input) {
             return match owner.discard_unsubmitted_reservation(reservation) {
-                Ok(()) => not_presented(reason, ready),
-                Err((fault, _reservation)) => self.retain_failure(ready, None, None, fault),
+                Ok(()) => not_presented(reason, input),
+                Err((fault, _reservation)) => self.retain_failure(input, None, None, fault),
             };
         }
         let acquired = match self.target.acquire() {
@@ -704,18 +1005,18 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
                 if let Err((fault, _reservation)) =
                     owner.discard_unsubmitted_reservation(reservation)
                 {
-                    return self.retain_failure(ready, None, None, fault);
+                    return self.retain_failure(input, None, None, fault);
                 }
                 return match error {
                     TargetAcquireError::Timeout => {
-                        not_presented(PresentRejection::SurfaceTimeout, ready)
+                        not_presented(PresentRejection::SurfaceTimeout, input)
                     }
                     TargetAcquireError::Outdated | TargetAcquireError::Lost => {
                         // Same admitted extent and device generation; I owns the
-                        // single retry allowance of this Ready.
+                        // single retry allowance of this input.
                         match self.reconfigure(owner, extent) {
-                            Ok(()) => not_presented(PresentRejection::SurfaceLostOrOutdated, ready),
-                            Err(fault) => self.retain_failure(ready, None, None, fault),
+                            Ok(()) => not_presented(PresentRejection::SurfaceLostOrOutdated, input),
+                            Err(fault) => self.retain_failure(input, None, None, fault),
                         }
                     }
                     TargetAcquireError::OutOfMemory | TargetAcquireError::Other => {
@@ -725,7 +1026,7 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
                             NativeGpuFaultKind::Submission
                         };
                         let fault = self.fault_at(Some(frame), kind, "surface acquire failed");
-                        self.retain_failure(ready, None, None, fault)
+                        self.retain_failure(input, None, None, fault)
                     }
                 };
             }
@@ -735,7 +1036,7 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
             Ok(txn) => txn,
             Err(fault) => {
                 self.target.discard(acquired);
-                return self.retain_failure(ready, None, None, fault);
+                return self.retain_failure(input, None, None, fault);
             }
         };
         let mut phase = match txn.begin_phase(GpuPhase::MappingPresent) {
@@ -744,21 +1045,22 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
                 // No phase opened. Dropping the unfinished transaction retires
                 // it in G's registry; poll_retirements finishes that record.
                 self.target.discard(acquired);
-                return self.retain_failure(ready, None, None, fault);
+                return self.retain_failure(input, None, None, fault);
             }
         };
-        let encoded = match self.encode(&mut phase, &premapping, extent, needs, &view) {
+        let encoded = match self.encode(&mut phase, K::source(&input), extent, needs, &view) {
             Ok(commands) => phase.finish(commands),
             Err(fault) => {
                 self.mapped = None;
                 self.inputs = None;
+                self.cpu_source = None;
                 phase.record_failure(fault.kind, fault.message.clone());
                 let sealed = phase.finish(Vec::new());
                 // If even the empty seal is refused, finish abandons the phase.
                 let _ = txn.submit_phase(sealed);
                 let pending = txn.finish();
                 self.target.discard(acquired);
-                return self.retain_failure(ready, Some(pending), None, fault);
+                return self.retain_failure(input, Some(pending), None, fault);
             }
         };
         drop(view);
@@ -767,15 +1069,16 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
             Err(fault) => {
                 let pending = txn.finish();
                 self.target.discard(acquired);
-                return self.retain_failure(ready, Some(pending), None, fault);
+                return self.retain_failure(input, Some(pending), None, fault);
             }
         };
         let submission = receipt.submission();
         let mut pending = Some(txn.finish());
         let mut receipt = Some(receipt);
 
-        // Existing first-use validation-before-present (cold resources/format).
-        if !self.validated {
+        // Existing first-use validation-before-present (cold resources/format),
+        // kept separately for each content kind.
+        if !*self.validated.slot(content) {
             let first = match pending.as_mut() {
                 Some(transaction) => await_first_use(owner, transaction, &mut receipt),
                 None => FirstUse::Expired,
@@ -783,17 +1086,17 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
             match first {
                 FirstUse::Validated => {
                     pending = None;
-                    self.validated = true;
+                    *self.validated.slot(content) = true;
                 }
                 FirstUse::Failed(fault) => {
                     self.fault
                         .get_or_insert((fault.kind, fault.message.clone()));
                     self.target.discard(acquired);
-                    return self.retain_failure(ready, None, None, fault);
+                    return self.retain_failure(input, None, None, fault);
                 }
                 FirstUse::Cancelled => {
                     self.target.discard(acquired);
-                    return not_presented(PresentRejection::Cancelled, ready);
+                    return not_presented(PresentRejection::Cancelled, input);
                 }
                 FirstUse::Expired => {
                     self.target.discard(acquired);
@@ -802,20 +1105,20 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
                         NativeGpuFaultKind::ScopeDrain,
                         "first-use present validation did not complete; owners retained",
                     );
-                    return self.retain_failure(ready, pending, receipt, fault);
+                    return self.retain_failure(input, pending, receipt, fault);
                 }
             }
         }
 
         // Physical boundary 2: authority/Stop, then the device, before present.
-        if let Err(reason) = gate.before_present(&ready) {
+        if let Err(reason) = gate.before_present(&input) {
             self.target.discard(acquired);
             self.retirements.push(PresentRetirement {
                 pending,
                 receipt,
                 _ready: None,
             });
-            return not_presented(reason, ready);
+            return not_presented(reason, input);
         }
         match self.check_owner(owner, Some(frame)) {
             Ok(true) => {}
@@ -826,23 +1129,26 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
                     receipt,
                     _ready: None,
                 });
-                return not_presented(PresentRejection::Cancelled, ready);
+                return not_presented(PresentRejection::Cancelled, input);
             }
             Err(fault) => {
                 self.target.discard(acquired);
-                return self.retain_failure(ready, pending, receipt, fault);
+                return self.retain_failure(input, pending, receipt, fault);
             }
         }
         self.target.present(acquired);
         self.presents = sequence;
+        if content == NativePresentContent::HardBlackout {
+            self.hard_blackouts = self.hard_blackouts.saturating_add(1);
+        }
         self.retirements.push(PresentRetirement {
             pending,
             receipt,
-            _ready: Some(Box::new(ready)),
+            _ready: Some(Box::new(input)),
         });
         Ok(PresentOutcome::Presented(NativePresentReceipt {
             frame,
-            snapshot,
+            content,
             submission,
             extent,
             sequence,
@@ -850,14 +1156,14 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
     }
 
     /// The exact new allocations of this present plus aliases of the pooled
-    /// resources and the Ready's premapping source. Steady state is all alias.
+    /// resources and a Ready's premapping source. Steady state is all alias,
+    /// except one queue-upload charge per CPU Artistic present. A blackout
+    /// plans nothing.
     fn present_plan(
         &self,
         frame: NativeFrameId,
         extent: (u32, u32),
-        params_bytes: [u8; 256],
-        mask_bytes: Vec<u8>,
-        premapping: &crate::native_gpu_composition::NativeChargedBuffer,
+        source: PresentSource<'_>,
     ) -> Result<(NativeAllocationPlan, PresentNeeds), NativeGpuFault> {
         let decline = |reason| {
             self.fault_at(
@@ -867,6 +1173,26 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
             )
         };
         let mut plan = NativeAllocationPlan::new(frame);
+        let mapping = match source {
+            PresentSource::ExactBlack => {
+                return Ok((
+                    plan,
+                    PresentNeeds {
+                        mapped: false,
+                        inputs: None,
+                        cpu_source: false,
+                    },
+                ));
+            }
+            PresentSource::Premapping { mapping, .. } | PresentSource::Cpu { mapping, .. } => {
+                mapping
+            }
+        };
+        let bytes = packed_bytes(extent).ok_or_else(|| {
+            decline(crate::native_gpu_contract::NativeGpuDecline::UnsupportedExtent)
+        })?;
+        let params_bytes = output_mapping_params(extent.0, extent.1, mapping);
+        let mask_bytes = mapping_mask_texture_bytes(mapping);
         let mapped = self
             .mapped
             .as_ref()
@@ -880,9 +1206,6 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
                 .into_iter()
                 .for_each(|id| plan.add_existing(id)),
             None => {
-                let bytes = packed_bytes(extent).ok_or_else(|| {
-                    decline(crate::native_gpu_contract::NativeGpuDecline::UnsupportedExtent)
-                })?;
                 plan.add_new(ChargeKind::MappingBuffer, bytes)
                     .map_err(decline)?;
                 plan.add_new(ChargeKind::MappingBuffer, DIMENSIONS_BYTES)
@@ -901,29 +1224,55 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
                 }
             }
         }
-        plan.add_existing(premapping.allocation_id());
+        let mut cpu_source = false;
+        match source {
+            PresentSource::Premapping { buffer, .. } => plan.add_existing(buffer.allocation_id()),
+            PresentSource::Cpu { .. } => {
+                match self
+                    .cpu_source
+                    .as_ref()
+                    .filter(|source| source.extent == extent)
+                {
+                    Some(source) => plan.add_existing(source.id()),
+                    None => {
+                        plan.add_new(ChargeKind::CompositionBuffer, bytes)
+                            .map_err(decline)?;
+                        cpu_source = true;
+                    }
+                }
+                plan.add_new(ChargeKind::QueueUploadStaging, bytes)
+                    .map_err(decline)?;
+            }
+            PresentSource::ExactBlack => {}
+        }
         Ok((
             plan,
             PresentNeeds {
                 mapped: mapped.is_none(),
                 inputs: inputs.is_none().then_some((params_bytes, mask_bytes)),
+                cpu_source,
             },
         ))
     }
 
-    /// One command buffer: (mask staging copy), clear, the single output
-    /// mapping pass, then the existing buffer blit into the acquired image.
-    /// Every charge is bound before its physical allocation; every read
-    /// resource is retained with this submission.
+    /// One command buffer. Mapped content: (mask staging copy), clear, the
+    /// single output mapping pass, then the existing buffer blit into the
+    /// acquired image; a CPU Artistic frame is first written once into the
+    /// pooled source. HardBlackout: only an exact-black clear of the image.
+    /// Every charge is bound before its physical allocation or queue write;
+    /// every read resource is retained with this submission.
     fn encode(
         &mut self,
         phase: &mut GpuPhaseEncoder<'_>,
-        premapping: &Arc<crate::native_gpu_composition::NativeChargedBuffer>,
+        source: PresentSource<'_>,
         extent: (u32, u32),
         needs: PresentNeeds,
         view: &wgpu::TextureView,
     ) -> Result<Vec<wgpu::CommandBuffer>, NativeGpuFault> {
         let device = phase.device().clone();
+        if let PresentSource::ExactBlack = source {
+            return Ok(vec![encode_exact_black(&device, view)]);
+        }
         let bytes = packed_bytes(extent).ok_or_else(|| {
             self.fault_at(
                 None,
@@ -1021,13 +1370,62 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
                 "pooled present resources are missing",
             ));
         };
+        // The storage buffer the mapping pass reads, and its owner.
+        let mut upload = None;
+        let (premapping, cpu_source) = match source {
+            PresentSource::Premapping { buffer, .. } => (Some(Arc::clone(buffer)), None),
+            PresentSource::Cpu { frame, .. } => {
+                if needs.cpu_source {
+                    let charge = phase.bind_allocation(ChargeKind::CompositionBuffer, bytes)?;
+                    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("Syndocal shared CPU Artistic source"),
+                        size: bytes,
+                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    self.cpu_source = Some(Arc::new(CpuArtisticSource {
+                        extent,
+                        source: Charged {
+                            resource: buffer,
+                            charge,
+                        },
+                    }));
+                }
+                let Some(source) = self
+                    .cpu_source
+                    .clone()
+                    .filter(|source| source.extent == extent)
+                else {
+                    return Err(self.fault_at(
+                        None,
+                        NativeGpuFaultKind::StateMismatch,
+                        "pooled CPU Artistic source is missing",
+                    ));
+                };
+                // One upload of the canonical frame. G accounts wgpu's staging
+                // copy until this submission completes; the previous present
+                // that read this pooled source was drained before planning.
+                upload = Some(phase.bind_allocation(ChargeKind::QueueUploadStaging, bytes)?);
+                phase
+                    .queue()
+                    .write_buffer(&source.source.resource, 0, &frame.data);
+                phase.mark_queue_write();
+                (None, Some(source))
+            }
+            PresentSource::ExactBlack => unreachable!("handled above"),
+        };
+        let source_buffer = match (&premapping, &cpu_source) {
+            (Some(premapping), _) => premapping.buffer(),
+            (None, Some(source)) => &source.source.resource,
+            (None, None) => unreachable!("one mapping source"),
+        };
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Syndocal shared output mapping"),
             layout: &self.pipelines.mapping_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: premapping.buffer().as_entire_binding(),
+                    resource: source_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -1102,18 +1500,30 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
             pass.draw(0..3, 0..1);
         }
         let command = encoder.finish();
-        phase.retain_resource(Arc::clone(premapping), &[premapping.allocation_id()])?;
+        if let Some(premapping) = premapping {
+            let id = premapping.allocation_id();
+            phase.retain_resource(premapping, &[id])?;
+        }
+        if let Some(source) = cpu_source {
+            let id = source.id();
+            phase.retain_resource(source, &[id])?;
+        }
         let mapped_ids = mapped.ids();
         phase.retain_resource(mapped, &mapped_ids)?;
         let input_ids = inputs.ids();
         phase.retain_resource(inputs, &input_ids)?;
-        let staging_ids: Vec<_> = staging.iter().map(|staging| staging.charge.id()).collect();
+        let frame_ids: Vec<_> = staging
+            .iter()
+            .map(|staging| staging.charge.id())
+            .chain(upload.iter().map(AllocationCharge::id))
+            .collect();
         phase.retain_resource(
             Arc::new(PresentFrameResources {
                 _bind_group: bind_group,
                 _staging: staging,
+                _upload: upload,
             }),
-            &staging_ids,
+            &frame_ids,
         )?;
         phase.retain_resource(Arc::clone(&self.pipelines), &[])?;
         Ok(vec![command])
@@ -1125,6 +1535,33 @@ fn packed_bytes((width, height): (u32, u32)) -> Option<u64> {
         .checked_mul(u64::from(height))
         .filter(|pixels| *pixels <= u64::from(u32::MAX))
         .and_then(|pixels| pixels.checked_mul(4))
+}
+
+/// The legacy hard-blackout bypass on the shared device: one render-pass
+/// clear of the acquired image to opaque exact black `[0, 0, 0, 255]`. No
+/// upload, no mapping pass, no stored content, so mapping values such as
+/// `black_level` can never lift it.
+fn encode_exact_black(device: &wgpu::Device, view: &wgpu::TextureView) -> wgpu::CommandBuffer {
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Syndocal shared hard blackout"),
+    });
+    {
+        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Syndocal shared hard blackout clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(HARD_BLACKOUT_CLEAR_COLOR),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+    }
+    encoder.finish()
 }
 
 fn await_first_use(
@@ -1164,17 +1601,20 @@ fn await_first_use(
 }
 
 /// `NativePresentSink` over the shared presenter for one I present call.
-pub(crate) struct SharedPresentSink<'p, T: NativePresentTarget, R, P> {
+/// `K` selects the entry: `ResidentContent` (default, `present_ready`),
+/// `CpuArtisticContent` or `HardBlackoutContent`.
+pub(crate) struct SharedPresentSink<'p, T: NativePresentTarget, R, P, K = ResidentContent> {
     presenter: &'p mut SharedSurfacePresenter<T>,
     owner: &'p mut NativeGpuOwner,
-    _types: PhantomData<fn(R, P)>,
+    _types: PhantomData<fn(R, P, K)>,
 }
 
-impl<T, R, P> NativePresentSink for SharedPresentSink<'_, T, R, P>
+impl<T, R, P, K> NativePresentSink for SharedPresentSink<'_, T, R, P, K>
 where
     T: NativePresentTarget,
-    R: FrozenPresentation + Send + 'static,
+    R: Send + 'static,
     P: NativePresentGate<R>,
+    K: PresentContentKind<R>,
 {
     type Ready = R;
     type Permit = P;
@@ -1185,7 +1625,8 @@ where
         ready: R,
         permit: P,
     ) -> Result<PresentOutcome<R, NativePresentReceipt>, NativeGpuFault> {
-        self.presenter.present_ready(ready, &permit, self.owner)
+        self.presenter
+            .present_content::<K, R, P>(ready, &permit, self.owner)
     }
 }
 

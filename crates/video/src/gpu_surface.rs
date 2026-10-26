@@ -667,6 +667,75 @@ impl NativeGpuFrameBuffers {
         }
     }
 
+    /// The CPU Artistic MapOnce arm after acquire: upload the composed frame
+    /// once, the single output mapping dispatch, then the buffer blit into
+    /// `output_view`. Shared by `present_mapped_artistic_buffer` and the
+    /// shared presenter's legacy pixel-parity oracle.
+    fn encode_mapped_artistic(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        (mapping_pipeline, buffer_pipeline): (&wgpu::ComputePipeline, &wgpu::RenderPipeline),
+        (frame, mapping): (&VideoFrame, &VideoOutputMapping),
+        (width, height): (u32, u32),
+        output_view: &wgpu::TextureView,
+    ) -> wgpu::CommandEncoder {
+        let buffer_size = frame.data.len() as u64;
+        #[cfg(feature = "qa-native-frame-timing")]
+        let qa_upload =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::PresenterUpload);
+        // The artistic frame is already composed by the video core: one write
+        // replaces the whole per-layer composite stage and the single mapping
+        // dispatch below is its only consumer.
+        queue.write_buffer(&self.composition, 0, &frame.data);
+        let mapping_params = output_mapping_params(width, height, mapping);
+        let dimensions = dimensions_uniform(width, height);
+        write_mapping_mask_texture(queue, &self.mapping_dummy_texture, mapping);
+        queue.write_buffer(&self.mapping_params, 0, &mapping_params);
+        queue.write_buffer(&self.dimensions, 0, &dimensions);
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(qa_upload);
+        #[cfg(feature = "qa-native-frame-timing")]
+        let qa_encode =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::PresenterEncode);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Syndocal native GPU artistic output encoder"),
+        });
+        encoder.clear_buffer(&self.mapped, 0, Some(buffer_size));
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Syndocal native GPU artistic output mapping pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(mapping_pipeline);
+            pass.set_bind_group(0, &self.mapping_bind_group, &[]);
+            let (workgroups_x, workgroups_y) = dispatch_dimensions(width, height);
+            pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+        }
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Syndocal native GPU artistic buffer output pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: output_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(buffer_pipeline);
+            pass.set_bind_group(0, &self.output_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(qa_encode);
+        encoder
+    }
+
     fn stats(&self) -> GpuSurfaceBufferStats {
         GpuSurfaceBufferStats {
             output_capacity_bytes: self.output_capacity,
@@ -1698,66 +1767,20 @@ impl GpuSurfacePresenter {
             &self.buffer_bind_group_layout,
             buffer_size,
         );
-        #[cfg(feature = "qa-native-frame-timing")]
-        let qa_upload =
-            crate::native_frame_timing::span(crate::native_frame_timing::Phase::PresenterUpload);
-        // The artistic frame is already composed by the video core: one write
-        // replaces the whole per-layer composite stage and the single mapping
-        // dispatch below is its only consumer.
-        self.queue
-            .write_buffer(&gpu_buffers.composition, 0, &frame.data);
-        let mapping_params = output_mapping_params(width, height, mapping);
-        let dimensions = dimensions_uniform(width, height);
-        write_mapping_mask_texture(&self.queue, &gpu_buffers.mapping_dummy_texture, mapping);
-        self.queue
-            .write_buffer(&gpu_buffers.mapping_params, 0, &mapping_params);
-        self.queue
-            .write_buffer(&gpu_buffers.dimensions, 0, &dimensions);
-        #[cfg(feature = "qa-native-frame-timing")]
-        drop(qa_upload);
-        #[cfg(feature = "qa-native-frame-timing")]
-        let qa_encode =
-            crate::native_frame_timing::span(crate::native_frame_timing::Phase::PresenterEncode);
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Syndocal native GPU artistic output encoder"),
-            });
-        encoder.clear_buffer(&gpu_buffers.mapped, 0, Some(buffer_size));
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Syndocal native GPU artistic output mapping pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.composite_pipelines.output_mapping);
-            pass.set_bind_group(0, &gpu_buffers.mapping_bind_group, &[]);
-            let (workgroups_x, workgroups_y) = dispatch_dimensions(width, height);
-            pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
-        }
         let output_view = surface_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Syndocal native GPU artistic buffer output pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &output_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            pass.set_pipeline(&self.buffer_pipeline);
-            pass.set_bind_group(0, &gpu_buffers.output_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-        #[cfg(feature = "qa-native-frame-timing")]
-        drop(qa_encode);
+        let encoder = gpu_buffers.encode_mapped_artistic(
+            &self.device,
+            &self.queue,
+            (
+                &self.composite_pipelines.output_mapping,
+                &self.buffer_pipeline,
+            ),
+            (frame, mapping),
+            (width, height),
+            &output_view,
+        );
         {
             #[cfg(feature = "qa-native-frame-timing")]
             let _qa_submit = crate::native_frame_timing::span(
