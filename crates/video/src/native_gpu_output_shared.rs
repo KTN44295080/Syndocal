@@ -4,6 +4,9 @@
 //! No window operations, new device, or whole-tick retry lives here.
 use std::sync::Arc;
 
+use super::history::{
+    NativeOutputHistoryFrame, NativeOutputHistoryPlan, NativeOutputHistorySession,
+};
 use super::*;
 use crate::gpu_surface::native::{
     AdmittedPhysicalGeometry, NativePresentTarget, SharedPresentSink, SharedSurfacePresenter,
@@ -19,6 +22,7 @@ use crate::native_gpu_context::{
     NativeGpuOwner, PendingGpuTransaction, RetirementProgress, RetiringGpuTransaction,
     StopRetirement,
 };
+use crate::native_gpu_history::HistoryError;
 use crate::native_gpu_result::{
     EncodedIsfBatch, GpuLayerLease, NativeIsfCompletion, ValidatedLayerResult,
 };
@@ -223,7 +227,26 @@ pub(crate) struct PendingSharedNativeOutput {
     snapshot: Option<SharedPremappingSnapshot>,
     failed_snapshot: Option<EncodedPremappingSnapshot>,
     composition_failure: Option<NativeGpuFault>,
-    validated: Option<(StackBatch<ValidatedLayerResult>, IsfValidatedReceipt)>,
+    composition_resolved: Option<bool>,
+    validated: Option<SharedValidatedOutput>,
+    history_plan: Option<NativeOutputHistoryPlan>,
+}
+
+enum SharedValidatedOutput {
+    Unpublished {
+        layers: StackBatch<ValidatedLayerResult>,
+        receipt: IsfValidatedReceipt,
+    },
+    History(NativeOutputHistoryFrame),
+}
+
+impl SharedValidatedOutput {
+    fn receipt(&self) -> Option<&IsfValidatedReceipt> {
+        match self {
+            Self::Unpublished { receipt, .. } => Some(receipt),
+            Self::History(history) => history.receipt(),
+        }
+    }
 }
 
 pub(crate) enum SharedNativeOutputProgress {
@@ -236,6 +259,10 @@ pub(crate) enum SharedNativeOutputProgress {
         ready: ReadyNativeGpuOutput<Arc<NativeSnapshotGpu>>,
         layers: StackBatch<ValidatedLayerResult>,
         isf: IsfValidatedReceipt,
+    },
+    HistoryReady {
+        ready: ReadyNativeGpuOutput<Arc<NativeSnapshotGpu>>,
+        history: NativeOutputHistoryFrame,
     },
     Retiring(SharedNativeOutputRetirement),
 }
@@ -252,6 +279,7 @@ pub(crate) struct SharedNativeOutputRetirement {
     gpu: Option<Arc<NativeSnapshotGpu>>,
     encoded_isf: Option<EncodedIsfBatch>,
     isf_outcome: Option<NativeIsfCompletion>,
+    history_outcome: Option<NativeOutputHistoryFrame>,
     reaped: bool,
 }
 
@@ -276,6 +304,12 @@ impl SharedNativeOutputRetirement {
     /// Recovered CPU outcomes retain their exact typed faults, pixels and charges.
     pub(crate) fn take_isf_outcome(&mut self) -> Option<NativeIsfCompletion> {
         self.isf_outcome.take()
+    }
+
+    /// Includes partial seals/commits or recovered CPU backing and exact faults.
+    /// The caller retains this owner while applying canonical history policy.
+    pub(crate) fn take_history_outcome(&mut self) -> Option<NativeOutputHistoryFrame> {
+        self.history_outcome.take()
     }
 
     /// C4 Stop entry: release the paired presenter before poll starts G Stop.
@@ -319,10 +353,10 @@ impl SharedNativeOutputRetirement {
             RetirementProgress::Pending {
                 transactions: 0, ..
             } if owner.state() == GpuOwnerState::Retiring => {
-                // A failed present drain may leave both the preceding GPU
-                // transaction and the next frame's unused root. G cannot refund
-                // that root until all transactions drain. Poll first, retaining
-                // every owner untouched on poison/loss or an incomplete drain.
+                // Keep this aggregate's unused root and payload owners until
+                // its transactions drain. G3 permits earlier root refund when
+                // only a present retires; this Stop path deliberately retains
+                // the complete failure owner through the same cleanup boundary.
                 if let Some(reservation) = self.unsubmitted.take() {
                     if let Err((error, reservation)) =
                         owner.discard_unsubmitted_reservation(reservation)
@@ -351,10 +385,73 @@ impl SharedNativeOutputRetirement {
 }
 
 impl PendingSharedNativeOutput {
-    /// Join a new C3 frame after P's preceding MappingPresent transaction.
-    /// The first poll is nonblocking; bounded drain is used only for actual
-    /// outstanding work. No new begin_frame runs while that work is undrained.
-    /// Authority/Stop is checked again after the potentially bounded wait.
+    /// History-aware C3 entry. Reject a foreign session/plan before begin_frame
+    /// or ISF encoding and return the unsubmitted admission, reservation and plan.
+    /// A caller with a presenter first performs its nonblocking per-tick poll.
+    pub(crate) fn submit_with_history(
+        owner: &mut NativeGpuOwner,
+        runtime: &mut IsfGpuRuntime,
+        compositor: &NativeGpuCompositor,
+        request: NativeOutputRequest,
+        admitted: PreparedNativeBatch,
+        reservation: FrameReservation,
+        composition: &NativeCompositionPlan,
+        selected_history: &[&GpuLayerLease],
+        session: &NativeOutputHistorySession,
+        history_plan: NativeOutputHistoryPlan,
+    ) -> Result<Self, (SharedNativeOutputRetirement, NativeOutputHistoryPlan)> {
+        if !session.accepts_plan(&history_plan)
+            || history_plan.context() != request.context
+            || history_plan.frame() != request.frame
+        {
+            return Err((
+                Self::retain_unsubmitted(
+                    history_rejection(&request, HistoryError::IdentityMismatch),
+                    admitted,
+                    reservation,
+                ),
+                history_plan,
+            ));
+        }
+        match Self::submit(
+            owner,
+            runtime,
+            compositor,
+            request,
+            admitted,
+            reservation,
+            composition,
+            selected_history,
+        ) {
+            Ok(mut pending) => {
+                pending.history_plan = Some(history_plan);
+                Ok(pending)
+            }
+            Err(retirement) => Err((retirement, history_plan)),
+        }
+    }
+
+    /// Bind the prospective history plan made before submit. Rejection returns
+    /// both affine owners; no already-submitted work is discarded.
+    pub(crate) fn bind_history(
+        mut self,
+        plan: NativeOutputHistoryPlan,
+    ) -> Result<Self, (HistoryError, Self, NativeOutputHistoryPlan)> {
+        if plan.context() != self.request.context
+            || plan.frame() != self.request.frame
+            || self.history_plan.is_some()
+            || self.validated.is_some()
+        {
+            return Err((HistoryError::IdentityMismatch, self, plan));
+        }
+        self.history_plan = Some(plan);
+        Ok(self)
+    }
+
+    /// Poll P's preceding present without waiting, then admit the next C3 frame.
+    /// G3 lets sealed present work retire alongside one new logical frame.
+    /// P drains that work only before its next MappingPresent phase. Recheck
+    /// authority/Stop after the poll and before beginning the new transaction.
     /// A failure keeps the unsubmitted affine admission/reservation intact.
     pub(crate) fn submit_after_present<T: NativePresentTarget>(
         owner: &mut NativeGpuOwner,
@@ -379,14 +476,7 @@ impl PendingSharedNativeOutput {
         if let Err(reason) = allowed {
             return Err(Self::retain_unsubmitted(reason, admitted, reservation));
         }
-        let drained = presenter.poll_retirements(owner).and_then(|pending| {
-            if pending == 0 {
-                Ok(())
-            } else {
-                presenter.drain_retirements(owner)
-            }
-        });
-        if let Err(error) = drained {
+        if let Err(error) = presenter.poll_retirements(owner) {
             return Err(Self::retain_unsubmitted(
                 OutputRejection::Fault(error),
                 admitted,
@@ -449,6 +539,7 @@ impl PendingSharedNativeOutput {
             gpu: None,
             encoded_isf: None,
             isf_outcome: None,
+            history_outcome: None,
             reaped: false,
         }
     }
@@ -488,6 +579,7 @@ impl PendingSharedNativeOutput {
                     gpu: None,
                     encoded_isf: None,
                     isf_outcome: None,
+                    history_outcome: None,
                     reaped: false,
                 });
             }
@@ -585,7 +677,9 @@ impl PendingSharedNativeOutput {
             snapshot,
             failed_snapshot,
             composition_failure,
+            composition_resolved: None,
             validated: None,
+            history_plan: None,
         })
     }
 
@@ -607,6 +701,7 @@ impl PendingSharedNativeOutput {
             gpu: None,
             encoded_isf: isf,
             isf_outcome: None,
+            history_outcome: None,
             reaped: false,
         }
     }
@@ -630,10 +725,14 @@ impl PendingSharedNativeOutput {
             .map(|pending| owner.cancel_and_retire(pending));
         // Defer begin_stop to the retirement consumer. If P is present, its
         // pooled/Ready owners must be released first via poll_with_presenter.
-        let isf_outcome = self
-            .validated
-            .take()
-            .map(|(layers, receipt)| NativeIsfCompletion::Validated { layers, receipt });
+        let (isf_outcome, history_outcome) = match self.validated.take() {
+            Some(SharedValidatedOutput::Unpublished { layers, receipt }) => (
+                Some(NativeIsfCompletion::Validated { layers, receipt }),
+                None,
+            ),
+            Some(SharedValidatedOutput::History(history)) => (None, Some(history)),
+            None => (None, None),
+        };
         SharedNativeOutputRetirement {
             context: self.request.context,
             reason,
@@ -649,15 +748,40 @@ impl PendingSharedNativeOutput {
             gpu: None,
             encoded_isf: self.isf.take(),
             isf_outcome,
+            history_outcome,
             reaped: false,
         }
     }
 
     pub(crate) fn poll(
+        self,
+        owner: &mut NativeGpuOwner,
+        runtime: &mut IsfGpuRuntime,
+        cache: &mut SharedNativeOutputCache,
+        authority: &impl NativeOutputAuthority,
+        cancel: &dyn VideoRenderCancellation,
+    ) -> SharedNativeOutputProgress {
+        self.poll_inner(owner, runtime, cache, None, authority, cancel)
+    }
+
+    pub(crate) fn poll_with_history(
+        self,
+        owner: &mut NativeGpuOwner,
+        runtime: &mut IsfGpuRuntime,
+        cache: &mut SharedNativeOutputCache,
+        history: &mut NativeOutputHistorySession,
+        authority: &impl NativeOutputAuthority,
+        cancel: &dyn VideoRenderCancellation,
+    ) -> SharedNativeOutputProgress {
+        self.poll_inner(owner, runtime, cache, Some(history), authority, cancel)
+    }
+
+    fn poll_inner(
         mut self,
         owner: &mut NativeGpuOwner,
         runtime: &mut IsfGpuRuntime,
         cache: &mut SharedNativeOutputCache,
+        mut history: Option<&mut NativeOutputHistorySession>,
         authority: &impl NativeOutputAuthority,
         cancel: &dyn VideoRenderCancellation,
     ) -> SharedNativeOutputProgress {
@@ -672,6 +796,27 @@ impl PendingSharedNativeOutput {
             return SharedNativeOutputProgress::Rejected {
                 pending: self,
                 reason: OutputRejection::Fault(error),
+            };
+        }
+        let bound = self.history_plan.is_some()
+            || matches!(self.validated, Some(SharedValidatedOutput::History(_)));
+        let correct_session = match history.as_deref() {
+            Some(session) => {
+                self.history_plan
+                    .as_ref()
+                    .is_some_and(|plan| session.accepts_plan(plan))
+                    || matches!(
+                        &self.validated,
+                        Some(SharedValidatedOutput::History(frame))
+                            if session.accepts_frame(frame)
+                    )
+            }
+            None => !bound,
+        };
+        if !correct_session {
+            return SharedNativeOutputProgress::Rejected {
+                reason: history_rejection(&self.request, HistoryError::IdentityMismatch),
+                pending: self,
             };
         }
         if let Err(reason) = guard(&self.request, OutputBoundary::BeforePoll, authority, cancel) {
@@ -710,7 +855,39 @@ impl PendingSharedNativeOutput {
             };
             match runtime.complete_native_batch(encoded, phase, owner, cancel) {
                 NativeIsfCompletion::Validated { layers, receipt } => {
-                    self.validated = Some((layers, receipt));
+                    self.validated = Some(match self.history_plan.take() {
+                        Some(plan) => SharedValidatedOutput::History(
+                            history
+                                .as_deref()
+                                .expect("history session checked before polling")
+                                .seal_validated(plan, layers, receipt),
+                        ),
+                        None => SharedValidatedOutput::Unpublished { layers, receipt },
+                    });
+                    if let Some(SharedValidatedOutput::History(frame)) = &self.validated {
+                        if let Some(error) = frame.error() {
+                            let reason = history_rejection(&self.request, error);
+                            return SharedNativeOutputProgress::Retiring(
+                                self.retire(owner, reason),
+                            );
+                        }
+                    }
+                }
+                NativeIsfCompletion::RecoveredCpu { layers } if self.history_plan.is_some() => {
+                    let recovered = history
+                        .as_deref()
+                        .expect("history session checked before polling")
+                        .seal_recovered(
+                            self.history_plan.take().expect("recovery keeps its plan"),
+                            layers,
+                        );
+                    let reason = recovered
+                        .error()
+                        .map(|error| history_rejection(&self.request, error));
+                    self.validated = Some(SharedValidatedOutput::History(recovered));
+                    return SharedNativeOutputProgress::Retiring(
+                        self.retire_with_reason(owner, reason),
+                    );
                 }
                 outcome => {
                     let reason = match &outcome {
@@ -728,27 +905,37 @@ impl PendingSharedNativeOutput {
                     return SharedNativeOutputProgress::Retiring(retiring);
                 }
             }
+            if self.composition_failure.is_none() {
+                if let Some(snapshot) = self.snapshot.as_mut() {
+                    if let Err(error) = snapshot.resolve_shared_phase(&mut resolved) {
+                        self.composition_failure = Some(error);
+                    }
+                }
+            }
+            self.composition_resolved = Some(self.composition_failure.is_none());
+        }
+        if let Err(reason) = guard(
+            &self.request,
+            OutputBoundary::PhasesResolved,
+            authority,
+            cancel,
+        ) {
+            return SharedNativeOutputProgress::Retiring(self.retire(owner, reason));
+        }
+        if let Some(valid) = self.composition_resolved.take() {
+            let history_result = self.resolve_history(history.as_deref_mut(), valid);
+            // Keep the original P fault as the primary error even when history
+            // publication also rejects; its typed error remains in history_outcome.
             if let Some(error) = self.composition_failure.take() {
                 return SharedNativeOutputProgress::Retiring(
                     self.retire(owner, cancelled_or_fault(error, cancel)),
                 );
             }
-            if let Some(snapshot) = self.snapshot.as_mut() {
-                if let Err(error) = snapshot.resolve_shared_phase(&mut resolved) {
-                    return SharedNativeOutputProgress::Retiring(
-                        self.retire(owner, cancelled_or_fault(error, cancel)),
-                    );
-                }
+            if let Err(reason) = history_result {
+                return SharedNativeOutputProgress::Retiring(self.retire(owner, reason));
             }
         }
-        let validation = guard(
-            &self.request,
-            OutputBoundary::PhasesResolved,
-            authority,
-            cancel,
-        )
-        .and_then(|()| self.validate_completion());
-        if let Err(reason) = validation {
+        if let Err(reason) = self.validate_completion() {
             return SharedNativeOutputProgress::Retiring(self.retire(owner, reason));
         }
         let snapshot = self
@@ -804,23 +991,45 @@ impl PendingSharedNativeOutput {
                 return SharedNativeOutputProgress::Retiring(retiring);
             }
         }
-        let (layers, isf) = self
-            .validated
-            .take()
-            .expect("ISF proof validated before cache");
         // P's completed map/pixels and real ISF proof were joined above. No
         // duplicated ResolvedGpuPhase or metadata-only success receipt is minted.
-        SharedNativeOutputProgress::Ready {
-            ready: ReadyNativeGpuOutput {
-                gpu,
-                request: self.request,
-                snapshot: descriptor.snapshot,
-                receipt,
-                retry_remaining: true,
-            },
-            layers,
-            isf,
+        let ready = ReadyNativeGpuOutput {
+            gpu,
+            request: self.request,
+            snapshot: descriptor.snapshot,
+            receipt,
+            retry_remaining: true,
+        };
+        match self
+            .validated
+            .take()
+            .expect("ISF proof validated before cache")
+        {
+            SharedValidatedOutput::Unpublished { layers, receipt } => {
+                SharedNativeOutputProgress::Ready {
+                    ready,
+                    layers,
+                    isf: receipt,
+                }
+            }
+            SharedValidatedOutput::History(history) => {
+                SharedNativeOutputProgress::HistoryReady { ready, history }
+            }
         }
+    }
+
+    fn resolve_history(
+        &mut self,
+        session: Option<&mut NativeOutputHistorySession>,
+        valid: bool,
+    ) -> Result<(), OutputRejection> {
+        if let Some(SharedValidatedOutput::History(frame)) = &mut self.validated {
+            session
+                .ok_or_else(|| history_rejection(&self.request, HistoryError::StateMismatch))?
+                .resolve_composition(frame, valid)
+                .map_err(|error| history_rejection(&self.request, error))?;
+        }
+        Ok(())
     }
 
     fn validate_completion(&self) -> Result<(), OutputRejection> {
@@ -832,7 +1041,12 @@ impl PendingSharedNativeOutput {
             ))
         };
         check_request(&self.request)?;
-        let (_, receipt) = self.validated.as_ref().ok_or_else(mismatch)?;
+        let validated = self.validated.as_ref().ok_or_else(mismatch)?;
+        if matches!(validated, SharedValidatedOutput::History(frame) if !frame.output_phases_valid())
+        {
+            return Err(mismatch());
+        }
+        let receipt = validated.receipt().ok_or_else(mismatch)?;
         let phase = receipt.phase();
         phase
             .validation()
@@ -860,6 +1074,24 @@ impl PendingSharedNativeOutput {
         }
         Ok(())
     }
+}
+
+fn history_rejection(request: &NativeOutputRequest, error: HistoryError) -> OutputRejection {
+    if error == HistoryError::Cancelled {
+        return OutputRejection::Cancelled;
+    }
+    let kind = match error {
+        HistoryError::IdentityMismatch => NativeGpuFaultKind::IdentityMismatch,
+        HistoryError::SequenceExhausted => NativeGpuFaultKind::SequenceExhausted,
+        _ => NativeGpuFaultKind::StateMismatch,
+    };
+    OutputRejection::Fault(NativeGpuFault {
+        context: request.context,
+        frame: Some(request.frame),
+        phase: GpuPhase::IsfBatch,
+        kind,
+        message: format!("native history publication rejected: {error:?}"),
+    })
 }
 
 #[cfg(test)]

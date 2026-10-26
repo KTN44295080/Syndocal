@@ -1,9 +1,12 @@
-//! I-owned lifetime bridge for exact CPU history materializations.
+//! I-owned lifetime bridges for exact CPU history materializations.
 //!
-//! G proves copy/completion/unmap. This adapter keeps its pixels, descriptor and
-//! physical CPU allocation charge inseparable while P retains or aliases a
-//! history entry. It does not publish a P queue or mint a MaterializationProof.
-//! P's charged backing/handover integration remains a separate owner change.
+//! G proves copy/completion/unmap. The original single-frame owner keeps that
+//! evidence and its physical allocation charge inseparable. The `history`
+//! adapter receives P's full charged CPU handover and retains whole owners for
+//! queue and LastValid consumers. Neither adapter mints a completion proof.
+
+#[path = "native_gpu_output_cpu_history.rs"]
+pub(crate) mod history;
 
 use std::sync::Arc;
 

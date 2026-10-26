@@ -6,6 +6,8 @@ use protocol::{VideoOutputId, VideoOutputMapping};
 
 #[path = "native_gpu_output_cpu.rs"]
 pub(crate) mod cpu;
+#[path = "native_gpu_output_history.rs"]
+pub(crate) mod history;
 #[path = "native_gpu_output_shared.rs"]
 pub(crate) mod shared;
 

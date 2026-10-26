@@ -917,17 +917,28 @@ fn retire_present_ready(
     assert_eq!(owner.budget_snapshot().managed_bytes(), 0);
 }
 
-fn assert_pending_present(owner: &mut NativeGpuOwner, next_frame: NativeFrameId) {
+fn assert_present_retirement_allows_next_frame(
+    owner: &mut NativeGpuOwner,
+    next_frame: NativeFrameId,
+) {
     let plan = crate::native_gpu_budget::NativeAllocationPlan::new(next_frame);
     let quote = owner.quote(&plan).unwrap();
     let reservation = owner.reserve(quote).unwrap();
-    match owner.begin_frame(next_frame, reservation) {
+    let mut txn = match owner.begin_frame(next_frame, reservation) {
+        Ok(txn) => txn,
+        Err(error) => panic!("a retiring present blocked the next logical frame: {error:?}"),
+    };
+    match txn.begin_phase(GpuPhase::MappingPresent) {
         Err(error) => assert_eq!(error.kind, NativeGpuFaultKind::StateMismatch),
-        Ok(_) => panic!("the prior steady present must still own G's transaction"),
+        Ok(_) => panic!("G admitted a second present while the prior one still retires"),
     }
+    // Resolve this empty logical probe only. P still owns the original present
+    // token; no presenter poll or drain is needed for the next begin_frame.
+    let pending = txn.finish();
+    drop(crate::isf_native_gpu::await_transaction(owner, pending, &|| false).unwrap());
 }
 
-fn present_two_with_pending_second(
+fn present_two_with_retiring_second(
     fixture: &mut Fixture,
     reference: &mut IsfGpuRuntime,
     compositor: &NativeGpuCompositor,
@@ -963,7 +974,7 @@ fn present_two_with_pending_second(
     }
     assert_eq!(delivery.delivered(), 2);
     assert_eq!(fixture.runtime.native_frame_index(), 6);
-    assert_pending_present(&mut fixture.owner, frame_id(3));
+    assert_present_retirement_allows_next_frame(&mut fixture.owner, frame_id(3));
     delivery
 }
 
@@ -1146,9 +1157,9 @@ fn i4_shared_sink_presents_real_ready_with_frozen_mapping_once_and_delivery() {
         frames.push((premapping, retained));
         last_key = Some(key);
         if sequence == 2 {
-            // The second present is steady-state: leave the actual pending
-            // record for frame 3's submit_after_present to drain.
-            assert_pending_present(&mut fixture.owner, frame_id(3));
+            // G3 leaves the steady present in retirement while frame 3 can
+            // begin. Only the next MappingPresent must wait for that retirement.
+            assert_present_retirement_allows_next_frame(&mut fixture.owner, frame_id(3));
         }
     }
     presenter.drain_retirements(&mut fixture.owner).unwrap();
@@ -1302,8 +1313,8 @@ fn i4_shared_sink_retry_preserves_real_snapshot_and_allows_one_retry_only() {
     let mut delivery = NativeDeliveryCounter::default();
 
     for sequence in 1..=2 {
-        // The actual I admission wrapper drains any prior present before it
-        // opens the next G frame; the caller does not pre-drain it for the test.
+        // The actual I admission wrapper polls the preceding present once
+        // without draining it before the next C3 frame begins.
         let ready = ready_for_present(
             &mut fixture,
             &mut reference,
@@ -1385,14 +1396,14 @@ fn i4_shared_sink_retry_preserves_real_snapshot_and_allows_one_retry_only() {
 }
 
 #[test]
-fn i4_shared_submit_rechecks_stop_and_authority_after_present_drain() {
+fn i5_shared_submit_rechecks_stop_and_authority_after_nonblocking_present_poll() {
     for cancel in [false, true] {
         let mut fixture = gpu();
         let mut reference = IsfGpuRuntime::new().unwrap();
         let compositor = NativeGpuCompositor::from_shared(&mut fixture.owner).unwrap();
         let (mut presenter, probe) = present_fixture(&mut fixture);
         let mut cache = SharedNativeOutputCache::new(101);
-        let delivery = present_two_with_pending_second(
+        let delivery = present_two_with_retiring_second(
             &mut fixture,
             &mut reference,
             &compositor,
@@ -1458,94 +1469,160 @@ fn i4_shared_submit_rechecks_stop_and_authority_after_present_drain() {
 }
 
 #[test]
-fn i4_shared_submit_drain_failure_retains_unsubmitted_root_until_prior_present_reaps() {
-    let mut fixture = gpu();
-    let mut reference = IsfGpuRuntime::new().unwrap();
-    let compositor = NativeGpuCompositor::from_shared(&mut fixture.owner).unwrap();
-    let (mut presenter, probe) = present_fixture(&mut fixture);
-    let mut cache = SharedNativeOutputCache::new(101);
-    let delivery = present_two_with_pending_second(
-        &mut fixture,
-        &mut reference,
-        &compositor,
-        &mut presenter,
-        &mut cache,
-    );
-    let request = output_request(&fixture, &mut cache, 3);
-    let (inputs, plan, _) = prepare(&fixture, &mut reference, &request, None);
-    let (admitted, reservation) = admit(&mut fixture, inputs, &plan, &[]);
-    // Exercise the exact drain-error ownership branch with a real unused root
-    // and a real submitted present still in G. Only the deadline outcome is
-    // injected: no completion, snapshot, cache or delivery evidence is minted.
-    let mut retiring = PendingSharedNativeOutput::retain_unsubmitted(
-        OutputRejection::Fault(NativeGpuFault {
-            context: fixture.owner.context().id(),
-            frame: Some(request.frame),
-            phase: GpuPhase::MappingPresent,
-            kind: NativeGpuFaultKind::ScopeDrain,
-            message: "injected drain deadline after a real pending present".into(),
-        }),
-        admitted,
-        reservation,
-    );
-    assert!(matches!(
-        retiring.reason(),
-        Some(OutputRejection::Fault(NativeGpuFault {
-            kind: NativeGpuFaultKind::ScopeDrain,
-            ..
-        }))
-    ));
-    assert!(retiring.unsubmitted.is_some());
-    assert!(retiring.admitted.is_some());
-    assert!(retiring.transaction.is_none());
-    assert!(retiring.snapshot.is_none());
-    assert!(fixture.owner.budget_snapshot().reservation_count > 0);
-    assert_eq!(fixture.owner.state(), GpuOwnerState::Active);
-    assert_eq!(fixture.runtime.native_frame_index(), 6);
-    assert_eq!(delivery.delivered(), 2);
-    assert_eq!(presenter.presents(), 2);
-    assert_eq!(probe.borrow().presented.len(), 2);
-    cache.blackout().unwrap();
-    drop(fixture.runtime);
-    // Refunding before polling G would fail while the preceding present owns
-    // its transaction. The aggregate must drain that work, then refund its root.
-    let started = Instant::now();
-    while retiring.unsubmitted.is_some() {
-        assert!(
-            !retiring
-                .poll_with_presenter(&mut presenter, &mut fixture.owner)
-                .unwrap(),
-            "the live root prevents Reaped before this poll refunds it",
+fn i5_shared_stop_retains_unsubmitted_or_overlapping_snapshot_and_latches_reaped() {
+    for submitted in [false, true] {
+        let mut fixture = gpu();
+        let mut reference = IsfGpuRuntime::new().unwrap();
+        let compositor = NativeGpuCompositor::from_shared(&mut fixture.owner).unwrap();
+        let (mut presenter, probe) = present_fixture(&mut fixture);
+        let mut cache = SharedNativeOutputCache::new(101);
+        let delivery = present_two_with_retiring_second(
+            &mut fixture,
+            &mut reference,
+            &compositor,
+            &mut presenter,
+            &mut cache,
         );
-        assert!(started.elapsed() < Duration::from_secs(5));
-        std::thread::yield_now();
-    }
-    assert!(retiring.unsubmitted.is_none());
-    assert!(retiring.admitted.is_none());
-    assert!(!retiring.reaped);
-    assert_eq!(fixture.owner.state(), GpuOwnerState::Retiring);
-    // An outer owner drain observes G's real one-shot Reaped result before this
-    // aggregate next polls. The persistent owner state must complete its ticket.
-    loop {
-        match fixture.owner.poll_retirement().unwrap() {
-            RetirementProgress::Reaped => break,
-            RetirementProgress::Pending { .. } => {
-                assert!(started.elapsed() < Duration::from_secs(5));
-                std::thread::yield_now();
+        let request = output_request(&fixture, &mut cache, 3);
+        let key = request.key.clone();
+        let previous_pixels = cache.last_valid(&key).unwrap().data.as_ptr();
+        let previous_present = Arc::downgrade(cache.snapshot_owner.as_ref().unwrap());
+        let (inputs, plan, _) = prepare(&fixture, &mut reference, &request, None);
+        let (admitted, reservation) = admit(&mut fixture, inputs, &plan, &[]);
+        let stopped = Cell::new(false);
+        let mut retiring = if submitted {
+            // Deliberately do not poll P here: exercise actual Batch3 plus
+            // snapshot submission while its preceding steady present is still
+            // owned. Ordinary ticks use submit_after_present's nonblocking poll.
+            let pending = PendingSharedNativeOutput::submit(
+                &mut fixture.owner,
+                &mut fixture.runtime,
+                &compositor,
+                request,
+                admitted,
+                reservation,
+                &plan,
+                &[],
+            )
+            .unwrap_or_else(|failure| {
+                panic!("overlapping snapshot submit failed: {:?}", failure.reason())
+            });
+            assert!(pending.snapshot.is_some());
+            assert_eq!(fixture.runtime.native_frame_index(), 9);
+            stopped.set(true);
+            let authority = Authority {
+                stopped: &stopped,
+                cancel_after_commit: false,
+            };
+            let retiring = match finish(pending, &mut fixture, &mut cache, &authority) {
+                SharedNativeOutputProgress::Retiring(retiring) => retiring,
+                _ => panic!("submitted overlap did not retain its cancelled snapshot"),
+            };
+            assert_eq!(retiring.reason(), Some(&OutputRejection::Cancelled));
+            assert!(retiring.snapshot.is_some());
+            assert!(retiring.transaction.is_some());
+            assert!(retiring.encoded_isf.is_some());
+            assert!(retiring.unsubmitted.is_none());
+            retiring
+        } else {
+            // A real authority rejection before the tick's present poll keeps
+            // its unused affine admission and the preceding present intact.
+            let authority = PresentAuthority {
+                stopped: &stopped,
+                mapping: request.mapping_identity,
+                rejection: Some((OutputBoundary::BeforeSubmit, false)),
+                boundaries: RefCell::new(Vec::new()),
+            };
+            let retiring = match PendingSharedNativeOutput::submit_after_present(
+                &mut fixture.owner,
+                &mut fixture.runtime,
+                &compositor,
+                &mut presenter,
+                request,
+                admitted,
+                reservation,
+                &plan,
+                &[],
+                &authority,
+                &|| stopped.get(),
+            ) {
+                Err(retiring) => retiring,
+                Ok(_) => panic!("revoked admission submitted the next frame"),
+            };
+            assert_eq!(
+                *authority.boundaries.borrow(),
+                vec![OutputBoundary::BeforeSubmit],
+            );
+            assert_eq!(
+                retiring.reason(),
+                Some(&OutputRejection::Authority(PresentRejection::Revoked)),
+            );
+            assert_eq!(fixture.runtime.native_frame_index(), 6);
+            assert!(retiring.unsubmitted.is_some());
+            assert!(retiring.admitted.is_some());
+            assert!(retiring.transaction.is_none());
+            assert!(retiring.snapshot.is_none());
+            assert!(retiring.encoded_isf.is_none());
+            retiring
+        };
+        assert!(fixture.owner.budget_snapshot().managed_bytes() > 0);
+        assert_eq!(fixture.owner.state(), GpuOwnerState::Active);
+        assert_eq!(delivery.delivered(), 2);
+        assert_eq!(presenter.presents(), 2);
+        assert_eq!(probe.borrow().presented.len(), 2);
+        assert_eq!(
+            cache.last_valid(&key).unwrap().data.as_ptr(),
+            previous_pixels
+        );
+        cache.blackout().unwrap();
+        assert!(
+            previous_present.upgrade().is_some(),
+            "the prior present retains its whole Ready after LastValid is released",
+        );
+        drop(fixture.runtime);
+        // The aggregate conservatively retains either the unused root or the
+        // submitted snapshot until all dependent transactions have drained.
+        let started = Instant::now();
+        while retiring.unsubmitted.is_some() || retiring.snapshot.is_some() {
+            assert!(
+                !retiring
+                    .poll_with_presenter(&mut presenter, &mut fixture.owner)
+                    .unwrap(),
+                "the owned root or snapshot charge prevents Reaped before release",
+            );
+            assert!(started.elapsed() < Duration::from_secs(5));
+            std::thread::yield_now();
+        }
+        assert!(retiring.unsubmitted.is_none());
+        assert!(retiring.admitted.is_none());
+        assert!(retiring.snapshot.is_none());
+        assert!(retiring.encoded_isf.is_none());
+        assert!(!retiring.reaped);
+        assert_eq!(fixture.owner.state(), GpuOwnerState::Retiring);
+        // An outer drain observes G's real one-shot Reaped result first. Its
+        // persistent owner state must complete this aggregate on the next poll.
+        loop {
+            match fixture.owner.poll_retirement().unwrap() {
+                RetirementProgress::Reaped => break,
+                RetirementProgress::Pending { .. } => {
+                    assert!(started.elapsed() < Duration::from_secs(5));
+                    std::thread::yield_now();
+                }
             }
         }
+        assert_eq!(fixture.owner.state(), GpuOwnerState::Reaped);
+        assert!(!retiring.reaped, "only the outer owner observed completion");
+        assert!(retiring
+            .poll_with_presenter(&mut presenter, &mut fixture.owner)
+            .unwrap());
+        assert!(retiring.reaped);
+        assert!(retiring
+            .poll_with_presenter(&mut presenter, &mut fixture.owner)
+            .unwrap());
+        assert!(previous_present.upgrade().is_none());
+        assert_eq!(fixture.owner.budget_snapshot().managed_bytes(), 0);
+        assert_eq!(fixture.owner.budget_snapshot().reservation_count, 0);
     }
-    assert_eq!(fixture.owner.state(), GpuOwnerState::Reaped);
-    assert!(!retiring.reaped, "only the outer owner observed completion");
-    assert!(retiring
-        .poll_with_presenter(&mut presenter, &mut fixture.owner)
-        .unwrap());
-    assert!(retiring.reaped);
-    assert!(retiring
-        .poll_with_presenter(&mut presenter, &mut fixture.owner)
-        .unwrap());
-    assert_eq!(fixture.owner.budget_snapshot().managed_bytes(), 0);
-    assert_eq!(fixture.owner.budget_snapshot().reservation_count, 0);
 }
 
 #[test]
@@ -1556,7 +1633,7 @@ fn i4_shared_presenter_wrong_owner_operations_preserve_correct_generation() {
     let compositor = NativeGpuCompositor::from_shared(&mut fixture.owner).unwrap();
     let (mut presenter, probe) = present_fixture(&mut fixture);
     let mut cache = SharedNativeOutputCache::new(101);
-    let delivery = present_two_with_pending_second(
+    let delivery = present_two_with_retiring_second(
         &mut fixture,
         &mut reference,
         &compositor,
@@ -1593,7 +1670,7 @@ fn i4_shared_presenter_wrong_owner_operations_preserve_correct_generation() {
     assert_eq!(probe.borrow().acquires, 2);
     assert_eq!(probe.borrow().discards, 0);
     assert_eq!(probe.borrow().presented.len(), 2);
-    assert_pending_present(&mut fixture.owner, frame_id(3));
+    assert_present_retirement_allows_next_frame(&mut fixture.owner, frame_id(3));
     presenter.drain_retirements(&mut fixture.owner).unwrap();
     cache.blackout().unwrap();
     release_shared_presenter_for_stop(&mut presenter, &mut fixture.owner).unwrap();
@@ -1692,3 +1769,6 @@ fn i4_shared_sink_submitted_snapshot_cancel_releases_presenter_before_stop_and_r
     assert_eq!(fixture.owner.state(), GpuOwnerState::Reaped);
     assert_eq!(fixture.owner.budget_snapshot().managed_bytes(), 0);
 }
+
+#[path = "native_gpu_output_history_tests.rs"]
+mod history_tests;
