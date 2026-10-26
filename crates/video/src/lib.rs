@@ -51,6 +51,22 @@ pub mod native_frame_timing;
 use native_frame_timing::{span as native_span, Phase as NativePhase};
 #[cfg(test)]
 pub(crate) mod native_gpu_contract;
+#[cfg(test)]
+pub(crate) mod native_gpu_context;
+#[cfg(test)]
+pub(crate) mod native_gpu_result;
+#[cfg(test)]
+pub(crate) mod native_gpu_budget;
+#[cfg(test)]
+pub(crate) mod isf_native_gpu;
+#[cfg(test)]
+pub(crate) mod frame_history_policy;
+#[cfg(test)]
+pub(crate) mod native_gpu_history;
+#[cfg(test)]
+pub(crate) mod native_gpu_composition;
+#[cfg(test)]
+pub(crate) mod native_gpu_snapshot;
 mod live_source;
 mod rgba_row_copy;
 mod show_spout_aspect_fit;
