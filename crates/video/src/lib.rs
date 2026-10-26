@@ -52,6 +52,8 @@ use native_frame_timing::{span as native_span, Phase as NativePhase};
 #[cfg(test)]
 pub(crate) mod native_gpu_contract;
 #[cfg(test)]
+pub(crate) mod native_gpu_output;
+#[cfg(test)]
 pub(crate) mod native_gpu_context;
 #[cfg(test)]
 pub(crate) mod native_gpu_result;
