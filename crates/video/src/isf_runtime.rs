@@ -43,6 +43,19 @@ mod resources;
 
 use resources::{IsfDimension, IsfImportedImage};
 
+#[cfg(test)]
+pub(crate) use pass_runtime::{GpuImage as IsfGpuImage, NativeStackResources};
+
+#[cfg(test)]
+pub(crate) fn native_queue_upload_pitch(adapter: &wgpu::Adapter) -> Option<u64> {
+    pass_runtime::queue_upload_pitch(adapter)
+}
+
+#[cfg(test)]
+pub(crate) fn native_valid_date(date_value: [f32; 4]) -> bool {
+    date::valid_isf_date(date_value)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct IsfPassDefinition {
     target: Option<String>,
@@ -192,7 +205,7 @@ pub struct IsfGpuRuntime {
     #[cfg(test)]
     adapter_info: wgpu::AdapterInfo,
     vertex_shader: wgpu::ShaderModule,
-    pipelines: HashMap<(u64, bool, usize), IsfGpuPipeline>,
+    pipelines: HashMap<(u64, bool, usize), Arc<IsfGpuPipeline>>,
     resources: pass_runtime::IsfResourcePool,
     audio_frame: Option<protocol::LiveAudioTextureFrame>,
     frame_index: u32,
@@ -200,7 +213,8 @@ pub struct IsfGpuRuntime {
     last_stack_render_us: u64,
 }
 
-struct IsfGpuPipeline {
+#[derive(Clone)]
+pub(crate) struct IsfGpuPipeline {
     bind_group_layout: wgpu::BindGroupLayout,
     pipeline: wgpu::RenderPipeline,
 }
@@ -306,6 +320,8 @@ impl IsfGpuRuntime {
         time_delta_seconds: f32,
         date: [f32; 4],
     ) -> Result<VideoFrame, IsfRuntimeError> {
+        #[cfg(test)]
+        self.reject_ownerless_native_entry()?;
         let frame_index = self.frame_index;
         let keys = (0..stages.len())
             .map(|index| IsfInstanceKey::legacy(frame.layer_id, index))
@@ -404,6 +420,15 @@ impl IsfGpuRuntime {
         date: [f32; 4],
         keys: &[IsfInstanceKey],
     ) -> (VideoFrame, Vec<(usize, IsfRuntimeError)>) {
+        #[cfg(test)]
+        if let Err(error) = self.reject_ownerless_native_entry() {
+            return (
+                frame.clone(),
+                (0..stages.len())
+                    .map(|index| (index, error.clone()))
+                    .collect(),
+            );
+        }
         let frame_index = self.frame_index;
         let result = self.apply_stack_stage_local_at_frame_index(
             frame,
@@ -433,69 +458,21 @@ impl IsfGpuRuntime {
         frame_index: u32,
     ) -> (VideoFrame, Vec<(usize, IsfRuntimeError)>) {
         let started = std::time::Instant::now();
-        let mut current = Cow::Borrowed(frame);
-        let mut failures = Vec::new();
-        let mut index = 0;
-        while index < stages.len() {
-            let Some(key) = keys.get(index) else {
-                failures.push((index, runtime_error("ISF stage ownership key is missing")));
-                index += 1;
-                continue;
-            };
-            // A target-backed stage can own feedback. Keep its established
-            // one-stage transaction; retrying it could advance history twice.
-            // Ordinary resource-neutral stages can share the host upload,
-            // GPU ping/pong and final readback without adding eviction pressure.
-            let mut end = index + 1;
-            if stages[index].can_share_host_buffers() {
-                while end < stages.len() && end < keys.len() && stages[end].can_share_host_buffers()
-                {
-                    end += 1;
-                }
-            }
-            if end > index + 1 {
-                if let Ok(rendered) = self.apply_stack_at_frame_index(
-                    &current,
-                    &stages[index..end],
+        let (rendered, failures) =
+            run_stage_local_chain(frame, stages, keys, |frame, stages, keys| {
+                self.apply_stack_at_frame_index(
+                    frame,
+                    stages,
                     time_seconds,
                     time_delta_seconds,
                     frame_index,
                     date,
-                    &keys[index..end],
-                ) {
-                    current = Cow::Owned(rendered);
-                    index = end;
-                    continue;
-                }
-                // A bounded recovery on the same input/clock identifies the
-                // failed stage and preserves the existing bypass-only-that-
-                // stage contract. No target-backed stage is ever replayed.
-            }
-            for stage_index in index..end {
-                let stage_key = if stage_index == index {
-                    key
-                } else {
-                    &keys[stage_index]
-                };
-                match self.apply_stack_at_frame_index(
-                    &current,
-                    std::slice::from_ref(&stages[stage_index]),
-                    time_seconds,
-                    time_delta_seconds,
-                    frame_index,
-                    date,
-                    std::slice::from_ref(stage_key),
-                ) {
-                    Ok(rendered) => current = Cow::Owned(rendered),
-                    Err(error) => failures.push((stage_index, error)),
-                }
-            }
-            index = end;
-        }
-        let rendered = current.into_owned();
+                    keys,
+                )
+            });
         self.last_stack_stage_count = stages.len();
         self.last_stack_render_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
-        (rendered, failures)
+        (rendered.into_owned(), failures)
     }
 
     /// Consumes one host frame for a non-empty stage-local chain whose stages
@@ -523,6 +500,119 @@ impl IsfGpuRuntime {
     pub fn reset_last_stack_metrics(&mut self) {
         self.last_stack_stage_count = 0;
         self.last_stack_render_us = 0;
+    }
+}
+
+/// Shared bypass/order policy. Native recovery supplies the same fixed-clock
+/// encoder through its broker; neither executor duplicates the stage walk.
+pub(crate) fn run_stage_local_chain<'f, 's>(
+    frame: &'f VideoFrame,
+    stages: &[IsfStageInputs<'s>],
+    keys: &[IsfInstanceKey],
+    mut render: impl FnMut(
+        &VideoFrame,
+        &[IsfStageInputs<'s>],
+        &[IsfInstanceKey],
+    ) -> Result<VideoFrame, IsfRuntimeError>,
+) -> (Cow<'f, VideoFrame>, Vec<(usize, IsfRuntimeError)>) {
+    let mut current = Cow::Borrowed(frame);
+    let mut failures = Vec::new();
+    let mut index = 0;
+    while index < stages.len() {
+        let Some(key) = keys.get(index) else {
+            failures.push((index, runtime_error("ISF stage ownership key is missing")));
+            index += 1;
+            continue;
+        };
+        // A target-backed stage can own feedback. Keep its established
+        // one-stage transaction; retrying it could advance history twice.
+        // Ordinary resource-neutral stages can share the host upload,
+        // GPU ping/pong and final readback without adding eviction pressure.
+        let mut end = index + 1;
+        if stages[index].can_share_host_buffers() {
+            while end < stages.len() && end < keys.len() && stages[end].can_share_host_buffers() {
+                end += 1;
+            }
+        }
+        if end > index + 1 {
+            if let Ok(rendered) = render(&current, &stages[index..end], &keys[index..end]) {
+                current = Cow::Owned(rendered);
+                index = end;
+                continue;
+            }
+            // A bounded recovery on the same input/clock identifies the
+            // failed stage and preserves the existing bypass-only-that-
+            // stage contract. No target-backed stage is ever replayed.
+        }
+        for stage_index in index..end {
+            let stage_key = if stage_index == index {
+                key
+            } else {
+                &keys[stage_index]
+            };
+            match render(
+                &current,
+                std::slice::from_ref(&stages[stage_index]),
+                std::slice::from_ref(stage_key),
+            ) {
+                Ok(rendered) => current = Cow::Owned(rendered),
+                Err(error) => failures.push((stage_index, error)),
+            }
+        }
+        index = end;
+    }
+    (current, failures)
+}
+
+#[cfg(test)]
+impl IsfGpuRuntime {
+    pub(crate) fn with_native_context(
+        owner: &mut crate::native_gpu_context::NativeGpuOwner,
+    ) -> Result<Self, IsfRuntimeError> {
+        let context = Arc::clone(owner.context());
+        let vertex_shader = owner
+            .initialize(|device, _| {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Syndocal ISF full-screen vertex shader"),
+                    source: wgpu::ShaderSource::Wgsl(ISF_VERTEX_SHADER.into()),
+                })
+            })
+            .map_err(|fault| runtime_error(fault.message))?;
+        let mut resources = pass_runtime::IsfResourcePool::default();
+        resources.queue_upload_pitch = context.capabilities().upload_row_pitch;
+        resources.native_context = Some(Arc::clone(&context));
+        Ok(Self {
+            device: context.device().clone(),
+            queue: context.queue().clone(),
+            adapter_info: context.capabilities().adapter_info.clone(),
+            vertex_shader,
+            pipelines: HashMap::new(),
+            resources,
+            audio_frame: None,
+            frame_index: 0,
+            last_stack_stage_count: 0,
+            last_stack_render_us: 0,
+        })
+    }
+
+    pub(crate) fn native_context(
+        &self,
+    ) -> Option<&Arc<crate::native_gpu_context::NativeGpuContext>> {
+        self.resources.native_context.as_ref()
+    }
+
+    fn reject_ownerless_native_entry(&self) -> Result<(), IsfRuntimeError> {
+        if self.native_context().is_some() {
+            Err(runtime_error(
+                "shared ISF execution requires its NativeGpuOwner",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn native_frame_index(&self) -> u32 {
+        self.frame_index
     }
 }
 

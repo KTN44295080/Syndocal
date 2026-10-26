@@ -51,12 +51,16 @@ pub(super) struct PendingStack<'a> {
     pub encoder: Option<wgpu::CommandEncoder>,
     pub states: Vec<(IsfInstanceKey, StageResources)>,
     pub images: Vec<GpuImage>,
+    #[cfg(test)]
+    pub native_pipeline_pins: Vec<Arc<IsfGpuPipeline>>,
+    #[cfg(test)]
+    pub native_uniforms: Vec<wgpu::Buffer>,
     receiver: Option<mpsc::Receiver<MapCompletion>>,
     mapping_started: bool,
 }
 
 impl<'a> PendingStack<'a> {
-    fn new(
+    pub(super) fn new(
         frame: &VideoFrame,
         input: Option<Arc<VideoFrame>>,
         keys: Cow<'a, [IsfInstanceKey]>,
@@ -78,6 +82,10 @@ impl<'a> PendingStack<'a> {
             encoder: None,
             states: Vec::new(),
             images: Vec::new(),
+            #[cfg(test)]
+            native_pipeline_pins: Vec::new(),
+            #[cfg(test)]
+            native_uniforms: Vec::new(),
             receiver: None,
             mapping_started: false,
         }
@@ -89,6 +97,8 @@ impl<'a> PendingStack<'a> {
             .as_ref()
             .unwrap()
             .readback
+            .as_ref()
+            .expect("CPU stack has a readback buffer")
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |result| {
                 let _ = sender.send(MapCompletion {
@@ -116,7 +126,13 @@ impl<'a> PendingStack<'a> {
             #[cfg(feature = "qa-native-frame-timing")]
             let _qa_unmap =
                 crate::native_frame_timing::span(crate::native_frame_timing::Phase::IsfUnmap);
-            self.workspace.as_ref().unwrap().readback.unmap();
+            self.workspace
+                .as_ref()
+                .unwrap()
+                .readback
+                .as_ref()
+                .unwrap()
+                .unmap();
             self.mapping_started = false;
         }
     }
@@ -126,7 +142,7 @@ impl<'a> PendingStack<'a> {
         #[cfg(feature = "qa-native-frame-timing")]
         let qa_copy =
             crate::native_frame_timing::span(crate::native_frame_timing::Phase::IsfMappedCopy);
-        let readback = &self.workspace.as_ref().unwrap().readback;
+        let readback = self.workspace.as_ref().unwrap().readback.as_ref().unwrap();
         let mapped = readback.slice(..).get_mapped_range();
         let data = copy_rgba_readback(
             &mapped,

@@ -50,11 +50,12 @@ pub(in crate::isf_runtime) fn queue_upload_pitch(adapter: &wgpu::Adapter) -> Opt
     (pitch.is_power_of_two() && pitch <= u64::from(u32::MAX)).then_some(pitch)
 }
 
+#[derive(Clone)]
 pub(super) struct StackWorkspace {
     pub(super) input: GpuImage,
     pub(super) ping: GpuImage,
     pub(super) pong: GpuImage,
-    pub(super) readback: wgpu::Buffer,
+    pub(super) readback: Option<wgpu::Buffer>,
     pub(super) sampler: wgpu::Sampler,
 }
 
@@ -90,15 +91,26 @@ impl StackWorkspace {
     }
 
     pub(super) fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+        Self::create(device, width, height, true)
+    }
+
+    #[cfg(test)]
+    pub(super) fn resident(device: &wgpu::Device, width: u32, height: u32) -> Self {
+        Self::create(device, width, height, false)
+    }
+
+    fn create(device: &wgpu::Device, width: u32, height: u32, readback: bool) -> Self {
         Self {
             input: GpuImage::new(device, width, height, false, "Syndocal ISF input"),
             ping: GpuImage::new(device, width, height, false, "Syndocal ISF stack ping"),
             pong: GpuImage::new(device, width, height, false, "Syndocal ISF stack pong"),
-            readback: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Syndocal ISF readback"),
-                size: u64::from(Self::bytes_per_row(width)) * u64::from(height),
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
+            readback: readback.then(|| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Syndocal ISF readback"),
+                    size: u64::from(Self::bytes_per_row(width)) * u64::from(height),
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                })
             }),
             sampler: device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("Syndocal ISF sampler"),

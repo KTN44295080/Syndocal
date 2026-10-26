@@ -31,6 +31,10 @@ mod phase_timing;
 #[derive(Default)]
 pub(super) struct IsfResourcePool {
     pub(super) queue_upload_pitch: Option<u64>,
+    // Default standalone/test fixtures retain their existing construction.
+    // Only with_native_context associates the pool with the shared broker.
+    #[cfg(test)]
+    pub(super) native_context: Option<std::sync::Arc<crate::native_gpu_context::NativeGpuContext>>,
     entries: BTreeMap<IsfInstanceKey, StageResources>,
     clock: u64,
     workspace: Option<StackWorkspace>,
@@ -51,12 +55,14 @@ pub(super) struct IsfResourcePool {
 }
 
 #[derive(Clone)]
-struct GpuImage {
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
-    width: u32,
-    height: u32,
-    float: bool,
+pub(crate) struct GpuImage {
+    pub(crate) texture: wgpu::Texture,
+    pub(crate) view: wgpu::TextureView,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) float: bool,
+    #[cfg(test)]
+    native_origin: Option<crate::native_gpu_contract::GpuContextId>,
 }
 
 impl GpuImage {
@@ -85,6 +91,8 @@ impl GpuImage {
             width,
             height,
             float,
+            #[cfg(test)]
+            native_origin: None,
         }
     }
 
@@ -111,6 +119,11 @@ impl GpuImage {
                 depth_or_array_layers: 1,
             },
         );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn native_origin(&self) -> Option<crate::native_gpu_contract::GpuContextId> {
+        self.native_origin
     }
 }
 
@@ -298,7 +311,7 @@ impl IsfGpuRuntime {
         let ping = &workspace.ping;
         let pong = &workspace.pong;
         let sampler = &workspace.sampler;
-        let readback = &workspace.readback;
+        let readback = workspace.readback.as_ref();
         #[cfg(test)]
         if let Some(timing) = self.resources.phase_timing.as_mut() {
             timing.mark(1);
@@ -346,10 +359,21 @@ impl IsfGpuRuntime {
                 })
                 .count();
             if self.pipelines.len() + missing > ISF_GPU_PIPELINE_CAPACITY {
-                self.pipelines.clear();
+                self.make_pipeline_room(missing)?;
             }
             for float in formats {
                 self.ensure_pass_pipeline(&shader.wgsl, texture_count, float)?;
+                #[cfg(test)]
+                if !pending.native_uniforms.is_empty() {
+                    // Freeze each actually used native pipeline before the
+                    // next stage can make cache room. A final cache lookup
+                    // loses early stages when this job crosses capacity.
+                    pending.native_pipeline_pins.push(std::sync::Arc::clone(
+                        self.pipelines
+                            .get(&(source_hash(&shader.wgsl), float, texture_count))
+                            .expect("the canonical pipeline was just ensured"),
+                    ));
+                }
             }
             let needs_transparent =
                 shader
@@ -492,16 +516,23 @@ impl IsfGpuRuntime {
                 }
                 sampled.extend(state.imports.iter().map(|image| &image.view));
                 sampled.extend(state.audio.iter().map(|image| &image.view));
-                let uniforms = self.pass_uniforms(
-                    width,
-                    height,
-                    time_seconds,
-                    time_delta_seconds,
-                    frame_index,
-                    pass_index,
-                    date,
-                    controls,
-                );
+                #[cfg(test)]
+                let resident_uniform = (!pending.native_uniforms.is_empty())
+                    .then(|| pending.native_uniforms[stage_index].clone());
+                #[cfg(not(test))]
+                let resident_uniform: Option<wgpu::Buffer> = None;
+                let uniforms = resident_uniform.unwrap_or_else(|| {
+                    self.pass_uniforms(
+                        width,
+                        height,
+                        time_seconds,
+                        time_delta_seconds,
+                        frame_index,
+                        pass_index,
+                        date,
+                        controls,
+                    )
+                });
                 self.encode_pass(encoder, &shader.wgsl, &sampled, sampler, &uniforms, &output);
                 if let Some(index) = target_index {
                     state.targets[index].front = 1 - state.targets[index].front;
@@ -512,6 +543,14 @@ impl IsfGpuRuntime {
             // a final named FLOAT target or a size expression on the last pass.
             if current.width != frame.width || current.height != frame.height || current.float {
                 self.ensure_pass_pipeline(BLIT_SHADER, 1, false)?;
+                #[cfg(test)]
+                if !pending.native_uniforms.is_empty() {
+                    pending.native_pipeline_pins.push(std::sync::Arc::clone(
+                        self.pipelines
+                            .get(&(source_hash(BLIT_SHADER), false, 1))
+                            .expect("the normalization pipeline was just ensured"),
+                    ));
+                }
                 let uniforms = self.pass_uniforms(
                     frame.width,
                     frame.height,
@@ -535,27 +574,29 @@ impl IsfGpuRuntime {
             state.has_history = true;
             pending_bytes += state.bytes + state.transient_bytes;
         }
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &current.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_bytes_per_row),
-                    rows_per_image: Some(frame.height),
+        if let Some(readback) = readback {
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &current.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
                 },
-            },
-            wgpu::Extent3d {
-                width: frame.width,
-                height: frame.height,
-                depth_or_array_layers: 1,
-            },
-        );
+                wgpu::TexelCopyBufferInfo {
+                    buffer: readback,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(padded_bytes_per_row),
+                        rows_per_image: Some(frame.height),
+                    },
+                },
+                wgpu::Extent3d {
+                    width: frame.width,
+                    height: frame.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
         #[cfg(test)]
         if let Some(timing) = self.resources.phase_timing.as_mut() {
             timing.mark(3);
@@ -923,10 +964,31 @@ impl IsfGpuRuntime {
             return Ok(());
         }
         if self.pipelines.len() >= ISF_GPU_PIPELINE_CAPACITY {
-            self.pipelines.clear();
+            self.make_pipeline_room(1)?;
         }
         let pipeline = self.create_pass_pipeline(wgsl, texture_count, float)?;
-        self.pipelines.insert(key, pipeline);
+        self.pipelines.insert(key, std::sync::Arc::new(pipeline));
+        Ok(())
+    }
+
+    fn make_pipeline_room(&mut self, missing: usize) -> Result<(), IsfRuntimeError> {
+        if missing > ISF_GPU_PIPELINE_CAPACITY {
+            return Err(runtime_error("ISF pipeline request exceeds cache capacity"));
+        }
+        #[cfg(test)]
+        if self.native_context().is_some() {
+            // Recipes retain exact pipelines. Eviction must not turn a bounded
+            // cache into an unbounded list of externally pinned GPU pipelines.
+            self.pipelines
+                .retain(|_, pipeline| std::sync::Arc::strong_count(pipeline) > 1);
+            if self.pipelines.len() + missing > ISF_GPU_PIPELINE_CAPACITY {
+                return Err(runtime_error(
+                    "ISF native recipe pipeline capacity exhausted",
+                ));
+            }
+            return Ok(());
+        }
+        self.pipelines.clear();
         Ok(())
     }
 
@@ -1024,6 +1086,139 @@ impl IsfGpuRuntime {
     }
 }
 
+/// Resource handles retained by the broker before the first queue write.
+/// A completed lease takes only the final image, never this workspace owner.
+#[cfg(test)]
+pub(crate) struct NativeStackResources {
+    workspace: StackWorkspace,
+    uniforms: Vec<wgpu::Buffer>,
+}
+
+#[cfg(test)]
+impl NativeStackResources {
+    pub(crate) fn final_image(&self, stage_count: usize) -> GpuImage {
+        if stage_count % 2 == 1 {
+            self.workspace.ping.clone()
+        } else {
+            self.workspace.pong.clone()
+        }
+    }
+
+    pub(crate) fn readback(&self) -> Option<&wgpu::Buffer> {
+        self.workspace.readback.as_ref()
+    }
+
+    pub(crate) fn sampler(&self) -> wgpu::Sampler {
+        self.workspace.sampler.clone()
+    }
+
+    pub(crate) fn use_frozen_sampler(&mut self, sampler: &wgpu::Sampler) {
+        self.workspace.sampler = sampler.clone();
+    }
+}
+
+#[cfg(test)]
+impl IsfGpuRuntime {
+    pub(crate) fn native_create_stack_resources(
+        &self,
+        phase: &crate::native_gpu_context::GpuPhaseEncoder<'_>,
+        frame: &VideoFrame,
+        stages: &[IsfStageInputs<'_>],
+        clocks: crate::native_gpu_contract::FrozenChainClocks,
+        cpu_readback: bool,
+    ) -> Result<NativeStackResources, IsfRuntimeError> {
+        if self
+            .native_context()
+            .is_none_or(|context| !std::sync::Arc::ptr_eq(context, phase.context()))
+        {
+            return Err(runtime_error(
+                "native stack allocation requires its device phase capability",
+            ));
+        }
+        self.validate_pass_size(frame.width, frame.height)?;
+        if stages
+            .iter()
+            .any(|stage| !stage.can_share_host_buffers() || stage.shader.passes.len() != 1)
+        {
+            return Err(runtime_error(
+                "native stack resources require one resource-neutral pass per stage",
+            ));
+        }
+        let mut workspace = if cpu_readback {
+            StackWorkspace::new(&self.device, frame.width, frame.height)
+        } else {
+            StackWorkspace::resident(&self.device, frame.width, frame.height)
+        };
+        for image in [
+            &mut workspace.input,
+            &mut workspace.ping,
+            &mut workspace.pong,
+        ] {
+            image.native_origin = Some(phase.context().id());
+        }
+        let uniforms = stages
+            .iter()
+            .map(|stage| {
+                self.pass_uniforms(
+                    frame.width,
+                    frame.height,
+                    f32::from_bits(clocks.time_seconds_bits),
+                    f32::from_bits(clocks.time_delta_seconds_bits),
+                    clocks.frame_index,
+                    0,
+                    clocks.date_bits.map(f32::from_bits),
+                    stage.controls,
+                )
+            })
+            .collect();
+        Ok(NativeStackResources {
+            workspace,
+            uniforms,
+        })
+    }
+
+    pub(crate) fn native_encode_canonical_stack(
+        &mut self,
+        phase: &crate::native_gpu_context::GpuPhaseEncoder<'_>,
+        resources: &NativeStackResources,
+        frame: &std::sync::Arc<VideoFrame>,
+        stages: &[IsfStageInputs<'_>],
+        keys: &[IsfInstanceKey],
+        clocks: crate::native_gpu_contract::FrozenChainClocks,
+    ) -> Result<(wgpu::CommandBuffer, Vec<std::sync::Arc<IsfGpuPipeline>>), IsfRuntimeError> {
+        if self
+            .native_context()
+            .is_none_or(|context| !std::sync::Arc::ptr_eq(context, phase.context()))
+        {
+            return Err(runtime_error(
+                "native stack encoding requires its device phase capability",
+            ));
+        }
+        let mut pending = PendingStack::new(
+            frame,
+            Some(std::sync::Arc::clone(frame)),
+            Cow::Borrowed(keys),
+            stack_transaction::StackClocks {
+                time_seconds: f32::from_bits(clocks.time_seconds_bits),
+                time_delta_seconds: f32::from_bits(clocks.time_delta_seconds_bits),
+                frame_index: clocks.frame_index,
+                date: clocks.date_bits.map(f32::from_bits),
+            },
+            Some(resources.workspace.clone()),
+        );
+        pending.native_uniforms = resources.uniforms.clone();
+        // G's single ledger has already reserved all native resources. A Some
+        // reservation keeps the legacy executor from evicting feedback/cache.
+        self.encode_pass_stack(&mut pending, frame, stages, Some(0))?;
+        let command = pending
+            .encoder
+            .take()
+            .expect("canonical encoder produced commands")
+            .finish();
+        Ok((command, pending.native_pipeline_pins))
+    }
+}
+
 const BLIT_SHADER: &str = r#"
 @group(0) @binding(0) var source_image: texture_2d<f32>;
 @group(0) @binding(1) var source_sampler: sampler;
@@ -1041,6 +1236,186 @@ mod workspace_tests;
 mod tests {
     use super::*;
     use crate::prepare_isf_shader;
+
+    #[test]
+    fn isf_native_gpu_pipeline_pins_survive_mid_stack_capacity_eviction() {
+        use crate::native_gpu_budget::{
+            checked_upload_staging_bytes, ChargeKind, NativeAllocationPlan,
+        };
+        use crate::native_gpu_context::{
+            NativeGpuFactory, NativeGpuRequirements, RetirementProgress,
+        };
+        use crate::native_gpu_contract::{
+            CompletionProgress, FrozenChainClocks, GpuPhase, NativeFrameId,
+        };
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let mut owner = NativeGpuFactory::new()
+            .create_headless(9821, NativeGpuRequirements::default())
+            .expect("pipeline retention regression requires a GPU");
+        let mut runtime = IsfGpuRuntime::with_native_context(&mut owner).unwrap();
+        let base = prepare_isf_shader(
+            r#"/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"}]}*/
+            void main() { gl_FragColor = IMG_THIS_PIXEL(inputImage); }"#,
+        )
+        .unwrap();
+        let shader = |ordinal: usize| {
+            let mut shader = base.clone();
+            // The compile keys are distinct while pixels remain an identity
+            // filter, so this exercises real cache pressure without changing FX.
+            shader
+                .wgsl
+                .push_str(&format!("\n// pipeline retention key {ordinal}\n"));
+            shader
+        };
+        owner
+            .initialize(|_, _| {
+                for ordinal in 0..40 {
+                    runtime.ensure_pass_pipeline(&shader(ordinal).wgsl, 1, false)?;
+                }
+                Ok::<(), IsfRuntimeError>(())
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(runtime.pipelines.len(), 40);
+        assert!(runtime
+            .pipelines
+            .values()
+            .all(|pipeline| Arc::strong_count(pipeline) == 1));
+
+        let shaders: Vec<_> = (40..72).map(shader).collect();
+        let stages: Vec<_> = shaders
+            .iter()
+            .map(|shader| IsfStageInputs {
+                shader,
+                controls: &[],
+                images: &[],
+            })
+            .collect();
+        let input = Arc::new(VideoFrame {
+            layer_id: 42,
+            width: 1,
+            height: 1,
+            pts_ms: 0,
+            duration_ms: 16,
+            format: VideoPixelFormat::Rgba8,
+            data: vec![21, 53, 87, 255],
+        });
+        let keys: Vec<_> = (0..stages.len())
+            .map(|index| IsfInstanceKey::legacy(input.layer_id, index))
+            .collect();
+        let frame = NativeFrameId {
+            output_id: 9821,
+            project_epoch: 1,
+            request_sequence: 1,
+            geometry_generation: 1,
+        };
+        let clocks = FrozenChainClocks {
+            frame_index: 7,
+            time_seconds_bits: 0.0f32.to_bits(),
+            time_delta_seconds_bits: 0.016f32.to_bits(),
+            date_bits: [2026.0f32, 10.0, 26.0, 0.0].map(f32::to_bits),
+        };
+        let uniform_bytes = 48 + crate::isf_runtime::ISF_MAX_CONTROL_INPUTS as u64 * 16;
+        let mut allocations = vec![
+            (ChargeKind::IsfScratch, 4),
+            (ChargeKind::IsfScratch, 4),
+            (ChargeKind::ResidentLayer, 4),
+            (ChargeKind::ActiveCpuInput, input.data.capacity() as u64),
+            (
+                ChargeKind::QueueUploadStaging,
+                checked_upload_staging_bytes(1, 1, owner.capabilities().upload_row_pitch).unwrap(),
+            ),
+        ];
+        allocations
+            .extend((0..stages.len()).map(|_| (ChargeKind::CachedEffectResource, uniform_bytes)));
+        let mut plan = NativeAllocationPlan::new(frame);
+        for (kind, bytes) in &allocations {
+            plan.add_new(*kind, *bytes).unwrap();
+        }
+        let quote = owner.quote(&plan).unwrap();
+        let reservation = owner.reserve(quote).unwrap();
+        let mut txn = owner.begin_frame(frame, reservation).unwrap();
+        let mut phase = txn.begin_phase(GpuPhase::IsfBatch).unwrap();
+        let charges: Vec<_> = allocations
+            .into_iter()
+            .map(|(kind, bytes)| phase.bind_allocation(kind, bytes).unwrap())
+            .collect();
+        let ids: Vec<_> = charges.iter().map(|charge| charge.id()).collect();
+        struct Retained {
+            stack: NativeStackResources,
+            _input: Arc<VideoFrame>,
+            _charges: Vec<crate::native_gpu_budget::AllocationCharge>,
+        }
+        let retained = Arc::new(Retained {
+            stack: runtime
+                .native_create_stack_resources(&phase, &input, &stages, clocks, false)
+                .unwrap(),
+            _input: Arc::clone(&input),
+            _charges: charges,
+        });
+        phase.retain_resource(Arc::clone(&retained), &ids).unwrap();
+        phase.mark_queue_write();
+        let (commands, pins) = runtime
+            .native_encode_canonical_stack(&phase, &retained.stack, &input, &stages, &keys, clocks)
+            .unwrap();
+        assert_eq!(
+            pins.len(),
+            32,
+            "every stage must survive a mid-job cache eviction"
+        );
+        assert_eq!(
+            runtime.pipelines.len(),
+            32,
+            "the 40 old unpinned entries were evicted"
+        );
+        for (shader, pin) in shaders.iter().zip(&pins) {
+            let cached = runtime
+                .pipelines
+                .get(&(source_hash(&shader.wgsl), false, 1))
+                .unwrap();
+            assert!(
+                Arc::ptr_eq(cached, pin),
+                "retain the exact compiled pipeline"
+            );
+        }
+        phase.retain_resource(Arc::new(pins.clone()), &[]).unwrap();
+        let encoded = phase.finish(vec![commands]);
+        let receipt = txn.submit_phase(encoded).unwrap();
+        let mut pending = txn.finish();
+        let started = Instant::now();
+        loop {
+            match owner.poll_transaction(&mut pending, &|| false) {
+                CompletionProgress::Pending if started.elapsed() < Duration::from_secs(5) => {
+                    std::thread::yield_now()
+                }
+                CompletionProgress::Complete(Ok(mut resolved)) => {
+                    resolved
+                        .take_phase(receipt)
+                        .unwrap()
+                        .into_validation()
+                        .unwrap();
+                    break;
+                }
+                CompletionProgress::Complete(Err(error)) => {
+                    panic!("pipeline retention completion failed: {error:?}")
+                }
+                _ => panic!("pipeline retention completion cancelled or timed out"),
+            }
+        }
+        assert!(
+            runtime.make_pipeline_room(33).is_err(),
+            "held recipe pins remain within the 64-entry cap"
+        );
+        assert_eq!(runtime.pipelines.len(), 32);
+        drop(pins);
+        runtime.make_pipeline_room(64).unwrap();
+        assert!(runtime.pipelines.is_empty());
+        drop(retained);
+        owner.begin_stop();
+        assert_eq!(owner.poll_retirement().unwrap(), RetirementProgress::Reaped);
+    }
 
     #[test]
     fn fixed_pass_sizes_refresh_transient_budget_when_host_size_changes() {

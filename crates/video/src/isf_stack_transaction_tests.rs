@@ -125,7 +125,13 @@ fn independent_stacks_keep_distinct_pixels_clocks_and_bounded_reusable_scratch()
             .workspace
             .iter()
             .chain(&runtime.resources.batch_workspaces)
-            .map(|workspace| workspace.readback.clone())
+            .map(|workspace| {
+                workspace
+                    .readback
+                    .as_ref()
+                    .expect("CPU stack retains readback")
+                    .clone()
+            })
             .collect::<Vec<_>>();
         assert_eq!(buffers.len(), 3);
         for left in 0..buffers.len() {
@@ -195,6 +201,8 @@ fn memory_pressure_and_resourceful_stages_decline_without_touching_feedback() {
         .as_ref()
         .unwrap()
         .readback
+        .as_ref()
+        .expect("CPU stack retains readback")
         .clone();
     let clock = runtime.resources.clock;
     let index = runtime.frame_index;
@@ -202,8 +210,15 @@ fn memory_pressure_and_resourceful_stages_decline_without_touching_feedback() {
     assert_eq!(runtime.resources.clock, clock);
     assert_eq!(runtime.frame_index, index);
     assert_eq!(
-        runtime.resources.workspace.as_ref().unwrap().readback,
-        before
+        runtime
+            .resources
+            .workspace
+            .as_ref()
+            .unwrap()
+            .readback
+            .as_ref()
+            .expect("CPU stack retains readback"),
+        &before
     );
     assert_eq!(runtime.independent_batch_count(), 0);
     assert!(runtime.resources.entries[&key].has_history);
@@ -295,7 +310,13 @@ fn unknown_upload_pitch_declines_before_upload_without_changing_feedback() {
         .workspace
         .iter()
         .chain(&runtime.resources.batch_workspaces)
-        .map(|workspace| workspace.readback.clone())
+        .map(|workspace| {
+            workspace
+                .readback
+                .as_ref()
+                .expect("CPU stack retains readback")
+                .clone()
+        })
         .collect::<Vec<_>>();
     let clock = runtime.resources.clock;
     let frame_index = runtime.frame_index;
@@ -320,7 +341,11 @@ fn unknown_upload_pitch_declines_before_upload_without_changing_feedback() {
             .workspace
             .iter()
             .chain(&runtime.resources.batch_workspaces)
-            .map(|workspace| workspace.readback.clone())
+            .map(|workspace| workspace
+                .readback
+                .as_ref()
+                .expect("CPU stack retains readback")
+                .clone())
             .collect::<Vec<_>>(),
         scratch
     );
@@ -365,6 +390,8 @@ fn assert_upload_decline(pitch: Option<u64>, cache: u64, old_three: u64, known_t
         .as_ref()
         .unwrap()
         .readback
+        .as_ref()
+        .expect("CPU stack retains readback")
         .clone();
     let clock = runtime.resources.clock;
     let frame_index = runtime.frame_index;
@@ -383,8 +410,15 @@ fn assert_upload_decline(pitch: Option<u64>, cache: u64, old_three: u64, known_t
     assert_eq!(runtime.frame_index, frame_index);
     assert_eq!(runtime.independent_batch_count(), 0);
     assert_eq!(
-        runtime.resources.workspace.as_ref().unwrap().readback,
-        buffer
+        runtime
+            .resources
+            .workspace
+            .as_ref()
+            .unwrap()
+            .readback
+            .as_ref()
+            .expect("CPU stack retains readback"),
+        &buffer
     );
     assert!(runtime.resources.batch_workspaces.is_empty());
     assert!(frames.iter().all(|frame| Arc::strong_count(frame) == 2));
@@ -477,6 +511,8 @@ fn failed_batch_map_drains_every_ticket_and_preserves_unrelated_feedback() {
         .as_ref()
         .unwrap()
         .readback
+        .as_ref()
+        .expect("CPU stack retains readback")
         .destroy();
     assert!(runtime
         .try_render_independent_stacks(&jobs)

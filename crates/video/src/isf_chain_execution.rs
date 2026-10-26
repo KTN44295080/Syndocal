@@ -1,22 +1,24 @@
 //! Shared chain preparation/execution and bounded independent Layer jobs.
 use super::*;
 
-struct PreparedStage {
-    shader: Arc<PreparedIsfShader>,
-    controls: Vec<[f32; 4]>,
-    images: Vec<(String, Arc<VideoFrame>)>,
-    fault_context: VideoEffectFaultContext,
+#[derive(Clone)]
+pub(crate) struct PreparedStage {
+    pub(crate) shader: Arc<PreparedIsfShader>,
+    pub(crate) controls: Vec<[f32; 4]>,
+    pub(crate) images: Vec<(String, Arc<VideoFrame>)>,
+    pub(crate) fault_context: VideoEffectFaultContext,
 }
 
-struct PreparedChain<'a> {
-    source: Cow<'a, ResolvedVideoEffectChain>,
-    stages: Vec<PreparedStage>,
-    keys: Vec<isf_runtime::IsfInstanceKey>,
-    faults: Vec<VideoEffectStageFault>,
+#[derive(Clone)]
+pub(crate) struct PreparedChain<'a> {
+    pub(crate) source: Cow<'a, ResolvedVideoEffectChain>,
+    pub(crate) stages: Vec<PreparedStage>,
+    pub(crate) keys: Vec<isf_runtime::IsfInstanceKey>,
+    pub(crate) faults: Vec<VideoEffectStageFault>,
 }
 
 impl PreparedChain<'_> {
-    fn independent(&self) -> bool {
+    pub(crate) fn independent(&self) -> bool {
         !self.stages.is_empty()
             && self.stages.iter().all(|stage| {
                 stage.images.is_empty()
@@ -29,7 +31,7 @@ impl PreparedChain<'_> {
             })
     }
 
-    fn finish_faults(
+    pub(crate) fn finish_faults(
         mut self,
         failures: Vec<(usize, IsfRuntimeError)>,
     ) -> Vec<VideoEffectStageFault> {

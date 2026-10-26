@@ -45,7 +45,11 @@ fn scratch_reuse_preserves_pixels_across_layers_odd_pitch_and_resize() {
         let workspace = runtime.resources.workspace.as_ref().unwrap();
         if let Some((old_width, old_height, old_buffer)) = previous {
             assert_eq!(
-                old_buffer == workspace.readback,
+                &old_buffer
+                    == workspace
+                        .readback
+                        .as_ref()
+                        .expect("CPU stack retains readback"),
                 (width, height) == (old_width, old_height),
                 "only an exact host size may reuse scratch"
             );
@@ -60,7 +64,15 @@ fn scratch_reuse_preserves_pixels_across_layers_odd_pitch_and_resize() {
                 + StackWorkspace::required_bytes(width, height)
                 <= MAX_CACHED_RESOURCE_BYTES
         );
-        previous = Some((width, height, workspace.readback.clone()));
+        previous = Some((
+            width,
+            height,
+            workspace
+                .readback
+                .as_ref()
+                .expect("CPU stack retains readback")
+                .clone(),
+        ));
     }
 }
 
@@ -78,7 +90,14 @@ fn mapped_readback_copy_timing_experiment() {
         runtime.apply(&input, &shader, &[], 0.0, 0.016).unwrap(),
         input
     );
-    let readback = &runtime.resources.workspace.as_ref().unwrap().readback;
+    let readback = runtime
+        .resources
+        .workspace
+        .as_ref()
+        .unwrap()
+        .readback
+        .as_ref()
+        .expect("CPU stack retains readback");
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     readback
         .slice(..)
@@ -123,7 +142,11 @@ fn mapped_readback_copy_timing_experiment() {
     after.sort_unstable();
     eprintln!(
         "ISF_READBACK_COPY size=2560x1600 samples={} before_p50_ns={} before_p95_ns={} after_p50_ns={} after_p95_ns={}",
-        before.len(), before[16], before[30], after[16], after[30]
+        before.len(),
+        before[16],
+        before[30],
+        after[16],
+        after[30]
     );
     drop(mapped);
     readback.unmap();
@@ -148,6 +171,8 @@ fn failed_readback_discards_scratch_and_does_not_publish_feedback() {
         .as_ref()
         .unwrap()
         .readback
+        .as_ref()
+        .expect("CPU stack retains readback")
         .destroy();
     assert!(runtime.apply(&input, &shader, &[], 0.0, 0.016).is_err());
     assert!(runtime.resources.workspace.is_none());

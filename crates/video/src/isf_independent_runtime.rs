@@ -36,7 +36,7 @@ impl<T> StackBatch<T> {
         std::mem::replace(self, Self::Empty).into_iter()
     }
 
-    fn map<U>(self, f: impl FnMut(T) -> U) -> StackBatch<U> {
+    pub(crate) fn map<U>(self, f: impl FnMut(T) -> U) -> StackBatch<U> {
         match self {
             Self::Empty => StackBatch::Empty,
             Self::One(items) => StackBatch::One(items.map(f)),
@@ -107,6 +107,21 @@ impl IsfGpuRuntime {
         &mut self,
         chains: &[IndependentChain<'_>],
     ) -> Option<StackBatch<(VideoFrame, Vec<(usize, IsfRuntimeError)>)>> {
+        if !(2..=3).contains(&chains.len()) {
+            return None;
+        }
+        #[cfg(test)]
+        if let Err(error) = self.reject_ownerless_native_entry() {
+            return Some(StackBatch::from_fn(chains.len(), |index| {
+                let chain = &chains[index];
+                (
+                    chain.frame.as_ref().clone(),
+                    (0..chain.stages.len())
+                        .map(|stage| (stage, error.clone()))
+                        .collect(),
+                )
+            }));
+        }
         if !(2..=3).contains(&chains.len())
             || chains.iter().any(|chain| {
                 chain.stages.is_empty()
@@ -125,14 +140,14 @@ impl IsfGpuRuntime {
         {
             return None;
         }
-        let first_index = self.frame_index;
+        let clocks = self.reserve_independent_clocks(chains.len());
         let requests = StackBatch::from_fn(chains.len(), |index| {
             let chain = &chains[index];
             pass_runtime::IndependentStack {
                 frame: Arc::clone(&chain.frame),
                 stages: chain.stages,
                 keys: Cow::Borrowed(chain.keys),
-                frame_index: first_index.wrapping_add(index as u32),
+                frame_index: clocks.at(index),
                 time_seconds: chain.time_seconds,
                 time_delta_seconds: chain.time_delta_seconds,
                 date: chain.date,
@@ -153,12 +168,44 @@ impl IsfGpuRuntime {
                     chain.time_delta_seconds,
                     chain.date,
                     chain.keys,
-                    first_index.wrapping_add(index as u32),
+                    clocks.at(index),
                 )
             }),
         };
-        self.frame_index = first_index.wrapping_add(chains.len() as u32);
+        self.commit_independent_clocks(clocks);
         Some(results)
+    }
+}
+
+/// One logical clock owner for the CPU and native independent executors.
+/// Taking this value is observational; only admitted work commits it.
+pub(crate) struct IndependentClockReservation {
+    first: u32,
+    count: usize,
+}
+
+impl IndependentClockReservation {
+    pub(crate) fn at(&self, index: usize) -> u32 {
+        assert!(index < self.count);
+        self.first.wrapping_add(index as u32)
+    }
+}
+
+impl IsfGpuRuntime {
+    pub(crate) fn reserve_independent_clocks(&self, count: usize) -> IndependentClockReservation {
+        assert!((1..=3).contains(&count));
+        IndependentClockReservation {
+            first: self.frame_index,
+            count,
+        }
+    }
+
+    pub(crate) fn commit_independent_clocks(&mut self, clocks: IndependentClockReservation) {
+        assert_eq!(
+            self.frame_index, clocks.first,
+            "a logical chain cannot be committed twice"
+        );
+        self.frame_index = clocks.first.wrapping_add(clocks.count as u32);
     }
 }
 
