@@ -1,0 +1,833 @@
+//! Pure planning/fake-port tests plus a separately labelled real-adapter oracle.
+use super::*;
+use crate::native_gpu_contract::{FrozenChainClocks, LayerOrigin};
+use crate::{CompositionPlan, VideoFrame};
+use protocol::{
+    Transform2D, VideoBlendMode, VideoColorAdjust, VideoFxAdjust, VideoRenderInputId,
+    VideoRenderInputKey, VideoSourceKind, VideoSourceSummary,
+};
+use std::sync::{mpsc, Arc};
+use wgpu::util::DeviceExt;
+
+fn context() -> GpuContextId {
+    GpuContextId {
+        owner_id: 7,
+        device_generation: 3,
+    }
+}
+fn frame() -> NativeFrameId {
+    NativeFrameId {
+        output_id: 1,
+        project_epoch: 2,
+        request_sequence: 9,
+        geometry_generation: 4,
+    }
+}
+fn identity(id: u64, extent: (u32, u32)) -> LayerResultIdentity {
+    LayerResultIdentity {
+        context: context(),
+        frame: frame(),
+        entry: HistoryEntryId {
+            input: VideoRenderInputKey {
+                project_render_epoch: 2,
+                input_id: VideoRenderInputId(id),
+            },
+            queue_epoch: 5,
+            sequence: 11,
+        },
+        layer_id: id as _,
+        source_generation: 8,
+        content_sequence: 21,
+        pts_ms: 33,
+        duration_ms: 33,
+        width: extent.0,
+        height: extent.1,
+        format: VideoPixelFormat::Rgba8,
+        origin: LayerOrigin::Executed(FrozenChainClocks {
+            frame_index: 3,
+            time_seconds_bits: 0.033f32.to_bits(),
+            time_delta_seconds_bits: 0.033f32.to_bits(),
+            date_bits: [0; 4],
+        }),
+    }
+}
+fn layer(
+    id: u64,
+    mode: VideoBlendMode,
+    opacity: f32,
+    transform: Transform2D,
+) -> CompositionLayerPlan {
+    CompositionLayerPlan {
+        layer_id: id as _,
+        label: format!("layer {id}"),
+        source: VideoSourceSummary {
+            kind: VideoSourceKind::File,
+            path: Some("fixture.mov".into()),
+            name: None,
+            codec: None,
+            metadata: None,
+        },
+        blend_mode: mode,
+        opacity,
+        position_ms: 0,
+        transform,
+        color: VideoColorAdjust::default(),
+        fx: VideoFxAdjust::default(),
+    }
+}
+fn plan(
+    plans: &[CompositionLayerPlan],
+    identities: &[LayerResultIdentity],
+    kinds: &[SelectedTextureKind],
+    extent: (u32, u32),
+    clear: [u8; 4],
+) -> Result<NativeCompositionPlan, CompositionPlanFailure> {
+    let layers = plans
+        .iter()
+        .zip(identities)
+        .zip(kinds)
+        .map(|((plan, identity), kind)| NativeCompositionLayer {
+            plan,
+            identity: *identity,
+            selected_entry: identity.entry,
+            kind: *kind,
+        })
+        .collect::<Vec<_>>();
+    NativeCompositionPlan::preflight(
+        context(),
+        frame(),
+        extent,
+        clear,
+        &layers,
+        16384,
+        128 * 1024 * 1024,
+    )
+}
+
+#[test]
+fn pure_preflight_checks_identity_before_encoding_and_distinguishes_decline() {
+    let size = (16, 8);
+    let plans = [layer(
+        1,
+        VideoBlendMode::Normal,
+        1.0,
+        Transform2D::default(),
+    )];
+    let original = identity(1, size);
+    for mutate in [
+        |id: &mut LayerResultIdentity| id.context.device_generation += 1,
+        |id: &mut LayerResultIdentity| id.frame.output_id += 1,
+        |id: &mut LayerResultIdentity| id.frame.project_epoch += 1,
+        |id: &mut LayerResultIdentity| id.frame.geometry_generation += 1,
+        |id: &mut LayerResultIdentity| id.frame.request_sequence -= 1,
+        |id: &mut LayerResultIdentity| id.entry.input.project_render_epoch += 1,
+        |id: &mut LayerResultIdentity| id.layer_id += 1,
+    ] {
+        let mut id = original;
+        mutate(&mut id);
+        assert!(matches!(
+            plan(
+                &plans,
+                &[id],
+                &[SelectedTextureKind::InThisTransaction],
+                size,
+                [0; 4]
+            ),
+            Err(CompositionPlanFailure::Fault(NativeGpuFault {
+                kind: NativeGpuFaultKind::IdentityMismatch,
+                ..
+            }))
+        ));
+    }
+    let mut historical = original;
+    historical.frame.request_sequence -= 1;
+    assert!(plan(
+        &plans,
+        &[historical],
+        &[SelectedTextureKind::Validated],
+        size,
+        [0; 4]
+    )
+    .is_ok());
+    let layer_input = [NativeCompositionLayer {
+        plan: &plans[0],
+        selected_entry: HistoryEntryId {
+            sequence: original.entry.sequence + 1,
+            ..original.entry
+        },
+        identity: original,
+        kind: SelectedTextureKind::Validated,
+    }];
+    assert!(matches!(
+        NativeCompositionPlan::preflight(
+            context(),
+            frame(),
+            size,
+            [0; 4],
+            &layer_input,
+            16384,
+            1024
+        ),
+        Err(CompositionPlanFailure::Fault(_))
+    ));
+    let mut wrong = original;
+    wrong.format = VideoPixelFormat::Bgra8;
+    assert_eq!(
+        plan(
+            &plans,
+            &[wrong],
+            &[SelectedTextureKind::Validated],
+            size,
+            [0; 4]
+        )
+        .unwrap_err(),
+        CompositionPlanFailure::Declined(NativeGpuDecline::UnsupportedFormat)
+    );
+    wrong = original;
+    wrong.width -= 1;
+    assert_eq!(
+        plan(
+            &plans,
+            &[wrong],
+            &[SelectedTextureKind::Validated],
+            size,
+            [0; 4]
+        )
+        .unwrap_err(),
+        CompositionPlanFailure::Declined(NativeGpuDecline::UnsupportedExtent)
+    );
+    for opacity in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let mut unsupported = plans.clone();
+        unsupported[0].opacity = opacity;
+        assert_eq!(
+            plan(
+                &unsupported,
+                &[original],
+                &[SelectedTextureKind::Validated],
+                size,
+                [0; 4]
+            )
+            .unwrap_err(),
+            CompositionPlanFailure::Declined(NativeGpuDecline::UnsupportedComposition)
+        );
+    }
+    for transform in [
+        Transform2D {
+            rotation_deg: 1.0,
+            ..Default::default()
+        },
+        Transform2D {
+            x: f32::NAN,
+            ..Default::default()
+        },
+    ] {
+        let mut unsupported = plans.clone();
+        unsupported[0].transform = transform;
+        assert!(matches!(
+            plan(
+                &unsupported,
+                &[original],
+                &[SelectedTextureKind::Validated],
+                size,
+                [0; 4]
+            ),
+            Err(CompositionPlanFailure::Declined(
+                NativeGpuDecline::UnsupportedComposition
+            ))
+        ));
+    }
+    for extent in [(0, 8), (16, 0), (u32::MAX, u32::MAX)] {
+        assert!(matches!(
+            plan(
+                &plans,
+                &[identity(1, extent)],
+                &[SelectedTextureKind::Validated],
+                extent,
+                [0; 4]
+            ),
+            Err(CompositionPlanFailure::Declined(
+                NativeGpuDecline::UnsupportedExtent
+            ))
+        ));
+    }
+    assert!(matches!(
+        plan(&[], &[], &[], size, [0; 4]),
+        Err(CompositionPlanFailure::Declined(
+            NativeGpuDecline::UnsupportedComposition
+        ))
+    ));
+}
+
+#[derive(Default)]
+struct FakePort {
+    calls: Vec<String>,
+    fail_layer: Option<u64>,
+}
+impl CompositionEncodingPort for FakePort {
+    type Encoded = Vec<String>;
+    type Error = &'static str;
+    fn begin(&mut self, plan: &NativeCompositionPlan) -> Result<(), Self::Error> {
+        self.calls.push(format!(
+            "clear {:?} {:?} {} {}",
+            plan.extent, plan.clear_color, plan.context.owner_id, plan.frame.request_sequence
+        ));
+        Ok(())
+    }
+    fn composite_layer(&mut self, layer: &CompositionLayerEncoding) -> Result<(), Self::Error> {
+        if self.fail_layer == Some(layer.identity.layer_id as u64) {
+            return Err("encode failed");
+        }
+        self.calls.push(format!(
+            "layer {} {:?} {}",
+            layer.identity.layer_id, layer.kind, layer.selected_entry.sequence
+        ));
+        Ok(())
+    }
+    fn copy_premapping_to_snapshot(&mut self, bytes: u64) -> Result<(), Self::Error> {
+        self.calls.push(format!("snapshot {bytes}"));
+        Ok(())
+    }
+    fn finish(&mut self) -> Result<Self::Encoded, Self::Error> {
+        Ok(std::mem::take(&mut self.calls))
+    }
+}
+
+#[test]
+fn fake_port_plan_preserves_order_single_snapshot_and_stops_after_failure() {
+    let size = (17, 11);
+    let plans = [
+        layer(2, VideoBlendMode::Normal, 0.8, Transform2D::default()),
+        layer(1, VideoBlendMode::Screen, 0.2, Transform2D::default()),
+    ];
+    let p = plan(
+        &plans,
+        &[identity(2, size), identity(1, size)],
+        &[
+            SelectedTextureKind::Validated,
+            SelectedTextureKind::InThisTransaction,
+        ],
+        size,
+        [5, 6, 7, 8],
+    )
+    .unwrap();
+    assert_eq!(
+        p.allocations,
+        CompositionAllocationPlan {
+            premapping_bytes: 748,
+            readback_bytes: 748,
+            lookup_bytes: 224,
+            uniform_bytes: 64
+        }
+    );
+    assert_eq!(
+        p.layers_bottom_first[0].lookup,
+        crate::axis_aligned_source_lookup(&plans[0].transform, size, size)
+    );
+    let calls = p.encode(&mut FakePort::default()).unwrap();
+    assert_eq!(
+        calls,
+        [
+            "clear (17, 11) [5, 6, 7, 8] 7 9",
+            "layer 2 Validated 11",
+            "layer 1 InThisTransaction 11",
+            "snapshot 748"
+        ]
+    );
+    let mut failed = FakePort {
+        fail_layer: Some(1),
+        ..Default::default()
+    };
+    assert_eq!(p.encode(&mut failed), Err("encode failed"));
+    assert_eq!(failed.calls.len(), 2);
+}
+
+#[test]
+fn texture_shader_validates_with_pinned_naga() {
+    let module = naga::front::wgsl::parse_str(TEXTURE_COMPOSITION_SHADER).unwrap();
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .unwrap();
+}
+
+struct Headless {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    texture_layout: wgpu::BindGroupLayout,
+    texture_pipeline: wgpu::ComputePipeline,
+    clear_pipeline: wgpu::ComputePipeline,
+    buffer_layout: wgpu::BindGroupLayout,
+    buffer_pipeline: wgpu::ComputePipeline,
+}
+
+fn headless() -> Option<Headless> {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        force_fallback_adapter: false,
+        compatible_surface: None,
+    })) {
+        Ok(adapter) => adapter,
+        Err(error) => {
+            eprintln!("SKIPPED real-adapter texture composition oracle: {error}");
+            return None;
+        }
+    };
+    eprintln!(
+        "REAL_ADAPTER texture composition oracle: {:?}",
+        adapter.get_info()
+    );
+    // Adapter absence may skip. An available adapter's request/validation failure
+    // is a failure, never a successful fake GPU result.
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+    let storage = |binding, read_only| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        count: None,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+    };
+    let uniform = wgpu::BindGroupLayoutEntry {
+        binding: 2,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        count: None,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+    };
+    let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("P texture oracle"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                count: None,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+            },
+            storage(1, false),
+            uniform,
+            storage(3, true),
+        ],
+    });
+    let buffer_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("P old buffer oracle"),
+        entries: &[storage(0, true), storage(1, false), uniform],
+    });
+    let make = |bind_layout: &wgpu::BindGroupLayout, source: &str, entry| {
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[bind_layout],
+            push_constant_ranges: &[],
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: None,
+            layout: Some(&layout),
+            module: &shader,
+            entry_point: Some(entry),
+            compilation_options: Default::default(),
+            cache: None,
+        })
+    };
+    let texture_pipeline = make(
+        &texture_layout,
+        TEXTURE_COMPOSITION_SHADER,
+        "composite_layer",
+    );
+    let clear_pipeline = make(&texture_layout, TEXTURE_COMPOSITION_SHADER, "clear_output");
+    let buffer_pipeline = make(
+        &buffer_layout,
+        include_str!("gpu_display_composition.wgsl"),
+        "composite_layer",
+    );
+    Some(Headless {
+        device,
+        queue,
+        texture_layout,
+        texture_pipeline,
+        clear_pipeline,
+        buffer_layout,
+        buffer_pipeline,
+    })
+}
+
+struct RealAdapterPort<'a> {
+    gpu: &'a Headless,
+    encoder: Option<wgpu::CommandEncoder>,
+    groups: &'a [wgpu::BindGroup],
+    plan: &'a NativeCompositionPlan,
+    readback: &'a wgpu::Buffer,
+    output: &'a wgpu::Buffer,
+    texture: bool,
+    next: usize,
+}
+impl CompositionEncodingPort for RealAdapterPort<'_> {
+    type Encoded = wgpu::CommandBuffer;
+    type Error = &'static str;
+    fn begin(&mut self, plan: &NativeCompositionPlan) -> Result<(), Self::Error> {
+        if plan.context != self.plan.context
+            || plan.frame != self.plan.frame
+            || plan.extent != self.plan.extent
+        {
+            return Err("foreign plan");
+        }
+        let encoder = self.encoder.as_mut().unwrap();
+        if self.texture {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            pass.set_pipeline(&self.gpu.clear_pipeline);
+            pass.set_bind_group(0, &self.groups[0], &[]);
+            pass.dispatch_workgroups(plan.extent.0.div_ceil(8), plan.extent.1.div_ceil(8), 1);
+        } else {
+            if plan.clear_color != [0; 4] {
+                return Err("old oracle clears transparent black only");
+            }
+            encoder.clear_buffer(self.output, 0, Some(plan.allocations.premapping_bytes));
+        }
+        Ok(())
+    }
+    fn composite_layer(&mut self, layer: &CompositionLayerEncoding) -> Result<(), Self::Error> {
+        let expected = &self.plan.layers_bottom_first[self.next];
+        if layer.selected_entry != expected.selected_entry
+            || layer.identity != expected.identity
+            || layer.kind != expected.kind
+        {
+            return Err("foreign texture identity");
+        }
+        let mut pass = self
+            .encoder
+            .as_mut()
+            .unwrap()
+            .begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+        pass.set_pipeline(if self.texture {
+            &self.gpu.texture_pipeline
+        } else {
+            &self.gpu.buffer_pipeline
+        });
+        pass.set_bind_group(0, &self.groups[self.next], &[]);
+        pass.dispatch_workgroups(
+            self.plan.extent.0.div_ceil(8),
+            self.plan.extent.1.div_ceil(8),
+            1,
+        );
+        self.next += 1;
+        Ok(())
+    }
+    fn copy_premapping_to_snapshot(&mut self, bytes: u64) -> Result<(), Self::Error> {
+        self.encoder.as_mut().unwrap().copy_buffer_to_buffer(
+            self.output,
+            0,
+            self.readback,
+            0,
+            bytes,
+        );
+        Ok(())
+    }
+    fn finish(&mut self) -> Result<Self::Encoded, Self::Error> {
+        Ok(self.encoder.take().unwrap().finish())
+    }
+}
+
+fn render(
+    gpu: &Headless,
+    plan: &NativeCompositionPlan,
+    frames: &[Arc<VideoFrame>],
+    texture: bool,
+) -> Vec<u8> {
+    let buffer = |bytes: &[u8], usage| {
+        gpu.device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytes,
+                usage,
+            })
+    };
+    let output = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: plan.allocations.premapping_bytes,
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: plan.allocations.readback_bytes,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut groups = Vec::new();
+    for (layer, frame) in plan.layers_bottom_first.iter().zip(frames) {
+        let lookup = layer
+            .lookup
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect::<Vec<_>>();
+        let mut params = layer.params;
+        if texture {
+            let source = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: frame.width,
+                    height: frame.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            gpu.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &source,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &frame.data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(frame.width * 4),
+                    rows_per_image: Some(frame.height),
+                },
+                source.size(),
+            );
+            let view = source.create_view(&wgpu::TextureViewDescriptor::default());
+            let lookup = buffer(&lookup, wgpu::BufferUsages::STORAGE);
+            let params = buffer(&params, wgpu::BufferUsages::UNIFORM);
+            groups.push(gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &gpu.texture_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: output.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: params.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: lookup.as_entire_binding(),
+                    },
+                ],
+            }));
+        } else {
+            let mut source = frame.data.clone();
+            source.extend_from_slice(&lookup);
+            params[24..28].copy_from_slice(&0u32.to_le_bytes());
+            params[28..32].copy_from_slice(&((frame.data.len() / 4) as u32).to_le_bytes());
+            let source = buffer(&source, wgpu::BufferUsages::STORAGE);
+            let params = buffer(&params, wgpu::BufferUsages::UNIFORM);
+            groups.push(gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &gpu.buffer_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: source.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: output.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: params.as_entire_binding(),
+                    },
+                ],
+            }));
+        }
+    }
+    let mut port = RealAdapterPort {
+        gpu,
+        encoder: Some(
+            gpu.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default()),
+        ),
+        groups: &groups,
+        plan,
+        readback: &readback,
+        output: &output,
+        texture,
+        next: 0,
+    };
+    gpu.queue.submit(Some(plan.encode(&mut port).unwrap()));
+    let (sender, receiver) = mpsc::sync_channel(1);
+    readback
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+    gpu.device.poll(wgpu::PollType::wait()).unwrap();
+    receiver.recv().unwrap().unwrap();
+    let data = {
+        let view = readback.slice(..).get_mapped_range();
+        view.to_vec()
+    };
+    readback.unmap();
+    data
+}
+
+fn gradient(id: u64, size: (u32, u32), seed: u8, opaque: bool) -> Arc<VideoFrame> {
+    Arc::new(VideoFrame {
+        layer_id: id as _,
+        width: size.0,
+        height: size.1,
+        pts_ms: 33,
+        duration_ms: 33,
+        format: VideoPixelFormat::Rgba8,
+        data: (0..size.0 * size.1)
+            .flat_map(|index| {
+                let v = (index as u8).wrapping_mul(29).wrapping_add(seed);
+                [v, v.wrapping_mul(3), 255 - v, if opaque { 255 } else { v }]
+            })
+            .collect(),
+    })
+}
+
+#[test]
+fn real_adapter_texture_pixels_match_existing_gpu_and_cpu_oracles() {
+    let Some(gpu) = headless() else { return };
+    let size = (31, 19);
+    let modes = [
+        VideoBlendMode::Normal,
+        VideoBlendMode::Add,
+        VideoBlendMode::Multiply,
+        VideoBlendMode::Screen,
+        VideoBlendMode::Overlay,
+        VideoBlendMode::Subtract,
+        VideoBlendMode::Difference,
+        VideoBlendMode::Lighten,
+        VideoBlendMode::Darken,
+        VideoBlendMode::SoftLight,
+    ];
+    let transforms = [
+        Transform2D::default(),
+        Transform2D {
+            x: 0.07,
+            y: -0.035,
+            scale_x: 0.83,
+            scale_y: 0.6,
+            crop_left: 0.13,
+            crop_bottom: 0.25,
+            ..Default::default()
+        },
+        Transform2D {
+            x: 1.2,
+            ..Default::default()
+        },
+        Transform2D {
+            crop_left: 0.8,
+            crop_right: 0.3,
+            ..Default::default()
+        },
+        Transform2D {
+            scale_x: -0.4,
+            scale_y: 0.0,
+            ..Default::default()
+        },
+    ];
+    let frames = [gradient(1, size, 3, true), gradient(2, size, 41, false)];
+    let mut cases = 0;
+    for mode in modes {
+        for opacity in [-0.5, 0.0, 0.01, 0.37, 0.7, 1.0, 1.5] {
+            for transform in transforms {
+                let layers = [
+                    layer(1, VideoBlendMode::Normal, 1.0, Transform2D::default()),
+                    layer(2, mode.clone(), opacity, transform),
+                ];
+                let plan = plan(
+                    &layers,
+                    &[identity(1, size), identity(2, size)],
+                    &[
+                        SelectedTextureKind::Validated,
+                        SelectedTextureKind::InThisTransaction,
+                    ],
+                    size,
+                    [0; 4],
+                )
+                .unwrap();
+                let actual = render(&gpu, &plan, &frames, true);
+                let old = render(&gpu, &plan, &frames, false);
+                assert_eq!(actual,old,"texture/old GPU mismatch mode={mode:?} opacity={opacity} transform={transform:?}");
+                let cpu_plan = CompositionPlan {
+                    composition_id: 1,
+                    label: "oracle".into(),
+                    output_ids: vec![],
+                    master_opacity: 1.0,
+                    blackout: false,
+                    layers: layers.to_vec(),
+                };
+                let cpu =
+                    crate::composite_frames_rgba8(&cpu_plan, &frames, size.0, size.1).unwrap();
+                // Existing oracle allows one rounding level per blend. The opaque
+                // backdrop is exact, so only the top blend may differ by one level.
+                for (index, (actual, expected)) in actual.iter().zip(&cpu.data).enumerate() {
+                    assert!(actual.abs_diff(*expected)<=1,"CPU mismatch channel={index} GPU={actual} CPU={expected} mode={mode:?} opacity={opacity}");
+                }
+                cases += 1;
+            }
+        }
+    }
+    // No accidental sRGB conversion/premultiplication: opaque source exact.
+    let layers = [layer(
+        1,
+        VideoBlendMode::Normal,
+        1.0,
+        Transform2D::default(),
+    )];
+    let p = plan(
+        &layers,
+        &[identity(1, size)],
+        &[SelectedTextureKind::Validated],
+        size,
+        [0; 4],
+    )
+    .unwrap();
+    assert_eq!(render(&gpu, &p, &frames[..1], true), frames[0].data);
+    // Clear happens on GPU, including nonzero colors; uncovered pixels survive.
+    let layers = [layer(
+        1,
+        VideoBlendMode::Normal,
+        1.0,
+        Transform2D {
+            x: 2.0,
+            ..Default::default()
+        },
+    )];
+    let p = plan(
+        &layers,
+        &[identity(1, size)],
+        &[SelectedTextureKind::Validated],
+        size,
+        [7, 19, 121, 63],
+    )
+    .unwrap();
+    assert_eq!(
+        render(&gpu, &p, &frames[..1], true),
+        [7, 19, 121, 63].repeat((size.0 * size.1) as usize)
+    );
+    eprintln!("REAL_ADAPTER texture composition oracle: {cases} blend/opacity/sampling cases + exact RGBA + GPU clear passed; premapping only, no native/performance proof");
+}
