@@ -1,0 +1,70 @@
+name: FFmpeg LGPL SDK candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ffmpeg-lgpl-sdk
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - name: Check out candidate recipe controls
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Check out exact upstream recipe
+        uses: actions/checkout@v5
+        with:
+          repository: BtbN/FFmpeg-Builds
+          ref: 6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b
+          path: upstream
+          persist-credentials: false
+
+      - name: Apply committed patch and verify source archive
+        run: |
+          set -euo pipefail
+          mkdir -p candidate
+          test "$(git -C upstream rev-parse HEAD)" = 6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b
+          git -C upstream apply --check ../tools/ffmpeg-sdk/0001-lgpl-without-chromaprint-fftw.patch
+          git -C upstream apply ../tools/ffmpeg-sdk/0001-lgpl-without-chromaprint-fftw.patch
+          cp tools/ffmpeg-sdk/rav1e.Cargo.lock upstream/util/rav1e.Cargo.lock
+          git -C upstream diff --check
+          curl --fail --location --retry 3 \
+            https://github.com/FFmpeg/FFmpeg/archive/29e619e767cde9045a75c29bc9a8278ae7b3a98b.tar.gz \
+            -o candidate/ffmpeg-source-29e619e767.tar.gz
+          echo '8e4699bcb6a311772e8f513cc72ce27328891b82a598b82e7cff3dfe580875a0  candidate/ffmpeg-source-29e619e767.tar.gz' | sha256sum --check
+          cp tools/ffmpeg-sdk/pin.json tools/ffmpeg-sdk/*.patch tools/ffmpeg-sdk/rav1e.Cargo.lock candidate/
+          git rev-parse HEAD > candidate/syndocal-commit.txt
+          docker version > candidate/docker-version.txt
+
+      - name: Build patched win64 lgpl-shared 8.1 dependency image and SDK
+        env:
+          QUICKBUILD: '1'
+          NOCLEAN: '1'
+          DOCKER_BUILDKIT: '1'
+        run: |
+          set -euo pipefail
+          bash tools/ffmpeg-sdk/build-candidate.sh 2>&1 | tee candidate/build.log
+
+      - name: Inspect candidate binaries under Wine and hash seven DLLs
+        run: |
+          set -euo pipefail
+          bash tools/ffmpeg-sdk/inspect-candidate.sh 2>&1 | tee candidate/inspection.log
+
+      - name: Retain candidate and failure diagnostics for 90 days
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-lgpl-sdk-${{ github.sha }}-${{ github.run_id }}
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0

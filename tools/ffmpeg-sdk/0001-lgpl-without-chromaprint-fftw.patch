@@ -1,0 +1,208 @@
+--- a/scripts.d/50-chromaprint.sh
++++ /dev/null
+@@ -1,33 +0,0 @@
+-#!/bin/bash
+-
+-SCRIPT_REPO="https://github.com/acoustid/chromaprint.git"
+-SCRIPT_COMMIT="aed8eba2202dd9d7b3b0a56c77904cc805490d72"
+-
+-ffbuild_depends() {
+-    echo base
+-    echo fftw3
+-}
+-
+-ffbuild_enabled() {
+-    (( $(ffbuild_ffver) >= 600 )) || return -1
+-    return 0
+-}
+-
+-ffbuild_dockerbuild() {
+-    mkdir build && cd build
+-
+-    cmake -DCMAKE_TOOLCHAIN_FILE="$FFBUILD_CMAKE_TOOLCHAIN" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$FFBUILD_PREFIX" -DBUILD_SHARED_LIBS=OFF -DBUILD_TOOLS=OFF -DBUILD_TESTS=OFF -DFFT_LIB=fftw3 ..
+-    make -j$(nproc)
+-    make install DESTDIR="$FFBUILD_DESTDIR"
+-
+-    echo "Libs.private: -lfftw3 -lstdc++" >> "$FFBUILD_DESTPREFIX"/lib/pkgconfig/libchromaprint.pc
+-    echo "Cflags.private: -DCHROMAPRINT_NODLL" >> "$FFBUILD_DESTPREFIX"/lib/pkgconfig/libchromaprint.pc
+-}
+-
+-ffbuild_configure() {
+-    echo --enable-chromaprint
+-}
+-
+-ffbuild_unconfigure() {
+-    echo --disable-chromaprint
+-}
+--- a/scripts.d/25-fftw3.sh
++++ /dev/null
+@@ -1,48 +0,0 @@
+-#!/bin/bash
+-
+-SCRIPT_REPO="https://github.com/FFTW/fftw3.git"
+-SCRIPT_COMMIT="93ed4c786934aec9946f8dda4b4e3eb08f8be41c"
+-
+-ffbuild_enabled() {
+-    return 0
+-}
+-
+-ffbuild_dockerbuild() {
+-    sed -i 's/-libs nums/-use-ocamlfind -package num/' genfft/Makefile.am
+-
+-    local myconf=(
+-        --prefix="$FFBUILD_PREFIX"
+-        --enable-maintainer-mode
+-        --disable-shared
+-        --enable-static
+-        --disable-fortran
+-        --disable-doc
+-        --with-our-malloc
+-        --enable-threads
+-        --with-combined-threads
+-        --with-incoming-stack-boundary=2
+-    )
+-
+-    if [[ $TARGET != *arm64 ]]; then
+-        myconf+=(
+-            --enable-sse2
+-            --enable-avx
+-            --enable-avx2
+-        )
+-    fi
+-
+-    if [[ $TARGET == win* || $TARGET == linux* ]]; then
+-        myconf+=(
+-            --host="$FFBUILD_TOOLCHAIN"
+-        )
+-    else
+-        echo "Unknown target"
+-        return -1
+-    fi
+-
+-    sed -i 's/windows.h/process.h/' configure.ac
+-
+-    ./bootstrap.sh "${myconf[@]}"
+-    make -j$(nproc)
+-    make install DESTDIR="$FFBUILD_DESTDIR"
+-}
+--- a/scripts.d/zz-final.sh
++++ b/scripts.d/zz-final.sh
+@@ -21,7 +21,6 @@
+     echo amf
+     echo aom
+     echo avisynth
+-    echo chromaprint
+     echo dav1d
+     echo davs2
+     echo dvd
+--- a/build.sh
++++ b/build.sh
+@@ -37,14 +37,16 @@
+     cd /ffbuild
+     rm -rf ffmpeg prefix
+ 
+-    git clone --filter=blob:none --branch='$GIT_BRANCH' '$FFMPEG_REPO' ffmpeg
++    git clone --filter=blob:none --no-checkout '$FFMPEG_REPO' ffmpeg
+     cd ffmpeg
++    git checkout --detach 29e619e767cde9045a75c29bc9a8278ae7b3a98b
++    test "\$(git rev-parse HEAD)" = 29e619e767cde9045a75c29bc9a8278ae7b3a98b
+ 
+     ./configure --prefix=/ffbuild/prefix --pkg-config-flags="--static" \$FFBUILD_TARGET_FLAGS \$FF_CONFIGURE \
+         --extra-cflags="\$FF_CFLAGS" --extra-cxxflags="\$FF_CXXFLAGS" --extra-libs="\$FF_LIBS" \
+         --extra-ldflags="\$FF_LDFLAGS" --extra-ldexeflags="\$FF_LDEXEFLAGS"'$RPATH_LDEXEFLAGS' \
+         --cc="\$CC" --cxx="\$CXX" --ar="\$AR" --ranlib="\$RANLIB" --nm="\$NM" \
+-        --extra-version="\$(date +%Y%m%d)" || { cat ffbuild/config.log; exit 1; }
++        --extra-version="\$(date -u -d @1790726400 +%Y%m%d)" || { cat ffbuild/config.log; exit 1; }
+     make -j\$(nproc) V=1
+     make install install-doc
+ EOF
+@@ -80,7 +82,7 @@
+ fi
+ cd -
+ 
+-rm -rf ffbuild
++# Keep configure/link logs and final dependency locks for the candidate receipt.
+ 
+ if [[ -n "$GITHUB_ACTIONS" ]]; then
+     echo "build_name=${BUILD_NAME}" >> "$GITHUB_OUTPUT"
+--- a/generate.sh
++++ b/generate.sh
+@@ -134,7 +134,7 @@
+ export TODF="Dockerfile"
+ 
+ BASELAYER="base-layer"
+-to_df "FROM ${REGISTRY}/${REPO}/base-${TARGET}:latest${DOCKER_TAG_SUFFIX:-} AS ${BASELAYER}"
++to_df "FROM ghcr.io/btbn/ffmpeg-builds/base-win64@sha256:8a3d189e5b615c89e1a9fe2be705fa17173d8f6ea0a955b25c7c28041cde36c7 AS ${BASELAYER}"
+ to_df "ENV TARGET=$TARGET VARIANT=$VARIANT REPO=$REPO ADDINS_STR=$ADDINS_STR FFVER=$(ffbuild_ffver)"
+ to_df "COPY --link util/run_stage.sh /usr/bin/run_stage"
+ 
+--- a/download.sh
++++ b/download.sh
+@@ -1,7 +1,9 @@
+ #!/bin/bash
+ set -xe
+ cd "$(dirname "$0")"
+-source util/vars.sh dl only
++source util/vars.sh "$@"
++source "variants/${TARGET}-${VARIANT}.sh"
++for addin in "${ADDINS[@]}"; do source "addins/${addin}.sh"; done
+ 
+ if docker info -f "{{println .SecurityOptions}}" | grep rootless >/dev/null 2>&1; then
+     UIDARGS=()
+@@ -17,6 +19,7 @@
+ mkdir -p "${PWD}"/.cache/downloads
+ 
+ for STAGE in scripts.d/*.sh scripts.d/*/*.sh; do
++	if ! (source "$STAGE"; ffbuild_enabled); then continue; fi
+ 	STAGENAME="$(basename "$STAGE" | sed 's/.sh$//')"
+ 
+ 	cat <<-EOF >"${DL_SCRIPT_DIR}/${STAGENAME}.sh"
+@@ -59,5 +62,5 @@
+ 	EOF
+ done
+ 
+-docker run -i $TTY_ARG --rm "${UIDARGS[@]}" -v "${DL_SCRIPT_DIR}":/stages -v "${PWD}/.cache/downloads":/dldir -v "${PWD}/scripts.d":/scripts.d -v "${PWD}/util/dl_functions.sh":/dl_functions.sh "${REGISTRY}/${REPO}/base:latest${DOCKER_TAG_SUFFIX:-}" \
++docker run -i $TTY_ARG --rm "${UIDARGS[@]}" -v "${DL_SCRIPT_DIR}":/stages -v "${PWD}/.cache/downloads":/dldir -v "${PWD}/scripts.d":/scripts.d -v "${PWD}/util/dl_functions.sh":/dl_functions.sh "ghcr.io/btbn/ffmpeg-builds/base@sha256:91eaaaf32f3f98464e99faf1062fab8ab99a23d0b499c72b51a02ec9137b06a0" \
+ 	bash -c 'set -xe && for STAGE in /stages/*.sh; do bash $STAGE; done'
+--- a/makeimage.sh
++++ b/makeimage.sh
+@@ -67,7 +67,7 @@
+     bake_images base
+ fi
+ 
+-./download.sh
++./download.sh "$TARGET" "$VARIANT" "${ADDINS[@]}"
+ ./generate.sh "$TARGET" "$VARIANT" "${ADDINS[@]}"
+ 
+ bake_images "${BAKE_TARGETS[@]}"
+--- a/scripts.d/50-rav1e.sh
++++ b/scripts.d/50-rav1e.sh
+@@ -23,7 +23,9 @@
+     unset PKG_CONFIG_LIBDIR
+ 
+     # The pinned version is broken, and upstream does not react
+-    cargo update cc
++    cp /rav1e.Cargo.lock Cargo.lock
++    mkdir -p "${FFBUILD_DESTPREFIX}/share/syndocal-source-locks"
++    cp Cargo.lock "${FFBUILD_DESTPREFIX}/share/syndocal-source-locks/rav1e-Cargo.lock"
+ 
+     export "AR_${FFBUILD_RUST_TARGET//-/_}"="${AR}"
+     export "RANLIB_${FFBUILD_RUST_TARGET//-/_}"="${RANLIB}"
+@@ -37,7 +39,7 @@
+     export "LDFLAGS_${FFBUILD_RUST_TARGET//-/_}"="${LDFLAGS}"
+     unset AR RANLIB NM CC CXX LD CFLAGS CXXFLAGS LDFLAGS
+ 
+-    cargo cinstall -v "${myconf[@]}"
++    cargo cinstall --locked -v "${myconf[@]}"
+ 
+     chmod 644 "${FFBUILD_DESTPREFIX}"/lib/*rav1e*
+ }
+@@ -49,3 +51,8 @@
+ ffbuild_unconfigure() {
+     echo --disable-librav1e
+ }
++
++# Overlay the reviewed complete lock before run_stage removes its source tree.
++ffbuild_dockerstage() {
++    to_df "RUN --mount=src=${SELF},dst=/stage.sh --mount=src=${SELFCACHE},dst=/cache.tar.xz --mount=src=util/rav1e.Cargo.lock,dst=/rav1e.Cargo.lock run_stage /stage.sh"
++}
