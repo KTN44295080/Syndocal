@@ -73,6 +73,12 @@ impl NativeSnapshotGpu {
         &self.premapping
     }
 
+    /// The strong owner the single mapping/present submission retains in G's
+    /// registry, so the premapping source outlives that submission.
+    pub(crate) fn premapping_owner(&self) -> &Arc<NativeChargedBuffer> {
+        &self.premapping
+    }
+
     pub(crate) fn cpu_capacity(&self) -> u64 {
         self.cpu_charge.capacity()
     }

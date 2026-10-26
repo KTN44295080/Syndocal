@@ -215,18 +215,21 @@ pub(crate) fn create_frame_texture(
     (texture, view)
 }
 
-pub(crate) fn create_mapping_mask_texture(
+/// Side of the output mapping's bitmap mask texture (`gpu_output_mapping.wgsl`).
+pub(crate) const MAPPING_MASK_DIMENSION: u32 = 16;
+/// Row pitch of [`mapping_mask_texture_bytes`], the texture-copy alignment.
+pub(crate) const MAPPING_MASK_PADDED_BYTES_PER_ROW: u32 = 256;
+
+/// The unwritten 16x16 RGBA8 bitmap mask texture of the output mapping pass.
+pub(crate) fn create_blank_mapping_mask_texture(
     device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    mapping: &VideoOutputMapping,
     label: &'static str,
 ) -> wgpu::Texture {
-    const DIMENSION: u32 = 16;
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
+    device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d {
-            width: DIMENSION,
-            height: DIMENSION,
+            width: MAPPING_MASK_DIMENSION,
+            height: MAPPING_MASK_DIMENSION,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -235,18 +238,25 @@ pub(crate) fn create_mapping_mask_texture(
         format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
-    });
+    })
+}
+
+pub(crate) fn create_mapping_mask_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    mapping: &VideoOutputMapping,
+    label: &'static str,
+) -> wgpu::Texture {
+    let texture = create_blank_mapping_mask_texture(device, label);
     write_mapping_mask_texture(queue, &texture, mapping);
     texture
 }
 
-pub(crate) fn write_mapping_mask_texture(
-    queue: &wgpu::Queue,
-    texture: &wgpu::Texture,
-    mapping: &VideoOutputMapping,
-) {
-    const DIMENSION: usize = 16;
-    const PADDED_BYTES_PER_ROW: usize = 256;
+/// The bitmap mask texture's padded RGBA8 rows: the one source for the queue
+/// write below and for the staged copy on the shared native device.
+pub(crate) fn mapping_mask_texture_bytes(mapping: &VideoOutputMapping) -> Vec<u8> {
+    const DIMENSION: usize = MAPPING_MASK_DIMENSION as usize;
+    const PADDED_BYTES_PER_ROW: usize = MAPPING_MASK_PADDED_BYTES_PER_ROW as usize;
     let enabled = mapping.bitmap_mask_width > 0 && mapping.bitmap_mask_height > 0;
     let mut data = vec![255_u8; PADDED_BYTES_PER_ROW * DIMENSION];
     for y in 0..DIMENSION {
@@ -260,6 +270,15 @@ pub(crate) fn write_mapping_mask_texture(
             data[offset..offset + 4].copy_from_slice(&[luma, luma, luma, 255]);
         }
     }
+    data
+}
+
+pub(crate) fn write_mapping_mask_texture(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    mapping: &VideoOutputMapping,
+) {
+    let data = mapping_mask_texture_bytes(mapping);
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
             texture,
@@ -270,12 +289,12 @@ pub(crate) fn write_mapping_mask_texture(
         &data,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(PADDED_BYTES_PER_ROW as u32),
-            rows_per_image: Some(DIMENSION as u32),
+            bytes_per_row: Some(MAPPING_MASK_PADDED_BYTES_PER_ROW),
+            rows_per_image: Some(MAPPING_MASK_DIMENSION),
         },
         wgpu::Extent3d {
-            width: DIMENSION as u32,
-            height: DIMENSION as u32,
+            width: MAPPING_MASK_DIMENSION,
+            height: MAPPING_MASK_DIMENSION,
             depth_or_array_layers: 1,
         },
     );
@@ -309,7 +328,36 @@ pub(crate) fn write_frame_texture(
 }
 
 pub(crate) fn create_gpu_composite_pipelines(device: &wgpu::Device) -> GpuCompositePipelines {
-    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+    let bind_group_layout = create_compositor_bind_group_layout(device);
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Syndocal video GPU compositor pipeline layout"),
+        bind_group_layouts: &[&bind_group_layout],
+        push_constant_ranges: &[],
+    });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Syndocal video GPU compositor shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("gpu_compositor.wgsl").into()),
+    });
+    let composite = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Syndocal video GPU compositor pipeline"),
+        layout: Some(&pipeline_layout),
+        module: &shader,
+        entry_point: Some("composite_layer"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let output_mapping = create_output_mapping_pipeline(device, &pipeline_layout);
+    GpuCompositePipelines {
+        bind_group_layout,
+        composite,
+        output_mapping,
+    }
+}
+
+/// Bindings shared by the compositor and the output mapping pass: packed
+/// source, packed output, params uniform and the bitmap mask texture.
+pub(crate) fn create_compositor_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Syndocal video GPU compositor bind group layout"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
@@ -353,41 +401,27 @@ pub(crate) fn create_gpu_composite_pipelines(device: &wgpu::Device) -> GpuCompos
                 count: None,
             },
         ],
-    });
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Syndocal video GPU compositor pipeline layout"),
-        bind_group_layouts: &[&bind_group_layout],
-        push_constant_ranges: &[],
-    });
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Syndocal video GPU compositor shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("gpu_compositor.wgsl").into()),
-    });
-    let composite = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Syndocal video GPU compositor pipeline"),
-        layout: Some(&pipeline_layout),
-        module: &shader,
-        entry_point: Some("composite_layer"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
+    })
+}
+
+/// The single output mapping pass (`gpu_output_mapping.wgsl`) over a pipeline
+/// layout made from [`create_compositor_bind_group_layout`].
+pub(crate) fn create_output_mapping_pipeline(
+    device: &wgpu::Device,
+    pipeline_layout: &wgpu::PipelineLayout,
+) -> wgpu::ComputePipeline {
     let output_mapping_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Syndocal video GPU output mapping shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("gpu_output_mapping.wgsl").into()),
     });
-    let output_mapping = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("Syndocal video GPU output mapping pipeline"),
-        layout: Some(&pipeline_layout),
+        layout: Some(pipeline_layout),
         module: &output_mapping_shader,
         entry_point: Some("map_output"),
         compilation_options: Default::default(),
         cache: None,
-    });
-    GpuCompositePipelines {
-        bind_group_layout,
-        composite,
-        output_mapping,
-    }
+    })
 }
 
 impl GpuCompositor {

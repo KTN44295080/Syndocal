@@ -519,6 +519,10 @@ impl NativeChargedBuffer {
     pub(crate) fn allocation_id(&self) -> GpuAllocationId {
         self.charge.id()
     }
+
+    pub(crate) fn capacity(&self) -> u64 {
+        self.charge.capacity()
+    }
 }
 
 /// Submitted encoding owners only; never completion or pixel evidence.

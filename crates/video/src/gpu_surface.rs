@@ -823,6 +823,49 @@ fn create_buffer_output_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGr
     })
 }
 
+/// The full-screen pass that draws a packed RGBA8 buffer (`gpu_surface_buffer.wgsl`)
+/// into a target of `format`; the one blit for every buffer-output presenter.
+fn create_buffer_output_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Syndocal native GPU buffer output pipeline layout"),
+        bind_group_layouts: &[layout],
+        push_constant_ranges: &[],
+    });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Syndocal native GPU buffer output shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("gpu_surface_buffer.wgsl").into()),
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Syndocal native GPU buffer output pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("fullscreen_vertex"),
+            buffers: &[],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("frame_fragment"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: Default::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
 fn grown_buffer_capacity(current: u64, required: u64) -> u64 {
     const ALIGNMENT: u64 = 256;
     let grown = if current == 0 {
@@ -956,41 +999,8 @@ impl GpuSurfacePresenter {
         let composite_pipelines = create_gpu_composite_pipelines(&device);
         let composition_pipeline = create_gpu_composition_pipeline(&device);
         let buffer_bind_group_layout = create_buffer_output_bind_group_layout(&device);
-        let buffer_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Syndocal native GPU buffer output pipeline layout"),
-                bind_group_layouts: &[&buffer_bind_group_layout],
-                push_constant_ranges: &[],
-            });
-        let buffer_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Syndocal native GPU buffer output shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("gpu_surface_buffer.wgsl").into()),
-        });
-        let buffer_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Syndocal native GPU buffer output pipeline"),
-            layout: Some(&buffer_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &buffer_shader,
-                entry_point: Some("fullscreen_vertex"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &buffer_shader,
-                entry_point: Some("frame_fragment"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview: None,
-            cache: None,
-        });
+        let buffer_pipeline =
+            create_buffer_output_pipeline(&device, &buffer_bind_group_layout, config.format);
         Ok(Self {
             surface,
             device,
@@ -1830,6 +1840,12 @@ fn dimensions_uniform(width: u32, height: u32) -> [u8; 16] {
     bytes[4..8].copy_from_slice(&height.to_le_bytes());
     bytes
 }
+
+/// C4 prerequisite: the native presenter on G's shared context. Test-gated
+/// with every shared-context module; not routed in production (I enables it).
+#[cfg(test)]
+#[path = "gpu_surface_native.rs"]
+pub(crate) mod native;
 
 #[cfg(test)]
 #[path = "gpu_surface_tests.rs"]
