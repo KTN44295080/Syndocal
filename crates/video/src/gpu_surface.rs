@@ -20,6 +20,79 @@ use crate::{
     VideoOutputGpuSupport, VideoOutputPresentationContract,
 };
 
+/// Creation-side surface for the shared native GPU path (INTERFACE-01 §3.1).
+/// It has no configured extent, acquire or present operation, so it cannot be
+/// mistaken for a Configured presenter. The safe wgpu constructor retains the
+/// supplied `Arc<W>` inside the surface: the window outlives every use of its
+/// handles, including the first-frame thread to worker hand-off.
+///
+/// The shared-context modules are still registered only in test builds (C0b),
+/// so this C1 consumer of G's `SurfaceAdapterTarget`/`create_for_surface` is
+/// compiled and type-checked but not reachable until I joins the native
+/// first-frame bootstrap. Existing presenter construction is unchanged.
+#[cfg(test)]
+#[expect(
+    dead_code,
+    reason = "C1 surface bootstrap consumer; I enables it with the native first-frame route"
+)]
+pub(crate) struct UnconfiguredNativeSurface {
+    instance: Arc<wgpu::Instance>,
+    surface: wgpu::Surface<'static>,
+}
+
+#[cfg(test)]
+#[expect(
+    dead_code,
+    reason = "C1 surface bootstrap consumer; I enables it with the native first-frame route"
+)]
+impl UnconfiguredNativeSurface {
+    /// The surface must come from the same instance as G's factory; G rejects
+    /// a target from any other instance before adapter selection.
+    pub(crate) fn new<W>(
+        instance: &Arc<wgpu::Instance>,
+        window: Arc<W>,
+    ) -> Result<Self, crate::native_gpu_context::ContextCreateError>
+    where
+        W: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static,
+    {
+        let surface = instance.create_surface(window).map_err(|error| {
+            crate::native_gpu_context::ContextCreateError::Surface(error.to_string())
+        })?;
+        Ok(Self {
+            instance: Arc::clone(instance),
+            surface,
+        })
+    }
+
+    pub(crate) fn adapter_target(&self) -> crate::native_gpu_context::SurfaceAdapterTarget<'_> {
+        crate::native_gpu_context::SurfaceAdapterTarget {
+            instance: &self.instance,
+            surface: &self.surface,
+        }
+    }
+
+    /// Select the surface-compatible adapter and create the one shared owner
+    /// before any ISF runtime exists or the surface is configured. The caller
+    /// keeps the pair together through first-frame admission and moves both to
+    /// the worker; no standalone device is created here.
+    pub(crate) fn create_with_owner<W>(
+        factory: &crate::native_gpu_context::NativeGpuFactory,
+        window: Arc<W>,
+        owner_id: u64,
+        requirements: crate::native_gpu_context::NativeGpuRequirements,
+    ) -> Result<
+        (Self, crate::native_gpu_context::NativeGpuOwner),
+        crate::native_gpu_context::ContextCreateError,
+    >
+    where
+        W: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static,
+    {
+        let surface = Self::new(factory.instance(), window)?;
+        let owner = factory.create_for_surface(surface.adapter_target(), owner_id, requirements)?;
+        Ok((surface, owner))
+    }
+}
+
 const HARD_BLACKOUT_CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 0.0,
     g: 0.0,

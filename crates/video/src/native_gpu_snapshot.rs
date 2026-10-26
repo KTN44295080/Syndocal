@@ -5,16 +5,30 @@
 //! real G adapter must drive completion/scopes through the shared broker. Mock
 //! phase receipts below are not GPU proof. I must additionally validate the ISF
 //! receipt before committing a completed snapshot or constructing its Ready.
+//!
+//! `NativeSnapshotMap` is the shared-context port: it owns the readback that
+//! P's composition phase actually copied into and G's `NativeReadbackMap`
+//! guard. Its only receipt path is P's resolved phase from G's completed
+//! transaction plus a successful map callback; device polling stays in the
+//! G owner. Pixels are never supplied by a caller.
 
+use std::sync::Arc;
+
+use crate::native_gpu_budget::AllocationCharge;
+use crate::native_gpu_composition::{EncodedPremappingSnapshot, NativeChargedBuffer};
+use crate::native_gpu_context::{NativeGpuOwner, PendingPhaseReceipt, ResolvedGpuTransaction};
 use crate::native_gpu_contract::{
-    CacheCommitDescriptor, CacheCommitReceipt, CompletionProgress, CpuSnapshotCommit, GpuPhase,
-    NativeGpuFault, NativeGpuFaultKind, SnapshotCommitRejection, SnapshotIdentity,
+    CacheCommitDescriptor, CacheCommitReceipt, CachePublicationFence, CompletionProgress,
+    CpuSnapshotCommit, GpuOwnerState, GpuPhase, NativeGpuFault, NativeGpuFaultKind, RetirementId,
+    SnapshotCommitRejection, SnapshotIdentity,
 };
+use crate::native_gpu_result::NativeReadbackMap;
 use crate::{VideoFrame, VideoPixelFormat, VideoRenderCancellation};
 
 /// Affine evidence that the composition/snapshot phase and map have completed.
-/// Production construction must be added at the G/P broker integration seam;
-/// a matching descriptor by itself is never sufficient evidence.
+/// The production constructor is `NativeSnapshotMap::poll_phase_and_map`,
+/// which requires G's resolved P phase and a completed real map; a matching
+/// descriptor by itself is never sufficient evidence.
 #[derive(Debug)]
 pub(crate) struct SnapshotPhaseReceipt {
     identity: SnapshotIdentity,
@@ -38,7 +52,170 @@ pub(crate) trait SnapshotMapPort {
     fn poll_phase_and_map(&mut self) -> CompletionProgress<SnapshotPhaseReceipt, NativeGpuFault>;
     fn mapped_view(&mut self) -> Result<Self::View<'_>, NativeGpuFault>;
     fn unmap(&mut self) -> Result<(), NativeGpuFault>;
+
+    /// A real adapter checks the owned packed Vec against its reserved charge.
+    fn validate_packed_capacity(&self, _capacity: usize) -> Result<(), NativeGpuFault> {
+        Ok(())
+    }
 }
+
+/// GPU side of a shared snapshot: the premapping target kept for the later
+/// single mapping pass, plus the charge of the owned packed CPU copy. I's
+/// cache adapter must keep this with LastValid so that charge is not refunded
+/// while the moved pixels are alive.
+pub(crate) struct NativeSnapshotGpu {
+    premapping: Arc<NativeChargedBuffer>,
+    cpu_charge: AllocationCharge,
+}
+
+impl NativeSnapshotGpu {
+    pub(crate) fn premapping(&self) -> &NativeChargedBuffer {
+        &self.premapping
+    }
+
+    pub(crate) fn cpu_capacity(&self) -> u64 {
+        self.cpu_charge.capacity()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SharedPhase {
+    Unresolved,
+    Valid,
+    Terminal,
+}
+
+/// Owns the exact readback P's submitted copy wrote and G's affine map guard.
+/// The map is started only after that submit; a callback merely updates the
+/// guard. A receipt needs the resolved, successful P phase of the same
+/// transaction/submission and then the completed map.
+pub(crate) struct NativeSnapshotMap {
+    readback: Arc<NativeChargedBuffer>,
+    map: NativeReadbackMap,
+    receipt: Option<PendingPhaseReceipt>,
+    transaction: RetirementId,
+    identity: SnapshotIdentity,
+    cpu_capacity: u64,
+    phase: SharedPhase,
+    mapped: bool,
+}
+
+impl NativeSnapshotMap {
+    fn resolve(&mut self, completion: &mut ResolvedGpuTransaction) -> Result<(), NativeGpuFault> {
+        let receipt = match (self.phase, self.receipt.take()) {
+            (SharedPhase::Unresolved, Some(receipt)) => receipt,
+            _ => {
+                self.phase = SharedPhase::Terminal;
+                return Err(fault(
+                    &self.identity,
+                    NativeGpuFaultKind::StateMismatch,
+                    "snapshot phase was already resolved or is terminal",
+                ));
+            }
+        };
+        let result = completion.take_phase(receipt).and_then(|phase| {
+            if phase.transaction() != self.transaction
+                || phase.context() != self.identity.allocation.context
+                || phase.frame() != self.identity.frame
+                || phase.phase() != GpuPhase::CompositionSnapshot
+                || phase.submission() != self.identity.completed_submission
+            {
+                return Err(fault(
+                    &self.identity,
+                    NativeGpuFaultKind::IdentityMismatch,
+                    "resolved phase does not cover the submitted snapshot copy",
+                ));
+            }
+            phase.into_validation()
+        });
+        self.phase = if result.is_ok() {
+            SharedPhase::Valid
+        } else {
+            SharedPhase::Terminal
+        };
+        result
+    }
+}
+
+impl SnapshotMapPort for NativeSnapshotMap {
+    type View<'a> = wgpu::BufferView<'a>;
+
+    fn poll_phase_and_map(&mut self) -> CompletionProgress<SnapshotPhaseReceipt, NativeGpuFault> {
+        match self.phase {
+            SharedPhase::Unresolved => return CompletionProgress::Pending,
+            SharedPhase::Terminal => {
+                return CompletionProgress::Complete(Err(fault(
+                    &self.identity,
+                    NativeGpuFaultKind::StateMismatch,
+                    "terminal native snapshot map",
+                )))
+            }
+            SharedPhase::Valid => {}
+        }
+        match self.map.try_complete() {
+            Ok(None) => CompletionProgress::Pending,
+            Err(message) => {
+                self.phase = SharedPhase::Terminal;
+                CompletionProgress::Complete(Err(fault(
+                    &self.identity,
+                    NativeGpuFaultKind::Map,
+                    &message,
+                )))
+            }
+            Ok(Some(())) => {
+                self.phase = SharedPhase::Terminal;
+                self.mapped = true;
+                CompletionProgress::Complete(Ok(SnapshotPhaseReceipt {
+                    identity: self.identity,
+                }))
+            }
+        }
+    }
+
+    fn mapped_view(&mut self) -> Result<Self::View<'_>, NativeGpuFault> {
+        if !self.mapped {
+            return Err(fault(
+                &self.identity,
+                NativeGpuFaultKind::Map,
+                "snapshot does not own a completed map",
+            ));
+        }
+        Ok(self.readback.buffer().slice(..).get_mapped_range())
+    }
+
+    fn unmap(&mut self) -> Result<(), NativeGpuFault> {
+        if !self.mapped {
+            return Err(fault(
+                &self.identity,
+                NativeGpuFaultKind::StateMismatch,
+                "snapshot map is not owned or was already unmapped",
+            ));
+        }
+        self.map.unmap();
+        self.mapped = false;
+        Ok(())
+    }
+
+    fn validate_packed_capacity(&self, capacity: usize) -> Result<(), NativeGpuFault> {
+        if capacity as u64 > self.cpu_capacity {
+            return Err(fault(
+                &self.identity,
+                NativeGpuFaultKind::SnapshotCopy,
+                "packed snapshot capacity exceeds its reserved CPU charge",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Key/fence mismatch before the map starts; every encoded owner is returned.
+pub(crate) struct NativeSnapshotBeginFailure {
+    pub fault: NativeGpuFault,
+    pub encoded: EncodedPremappingSnapshot,
+}
+
+pub(crate) type SharedPremappingSnapshot =
+    PendingPremappingSnapshot<NativeSnapshotGpu, NativeSnapshotMap>;
 
 /// Metadata and owners from an encoded phase, not a successful result.
 pub(crate) struct SnapshotEncoding<R, M> {
@@ -106,6 +283,107 @@ pub(crate) struct SnapshotCommitFailure<R> {
 pub(crate) struct NativeGpuSnapshotter;
 
 impl NativeGpuSnapshotter {
+    /// Start the single map of P's submitted premapping copy. Must follow the
+    /// composition submit (the encoded value only exists after it). Neither
+    /// waits nor polls; G's owner later drives the device.
+    pub(crate) fn begin_shared(
+        encoded: EncodedPremappingSnapshot,
+        key: crate::VideoOutputLastValidKey,
+        fence: CachePublicationFence,
+        pts_ms: u64,
+        duration_ms: u64,
+    ) -> Result<SharedPremappingSnapshot, NativeSnapshotBeginFailure> {
+        let frame = encoded.frame();
+        let extent = encoded.extent();
+        if key.project_render_epoch != frame.project_epoch
+            || key.output_id != frame.output_id
+            || (key.width, key.height) != extent
+            || fence.request_sequence != frame.request_sequence
+        {
+            return Err(NativeSnapshotBeginFailure {
+                fault: NativeGpuFault {
+                    context: encoded.submission().context,
+                    frame: Some(frame),
+                    phase: GpuPhase::CompositionSnapshot,
+                    kind: NativeGpuFaultKind::IdentityMismatch,
+                    message: "snapshot key/fence does not match the encoded composition".into(),
+                },
+                encoded,
+            });
+        }
+        let parts = encoded.into_parts();
+        let identity = SnapshotIdentity {
+            frame: parts.frame,
+            allocation: parts.output.allocation_id(),
+            completed_submission: parts.receipt.submission(),
+            pts_ms,
+            duration_ms,
+            width: parts.extent.0,
+            height: parts.extent.1,
+            format: VideoPixelFormat::Rgba8,
+        };
+        let cpu_capacity = parts.cpu_charge.capacity();
+        let map = NativeReadbackMap::start(parts.readback.buffer());
+        Ok(Self::begin(SnapshotEncoding {
+            descriptor: CacheCommitDescriptor {
+                key,
+                snapshot: identity,
+                fence,
+            },
+            gpu: NativeSnapshotGpu {
+                premapping: parts.output,
+                cpu_charge: parts.cpu_charge,
+            },
+            mapper: NativeSnapshotMap {
+                cpu_capacity,
+                readback: parts.readback,
+                map,
+                receipt: Some(parts.receipt),
+                transaction: parts.transaction,
+                identity,
+                phase: SharedPhase::Unresolved,
+                mapped: false,
+            },
+            // The premapping target is a packed storage buffer copied whole.
+            readback_row_pitch: u64::from(identity.width) * 4,
+        }))
+    }
+
+    /// Owner-thread poll: G's owner drives device progress (map callbacks
+    /// only update the guard), then the ordinary snapshot policy runs. Stop
+    /// or a retained/lost owner ends the snapshot without any receipt.
+    pub(crate) fn poll_shared(
+        pending: &mut SharedPremappingSnapshot,
+        owner: &mut NativeGpuOwner,
+        current: &CacheCommitDescriptor,
+        cancel: &dyn VideoRenderCancellation,
+    ) -> SnapshotProgress<NativeSnapshotGpu> {
+        if !pending.terminal {
+            let unavailable = match owner.state() {
+                GpuOwnerState::Active => None,
+                GpuOwnerState::Retiring | GpuOwnerState::Reaped => {
+                    pending.terminal = true;
+                    return SnapshotProgress::Cancelled;
+                }
+                GpuOwnerState::DeviceLostRetained => Some(NativeGpuFaultKind::DeviceLost),
+                GpuOwnerState::PoisonedRetained => Some(NativeGpuFaultKind::ScopeDrain),
+            };
+            if let Some(kind) = unavailable {
+                pending.terminal = true;
+                return SnapshotProgress::Failed(fault(
+                    &pending.descriptor.snapshot,
+                    kind,
+                    "shared GPU owner cannot complete a snapshot",
+                ));
+            }
+            if let Err(error) = owner.poll_retirement() {
+                pending.terminal = true;
+                return SnapshotProgress::Failed(error);
+            }
+        }
+        Self::poll(pending, current, cancel)
+    }
+
     pub(crate) fn begin<R, M>(encoded: SnapshotEncoding<R, M>) -> PendingPremappingSnapshot<R, M> {
         PendingPremappingSnapshot {
             descriptor: encoded.descriptor,
@@ -186,7 +464,34 @@ impl NativeGpuSnapshotter {
     }
 }
 
+impl SharedPremappingSnapshot {
+    /// After G resolved the whole transaction, consume only P's phase. ISF's
+    /// distinct receipt stays with its history/publication owner. A foreign,
+    /// repeated or failed phase makes this snapshot terminal (no receipt).
+    pub(crate) fn resolve_shared_phase(
+        &mut self,
+        completion: &mut ResolvedGpuTransaction,
+    ) -> Result<(), NativeGpuFault> {
+        if self.terminal {
+            return Err(fault(
+                &self.descriptor.snapshot,
+                NativeGpuFaultKind::StateMismatch,
+                "terminal snapshot cannot accept a late phase",
+            ));
+        }
+        let result = self.mapper.resolve(completion);
+        if result.is_err() {
+            self.terminal = true;
+        }
+        result
+    }
+}
+
 impl<R, M> PendingPremappingSnapshot<R, M> {
+    pub(crate) fn descriptor(&self) -> &CacheCommitDescriptor {
+        &self.descriptor
+    }
+
     pub(crate) fn into_retirement(self) -> RetiringPremappingSnapshot<R, M> {
         RetiringPremappingSnapshot {
             gpu: self.gpu,
@@ -196,6 +501,10 @@ impl<R, M> PendingPremappingSnapshot<R, M> {
 }
 
 impl<R> CompletedPremappingSnapshot<R> {
+    pub(crate) fn pixels(&self) -> &VideoFrame {
+        &self.pixels
+    }
+
     pub(crate) fn commit<C: CpuSnapshotCommit>(
         self,
         cache: &mut C,
@@ -331,6 +640,7 @@ fn copy_and_unmap<M: SnapshotMapPort>(
     };
     mapper.unmap()?;
     let data = copied?;
+    mapper.validate_packed_capacity(data.capacity())?;
     Ok(VideoFrame {
         layer_id: 0,
         width: identity.width,

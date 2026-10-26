@@ -23,7 +23,7 @@ fn frame() -> NativeFrameId {
         geometry_generation: 4,
     }
 }
-fn identity(id: u64, extent: (u32, u32)) -> LayerResultIdentity {
+pub(crate) fn identity(id: u64, extent: (u32, u32)) -> LayerResultIdentity {
     LayerResultIdentity {
         context: context(),
         frame: frame(),
@@ -51,7 +51,7 @@ fn identity(id: u64, extent: (u32, u32)) -> LayerResultIdentity {
         }),
     }
 }
-fn layer(
+pub(crate) fn layer(
     id: u64,
     mode: VideoBlendMode,
     opacity: f32,
@@ -75,7 +75,7 @@ fn layer(
         fx: VideoFxAdjust::default(),
     }
 }
-fn plan(
+pub(crate) fn plan(
     plans: &[CompositionLayerPlan],
     identities: &[LayerResultIdentity],
     kinds: &[SelectedTextureKind],
@@ -352,7 +352,7 @@ fn texture_shader_validates_with_pinned_naga() {
     .unwrap();
 }
 
-struct Headless {
+pub(crate) struct Headless {
     device: wgpu::Device,
     queue: wgpu::Queue,
     texture_layout: wgpu::BindGroupLayout,
@@ -362,7 +362,7 @@ struct Headless {
     buffer_pipeline: wgpu::ComputePipeline,
 }
 
-fn headless() -> Option<Headless> {
+pub(crate) fn headless() -> Option<Headless> {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
@@ -542,7 +542,7 @@ impl CompositionEncodingPort for RealAdapterPort<'_> {
     }
 }
 
-fn render(
+pub(crate) fn render(
     gpu: &Headless,
     plan: &NativeCompositionPlan,
     frames: &[Arc<VideoFrame>],
@@ -830,4 +830,238 @@ fn real_adapter_texture_pixels_match_existing_gpu_and_cpu_oracles() {
         [7, 19, 121, 63].repeat((size.0 * size.1) as usize)
     );
     eprintln!("REAL_ADAPTER texture composition oracle: {cases} blend/opacity/sampling cases + exact RGBA + GPU clear passed; premapping only, no native/performance proof");
+}
+
+// Shared-context fixtures: G's real headless owner, real ISF candidates and
+// validated leases. These are reused by the snapshot real-adapter tests.
+use crate::isf_native_gpu::tests::{jobs, shader, Fixture, IDENTITY};
+use crate::isf_native_gpu::{NativeBatchAdmission, NativeBatchRestrictions, PreparedNativeLayer};
+use crate::isf_runtime::StackBatch;
+use crate::native_gpu_context::{PendingGpuTransaction, ResolvedGpuTransaction};
+use crate::native_gpu_result::{EncodedIsfBatch, NativeIsfCompletion, ValidatedLayerResult};
+
+/// `count` independent three-stage identity chains (layer ids `4 - count..=3`)
+/// whose inputs are replaced in place, preserving G's planned capacities.
+pub(crate) fn identity_batch(
+    size: (u32, u32),
+    count: usize,
+    pixel: impl Fn(u64, usize) -> [u8; 4],
+) -> StackBatch<PreparedNativeLayer> {
+    let identity = shader(IDENTITY);
+    let mut slots: Vec<Option<PreparedNativeLayer>> = jobs(
+        size.0,
+        size.1,
+        &[identity.clone(), identity.clone(), identity],
+    )
+    .into_iter()
+    .map(Some)
+    .collect();
+    let skip = 3 - count;
+    let mut batch = StackBatch::from_fn(count, |index| {
+        slots[skip + index].take().expect("unique job slot")
+    });
+    for job in batch.iter_mut() {
+        let layer = job.input.layer_id;
+        let input = Arc::get_mut(&mut job.input).expect("fixture owns its input");
+        for (index, rgba) in input.data.chunks_exact_mut(4).enumerate() {
+            rgba.copy_from_slice(&pixel(layer, index));
+        }
+    }
+    batch
+}
+
+/// The identities G's encode will mint (same derivation as G's own fixture).
+/// I currently has no G API for prospective candidate identities; see P50.
+pub(crate) fn predicted_identities(
+    fixture: &Fixture,
+    frame: NativeFrameId,
+    batch: &[PreparedNativeLayer],
+) -> Vec<LayerResultIdentity> {
+    let first = fixture.runtime.native_frame_index();
+    batch
+        .iter()
+        .enumerate()
+        .map(|(index, job)| LayerResultIdentity {
+            context: fixture.owner.context().id(),
+            frame,
+            entry: job.entry,
+            layer_id: job.input.layer_id,
+            source_generation: job.source_generation,
+            content_sequence: job.content_sequence,
+            pts_ms: job.input.pts_ms,
+            duration_ms: job.input.duration_ms,
+            width: job.input.width,
+            height: job.input.height,
+            format: job.input.format,
+            origin: LayerOrigin::Executed(FrozenChainClocks {
+                frame_index: first.wrapping_add(index as u32),
+                time_seconds_bits: (job.input.pts_ms as f32 / 1000.0).to_bits(),
+                time_delta_seconds_bits: (job.input.duration_ms as f32 / 1000.0).to_bits(),
+                date_bits: job.date.map(f32::to_bits),
+            }),
+        })
+        .collect()
+}
+
+pub(crate) struct SharedFrame {
+    pub frame: NativeFrameId,
+    pub isf: EncodedIsfBatch,
+    pub pending: PendingGpuTransaction,
+    pub encoded: Result<EncodedPremappingSnapshot, NativeGpuFault>,
+    /// CPU inputs of the current candidates, bottom-first after history.
+    pub candidate_inputs: Vec<Arc<VideoFrame>>,
+}
+
+/// One frame exactly as INTERFACE-01 §1.1 orders it: a single G/P quote and
+/// reservation, P's split before ISF binds, G's ISF submit, then P's single
+/// composition+snapshot submit, with no host wait or poll in between.
+pub(crate) fn submit_shared_frame(
+    fixture: &mut Fixture,
+    compositor: &NativeGpuCompositor,
+    sequence: u64,
+    batch: StackBatch<PreparedNativeLayer>,
+    history: &[&GpuLayerLease],
+    plans: &[CompositionLayerPlan],
+    swap_candidates: bool,
+) -> SharedFrame {
+    let frame = crate::isf_native_gpu::tests::request(sequence);
+    let predicted = predicted_identities(fixture, frame, &batch);
+    let candidate_inputs = batch.iter().map(|job| Arc::clone(&job.input)).collect();
+    let extent = (batch[0].input.width, batch[0].input.height);
+    let inputs = fixture
+        .runtime
+        .prepare_native_inputs(frame, batch, NativeBatchRestrictions::default())
+        .unwrap();
+    let selected = history
+        .iter()
+        .map(|lease| (*lease.identity(), SelectedTextureKind::Validated))
+        .chain(
+            predicted
+                .into_iter()
+                .map(|identity| (identity, SelectedTextureKind::InThisTransaction)),
+        )
+        .collect::<Vec<_>>();
+    assert_eq!(selected.len(), plans.len());
+    let layers = plans
+        .iter()
+        .zip(&selected)
+        .map(|(plan, (identity, kind))| NativeCompositionLayer {
+            plan,
+            selected_entry: identity.entry,
+            identity: *identity,
+            kind: *kind,
+        })
+        .collect::<Vec<_>>();
+    let limits = fixture.owner.capabilities().limits.clone();
+    let plan = NativeCompositionPlan::preflight(
+        fixture.owner.context().id(),
+        frame,
+        extent,
+        [0; 4],
+        &layers,
+        limits.max_texture_dimension_2d,
+        u64::from(limits.max_storage_buffer_binding_size),
+    )
+    .unwrap();
+    let mut frame_plan = inputs.allocation_plan().unwrap().clone();
+    frame_plan.merge(plan.allocation_plan()).unwrap();
+    for lease in history {
+        frame_plan.add_existing(lease.allocation_id());
+    }
+    let quote = fixture.owner.quote(&frame_plan).unwrap();
+    let admitted = match fixture.runtime.admit_native_batch(inputs, &quote) {
+        NativeBatchAdmission::Accepted(batch) => batch,
+        NativeBatchAdmission::Declined { reason, .. } => {
+            panic!("shared fixture declined: {reason:?}")
+        }
+    };
+    let reservation = fixture.owner.reserve(quote).unwrap();
+    let mut txn = fixture.owner.begin_frame(frame, reservation).unwrap();
+    let composition = compositor.reserve(&mut txn, &plan).unwrap();
+    let isf = fixture
+        .runtime
+        .encode_native_batch(&mut txn, admitted)
+        .unwrap();
+    let mut candidates = isf
+        .candidates
+        .iter()
+        .map(SelectedLayerInput::InThisTransaction)
+        .collect::<Vec<_>>();
+    if swap_candidates {
+        candidates.reverse();
+    }
+    let sources = history
+        .iter()
+        .map(|lease| SelectedLayerInput::Validated(lease))
+        .chain(candidates)
+        .collect::<Vec<_>>();
+    let encoded =
+        compositor.encode_composition_and_snapshot(&mut txn, &plan, &sources, composition);
+    drop(sources);
+    if let Ok(encoded) = &encoded {
+        // ISF submit, then exactly the next submission is P's composition.
+        let isf_submission = isf.pending.submission();
+        assert_eq!(encoded.submission().context, isf_submission.context);
+        assert_eq!(encoded.submission().sequence, isf_submission.sequence + 1);
+        assert_eq!(encoded.frame(), frame);
+    }
+    SharedFrame {
+        frame,
+        isf,
+        pending: txn.finish(),
+        encoded,
+        candidate_inputs,
+    }
+}
+
+pub(crate) fn validate_isf(
+    fixture: &mut Fixture,
+    mut isf: EncodedIsfBatch,
+    resolved: &mut ResolvedGpuTransaction,
+) -> StackBatch<ValidatedLayerResult> {
+    let receipt = isf.pending.take().unwrap();
+    let phase = resolved.take_phase(receipt).unwrap();
+    match fixture
+        .runtime
+        .complete_native_batch(isf, phase, &mut fixture.owner, &|| false)
+    {
+        NativeIsfCompletion::Validated { layers, .. } => layers,
+        _ => panic!("ISF must validate independently of P's composition phase"),
+    }
+}
+
+#[test]
+fn real_shared_composition_rejects_mismatched_selection_before_its_phase() {
+    use crate::isf_native_gpu::{await_transaction, tests::gpu, tests::stop};
+    let mut fixture = gpu();
+    let compositor = NativeGpuCompositor::from_shared(&mut fixture.owner).unwrap();
+    let size = (19, 13);
+    let batch = identity_batch(size, 3, |layer, index| {
+        [layer as u8 * 40, index as u8, 200, 255]
+    });
+    let plans = [
+        layer(1, VideoBlendMode::Normal, 1.0, Transform2D::default()),
+        layer(2, VideoBlendMode::Add, 1.0, Transform2D::default()),
+        layer(3, VideoBlendMode::Lighten, 1.0, Transform2D::default()),
+    ];
+    let shared = submit_shared_frame(&mut fixture, &compositor, 1, batch, &[], &plans, true);
+    let error = shared
+        .encoded
+        .err()
+        .expect("swapped selection must be rejected");
+    assert_eq!(error.kind, NativeGpuFaultKind::IdentityMismatch);
+    assert_eq!(error.phase, GpuPhase::CompositionSnapshot);
+    let mut resolved = await_transaction(&mut fixture.owner, shared.pending, &|| false).unwrap();
+    let layers = validate_isf(&mut fixture, shared.isf, &mut resolved);
+    assert_eq!(
+        layers.len(),
+        3,
+        "ISF history is kept when composition fails"
+    );
+    drop(layers);
+    drop(resolved);
+    fixture.owner.poll_retirement().unwrap();
+    // P's never-spent sub-reservation was refunded with the frame.
+    assert_eq!(fixture.owner.budget_snapshot().managed_bytes(), 0);
+    stop(&mut fixture.owner);
 }

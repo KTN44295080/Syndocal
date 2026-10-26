@@ -1,6 +1,13 @@
 use super::*;
 use crate::{apply_video_output_mapping, video_output_black_frame};
 
+#[test]
+fn unconfigured_shared_surface_and_owner_support_worker_handoff() {
+    fn assert_send_static<T: Send + 'static>() {}
+    assert_send_static::<UnconfiguredNativeSurface>();
+    assert_send_static::<crate::native_gpu_context::NativeGpuOwner>();
+}
+
 fn test_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
