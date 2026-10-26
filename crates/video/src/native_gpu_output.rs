@@ -4,10 +4,10 @@
 
 use protocol::{VideoOutputId, VideoOutputMapping};
 
-#[path = "native_gpu_output_shared.rs"]
-pub(crate) mod shared;
 #[path = "native_gpu_output_cpu.rs"]
 pub(crate) mod cpu;
+#[path = "native_gpu_output_shared.rs"]
+pub(crate) mod shared;
 
 use crate::native_gpu_context::ResolvedGpuPhase;
 use crate::native_gpu_contract::*;
@@ -625,6 +625,10 @@ impl<G> ReadyNativeGpuOutput<G> {
     pub(crate) fn cache_receipt(&self) -> &CacheCommitReceipt {
         &self.receipt
     }
+    /// The exact mapping frozen with this output request, before submission.
+    pub(crate) fn mapping(&self) -> &VideoOutputMapping {
+        &self.request.mapping
+    }
     pub(crate) fn evidence(&self) -> VideoOutputRenderEvidence {
         VideoOutputRenderEvidence {
             project_render_epoch: self.request.frame.project_epoch,
@@ -632,6 +636,22 @@ impl<G> ReadyNativeGpuOutput<G> {
             freshness: VideoOutputRenderFreshness::Fresh,
             error: None,
         }
+    }
+}
+
+impl crate::gpu_surface::native::FrozenPresentation
+    for ReadyNativeGpuOutput<std::sync::Arc<crate::native_gpu_snapshot::NativeSnapshotGpu>>
+{
+    fn cache_receipt(&self) -> &CacheCommitReceipt {
+        ReadyNativeGpuOutput::cache_receipt(self)
+    }
+
+    fn snapshot_gpu(&self) -> &crate::native_gpu_snapshot::NativeSnapshotGpu {
+        self.payload().as_ref()
+    }
+
+    fn mapping(&self) -> &VideoOutputMapping {
+        ReadyNativeGpuOutput::mapping(self)
     }
 }
 
@@ -657,10 +677,19 @@ impl<R> RetiringNativeOutput<R> {
         &mut self,
         driver: &mut D,
     ) -> Result<bool, NativeGpuFault> {
+        self.poll_with(|ticket| driver.poll_retirement(ticket))
+    }
+
+    /// Poll a concrete retained owner after the present sink's broker borrow
+    /// ended. A false result or fault leaves the entire ticket in this owner.
+    pub(crate) fn poll_with(
+        &mut self,
+        poll: impl FnOnce(&mut R) -> Result<bool, NativeGpuFault>,
+    ) -> Result<bool, NativeGpuFault> {
         let Some(ticket) = self.ticket.as_mut() else {
             return Ok(true);
         };
-        if driver.poll_retirement(ticket)? {
+        if poll(ticket)? {
             self.ticket = None;
         }
         Ok(self.is_retired())
@@ -748,6 +777,31 @@ where
     A: NativeOutputAuthority,
     S: NativePresentSink<Ready = ReadyNativeGpuOutput<D::Gpu>, Permit = NativePresentPermit<'a, A>>,
 {
+    present_native_output_with_retirement(
+        ready,
+        |ready| driver.retire_ready(ready),
+        sink,
+        authority,
+        cancel,
+        delivery,
+    )
+}
+
+/// Canonical present policy for an already validated Ready. Retirement only
+/// transfers its whole owner; it need not borrow the GPU broker while P's
+/// consuming sink holds that broker. Poll the returned retirement afterward.
+pub(crate) fn present_native_output_with_retirement<'a, G, R, S, A>(
+    ready: ReadyNativeGpuOutput<G>,
+    mut retire_ready: impl FnMut(ReadyNativeGpuOutput<G>) -> R,
+    sink: &mut S,
+    authority: &'a A,
+    cancel: &'a dyn VideoRenderCancellation,
+    delivery: &mut NativeDeliveryCounter,
+) -> NativePresentation<G, R, S::Receipt>
+where
+    A: NativeOutputAuthority,
+    S: NativePresentSink<Ready = ReadyNativeGpuOutput<G>, Permit = NativePresentPermit<'a, A>>,
+{
     let next = delivery.delivered.checked_add(1);
     let reason = guard(
         &ready.request,
@@ -768,7 +822,7 @@ where
     if let Some(reason) = reason {
         return NativePresentation::Retiring(RetiringNativeOutput::new(
             reason,
-            driver.retire_ready(ready),
+            retire_ready(ready),
         ));
     }
     let frame = ready.request.frame;
@@ -789,7 +843,7 @@ where
             if cancel.is_cancelled() || reason == PresentRejection::Cancelled {
                 return NativePresentation::Retiring(RetiringNativeOutput::new(
                     OutputRejection::Cancelled,
-                    driver.retire_ready(ready),
+                    retire_ready(ready),
                 ));
             }
             if ready.request.frame != frame
@@ -813,7 +867,7 @@ where
                 };
                 return NativePresentation::Retiring(RetiringNativeOutput::new(
                     OutputRejection::Fault(error),
-                    driver.retire_ready(ready),
+                    retire_ready(ready),
                 ));
             }
             if reason == PresentRejection::SurfaceLostOrOutdated && retry_remaining {
@@ -822,7 +876,7 @@ where
             } else {
                 NativePresentation::Retiring(RetiringNativeOutput::new(
                     OutputRejection::Authority(reason),
-                    driver.retire_ready(ready),
+                    retire_ready(ready),
                 ))
             }
         }

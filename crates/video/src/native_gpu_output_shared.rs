@@ -1,10 +1,13 @@
-//! I3 headless join of the real G transaction and P composition/snapshot.
-//! This remains behind native_gpu_output's test gate. Candidate preflight
-//! metadata must come from G's prospective-identity API before production use.
-//! No surface, mapping, display routing, new device, or whole-tick retry lives here.
+//! I-owned join of the real G transaction and P composition/snapshot/present.
+//! This remains behind native_gpu_output's test gate until canonical renderer,
+//! charged history handover and G/P production consumers are joined.
+//! No window operations, new device, or whole-tick retry lives here.
 use std::sync::Arc;
 
 use super::*;
+use crate::gpu_surface::native::{
+    AdmittedPhysicalGeometry, NativePresentTarget, SharedPresentSink, SharedSurfacePresenter,
+};
 use crate::isf_native_gpu::PreparedNativeBatch;
 use crate::isf_runtime::{IsfGpuRuntime, StackBatch};
 use crate::native_gpu_budget::FrameReservation;
@@ -14,6 +17,7 @@ use crate::native_gpu_composition::{
 };
 use crate::native_gpu_context::{
     NativeGpuOwner, PendingGpuTransaction, RetirementProgress, RetiringGpuTransaction,
+    StopRetirement,
 };
 use crate::native_gpu_result::{
     EncodedIsfBatch, GpuLayerLease, NativeIsfCompletion, ValidatedLayerResult,
@@ -22,6 +26,82 @@ use crate::native_gpu_snapshot::{
     NativeGpuSnapshotter, NativeSnapshotGpu, NativeSnapshotMap, RetiringPremappingSnapshot,
     SharedPremappingSnapshot, SnapshotProgress,
 };
+
+/// I's presenter retains the generation identity captured by its constructor.
+/// P's retirement methods do not validate the broker; keep the presenter private
+/// and reject a foreign owner before it can consume any P transaction token.
+pub(crate) struct SharedNativePresenter<T: NativePresentTarget> {
+    context: GpuContextId,
+    presenter: SharedSurfacePresenter<T>,
+}
+
+impl<T: NativePresentTarget> SharedNativePresenter<T> {
+    pub(crate) fn new(target: T, owner: &mut NativeGpuOwner) -> Result<Self, NativeGpuFault> {
+        let presenter = SharedSurfacePresenter::new(target, owner)?;
+        Ok(Self {
+            context: owner.context().id(),
+            presenter,
+        })
+    }
+
+    fn check_owner(&self, owner: &NativeGpuOwner) -> Result<(), NativeGpuFault> {
+        if owner.context().id() == self.context {
+            Ok(())
+        } else {
+            Err(NativeGpuFault {
+                context: self.context,
+                frame: None,
+                phase: GpuPhase::MappingPresent,
+                kind: NativeGpuFaultKind::IdentityMismatch,
+                message: "presenter and broker belong to different GPU generations".into(),
+            })
+        }
+    }
+
+    /// GPU configuration only. The app owns window resizing on its window thread.
+    pub(crate) fn configure_admitted(
+        &mut self,
+        geometry: AdmittedPhysicalGeometry,
+        owner: &mut NativeGpuOwner,
+    ) -> Result<(), NativeGpuFault> {
+        self.check_owner(owner)?;
+        self.presenter.configure_admitted(geometry, owner)
+    }
+
+    pub(crate) fn poll_retirements(
+        &mut self,
+        owner: &mut NativeGpuOwner,
+    ) -> Result<usize, NativeGpuFault> {
+        self.check_owner(owner)?;
+        self.presenter.poll_retirements(owner)
+    }
+
+    pub(crate) fn drain_retirements(
+        &mut self,
+        owner: &mut NativeGpuOwner,
+    ) -> Result<(), NativeGpuFault> {
+        self.check_owner(owner)?;
+        self.presenter.drain_retirements(owner)
+    }
+
+    pub(crate) fn sink<'p, R, P>(
+        &'p mut self,
+        owner: &'p mut NativeGpuOwner,
+    ) -> Result<SharedPresentSink<'p, T, R, P>, NativeGpuFault> {
+        self.check_owner(owner)?;
+        Ok(self.presenter.sink(owner))
+    }
+
+    pub(crate) fn presents(&self) -> u64 {
+        self.presenter.presents()
+    }
+
+    fn release_for_stop(&mut self, owner: &NativeGpuOwner) -> Result<(), NativeGpuFault> {
+        self.check_owner(owner)?;
+        self.presenter.release_for_stop();
+        Ok(())
+    }
+}
 
 /// The CPU pixels and their accounting owner have the same outer lifetime.
 /// Until P provides a CPU-charge split, this conservatively retains the
@@ -175,6 +255,18 @@ pub(crate) struct SharedNativeOutputRetirement {
     reaped: bool,
 }
 
+/// Release P's pooled/Ready owners before marking the shared generation stopped.
+/// Submitted resources remain in G's registry; this ticket is not a Stop ACK.
+/// The caller retains the broker, cache/history and any I retirement through
+/// actual Reaped. Window ownership and resize stay with the app's window thread.
+pub(crate) fn release_shared_presenter_for_stop<T: NativePresentTarget>(
+    presenter: &mut SharedNativePresenter<T>,
+    owner: &mut NativeGpuOwner,
+) -> Result<StopRetirement, NativeGpuFault> {
+    presenter.release_for_stop(owner)?;
+    Ok(owner.begin_stop())
+}
+
 impl SharedNativeOutputRetirement {
     pub(crate) fn reason(&self) -> Option<&OutputRejection> {
         self.reason.as_ref()
@@ -184,6 +276,20 @@ impl SharedNativeOutputRetirement {
     /// Recovered CPU outcomes retain their exact typed faults, pixels and charges.
     pub(crate) fn take_isf_outcome(&mut self) -> Option<NativeIsfCompletion> {
         self.isf_outcome.take()
+    }
+
+    /// C4 Stop entry: release the paired presenter before poll starts G Stop.
+    /// A foreign broker does not release P's owners or consume this aggregate.
+    pub(crate) fn poll_with_presenter<T: NativePresentTarget>(
+        &mut self,
+        presenter: &mut SharedNativePresenter<T>,
+        owner: &mut NativeGpuOwner,
+    ) -> Result<bool, NativeGpuFault> {
+        if owner.context().id() != self.context || self.reaped {
+            return self.poll(owner);
+        }
+        presenter.release_for_stop(owner)?;
+        self.poll(owner)
     }
 
     /// Retain this aggregate and the broker through Reaped. The inner snapshot
@@ -199,15 +305,13 @@ impl SharedNativeOutputRetirement {
                 message: "retirement owner belongs to another context".into(),
             });
         }
-        if self.reaped {
+        // Another cleanup consumer (including P's retirement poll) can observe
+        // the broker's terminal result first. Reaped is sticky owner state even
+        // when G's subsequent poll returns Pending; preserve that completion.
+        if self.reaped || owner.state() == GpuOwnerState::Reaped {
+            self.reaped = true;
+            self.transaction = None;
             return Ok(true);
-        }
-        if let Some(reservation) = self.unsubmitted.take() {
-            if let Err((error, reservation)) = owner.discard_unsubmitted_reservation(reservation) {
-                self.unsubmitted = Some(reservation);
-                return Err(error);
-            }
-            self.admitted = None;
         }
         owner.begin_stop();
         match owner.poll_retirement()? {
@@ -215,6 +319,19 @@ impl SharedNativeOutputRetirement {
             RetirementProgress::Pending {
                 transactions: 0, ..
             } if owner.state() == GpuOwnerState::Retiring => {
+                // A failed present drain may leave both the preceding GPU
+                // transaction and the next frame's unused root. G cannot refund
+                // that root until all transactions drain. Poll first, retaining
+                // every owner untouched on poison/loss or an incomplete drain.
+                if let Some(reservation) = self.unsubmitted.take() {
+                    if let Err((error, reservation)) =
+                        owner.discard_unsubmitted_reservation(reservation)
+                    {
+                        self.unsubmitted = Some(reservation);
+                        return Err(error);
+                    }
+                    self.admitted = None;
+                }
                 // No scope/submission remains; mapper Drop can now safely unmap.
                 self.snapshot = None;
                 self.failed_snapshot = None;
@@ -234,6 +351,108 @@ impl SharedNativeOutputRetirement {
 }
 
 impl PendingSharedNativeOutput {
+    /// Join a new C3 frame after P's preceding MappingPresent transaction.
+    /// The first poll is nonblocking; bounded drain is used only for actual
+    /// outstanding work. No new begin_frame runs while that work is undrained.
+    /// Authority/Stop is checked again after the potentially bounded wait.
+    /// A failure keeps the unsubmitted affine admission/reservation intact.
+    pub(crate) fn submit_after_present<T: NativePresentTarget>(
+        owner: &mut NativeGpuOwner,
+        runtime: &mut IsfGpuRuntime,
+        compositor: &NativeGpuCompositor,
+        presenter: &mut SharedNativePresenter<T>,
+        request: NativeOutputRequest,
+        admitted: PreparedNativeBatch,
+        reservation: FrameReservation,
+        composition: &NativeCompositionPlan,
+        history: &[&GpuLayerLease],
+        authority: &impl NativeOutputAuthority,
+        cancel: &dyn VideoRenderCancellation,
+    ) -> Result<Self, SharedNativeOutputRetirement> {
+        if let Err(reason) = Self::validate_submission(owner, &request, &reservation, composition) {
+            return Err(Self::retain_unsubmitted(reason, admitted, reservation));
+        }
+        let allowed = presenter
+            .check_owner(owner)
+            .map_err(OutputRejection::Fault)
+            .and_then(|()| guard(&request, OutputBoundary::BeforeSubmit, authority, cancel));
+        if let Err(reason) = allowed {
+            return Err(Self::retain_unsubmitted(reason, admitted, reservation));
+        }
+        let drained = presenter.poll_retirements(owner).and_then(|pending| {
+            if pending == 0 {
+                Ok(())
+            } else {
+                presenter.drain_retirements(owner)
+            }
+        });
+        if let Err(error) = drained {
+            return Err(Self::retain_unsubmitted(
+                OutputRejection::Fault(error),
+                admitted,
+                reservation,
+            ));
+        }
+        if let Err(reason) = guard(&request, OutputBoundary::BeforeSubmit, authority, cancel) {
+            return Err(Self::retain_unsubmitted(reason, admitted, reservation));
+        }
+        Self::submit(
+            owner,
+            runtime,
+            compositor,
+            request,
+            admitted,
+            reservation,
+            composition,
+            history,
+        )
+    }
+
+    fn validate_submission(
+        owner: &NativeGpuOwner,
+        request: &NativeOutputRequest,
+        reservation: &FrameReservation,
+        composition: &NativeCompositionPlan,
+    ) -> Result<(), OutputRejection> {
+        check_request(request)?;
+        if request.context != owner.context().id()
+            || reservation.context() != owner.context().id()
+            || reservation.frame() != request.frame
+            || composition.context != request.context
+            || composition.frame != request.frame
+            || composition.extent != (request.key.width, request.key.height)
+        {
+            Err(OutputRejection::Fault(fault(
+                request,
+                GpuPhase::Initialize,
+                NativeGpuFaultKind::IdentityMismatch,
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn retain_unsubmitted(
+        reason: OutputRejection,
+        admitted: PreparedNativeBatch,
+        reservation: FrameReservation,
+    ) -> SharedNativeOutputRetirement {
+        SharedNativeOutputRetirement {
+            context: reservation.context(),
+            reason: Some(reason),
+            unsubmitted: Some(reservation),
+            admitted: Some(admitted),
+            transaction: None,
+            snapshot: None,
+            failed_snapshot: None,
+            completed: None,
+            gpu: None,
+            encoded_isf: None,
+            isf_outcome: None,
+            reaped: false,
+        }
+    }
+
     /// Call after ONE merged quote/reservation including validated-history aliases.
     /// This function owns the order: P reservation split, ISF Batch3 submit,
     /// composition/snapshot submit, then map registration. There is no poll/wait
@@ -248,38 +467,8 @@ impl PendingSharedNativeOutput {
         composition: &NativeCompositionPlan,
         history: &[&GpuLayerLease],
     ) -> Result<Self, SharedNativeOutputRetirement> {
-        let validation = check_request(&request).and_then(|()| {
-            if request.context != owner.context().id()
-                || reservation.context() != owner.context().id()
-                || reservation.frame() != request.frame
-                || composition.context != request.context
-                || composition.frame != request.frame
-                || composition.extent != (request.key.width, request.key.height)
-            {
-                Err(OutputRejection::Fault(fault(
-                    &request,
-                    GpuPhase::Initialize,
-                    NativeGpuFaultKind::IdentityMismatch,
-                )))
-            } else {
-                Ok(())
-            }
-        });
-        if let Err(reason) = validation {
-            return Err(SharedNativeOutputRetirement {
-                context: reservation.context(),
-                reason: Some(reason),
-                unsubmitted: Some(reservation),
-                admitted: Some(admitted),
-                transaction: None,
-                snapshot: None,
-                failed_snapshot: None,
-                completed: None,
-                gpu: None,
-                encoded_isf: None,
-                isf_outcome: None,
-                reaped: false,
-            });
+        if let Err(reason) = Self::validate_submission(owner, &request, &reservation, composition) {
+            return Err(Self::retain_unsubmitted(reason, admitted, reservation));
         }
         let transaction = owner.begin_frame(request.frame, reservation);
         let mut txn = match transaction {
@@ -439,7 +628,8 @@ impl PendingSharedNativeOutput {
             .pending
             .take()
             .map(|pending| owner.cancel_and_retire(pending));
-        owner.begin_stop();
+        // Defer begin_stop to the retirement consumer. If P is present, its
+        // pooled/Ready owners must be released first via poll_with_presenter.
         let isf_outcome = self
             .validated
             .take()
