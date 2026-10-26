@@ -33,4 +33,11 @@ docker run --rm -v "$root/${sdk[0]}":/sdk:ro -v "$root/candidate":/evidence \
 cat candidate/configure.txt candidate/license.txt candidate/muxers.txt
 if grep -Ei -- '--enable-(chromaprint|gpl|nonfree)' candidate/configure.txt; then exit 1; fi
 if grep -Ei 'chromaprint' candidate/muxers.txt; then exit 1; fi
-grep -F 'LGPL' candidate/license.txt
+# ffmpeg -L prints the licence prose, not the literal "LGPL". Fail closed on GPL
+# or nonfree wording, then require the Lesser GPL v2.1+/v3+ grant explicitly.
+if grep -Ei 'GNU General Public License|nonfree|not legally redistributable' candidate/license.txt; then
+  echo "GPL or nonfree licence wording in ffmpeg -L output" >&2
+  exit 1
+fi
+grep -F 'under the terms of the GNU Lesser General Public License as published by' candidate/license.txt
+grep -E 'either version (2\.1|3) of the License, or' candidate/license.txt
