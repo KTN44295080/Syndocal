@@ -68,6 +68,10 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
     return props.outputs.find((output) => output.id === id) ?? props.outputs[0] ?? null;
   });
   const [routeCompositionId, setRouteCompositionId] = createSignal<number | null>(null);
+  const [openDetail, setOpenDetail] = createSignal<"configuration" | "correction" | null>(null);
+  const onDetailToggle = (detail: "configuration" | "correction", open: boolean) => {
+    setOpenDetail((current) => open ? detail : current === detail ? null : current);
+  };
   createEffect(() => {
     const output = selectedOutput();
     setRouteCompositionId(output?.composition_id ?? null);
@@ -116,7 +120,6 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
               </For>
             </Show>
           </div>
-          {props.setupTools}
         </div>
       </aside>
 
@@ -144,60 +147,71 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
                 <strong>{output().enabled ? "Authored enabled" : "Authored disabled"}</strong>
               </div>
 
-              <div class="videoOutputStatusSummary" role={windowState().stateClass === "error" ? "alert" : "status"} aria-live="polite">
-                <div>
-                  <span>Physical window state</span>
-                  <strong class={`outputWindowStatus state-${windowState().stateClass}`}>
-                    {windowState().stateLabel}
-                  </strong>
+              <div class="videoOutputPrimarySummary">
+                <div class="videoOutputStatusSummary" role={windowState().stateClass === "error" ? "alert" : "status"} aria-live="polite">
+                  <div>
+                    <span>Physical window state</span>
+                    <strong class={`outputWindowStatus state-${windowState().stateClass}`}>
+                      {windowState().stateLabel}
+                    </strong>
+                  </div>
+                  <small>{windowState().detail}</small>
                 </div>
-                <small>{windowState().detail}</small>
-              </div>
 
-              <div class="videoOutputRouteSummary">
-                <div>
-                  <span>Route</span>
-                  <Show
-                    when={compositionForOutput(output())}
-                    fallback={(
-                      <strong>
-                        Composition <span data-no-localize>{output().composition_id}</span>
-                      </strong>
-                    )}
-                  >
-                    {(composition) => <strong data-no-localize>{composition().label}</strong>}
-                  </Show>
-                </div>
-                <label>
-                  <span>Composition</span>
-                  <select
-                    value={String(routeCompositionId() ?? output().composition_id)}
-                    disabled={routingBusy() || props.compositions.length === 0}
-                    onChange={(event) => {
-                      const compositionId = Number(event.currentTarget.value);
-                      setRouteCompositionId(Number.isSafeInteger(compositionId) && compositionId > 0
-                        ? compositionId
-                        : null);
+                <div class="videoOutputRouteSummary">
+                  <div>
+                    <span>Route</span>
+                    <Show
+                      when={compositionForOutput(output())}
+                      fallback={(
+                        <strong>
+                          Composition <span data-no-localize>{output().composition_id}</span>
+                        </strong>
+                      )}
+                    >
+                      {(composition) => <strong data-no-localize>{composition().label}</strong>}
+                    </Show>
+                  </div>
+                  <label>
+                    <span>Composition</span>
+                    <select
+                      value={String(routeCompositionId() ?? output().composition_id)}
+                      disabled={routingBusy() || props.compositions.length === 0}
+                      onChange={(event) => {
+                        const compositionId = Number(event.currentTarget.value);
+                        setRouteCompositionId(Number.isSafeInteger(compositionId) && compositionId > 0
+                          ? compositionId
+                          : null);
+                      }}
+                    >
+                      <For each={props.compositions}>
+                        {(composition) => (
+                          <option data-no-localize value={composition.id}>{composition.label}</option>
+                        )}
+                      </For>
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    disabled={routingBusy() || routeCompositionId() === null}
+                    onClick={() => {
+                      const compositionId = routeCompositionId();
+                      if (compositionId !== null) void props.onAssignComposition(output().id, compositionId);
                     }}
                   >
-                    <For each={props.compositions}>
-                      {(composition) => (
-                        <option data-no-localize value={composition.id}>{composition.label}</option>
-                      )}
-                    </For>
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  disabled={routingBusy() || routeCompositionId() === null}
-                  onClick={() => {
-                    const compositionId = routeCompositionId();
-                    if (compositionId !== null) void props.onAssignComposition(output().id, compositionId);
-                  }}
-                >
-                  {routingBusy() ? "Applying route…" : "Apply route"}
-                </button>
-                <small>Changing the route requires local output authority and confirmation.</small>
+                    {routingBusy() ? "Applying route…" : "Apply route"}
+                  </button>
+                  <small>Changing the route requires local output authority and confirmation.</small>
+                </div>
+
+                <VideoOutputActionsPanel
+                  output={output()}
+                  actualOpen={windowState().actualOpen}
+                  busy={busy()}
+                  blocked={ownershipBlocked() || windowState().actionDisabled}
+                  error={windowState().error}
+                  onToggleWindow={props.onToggleWindow}
+                />
               </div>
 
               <Show when={props.previewOutputId === output().id}>
@@ -212,16 +226,13 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
                 </div>
               </Show>
 
-              <VideoOutputActionsPanel
-                output={output()}
-                actualOpen={windowState().actualOpen}
-                busy={busy()}
-                blocked={ownershipBlocked() || windowState().actionDisabled}
-                error={windowState().error}
-                onToggleWindow={props.onToggleWindow}
-              />
-
-              <details class="ioDisclosure" data-video-output-config-disclosure>
+              <details
+                class="ioDisclosure"
+                data-video-output-config-disclosure
+                data-video-output-detail="configuration"
+                open={openDetail() === "configuration"}
+                onToggle={(event) => onDetailToggle("configuration", event.currentTarget.open)}
+              >
                 <summary>Output configuration</summary>
                 <div class="ioDisclosureBody">
                   <VideoOutputConfigPanel
@@ -238,7 +249,12 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
                 </div>
               </details>
 
-              <details class="advancedProjectionCorrection">
+              <details
+                class="advancedProjectionCorrection"
+                data-video-output-detail="correction"
+                open={openDetail() === "correction"}
+                onToggle={(event) => onDetailToggle("correction", event.currentTarget.open)}
+              >
                 <summary>Advanced projection correction</summary>
                 <p>Ordinary fullscreen display output does not need this; use it for projector and corner correction.</p>
                 <VideoOutputMappingPanel
@@ -263,6 +279,7 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
           );
         }}
       </Show>
+      {props.setupTools}
     </div>
   );
 }

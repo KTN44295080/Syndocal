@@ -11,6 +11,7 @@ import { runPaneBrowserFallbackRuntimeProof } from "./check-pane-browser-fallbac
 import { runLiveAudioBackendDisappearanceContract } from "./live-audio-backend-disappearance-contract.mjs";
 import { exerciseRemoteDisclosureScrollReachability } from "./remote-disclosure-scroll-contract.mjs";
 import { runPatchProfileDensityChecks } from "./patch-profile-density-contract.mjs";
+import { exerciseBatch2DensityInPage, runUiDensityBatch2Checks } from "./ui-density-batch2-contract.mjs";
 import {
   exerciseSetupIoOperatorDeck,
   selectSetupIoConnection,
@@ -105,6 +106,7 @@ const editIaVideoOnlyMode = process.argv.includes("--edit-ia-video-only");
 const timelineLayeredOnlyMode = process.argv.includes("--timeline-layered-only");
 const patchOnlyMode = process.argv.includes("--patch-only");
 const patchProfileDensityOnlyMode = process.argv.includes("--patch-profile-density-only");
+const uiDensityBatch2OnlyMode = process.argv.includes("--ui-density-batch2-only");
 const fixtureGroupsOnlyMode = process.argv.includes("--fixture-groups-only");
 const patchEmptyStateOnlyMode = process.argv.includes("--patch-empty-state-only");
 const touchOnlyMode = process.argv.includes("--touch-only");
@@ -5259,17 +5261,20 @@ async function runSetupVideoViewport(client, viewport, { navigate = true } = {})
     const details = document.querySelector('.videoSetupPanel .advancedProjectionCorrection');
     return Boolean(details && !details.open);
   })()`);
-  await client.evaluate(`document.querySelector('.videoSetupPanel .advancedProjectionCorrection > summary')?.click()`);
-  await waitForClientCondition(
-    client,
-    `document.querySelector('.videoSetupPanel .advancedProjectionCorrection')?.open === true`,
-    "Video Setup Advanced projection correction disclosure",
-  );
-  await client.evaluate(`document.querySelector('.videoSetupPanel .advancedProjectionCorrection')?.scrollIntoView({ block: 'nearest' })`);
-  await sleep(100);
+  // D03 moves scrolling from the nested Advanced body to the whole Video
+  // workbench. Prove owner-only reachability before retaining the existing
+  // projector/control-count contracts in measure()/hasExpectedSetupSurface().
+  const closedDensity = await client.evaluate(`(${exerciseBatch2DensityInPage.toString()})("video-default")`);
+  const openDensity = await client.evaluate(`(${exerciseBatch2DensityInPage.toString()})("video-correction")`);
   const open = await measure(client, `setup-video-${viewport.width}x${viewport.height}`);
   return {
     ...open,
+    videoSetupDensityChecksPassed: Object.values(closedDensity.checks).every(Boolean) && Object.values(openDensity.checks).every(Boolean),
+    videoSetupDensity: { closed: closedDensity, open: openDensity },
+    videoSetupMappingLastControlReachable: openDensity.checks.mappingFirstAndLastReachableThroughOwner,
+    videoSetupActionDockLastActionReachable: openDensity.checks.outputActionDockFirstAndLastReachableThroughOwner,
+    videoSetupClosedActionDockInViewport: closed.videoSetupActionDockInViewport,
+    videoSetupPreviewReachableThroughOwner: !open.videoSetupPreviewCardPresent || openDensity.checks.previewReachableThroughOwner,
     videoSetupAdvancedInitiallyClosed: initiallyClosed,
     videoSetupClosedDocumentAndAppScrollZero:
       closed.documentScrollWidth === closed.innerWidth &&
@@ -13614,18 +13619,17 @@ function hasExpectedSetupSurface(result) {
       result.videoSetupMapPaneWidth >= 498 &&
       result.videoSetupStatusPaneWidth >= 498 &&
       result.videoSetupMapPaneHeight >= 200 &&
-      // Compact heights may expose a bounded status-pane scroll range after
-      // the two summaries and 44px action dock are reflowed. The document/app
-      // remain fixed; the Advanced disclosure remains the primary scrollport.
-      result.videoSetupMapPaneOverflowPx <= 96 &&
+      // D03: old bounded status-pane overflow + Advanced internal-scroll
+      // assumption becomes one bounded workbench owner, zero horizontal/nested
+      // scroll, and owner-only first/last reachability. Control counts stay.
+      result.videoSetupDensityChecksPassed === true &&
       result.videoSetupMappingLastControlReachable &&
       result.videoSetupProjectorSurfaceContained &&
-      result.videoSetupAdvancedInternalScroll === true &&
-      (!result.videoSetupPreviewCardPresent || result.videoSetupPreviewContained) &&
+      result.videoSetupPreviewReachableThroughOwner &&
       result.visibleVideoSetupActionDockCount === 1 &&
       result.videoSetupActionDockHeight >= 40 &&
       result.videoSetupActionDockLastActionReachable &&
-      result.videoSetupActionDockInViewport &&
+      result.videoSetupClosedActionDockInViewport &&
       result.visibleVideoSetupDisplayActionCount === 1 &&
       result.visibleSetupVideoOutputDeckCount >= 1 &&
       result.visibleSetupVideoOutputActiveDeckCount >= 1 &&
@@ -30181,6 +30185,30 @@ async function measureTimelineSourceShelf(client) {
     };
     const rect = shelf.getBoundingClientRect();
     const context = shelf.closest('[data-workspace-pane="lower-right"]');
+    const body = shelf.querySelector('.timelineExternalSourceShelfBody');
+    const contextRect = context?.getBoundingClientRect();
+    const contextStyle = context ? getComputedStyle(context) : null;
+    const contextTop = contextRect && contextStyle ? contextRect.top + context.clientTop + parseFloat(contextStyle.paddingTop) : null;
+    const contextBottom = contextRect && contextStyle ? contextRect.top + context.clientTop + context.clientHeight - parseFloat(contextStyle.paddingBottom) : null;
+    const surfaces = [shelf, ...shelf.querySelectorAll('*')].filter(visible);
+    const actualScroll = (element, axis) => /(auto|scroll)/.test(getComputedStyle(element)[axis === 'x' ? 'overflowX' : 'overflowY'])
+      && (axis === 'x' ? element.scrollWidth > element.clientWidth + 1 : element.scrollHeight > element.clientHeight + 1);
+    const vertical = surfaces.filter((element) => actualScroll(element, 'y'));
+    const lastControlReachableThroughBody = (() => {
+      const controls = body ? [...body.querySelectorAll('button,select')].filter(visible) : [];
+      const last = controls.at(-1);
+      if (!(body instanceof HTMLElement) || !(last instanceof HTMLElement)) return false;
+      const before = surfaces.map((element) => ({ element, left: element.scrollLeft, top: element.scrollTop }));
+      const b = body.getBoundingClientRect(), target = last.getBoundingClientRect();
+      body.scrollTop += Math.max(0, target.bottom - b.top - body.clientTop - body.clientHeight + 2);
+      const reached = last.getBoundingClientRect();
+      const hit = document.elementFromPoint(reached.x + reached.width / 2, reached.y + reached.height / 2);
+      const contained = reached.left >= b.left + body.clientLeft - 1 && reached.right <= b.left + body.clientLeft + body.clientWidth + 1
+        && reached.top >= b.top + body.clientTop - 1 && reached.bottom <= b.top + body.clientTop + body.clientHeight + 1;
+      const onlyBodyMoved = before.every(({ element, left, top }) => element.scrollLeft === left && (element === body || element.scrollTop === top));
+      for (const { element, left, top } of before) { element.scrollLeft = left; element.scrollTop = top; }
+      return contained && (hit === last || last.contains(hit)) && onlyBodyMoved;
+    })();
     const filters = [...shelf.querySelectorAll('[data-timeline-source-shelf-filter]')];
     const placementButtons = [...shelf.querySelectorAll('[data-timeline-external-source]')];
     const targetSelects = [...shelf.querySelectorAll('.timelineExternalSourceTarget select')];
@@ -30205,7 +30233,14 @@ async function measureTimelineSourceShelf(client) {
     return {
       present: true,
       contained: rect.left >= -0.5 && rect.right <= innerWidth + 0.5 && rect.top >= -0.5 && rect.bottom <= innerHeight + 0.5,
-      compactTopAligned: context instanceof HTMLElement && rect.top >= context.getBoundingClientRect().top - 1 && rect.bottom <= context.getBoundingClientRect().bottom + 1 && rect.height < context.getBoundingClientRect().height - 4,
+      // D04 replaces a deliberately short/top-aligned shelf with its full
+      // assigned pane height. Body-only scroll and tail reachability replace
+      // the former compact-height assumption without reducing control sizes.
+      fillsAssignedHeight: contextTop !== null && contextBottom !== null && Math.abs(rect.top - contextTop) <= 2 && Math.abs(rect.bottom - contextBottom) <= 2,
+      bodyIsOnlyScrollOwner: body instanceof HTMLElement && /(auto|scroll)/.test(getComputedStyle(body).overflowY) && vertical.every((element) => element === body),
+      horizontalScrollCount: surfaces.filter((element) => actualScroll(element, 'x')).length,
+      nestedScrollCount: vertical.filter((element) => vertical.some((parent) => parent !== element && parent.contains(element))).length,
+      lastControlReachableThroughBody,
       filterCount: filters.length,
       placementButtonCount: placementButtons.length,
       sourceKinds,
@@ -30685,9 +30720,11 @@ async function exerciseTimelineSourceShelfMediaClickPlacement(client) {
   await sleep(120);
   const capture = await finishTimelineSourceShelfProductionCapture(client);
   const request = timelineSourceShelfMediaRequest(capture);
+  const readOnlyPollChecks = timelineSourceShelfReadOnlyPollChecks(capture);
   return {
     passed: Boolean(
       captureInstalled &&
+      Object.values(readOnlyPollChecks).every(Boolean) &&
       availability.assetId === prepared.mediaAssetId &&
       availability.unverified === true &&
       availability.placementButtonsDisabled === true &&
@@ -30700,6 +30737,7 @@ async function exerciseTimelineSourceShelfMediaClickPlacement(client) {
     prepared,
     capture,
     request,
+    readOnlyPollChecks,
   };
 }
 
@@ -30764,9 +30802,11 @@ async function exerciseTimelineSourceShelfMediaDragPlacement(client) {
   let payload = null;
   try { payload = JSON.parse(dragProbe.payload); } catch { /* assert exact payload below */ }
   const request = timelineSourceShelfMediaRequest(capture);
+  const readOnlyPollChecks = timelineSourceShelfReadOnlyPollChecks(capture);
   return {
     passed: Boolean(
       captureInstalled &&
+      Object.values(readOnlyPollChecks).every(Boolean) &&
       availability.assetId === prepared.mediaAssetId &&
       availability.unverified === true &&
       availability.placementButtonsDisabled === true &&
@@ -30788,6 +30828,7 @@ async function exerciseTimelineSourceShelfMediaDragPlacement(client) {
     payload,
     capture,
     request,
+    readOnlyPollChecks,
   };
 }
 
@@ -31145,6 +31186,25 @@ async function exerciseTimelineSourceShelfSceneDragPlacement(client) {
   };
 }
 
+function timelineSourceShelfReadOnlyPollChecks(capture) {
+  const allowed = new Set(['get_output_ownership_status', 'query_output_lease_authority_v1']);
+  const reads = capture?.authorityReadCalls ?? [];
+  const rawReads = (capture?.commands ?? []).filter((command) => allowed.has(command));
+  const backgroundReads = (capture?.backgroundCommands ?? []).filter((command) => allowed.has(command));
+  return {
+    noRejectedCaptureCommands: Array.isArray(capture?.rejectedCommands) && capture.rejectedCommands.length === 0,
+    onlyKnownAuthorityQueries: reads.every((read) => allowed.has(read.command)),
+    authorityQueriesUseEmptyArguments: reads.every((read) => read.args !== null && typeof read.args === 'object'
+      && !Array.isArray(read.args) && Object.keys(read.args).length === 0),
+    authorityQueriesDoNotMutate: reads.every((read) => read.mutationCount === 0
+      && read.transactionCountBefore === read.transactionCountAfter),
+    authorityQueriesRecordedSeparately: Array.isArray(capture?.authorityReadCalls)
+      && JSON.stringify(rawReads) === JSON.stringify(reads.map((read) => read.command))
+      && JSON.stringify(backgroundReads) === JSON.stringify(rawReads)
+      && !(capture?.transactionCommands ?? []).some((command) => allowed.has(command)),
+  };
+}
+
 async function installTimelineSourceShelfProductionCapture(client) {
   return await evaluatePageFunction(client, () => {
     const installedWithoutExistingInternals = window.__TAURI_INTERNALS__ === undefined;
@@ -31154,6 +31214,8 @@ async function installTimelineSourceShelfProductionCapture(client) {
       commands: [],
       startupCommands: [],
       backgroundCommands: [],
+      authorityReadCalls: [],
+      rejectedCommands: [],
       transactionCommands: [],
       availabilityCommands: [],
       phase: 'await-owner-registration',
@@ -31174,6 +31236,47 @@ async function installTimelineSourceShelfProductionCapture(client) {
     window.__TAURI_INTERNALS__ = {
       invoke: async (command, args = {}) => {
         capture.commands.push(command);
+        // Installing this fixture enables the app's existing output-drive
+        // status poll (App.tsx -> outputDriveQuery.ts). The pre-Batch2 bundle
+        // also interleaves these two pure reads with Scene placement. Admit
+        // exactly their no-argument wire, record them separately, and retain
+        // the exact five-command placement sequence below without filtering
+        // arbitrary commands or accepting any output-authority mutation.
+        if (command === 'get_output_ownership_status' || command === 'query_output_lease_authority_v1') {
+          if (args === null || typeof args !== 'object' || Array.isArray(args)
+            || Object.getPrototypeOf(args) !== Object.prototype || Object.keys(args).length !== 0) {
+            throw new Error(`Timeline Sources authority read ${command} requires empty arguments.`);
+          }
+          const mutationState = () => JSON.stringify({
+            phase: capture.phase,
+            startupCommands: capture.startupCommands,
+            transactionCommands: capture.transactionCommands,
+            availabilityCommands: capture.availabilityCommands,
+            ownerRegistrationArgs: capture.ownerRegistrationArgs,
+            ownerRegistrationResult: capture.ownerRegistrationResult,
+            programAudioHandoffArgs: capture.programAudioHandoffArgs,
+            beginArgs: capture.beginArgs, addArgs: capture.addArgs, mediaArgs: capture.mediaArgs,
+            commitArgs: capture.commitArgs, acknowledgeArgs: capture.acknowledgeArgs,
+            availabilityStartArgs: capture.availabilityStartArgs,
+            availabilityInspectArgs: capture.availabilityInspectArgs,
+            eventId: capture.eventId, snapshot: capture.snapshot,
+          });
+          const before = mutationState(), transactionCountBefore = capture.transactionCommands.length;
+          // This is an explicit in-memory standby/unavailable status; no
+          // acquisition, enable, transfer, or native output call is performed.
+          const response = command === 'get_output_ownership_status' ? {
+            role: 'Standby', effective_role: 'Standby', desired_role: 'Standby', persisted_role: 'Standby',
+            state: 'Ready', generation: 0, epoch: 0, lighting_allowed: false, video_allowed: false,
+            lighting_reason: 'BlockedByMachineRole', video_reason: 'BlockedByMachineRole', error: null,
+          } : {
+            operation_id: 'syndocal.output.lease.authority.query.v1', statuses: [{ status: 'unavailable' }],
+          };
+          capture.backgroundCommands.push(command);
+          capture.authorityReadCalls.push({ command, args: clone(args), phase: capture.phase,
+            transactionCountBefore, transactionCountAfter: capture.transactionCommands.length,
+            mutationCount: before === mutationState() ? 0 : 1 });
+          return response;
+        }
         // Periodic status reads and candidate enumeration can race any pointer gesture. They are not
         // part of the authoritative placement transaction and must not make
         // its exact mutation sequence timing-dependent. Keep the allowlist
@@ -31412,6 +31515,18 @@ async function installTimelineSourceShelfProductionCapture(client) {
         throw new Error(`Unexpected Timeline Sources production-capture command: ${command}`);
       },
     };
+    const strictInvoke = window.__TAURI_INTERNALS__.invoke;
+    window.__TAURI_INTERNALS__.invoke = async (command, args = {}) => {
+      try {
+        return await strictInvoke(command, args);
+      } catch (error) {
+        // App-side callers may deliberately catch read errors. Preserve the
+        // rejection in the proof so unknown commands or malformed arguments
+        // still fail both Scene and Media gates even when UI code catches it.
+        capture.rejectedCommands.push({ command, args: clone(args), error: String(error) });
+        throw error;
+      }
+    };
     return installedWithoutExistingInternals;
   });
 }
@@ -31438,12 +31553,15 @@ async function exerciseTimelineSourceShelfProductionClickPlacement(client) {
     'get_snapshot',
   ];
   const args = capture?.addArgs ?? {};
+  const readOnlyPollChecks = timelineSourceShelfReadOnlyPollChecks(capture);
   return {
     captureInstalled,
     placement,
     capture,
+    readOnlyPollChecks,
     passed: Boolean(
       captureInstalled &&
+      Object.values(readOnlyPollChecks).every(Boolean) &&
       JSON.stringify(capture?.startupCommands) === JSON.stringify([
         'register_project_transaction_owner',
         'set_program_audio_handoff_config',
@@ -31454,7 +31572,9 @@ async function exerciseTimelineSourceShelfProductionClickPlacement(client) {
       capture.backgroundCommands.every((command) =>
         command === 'remote_control_status' ||
         command === 'get_dj_link_machine_status' ||
-        command === 'list_dj_link_wired_candidates') &&
+        command === 'list_dj_link_wired_candidates' ||
+        command === 'get_output_ownership_status' ||
+        command === 'query_output_lease_authority_v1') &&
       placement.passed &&
       JSON.stringify(capture?.transactionCommands) === JSON.stringify(exactCommands) &&
       capture.ownerRegistrationArgs.ownerId === capture.beginArgs?.ownerId &&
@@ -31485,12 +31605,15 @@ async function exerciseTimelineSourceShelfProductionDragPlacement(client) {
     'get_snapshot',
   ];
   const args = capture?.addArgs ?? {};
+  const readOnlyPollChecks = timelineSourceShelfReadOnlyPollChecks(capture);
   return {
     captureInstalled,
     placement,
     capture,
+    readOnlyPollChecks,
     passed: Boolean(
       captureInstalled &&
+      Object.values(readOnlyPollChecks).every(Boolean) &&
       JSON.stringify(capture?.startupCommands) === JSON.stringify([
         'register_project_transaction_owner',
         'set_program_audio_handoff_config',
@@ -31501,7 +31624,9 @@ async function exerciseTimelineSourceShelfProductionDragPlacement(client) {
       capture.backgroundCommands.every((command) =>
         command === 'remote_control_status' ||
         command === 'get_dj_link_machine_status' ||
-        command === 'list_dj_link_wired_candidates') &&
+        command === 'list_dj_link_wired_candidates' ||
+        command === 'get_output_ownership_status' ||
+        command === 'query_output_lease_authority_v1') &&
       placement.passed &&
       JSON.stringify(capture?.transactionCommands) === JSON.stringify(exactCommands) &&
       capture.ownerRegistrationArgs.ownerId === capture.beginArgs?.ownerId &&
@@ -32036,7 +32161,9 @@ async function runTimelineSlimViewport(client, viewport, recycleClient = null) {
       visual.documentAndAppScrollZero &&
       implicitVisual.documentAndAppScrollZero],
     ['timelineSourceShelfIsContainedAndUsesLocalScroll', () =>
-      sourceShelf.present && sourceShelf.contained && sourceShelf.compactTopAligned && sourceShelf.scrollSurfaces.every((surface) => surface.permitsInternalScroll)],
+      sourceShelf.present && sourceShelf.contained && sourceShelf.fillsAssignedHeight && sourceShelf.bodyIsOnlyScrollOwner
+      && sourceShelf.horizontalScrollCount === 0 && sourceShelf.nestedScrollCount === 0 && sourceShelf.lastControlReachableThroughBody
+      && sourceShelf.scrollSurfaces.every((surface) => surface.permitsInternalScroll)],
     ['timelineSourceShelfSceneCardsKeepEqualNonShrinkingHeights', () =>
       sourceShelfSceneCards.present && sourceShelfSceneCards.cardCount > 0 &&
       sourceShelfSceneCards.equalHeights &&
@@ -39445,7 +39572,7 @@ async function main() {
       "--disable-background-timer-throttling",
       "--disable-backgrounding-occluded-windows",
       "--disable-renderer-backgrounding",
-      ...(patchProfileDensityOnlyMode ? [] : ["--hide-scrollbars"]),
+      ...(patchProfileDensityOnlyMode || uiDensityBatch2OnlyMode ? [] : ["--hide-scrollbars"]),
       "--disable-crash-reporter",
       "--disable-crashpad",
       `--remote-debugging-port=${cdpPort}`,
@@ -39466,6 +39593,11 @@ async function main() {
         waitForApp,
         installShareMock: installPatchGdtfShareMockInPage,
       });
+      return;
+    }
+
+    if (uiDensityBatch2OnlyMode) {
+      await runUiDensityBatch2Checks({ CdpClient, cdpPort, appUrl: fixtureUrl("timeline-layered"), screenshotDir, waitForApp });
       return;
     }
 
@@ -39976,7 +40108,7 @@ async function main() {
             `action=${result.visibleVideoSetupDisplayActionCount}/${result.videoSetupActionDockLastActionReachable ? "reachable" : "unreachable"} ` +
             `scroll=${result.videoSetupClosedDocumentAndAppScrollZero && result.documentScrollWidth === result.innerWidth && result.appScrollWidth === result.innerWidth ? "zero" : "overflow"} ` +
             `surface=${JSON.stringify(result.videoSetupProjectorSurfaceBounds)} pane=${JSON.stringify(result.videoSetupStatusPaneBounds)} ` +
-            `checks=${JSON.stringify({ mapH: result.videoSetupMapPaneHeight, mapOverflow: result.videoSetupMapPaneOverflowPx, mappingReachable: result.videoSetupMappingLastControlReachable, surfaceContained: result.videoSetupProjectorSurfaceContained, advancedScroll: result.videoSetupAdvancedInternalScroll, dockInViewport: result.videoSetupActionDockInViewport, preview: result.videoSetupPreviewCardPresent ? result.videoSetupPreviewContained : true })} ` +
+            `checks=${JSON.stringify({ mapH: result.videoSetupMapPaneHeight, mapOverflow: result.videoSetupMapPaneOverflowPx, mappingReachable: result.videoSetupMappingLastControlReachable, surfaceContained: result.videoSetupProjectorSurfaceContained, densityPassed: result.videoSetupDensityChecksPassed, dockInitiallyInViewport: result.videoSetupClosedActionDockInViewport, previewReachable: result.videoSetupPreviewReachableThroughOwner, densityFailed: Object.fromEntries(Object.entries(result.videoSetupDensity ?? {}).map(([phase, state]) => [phase, Object.entries(state.checks).filter(([, passed]) => !passed).map(([name]) => name)])) })} ` +
             `failed=${JSON.stringify(failedChecks)}`,
         );
       }
@@ -40749,11 +40881,21 @@ async function main() {
               `${result.mediaClick.prepared?.audioLayerId ?? "?"} ` +
             `parity=${result.parity ? "pass" : "fail"} ` +
             `events=${JSON.stringify(result.drag.placement?.dragProbe ?? null)} ` +
+            `readOnlyPolls=${JSON.stringify(Object.fromEntries(['click', 'drag', 'mediaClick', 'mediaDrag'].map((kind) => [kind, {
+              count: result[kind].capture?.authorityReadCalls?.length ?? 0,
+              mutationCount: (result[kind].capture?.authorityReadCalls ?? []).reduce((sum, read) => sum + read.mutationCount, 0),
+              rejected: result[kind].capture?.rejectedCommands?.length ?? 0,
+              checks: result[kind].readOnlyPollChecks,
+            }])))} ` +
             `commands=${JSON.stringify({
               click: result.click.capture?.commands ?? [],
               drag: result.drag.capture?.commands ?? [],
             })}`,
         );
+      }
+      if (screenshotDir) {
+        mkdirSync(screenshotDir, { recursive: true });
+        writeFileSync(join(screenshotDir, 'timeline-source-placement-results.json'), JSON.stringify(results, null, 2) + '\n');
       }
       const failures = results.filter((result) => !result.passed);
       if (failures.length > 0) {

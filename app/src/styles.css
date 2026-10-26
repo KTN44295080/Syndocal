@@ -2632,14 +2632,14 @@ h3 {
   grid-column: 1;
   grid-row: 1 / -1;
   grid-template-rows: auto minmax(0, 1fr);
-  align-self: start;
+  align-self: stretch;
   align-content: start;
   width: 100%;
   min-height: 0;
-  /* Reserve a stable compact rail; the body owns card overflow instead of
-     allowing the grid item to expand to the whole lower pane. */
-  height: 200px;
-  max-height: min(200px, 100%);
+  /* Use the assigned pane height; only the body scrolls through source cards. */
+  height: 100%;
+  max-height: 100%;
+  box-sizing: border-box;
   overflow: hidden;
 }
 
@@ -21584,6 +21584,7 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 .layoutSetup.setupMode-library,
 .layoutSetup.setupMode-profiles,
 .layoutSetup.setupMode-video,
+.layoutSetup.setupMode-authority,
 .layoutSetup.setupMode-io {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -21599,6 +21600,7 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 .layoutSetup.setupMode-library > .setup,
 .layoutSetup.setupMode-profiles > .setup,
 .layoutSetup.setupMode-video > .videoSetupPanel,
+.layoutSetup.setupMode-authority > .agentAuthorityPanel,
 .layoutSetup.setupMode-io > .setupIoPanel {
   grid-column: 1;
   width: 100%;
@@ -27973,6 +27975,7 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 .layoutSharedWorkspace.layoutSetup.setupMode-library,
 .layoutSharedWorkspace.layoutSetup.setupMode-profiles,
 .layoutSharedWorkspace.layoutSetup.setupMode-video,
+.layoutSharedWorkspace.layoutSetup.setupMode-authority,
 .layoutSharedWorkspace.layoutSetup.setupMode-io,
 .layoutSharedWorkspace.layoutSetup.setupMode-mapping,
 .layoutSharedWorkspace.layoutControl.controlModeEdit,
@@ -39471,7 +39474,7 @@ html:not([data-window-mode="fullscreen"])
   > .timelineExternalSourceShelfBody {
   min-height: 0;
   align-content: start;
-  overflow: hidden auto;
+  overflow: auto;
 }
 
 .timelineExternalSourceTargets {
@@ -39730,10 +39733,59 @@ button.timelineExternalSourceCard:active,
   margin: 0;
 }
 
-/* Video Setup uses two clear regions: outputs/sources at left and the
-   selected-output status/action surface at right. The advanced correction
-   disclosure owns its own scroll area so collapsed content never steals focus
-   or causes document scrolling. */
+/* Sources follow the order identity, then placement actions. Banks and media
+   use one column and natural height inside the shelf's single body scrollport. */
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane > .timelineExternalSourceShelf .timelineExternalSourceShelfBanks,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane > .timelineExternalSourceShelf .timelineExternalSourceShelfItems {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  overflow: visible;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane > .timelineExternalSourceShelf .timelineExternalSourceShelfBank {
+  min-width: 0;
+  max-width: none;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane > .timelineExternalSourceShelf .timelineExternalSourceShelfBankScenes {
+  grid-auto-rows: minmax(5rem, max-content);
+  max-height: none;
+  overflow: visible;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane > .timelineExternalSourceShelf .timelineExternalSourceShelfBankScenes .timelineExternalSourceCard {
+  /* Reserve the same full-size identity and metadata rows for every kind. */
+  min-height: 5rem;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane > .timelineExternalSourceShelf .timelineExternalSourceCard.media {
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane > .timelineExternalSourceShelf .timelineExternalSourceCardTitle > strong {
+  overflow-wrap: anywhere;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane > .timelineExternalSourceShelf .timelineExternalSourceCardActions {
+  justify-content: flex-start;
+}
+
+/* Output selection and primary actions stay together. Details and creation
+   tools expand at natural height in one workspace scrollport. */
+.layoutSetup.setupMode-video .videoSetupWorkbench[data-video-setup-scroll] {
+  align-content: start;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.layoutSetup.setupMode-video [data-video-setup-scroll] .videoSetupOutputDesk,
+.layoutSetup.setupMode-video [data-video-setup-scroll] .videoOutputSetupShell {
+  height: auto;
+  align-items: start;
+  overflow: visible;
+}
+
 .layoutSetup.setupMode-video .videoOutputSetupShell {
   grid-template-columns: minmax(250px, 320px) minmax(0, 1fr);
   gap: 0;
@@ -39742,6 +39794,19 @@ button.timelineExternalSourceCard:active,
 .layoutSetup.setupMode-video .videoOutputSetupShell > .videoSetupRoutingPane {
   grid-column: 1;
   grid-row: 1;
+  grid-template-rows: auto auto;
+  overflow: visible;
+}
+
+.layoutSetup.setupMode-video [data-video-setup-scroll] .videoOutputRail {
+  grid-template-rows: auto;
+  overflow: visible;
+}
+
+.layoutSetup.setupMode-video [data-video-setup-scroll] .videoOutputDeckList {
+  align-content: start;
+  max-height: none;
+  overflow: visible;
 }
 
 .layoutSetup.setupMode-video .videoOutputSetupShell > .videoOutputStatusPane,
@@ -39752,19 +39817,33 @@ button.timelineExternalSourceCard:active,
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: visible;
   border-right: 0;
   background: var(--theme-panel);
   padding: 8px;
   gap: 8px;
 }
 
+.videoOutputStatusPane > *,
 .videoOutputStatusPane .videoOutputDetailHeader,
 .videoOutputStatusPane .videoOutputStatusSummary,
 .videoOutputStatusPane .videoOutputRouteSummary,
 .videoOutputStatusPane .videoOutputPreviewCard,
 .videoOutputStatusPane .videoOutputActionDock {
   flex: 0 0 auto;
+}
+
+.videoOutputPrimarySummary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.layoutSetup.setupMode-video .videoOutputStatusPane .videoOutputDetailHeader h3 {
+  /* Keep the full font ink inside the title's existing overflow boundary. */
+  line-height: 1.5;
 }
 
 .videoOutputStatusSummary,
@@ -39799,16 +39878,16 @@ button.timelineExternalSourceCard:active,
 }
 
 .videoOutputStatusPane > .advancedProjectionCorrection {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-height: 44px;
-  overflow: auto;
+  overflow: visible;
   border: 1px solid var(--ray-border);
   background: var(--theme-bg);
   padding: 0 8px 8px;
 }
 
-/* Output configuration adds another disclosure above correction. Keep the
-   expanded editor usable and let the status pane scroll when both need room. */
+/* Configuration and correction are mutually exclusive; controls retain their
+   natural height while the workspace owns scrolling. */
 .videoOutputStatusPane > .advancedProjectionCorrection[open] {
   min-height: 120px;
 }
@@ -39846,53 +39925,41 @@ button.timelineExternalSourceCard:active,
   height: clamp(96px, 45vh, 480px);
 }
 
-/* Compact desktop heights still keep the status and routine action visible.
-   Reflow the read-only status/route summaries beside each other so the
-   advanced disclosure retains a real internal scrollport without shrinking
-   control targets or typography. */
-@media (max-height: 820px) {
-  /* Match the direct-child desktop rule above so the compact reflow can
-     actually replace its flex layout.  Without the third selector component
-     the higher-specificity direct-child rule keeps the summaries stacked,
-     making the status pane's intrinsic height escape its bounded workspace. */
-  .layoutSetup.setupMode-video .videoOutputSetupShell > .videoOutputStatusPane {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(190px, 0.8fr);
-    grid-template-rows: auto minmax(44px, auto) minmax(44px, 1fr);
-    align-content: stretch;
-    overflow: auto;
-  }
+.layoutSetup.setupMode-video [data-video-setup-scroll] [data-video-output-config-disclosure] {
+  flex: 0 0 auto;
+  max-height: none;
+  overflow: visible;
+}
 
-  .layoutSetup.setupMode-video .videoOutputStatusPane > .videoOutputDetailHeader,
-  .layoutSetup.setupMode-video .videoOutputStatusPane > .videoOutputPreviewCard {
-    grid-column: 1 / -1;
-  }
+.layoutSetup.setupMode-video .videoOutputSetupShell > [data-video-setup-tools] {
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: none;
+  max-height: none;
+  overflow: visible;
+  contain: none;
+}
 
-  .layoutSetup.setupMode-video .videoOutputStatusPane > .videoOutputStatusSummary {
-    grid-column: 1;
-  }
+.layoutSetup.setupMode-video [data-video-setup-tools] .videoSetupDisclosure,
+.layoutSetup.setupMode-video [data-video-setup-tools] .compositionList,
+.layoutSetup.setupMode-video [data-video-setup-tools] .videoCompositionForm,
+.layoutSetup.setupMode-video [data-video-setup-tools] .videoOutputForm,
+.layoutSetup.setupMode-video [data-video-setup-tools] .ioDisclosureBody {
+  max-height: none;
+  overflow: visible;
+}
 
-  .layoutSetup.setupMode-video .videoOutputStatusPane > .videoOutputRouteSummary {
-    grid-column: 2;
-  }
+.layoutSetup.setupMode-video [data-video-setup-scroll] fieldset {
+  min-inline-size: 0;
+}
 
-  .layoutSetup.setupMode-video .videoOutputStatusPane > .videoOutputActionDock {
-    grid-column: 3;
-    grid-row: 2;
-  }
+.videoSetupToolDisclosure > summary {
+  min-height: 44px;
+}
 
-  .layoutSetup.setupMode-video .videoOutputStatusPane > .advancedProjectionCorrection {
-    grid-column: 1 / -1;
-    grid-row: 3;
-    min-height: 44px;
-  }
-
-  /* The source/tool rail is its own scrollport. Do not apply layout
-     containment here: it suppresses the intrinsic height of the disclosure
-     and audio controls, leaving painted children outside their hit surface. */
-  .layoutSetup.setupMode-video .videoSetupSidebar {
-    contain: none;
-  }
+/* The disclosure already names this surface. */
+.videoSetupToolDisclosure[data-video-setup-tool="outputs"] .videoOutputCreateSurface > .videoSetupDisclosureHeading {
+  display: none;
 }
 
 .touchVideoOutputReadOnly {

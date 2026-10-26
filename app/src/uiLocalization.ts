@@ -3034,6 +3034,7 @@ const japaneseText: Record<string, string> = {
   "Remove group": "グループを削除",
   Chain: "チェーン",
   Composition: "コンポジション",
+  Compositions: "コンポジション",
   layers: "レイヤー",
   "· Effect": "· エフェクト",
   Parameters: "パラメーター",

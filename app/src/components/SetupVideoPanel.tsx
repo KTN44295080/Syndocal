@@ -109,53 +109,63 @@ export function SetupVideoPanel(props: SetupVideoPanelProps) {
         <h2>Video Setup</h2>
         <span>{props.outputs.length} video output(s)</span>
       </div>
-      <div class="videoSetupWorkbench">
+      <div class="videoSetupWorkbench" data-video-setup-scroll>
         <div class="videoSetupOutputDesk">
           <VideoOutputListPanel
             setupTools={
-              <div class="videoSetupSidebar" aria-label="Video setup tools">
-                <VideoCompositionSetupPanel
-                  compositions={props.compositions}
-                  layers={props.layers}
-                  timelineId={props.timelineId}
-                  timelineLayers={props.timelineLayers}
-                  draftLabel={props.compositionLabel}
-                  draftLayerIds={props.compositionLayerIds}
-                  onDraftLabel={props.onCompositionLabel}
-                  onToggleDraftLayer={props.onToggleCompositionLayer}
-                  onAddComposition={props.onAddComposition}
-                  onRemoveComposition={props.onRemoveComposition}
-                  onSetCompositionLayers={props.onSetCompositionLayers}
-                  onSetCompositionTimelineLayers={props.onSetCompositionTimelineLayers}
-                  onMoveCompositionLayer={props.onMoveCompositionLayer}
-                />
-                <VideoOutputCreatePanel
-                  label={props.outputLabel}
-                  kind={props.outputKind}
-                  syphonAvailable={props.syphonAvailable}
-                  spoutAvailable={props.spoutAvailable}
-                  ndiAvailable={props.ndiAvailable}
-                  compositions={props.compositions}
-                  width={props.outputWidth}
-                  height={props.outputHeight}
-                  fadeMs={props.outputFadeMs}
-                  monitorId={props.outputMonitorId}
-                  fullscreen={props.outputFullscreen}
-                  endpoint={props.outputEndpoint}
-                  onLabel={props.onOutputLabel}
-                  onKind={props.onOutputKind}
-                  onWidth={props.onOutputWidth}
-                  onHeight={props.onOutputHeight}
-                  onFadeMs={props.onOutputFadeMs}
-                  onMonitorId={props.onOutputMonitorId}
-                  onFullscreen={props.onOutputFullscreen}
-                  onEndpoint={props.onOutputEndpoint}
-                  invokeCommand={props.invokeCommand}
-                  onAddDisplayOutput={props.onAddDisplayOutput}
-                  onAddExternalOutput={props.onAddExternalOutput}
-                  onEnableShowSpoutOutputs={props.onEnableShowSpoutOutputs}
-                  onResetShowSpoutOutputs={props.onResetShowSpoutOutputs}
-                />
+              <div class="videoSetupSidebar" aria-label="Video setup tools" data-video-setup-tools>
+                <details class="ioDisclosure videoSetupToolDisclosure" data-video-setup-tool="compositions">
+                  <summary>Compositions</summary>
+                  <div class="ioDisclosureBody">
+                    <VideoCompositionSetupPanel
+                      compositions={props.compositions}
+                      layers={props.layers}
+                      timelineId={props.timelineId}
+                      timelineLayers={props.timelineLayers}
+                      draftLabel={props.compositionLabel}
+                      draftLayerIds={props.compositionLayerIds}
+                      onDraftLabel={props.onCompositionLabel}
+                      onToggleDraftLayer={props.onToggleCompositionLayer}
+                      onAddComposition={props.onAddComposition}
+                      onRemoveComposition={props.onRemoveComposition}
+                      onSetCompositionLayers={props.onSetCompositionLayers}
+                      onSetCompositionTimelineLayers={props.onSetCompositionTimelineLayers}
+                      onMoveCompositionLayer={props.onMoveCompositionLayer}
+                    />
+                  </div>
+                </details>
+                <details class="ioDisclosure videoSetupToolDisclosure" data-video-setup-tool="outputs">
+                  <summary>New Output</summary>
+                  <div class="ioDisclosureBody">
+                    <VideoOutputCreatePanel
+                      label={props.outputLabel}
+                      kind={props.outputKind}
+                      syphonAvailable={props.syphonAvailable}
+                      spoutAvailable={props.spoutAvailable}
+                      ndiAvailable={props.ndiAvailable}
+                      compositions={props.compositions}
+                      width={props.outputWidth}
+                      height={props.outputHeight}
+                      fadeMs={props.outputFadeMs}
+                      monitorId={props.outputMonitorId}
+                      fullscreen={props.outputFullscreen}
+                      endpoint={props.outputEndpoint}
+                      onLabel={props.onOutputLabel}
+                      onKind={props.onOutputKind}
+                      onWidth={props.onOutputWidth}
+                      onHeight={props.onOutputHeight}
+                      onFadeMs={props.onOutputFadeMs}
+                      onMonitorId={props.onOutputMonitorId}
+                      onFullscreen={props.onOutputFullscreen}
+                      onEndpoint={props.onOutputEndpoint}
+                      invokeCommand={props.invokeCommand}
+                      onAddDisplayOutput={props.onAddDisplayOutput}
+                      onAddExternalOutput={props.onAddExternalOutput}
+                      onEnableShowSpoutOutputs={props.onEnableShowSpoutOutputs}
+                      onResetShowSpoutOutputs={props.onResetShowSpoutOutputs}
+                    />
+                  </div>
+                </details>
               </div>
             }
             outputs={props.outputs}
