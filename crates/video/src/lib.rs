@@ -49,6 +49,8 @@ mod libav_decoder;
 pub mod native_frame_timing;
 #[cfg(feature = "qa-native-frame-timing")]
 use native_frame_timing::{span as native_span, Phase as NativePhase};
+#[cfg(test)]
+pub(crate) mod native_gpu_contract;
 mod live_source;
 mod rgba_row_copy;
 mod show_spout_aspect_fit;
