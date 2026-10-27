@@ -49,7 +49,7 @@ commands initialized and verified against the exact paths above.
 
 Use the LGPL shared 8.1 build recorded in
 [FFMPEG_WINDOWS_RUNTIME_INVENTORY.json](FFMPEG_WINDOWS_RUNTIME_INVENTORY.json)
-(schema 2, exact provenance, configure line and seven DLL identities). It is a
+(schema 3, exact provenance, configure line, seven DLL identities and the recording executable). It is a
 Syndocal self-build of the pinned BtbN FFmpeg-Builds recipe with the GPL-only
 Chromaprint/FFTW3 recipes removed (`tools/ffmpeg-sdk/`, workflow
 `.github/workflows/ffmpeg-lgpl-sdk.yml`):
@@ -83,7 +83,7 @@ Gyan GPL DLLs or an arbitrary PATH SDK.
 The two native acceptance harnesses use only this checkout-relative fallback
 when `FFMPEG_DIR` is unset:
 `target/qa/ffmpeg-selfbuild-20261027/sdk/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1`.
-Their shared resolver verifies all seven pinned DLL sizes, SHA-256 hashes and
+Their shared resolver verifies all seven pinned DLL and recording `ffmpeg.exe` sizes, SHA-256 hashes and
 PE identities, plus required nonempty headers and MSVC import libraries.
 Explicit `FFMPEG_DIR` overrides pass the same checks; invalid overrides fail
 without falling back. No WinGet/Gyan, arbitrary directory or PATH SDK discovery
@@ -92,8 +92,16 @@ and exact-source blockers in the alignment evidence; publication stays blocked.
 
 `avcodec_configuration()` must match the inventory; `avutil_license()` reports
 `LGPL version 3 or later`, without `--enable-gpl` or `--enable-nonfree`.
-`prepare-release-runtime.mjs` verifies the exact seven DLLs; it never bundles
-the SDK's `ffmpeg.exe` as a recording encoder.
+`prepare-release-runtime.mjs` verifies and stages the exact seven DLLs and the
+SDK's LGPL recording `ffmpeg.exe` beside the application. The executable is
+540672 bytes, SHA-256 `cc737ff68b38ba9228ee422b1c49ad0943e9132a17ff9a2b958aa47a24598d97`,
+with PE32+ AMD64 executable characteristics `0x022e` (DLLs remain `0x222e`).
+The canonical inventory anchors both identities; a DLL renamed to `ffmpeg.exe`,
+a missing executable, or changed executable bytes fail verification.
+Normal and optional Show-ASIO artifacts both carry the same recording executable.
+Show-ASIO keeps its existing `ffmpeg-runtime` file role and pins `ffmpeg.exe` as
+an executable while the seven other entries must retain their DLL characteristic;
+old inventories without `recording_encoder` are rejected by schema 3.
 
 For the Task 53 trial, use an absolute `CARGO_TARGET_DIR` below
 `target/qa/ffmpeg-lgpl-20261026/`, run `pnpm --dir app tauri build --no-bundle`,

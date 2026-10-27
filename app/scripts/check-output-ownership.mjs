@@ -546,8 +546,9 @@ assertOrderedMarkers(
   ],
   "a take must write its start receipt before recording and its end receipt after",
 );
-// Lease start (phase 3), FFmpeg spawn, FFmpeg stdin and renderer start.
-assert.equal((recordingWorker.match(/end_failed_take\(&status, &mut artifact, journal, error\);/g) ?? []).length, 4);
+// Lease start (phase 3), LGPL/encoder admission, command construction,
+// FFmpeg spawn, FFmpeg stdin and renderer start must all close the receipt.
+assert.equal((recordingWorker.match(/end_failed_take\(&status, &mut artifact, journal, error\);/g) ?? []).length, 6);
 assertOrderedMarkers(
   recordingWorker,
   ["let result = encoded.and_then(|_| artifact.publish(frames_written));", "let receipt = journal.end("],

@@ -6,7 +6,6 @@ use super::{
 use engine::EngineHandle;
 use protocol::{hidden_console_command::hidden_command, VideoOutputId};
 use std::{
-    env,
     ffi::OsStr,
     io::Write,
     path::{Path, PathBuf},
@@ -20,6 +19,8 @@ use std::{
 
 #[path = "video_recording_encoder.rs"]
 pub(crate) mod encoder;
+#[path = "video_recording_selection.rs"]
+pub(crate) mod selection;
 use super::video_recording_renderer_process::{self, RecordingRenderRequest};
 
 /// The application-side input ownership seam for isolated recording. Live
@@ -59,12 +60,14 @@ impl RecordingExternalFrameSources {
         for layer in &video.layers {
             let mut frame = match layer.source.kind {
                 protocol::VideoSourceKind::Camera | protocol::VideoSourceKind::ScreenCapture => {
-                    capture.as_ref().and_then(|frames| frames.get(&layer.id).cloned())
+                    capture
+                        .as_ref()
+                        .and_then(|frames| frames.get(&layer.id).cloned())
                 }
                 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-                protocol::VideoSourceKind::Spout => {
-                    spout.as_ref().and_then(|frames| frames.get(&layer.id).cloned())
-                }
+                protocol::VideoSourceKind::Spout => spout
+                    .as_ref()
+                    .and_then(|frames| frames.get(&layer.id).cloned()),
                 #[cfg(feature = "ndi")]
                 protocol::VideoSourceKind::Ndi => ndi.as_mut().and_then(|inputs| {
                     inputs
@@ -109,6 +112,7 @@ pub(super) struct RecordingAudioInput {
     pub(super) loop_enabled: bool,
 }
 
+#[cfg(test)]
 pub(super) fn video_recording_ffmpeg_command(
     ffmpeg: impl AsRef<OsStr>,
     path: &Path,
@@ -116,7 +120,28 @@ pub(super) fn video_recording_ffmpeg_command(
     height: u32,
     frame_rate: u32,
     audio_inputs: &[RecordingAudioInput],
-) -> Command {
+) -> Result<Command, String> {
+    let (ffmpeg, selected) = selection::select(Path::new(ffmpeg.as_ref()))?;
+    recording_command_for_encoder(
+        &ffmpeg,
+        selected,
+        path,
+        width,
+        height,
+        frame_rate,
+        audio_inputs,
+    )
+}
+
+pub(super) fn recording_command_for_encoder(
+    ffmpeg: impl AsRef<OsStr>,
+    selected: &str,
+    path: &Path,
+    width: u32,
+    height: u32,
+    frame_rate: u32,
+    audio_inputs: &[RecordingAudioInput],
+) -> Result<Command, String> {
     let dimensions = format!("{width}x{height}");
     let rate = frame_rate.to_string();
     let mut command = hidden_command(ffmpeg);
@@ -141,15 +166,13 @@ pub(super) fn video_recording_ffmpeg_command(
     } else {
         command.arg("-an");
     }
+    selection::options(&mut command, selected, frame_rate)?;
     command
-        .args([
-            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-        ])
         .args(["-f", "mp4"])
         .arg(path)
         .stdin(Stdio::piped())
         .stderr(Stdio::piped());
-    command
+    Ok(command)
 }
 
 pub(super) struct VideoOutputRecordingContext {
@@ -252,15 +275,28 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
             return;
         }
     };
-    let ffmpeg = env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
-    let mut command = video_recording_ffmpeg_command(
+    let (ffmpeg, selected) = match selection::selected(&stop) {
+        Ok(selection) => selection,
+        Err(error) => {
+            end_failed_take(&status, &mut artifact, journal, error);
+            return;
+        }
+    };
+    let mut command = match recording_command_for_encoder(
         ffmpeg,
+        selected,
         artifact.path(),
         width,
         height,
         frame_rate,
         &audio_inputs,
-    );
+    ) {
+        Ok(command) => command,
+        Err(error) => {
+            end_failed_take(&status, &mut artifact, journal, error);
+            return;
+        }
+    };
     let mut encoder = match encoder::RecordingEncoder::spawn(&mut command, Arc::clone(&stop)) {
         Ok(encoder) => encoder,
         Err(error) => {
@@ -283,10 +319,8 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
             let error = match encoder.fail(format!(
                 "Unable to start isolated recording renderer: {error}"
             )) {
-                Ok(_) => {
-                    "Recording encoder stopped without returning the renderer startup error"
-                        .to_string()
-                }
+                Ok(_) => "Recording encoder stopped without returning the renderer startup error"
+                    .to_string(),
                 Err(error) => error,
             };
             end_failed_take(&status, &mut artifact, journal, error);

@@ -76,7 +76,7 @@ function slashRelativePath(root, path, label) {
 
 function approvedArtifactFiles(inventory) {
   const approved = new Map([["syndocal.exe", Object.freeze({ kind: "executable" })]]);
-  for (const runtime of inventory.runtime_dlls) {
+  for (const runtime of [...inventory.runtime_dlls, inventory.recording_encoder]) {
     approved.set(runtime.filename, Object.freeze({ kind: "runtime", runtime }));
   }
   for (const resource of inventory.common_resources) {
@@ -371,7 +371,7 @@ export function assertExtractedWindowsArtifactContents(
   }
 
   assertSyndocalExecutable(join(realRoot, "syndocal.exe"), label + " syndocal.exe", [realRoot]);
-  for (const runtime of verifiedInventory.runtime_dlls) {
+  for (const runtime of [...verifiedInventory.runtime_dlls, verifiedInventory.recording_encoder]) {
     verifyPinnedRuntimeFile(
       join(realRoot, runtime.filename),
       runtime,
@@ -391,7 +391,7 @@ export function assertExtractedWindowsArtifactContents(
     root: realRoot,
     applicationDirectory: realRoot,
     fileCount: filesByRelativePath.size,
-    ffmpegRuntimeCount: verifiedInventory.runtime_dlls.length,
+    ffmpegRuntimeCount: verifiedInventory.runtime_dlls.length + 1,
     commonResourceCount: verifiedInventory.common_resources.length,
   });
 }
@@ -985,15 +985,15 @@ function selfTest() {
     assertions += 1;
   };
   pass(
-    inventory.schema_version === 2
+    inventory.schema_version === 3
       && inventory.ffmpeg_build.license === "LGPL version 3 or later"
       && !/--enable-(?:gpl|nonfree)(?:\s|$)/u.test(inventory.ffmpeg_build.configure),
     "the approved normal Windows runtime has exact LGPL provenance",
   );
-  for (const schemaVersion of [1, 3]) {
+  for (const schemaVersion of [1, 2, 4]) {
     rejects(
       () => validateWindowsRuntimeInventory({ ...structuredClone(inventory), schema_version: schemaVersion }),
-      /must be schema_version 2/u,
+      /must be schema_version 3/u,
     );
   }
   for (const [key, value] of [
@@ -1231,6 +1231,14 @@ function selfTest() {
       writeFileSync(join(clean, runtime.filename), bytes, { flag: "wx" });
       return { ...runtime, byte_size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
     });
+    rejects(
+      () => assertExtractedWindowsArtifactContents(clean, "missing recording encoder artifact", cleanInventory),
+      /missing approved artifact file: ffmpeg\.exe/,
+    );
+    const encoderBytes = fixturePe(8, 0x022e);
+    writeFileSync(join(clean, "ffmpeg.exe"), encoderBytes, { flag: "wx" });
+    cleanInventory.recording_encoder.byte_size = encoderBytes.length;
+    cleanInventory.recording_encoder.sha256 = createHash("sha256").update(encoderBytes).digest("hex");
     const writeCommonResource = (resource) => {
       const source = resolve(workspaceRoot, resource.source.slice("../../".length));
       const record = readVerifiedRegularFile(source, "self-test source common resource", { allowedRoots: [workspaceRoot] });
@@ -1244,8 +1252,8 @@ function selfTest() {
     );
     const cleanResult = assertExtractedWindowsArtifactContents(clean, "clean extracted artifact", cleanInventory);
     pass(
-      cleanResult.fileCount === 14 && cleanResult.ffmpegRuntimeCount === 7 && cleanResult.commonResourceCount === 6,
-      "clean materialized artifact passes the exact approved fourteen-file tree",
+      cleanResult.fileCount === 15 && cleanResult.ffmpegRuntimeCount === 8 && cleanResult.commonResourceCount === 6,
+      "clean materialized artifact passes the exact approved fifteen-file tree",
     );
 
     const notices = cleanInventory.common_resources.find((resource) => resource.destination === "THIRD_PARTY_NOTICES.md");

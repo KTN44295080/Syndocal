@@ -368,15 +368,15 @@ export function parsePeIdentity(bytes, label) {
   return identity;
 }
 
-function assertPeRole(identity, role, label) {
+function assertPeRole(identity, role, label, filename) {
   assertExactKeys(identity, ["signature", "machine", "characteristics", "optionalMagic"], label + " PE identity");
   if (identity.signature !== "PE\0\0" || identity.machine !== 0x8664 || identity.optionalMagic !== 0x20b) {
     throw new Error(label + " manifest PE identity must be AMD64 PE32+.");
   }
   if ((identity.characteristics & 0x0002) === 0) throw new Error(label + " PE image is not executable.");
   const isDll = (identity.characteristics & 0x2000) !== 0;
-  if (role === "application" && isDll) throw new Error(label + " must be an executable, not a DLL.");
-  if ((role === "asio-bridge" || role === "ffmpeg-runtime") && !isDll) throw new Error(label + " must carry the PE DLL characteristic.");
+  if ((role === "application" || filename === "ffmpeg.exe") && isDll) throw new Error(label + " must be an executable, not a DLL.");
+  if ((role === "asio-bridge" || (role === "ffmpeg-runtime" && filename !== "ffmpeg.exe")) && !isDll) throw new Error(label + " must carry the PE DLL characteristic.");
 }
 
 export function parseDumpbinExports(stdout) {
@@ -732,7 +732,7 @@ function expectedArtifactFiles(inventory) {
   return [
     ["application", "syndocal-show-asio.exe"],
     ["asio-bridge", "syndocal_asio_bridge.dll"],
-    ...inventory.runtime_dlls.map((entry) => ["ffmpeg-runtime", entry.filename]),
+    ...[...inventory.runtime_dlls, inventory.recording_encoder].map((entry) => ["ffmpeg-runtime", entry.filename]),
     ...inventory.common_resources.map((entry) => ["notice", entry.destination]),
     ["notice", "ASIO_SHOW_LOCAL_ONLY.md"],
   ];
@@ -822,7 +822,7 @@ export function validateShowAsioManifest(manifest, {
     if (file.role !== expectedRole || file.path !== expectedPath) throw new Error("Show-ASIO file role/path order is not exact.");
     assertPositiveInteger(file.byteSize, "Show-ASIO " + file.path + " byteSize");
     assertLowerSha256(file.sha256, "Show-ASIO " + file.path + " SHA-256");
-    if (file.pe) assertPeRole(file.pe, file.role, "Show-ASIO " + file.path);
+    if (file.pe) assertPeRole(file.pe, file.role, "Show-ASIO " + file.path, file.path);
     if (file.role === "asio-bridge") {
       if (file.bridgeAbiVersion !== 3) throw new Error("Show-ASIO bridge maximum ABI must be exactly v3 while retaining v2.");
       if (JSON.stringify(file.exports) !== JSON.stringify(showAsioBridgeExports)) {
@@ -925,10 +925,10 @@ export function checkShowAsioArtifact({
     if (file.pe) {
       const actualPe = parsePeIdentity(record.bytes, "Show-ASIO artifact " + file.path);
       if (JSON.stringify(actualPe) !== JSON.stringify(file.pe)) throw new Error("Show-ASIO PE identity changed after manifest creation: " + file.path);
-      assertPeRole(actualPe, file.role, "Show-ASIO artifact " + file.path);
+      assertPeRole(actualPe, file.role, "Show-ASIO artifact " + file.path, file.path);
     }
     if (file.role === "ffmpeg-runtime") {
-      const pinned = inventory.runtime_dlls.find((entry) => entry.filename === file.path);
+      const pinned = [...inventory.runtime_dlls, inventory.recording_encoder].find((entry) => entry.filename === file.path);
       verifyPinnedRuntimeFile(path, pinned, "Show-ASIO FFmpeg runtime " + file.path, { allowedRoots: [exactDirectory] });
     }
     if (file.role === "asio-bridge") {
@@ -1009,20 +1009,25 @@ function makeSyntheticManifestFixture(root) {
   const common = [
     ["../../THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md"],
     ["../../licenses/FFmpeg-LGPL-3.0.txt", "licenses/FFmpeg-LGPL-3.0.txt"],
+    ["../../licenses/GPL-3.0.txt", "licenses/GPL-3.0.txt"],
+    ["../../licenses/FFmpeg-DEPENDENCIES.txt", "licenses/FFmpeg-DEPENDENCIES.txt"],
     ["../../licenses/Spout2-BSD-2-Clause.txt", "licenses/Spout2-BSD-2-Clause.txt"],
     ["../../licenses/bcdec_rs-MIT.txt", "licenses/bcdec_rs-MIT.txt"],
   ].map(([source, destination]) => {
     const bytes = Buffer.from("notice:" + destination, "utf8");
     return { source, destination, byte_size: bytes.length, sha256: hash(bytes), bytes };
   });
-  const inventory = { runtime_dlls: runtimeDlls, common_resources: common };
+  const encoderBytes = syntheticPe({ dll: false, marker: 0x49 });
+  const recordingEncoder = { filename: "ffmpeg.exe", byte_size: encoderBytes.length, sha256: hash(encoderBytes),
+    pe_identity: { signature: "PE\0\0", machine: 0x8664, characteristics: 2, optional_magic: 0x20b }, bytes: encoderBytes };
+  const inventory = { runtime_dlls: runtimeDlls, recording_encoder: recordingEncoder, common_resources: common };
   const appBytes = syntheticPe({ dll: false, marker: 0x51 });
   const bridgeBytes = syntheticPe({ dll: true, marker: 0x52 });
   const localNotice = Buffer.from("LOCAL ONLY", "utf8");
   const rawFiles = [
     ["application", "syndocal-show-asio.exe", appBytes],
     ["asio-bridge", "syndocal_asio_bridge.dll", bridgeBytes],
-    ...runtimeDlls.map((entry) => ["ffmpeg-runtime", entry.filename, entry.bytes]),
+    ...[...runtimeDlls, recordingEncoder].map((entry) => ["ffmpeg-runtime", entry.filename, entry.bytes]),
     ...common.map((entry) => ["notice", entry.destination, entry.bytes]),
     ["notice", "ASIO_SHOW_LOCAL_ONLY.md", localNotice],
   ];

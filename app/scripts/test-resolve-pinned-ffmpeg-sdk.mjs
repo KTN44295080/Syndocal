@@ -35,7 +35,7 @@ function psLiteral(text) {
   return "'" + text.replaceAll("'", "''") + "'";
 }
 try {
-  check("automatic selection verifies the real pinned seven-DLL SDK", () => {
+  check("automatic selection verifies the real pinned seven-DLL and recording-executable SDK", () => {
     assert.equal(resolvePinnedFfmpegSdk({ explicitRoot: "" }), realpathSync(pinnedRoot));
   });
   check("explicit FFMPEG_DIR verifies the same real pinned SDK", () => {
@@ -58,9 +58,19 @@ try {
       copyFileSync(join(pinnedRoot, relative), destination);
     }
   }
+  const encoder = join(fixtureRoot, "bin/ffmpeg.exe");
+  copyFileSync(join(pinnedRoot, "bin/ffmpeg.exe"), encoder);
   check("complete copied SDK passes at a Japanese explicit path", () => {
     assert.equal(resolvePinnedFfmpegSdk({ explicitRoot: fixtureRoot }), realpathSync(fixtureRoot));
   });
+  rmSync(encoder);
+  check("missing pinned recording executable fails closed", () => rejectRoot(fixtureRoot, /recording encoder is missing/u));
+  const encoderBytes = readFileSync(join(pinnedRoot, "bin/ffmpeg.exe"));
+  const changedEncoderBytes = Buffer.from(encoderBytes);
+  changedEncoderBytes[changedEncoderBytes.length - 1] ^= 1;
+  writeFileSync(encoder, changedEncoderBytes);
+  check("same-size recording executable mismatch fails closed", () => rejectRoot(fixtureRoot, /recording encoder SHA-256 does not match/u));
+  writeFileSync(encoder, encoderBytes);
   const header = join(fixtureRoot, "include/libavcodec/avcodec.h");
   rmSync(header);
   check("incomplete headers fail closed", () => rejectRoot(fixtureRoot, /avcodec\.h is missing/u));

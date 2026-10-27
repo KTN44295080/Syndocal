@@ -328,21 +328,66 @@ moving release/8.1 and Docker tags; freeze exact commits/environment. Monthly
 upstream retention is two years, so preserve/mirror exact bytes before expiry.
 This does not close DIST-NOTICES-001 or prove clean-machine distribution.
 
-Do not bundle a recording encoder in this task. Recommend a separate pinned
-encoder exe in a dedicated directory with its own hash/source/license manifest.
-`app/src-tauri/src/video_recording.rs:255` resolves SYNDOCAL_FFMPEG then PATH
-ffmpeg; command constructor :112, libx264 :146, optional built-in aac :140.
-libx264 requires the GPL encoder distribution path; never --enable-nonfree.
-Built-in aac is not libfdk_aac. The pinned LGPL CLI's encoder list
-offers LGPL-compatible H.264 paths: `libopenh264`, `h264_amf`, `h264_mf`,
-`h264_nvenc`, `h264_qsv` and `h264_d3d12va`. It offers no `libx264`. The
-recording lane must choose between two options. One is the GPL route: a separate
-GPL encoder exe with libx264 and a GPL source offer. The other is to switch
-`video_recording.rs:146` to an LGPL encoder with a hardware-first fallback chain.
-Recording lane must add bounded codec preflight,
-actionable unavailable errors, exact process/dependency paths, installer/inventory
-integration and clean-install recording proof. Do not replace LGPL decode DLLs
-with GPL encoder DLLs. No encoder was bundled.
+The Task 58 owner decision supersedes the earlier separate-GPL-encoder proposal:
+recording now uses the **same pinned self-built LGPL SDK's `ffmpeg.exe`** as the
+decode DLLs. No GPL encoder executable, libx264 or `--enable-nonfree` is admitted.
+Bundled `ffmpeg.exe` beside the application wins, followed by the development
+`SYNDOCAL_FFMPEG` override and explicit PATH discovery. Every newly admitted
+executable must complete bounded `-L` and `-version` checks, prove the Lesser GPL
+grant and reject GPL/nonfree flags or an unverifiable response. It does not
+silently continue to a different executable after an invalid selected path.
+
+Real two-frame 256x144 encode preflights try exactly
+`h264_nvenc -> h264_amf -> h264_qsv -> h264_mf -> libopenh264`; first success
+wins and is cached for the process session by canonical executable path and
+SHA-256. Each process has an 8-second deadline, stop cancellation, a two-second
+termination/reap window and retained process-tree ownership if the OS cannot
+confirm termination. License output uses disk capture rather than an undrained
+pipe. The chosen encoder is logged in existing diagnostics; no IPC/status
+schema was extended. Unavailable/executable/license errors use three exact,
+actionable English source keys with Japanese dictionary translations.
+
+All encoder options share `-pix_fmt yuv420p` and a two-second GOP (`-g 2*fps`).
+The old implicit x264 CRF 23 / veryfast quality intent is mapped as follows;
+these settings do not claim perceptually identical output across encoders:
+
+| Encoder | Recording and preflight options |
+| --- | --- |
+| `h264_nvenc` | `-preset p2 -rc vbr -cq 23 -b:v 0` |
+| `h264_amf` | `-quality speed -rc cqp -qp_i 23 -qp_p 23` |
+| `h264_qsv` | `-preset veryfast -global_quality 23` |
+| `h264_mf` | `-rate_control quality -quality 75 -scenario archive` (MF chooses its available implementation) |
+| `libopenh264` | `-rc_mode bitrate -b:v 8M -allow_skip_frames 0` |
+
+MP4 and built-in AAC at 192 kbps are unchanged. Hardware availability and
+requested output dimensions remain runtime constraints; a successful tiny
+preflight does not prove every resolution or sustained recording budget.
+The options were checked against the pinned executable's `-h encoder=...`;
+[FFmpeg's encoder documentation](https://ffmpeg.org/ffmpeg-codecs.html) describes
+the per-encoder controls. No paid dependency was introduced.
+
+The canonical Windows inventory is now schema **3**, with a distinct
+`recording_encoder` entry: `ffmpeg.exe`, **540,672 bytes**, SHA-256
+`cc737ff68b38ba9228ee422b1c49ad0943e9132a17ff9a2b958aa47a24598d97`,
+PE32+ AMD64 executable (characteristics `0x022e`). The SDK ZIP/source/configure,
+seven DLL hashes remain unchanged. `THIRD_PARTY_NOTICES.md` corrects the former
+no-encoder statement: 7,101 bytes, SHA-256
+`d39a587a9cc3ae55e24567c0d6b338967594d5a591bd4853255cd3b852761bd1`;
+the other five notice hashes are unchanged. Resolver, staging,
+Tauri Windows resources, normal-artifact verification and optional Show-ASIO
+runtime consumers all require the encoder. Schema 2 and future inventory
+versions fail closed. This is build/distribution metadata, not a user-project
+schema migration. The normal extracted tree grows from 14 to 15 files; the
+optional Show-ASIO tree requires 17 files including its existing six notices.
+
+Task 58 validation evidence and remaining acceptance boundaries are recorded
+in the dated Task 58 section below. **Clean-install recording proof and the
+self-built OpenH264 patent-policy note remain open.** Cisco-distributed binary
+patent coverage is not inferred for this source-built library; see the
+[Cisco-provided binary conditions](https://www.openh264.org/BINARY_LICENSE.txt).
+Corresponding
+source/dependency closure, signing, hardware acceptance and full release
+readiness remain separate gates.
 
 ## Checkpoint / first safe resume
 
@@ -1000,3 +1045,107 @@ CI results:
   stale count, not a flake, and belongs to the native lane. The Windows
   `Test Rust workspace` step runs the same test, so the Windows job cannot
   turn green until that count is reconciled.
+
+<a id="task-58--lgpl-recording-encoder--2026-10-27"></a>
+
+## Task 58 - LGPL recording encoder - 2026-10-27
+
+Base: `main` at `c353e172f1b82ef3d029b1d9446b05a9709ff77f`. The owner accepted
+the LGPL recording route described in [Source / recording remaining work](#source--recording-remaining-work).
+The implementation, exact options, runtime executable identity and remaining
+publication boundaries are recorded there. `main.rs`, `crates/**` and frontend
+components were not edited; the only UI change is three Japanese source-key
+entries. Existing unrelated dirty video-test markers were preserved.
+
+Evidence root: `%LOCALAPPDATA%/SyndocalDev/task58-recording-lgpl/`. `head.tar`
+is a `git archive HEAD` snapshot of the base; `src/` overlays only the owned
+files listed in `owned-files.txt`. Python's UTF-8 tar extraction recovered
+Japanese distribution filenames after Windows tar rejected them. No extra
+branch/worktree or shared-index mutation was needed. Git attribute checks use
+the existing `.git` read-only with `GIT_WORK_TREE` pointing at the archive.
+Dependency installation is reused via the `app/node_modules` junction; frontend
+output and both Cargo targets are isolated from the shared checkout.
+
+`run.mjs` resolves and verifies the pinned SDK, initializes vcvars64 with
+`-vcvars_ver=14.44`, pins the exact Build Tools MSVC **14.44.35207** linker and
+prints/verifies it first in `where.exe link.exe` before each native command.
+`FFMPEG_DIR` and process-local PATH select that SDK; `SYNDOCAL_FFMPEG` and
+`SYNDOCAL_FFPROBE` select its exact CLIs. The unrelated inherited
+`CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS` key is removed process-locally.
+Debug tests use `cargo-target/`; the no-bundle native build uses a separate
+`native-target/`. The Tauri wrapper verifies/stops only that isolated release
+executable. No physical DMX, audio device or external application is exercised.
+
+The first release-check run detected an affected static contract: recording
+now has **six** early failure paths that must close a started receipt, rather
+than four. `check-output-ownership.mjs` now includes LGPL/encoder admission and
+fallible command construction alongside lease, process, stdin and renderer
+startup. This tightens coverage of the new failure paths; it does not relax
+receipt ownership. Its standalone rerun passed.
+
+| Check | Exit | Evidence |
+| --- | ---: | --- |
+| Base `cargo build -p syndocal --locked` | 0 | `baseline-build.log`; 4m01s; compiler warnings 0 |
+| Candidate `cargo build -p syndocal --locked` | 0 | `candidate-build.log`; 2m51s; compiler warnings 0 |
+| `cargo test -p syndocal --locked recording -- --test-threads=1` | 0 | 95 passed, 0 failed, 8 ignored, 2,225 filtered; all six new selection tests ran |
+| `cargo test -p syndocal --locked -- --test-threads=1` | 0 | 2,303 passed, 0 failed, 25 ignored; 184.54s, no tests filtered |
+| `cargo test -p syndocal --locked recording_command_writes -- --ignored --nocapture --test-threads=1` | 0 | 3 passed, 0 failed, 0 ignored, 2,325 filtered; automatic AMF, forced MF and forced OpenH264 |
+| Localization contract | 0 | `localization-check.log`; 4,214/4,214 static Japanese entries, 0 unprotected user-data labels |
+| `npm --prefix app run check:release` | 0 | `release-check.log`; all 54 static commands plus metadata (55 total); new encoder and notice identities verified |
+| Pinned SDK resolver fixtures (provisioned shared checkout) | 0 | 25 checks: existing 23 plus missing/corrupt executable rejection; copied SDK fixture includes the encoder |
+| ASIO packaging / Show-ASIO artifact / Show-ASIO preparation | 0 / 0 / 0 | 183 / 155 / 16 assertions; no bridge build, device or process-stop action |
+| Windows artifact final self-test | 0 | `artifact-selftest.log`; 162 assertions, extractor 43, materialization 4; exact 15-file normal tree (8 FFmpeg runtime files, 6 notices, app) |
+| Runtime preparation self-test / actual isolated stage | 0 / 0 | 99 assertions / all 7 DLLs plus encoder verified and staged |
+| `pnpm --dir app tauri build --no-bundle` | 0 | `native-build.log`; TypeScript/Vite passed, Vite 19.14s; Cargo release 8m13s |
+| Native identities / window | 0 | All 8 FFmpeg files and 6 notices verified; one responsive Ready window, maximized; task-owned app closed cleanly |
+
+The base build first required staging the pinned DLL resources into the
+archive's `target/release`; this setup failure was corrected before the
+successful baseline above. Initial native-launcher setup also corrected the
+local pnpm entry point to Corepack's installed `pnpm.js`; no product change or
+guard bypass was involved.
+
+Direct CLI probe receipts (`direct-chain.json`) show NVENC unavailable
+(`nvcuda.dll` missing), AMF successful, QSV unavailable (unsupported MFX
+implementation), and Media Foundation/OpenH264 successful. The Rust session
+automatically selected **`h264_amf`**. All three runtime MP4 tests passed in
+4.71 seconds: raw RGBA plus a PCM tone produces H.264/AAC MP4, FFprobe sees both
+streams, all 30 submitted frames decode, the previous target remains unchanged
+until atomic publication, and staging disappears on success. The tests use
+256x144 rather than the former 16x16 fixture so hardware encoders can accept
+the same input shape as the preflight; frame-count assertions grow accordingly.
+This is local encode/mux/publication proof, not clean-install or live A/V soak
+acceptance.
+
+Native artifact: `native-target/release/syndocal.exe`, **74,956,800 bytes**,
+SHA-256 `277620b580fe8e3228c6b9ff7b9edaa6b277a38f57386fe02005621941c53806`.
+The exact-path process was PID **15372**, HWND **115607300**, title `Syndocal`,
+`Responding=true`. Computer Use verified the rendered empty-project Ready
+state and maximization: the Windows system menu enabled Restore and disabled
+Maximize. A successful earlier accessibility snapshot also reported Ready and
+the native Restore control; later accessibility snapshots intermittently
+returned null, so the final receipt distinguishes visual evidence from that
+earlier accessibility evidence. No product-data edits or output actions were
+performed. Alt+F4 closed the task-owned process, and absence of its window and
+process was verified. Five loaded modules (avcodec, avformat, avutil, swscale,
+swresample) came from the isolated release directory. Receipts:
+`native-artifact-identities.json`, `native-window.json`,
+`native-window-cua.json`, `native-launch.json`, `native-exit.json`.
+
+Compiler warnings for the matched non-test debug configuration are
+**baseline 0 / current 0 / delta 0**. The candidate release build and all three
+Cargo test invocations also report **0** compiler warnings; no pre-change
+release/test baseline was built, so those profile deltas are unmeasured. No
+warning suppression or acceptance assertion was weakened. Git line-ending
+advisories are not compiler warnings. The application version remains
+`1.2.0-alpha.82`; this is an internal checkpoint, not a distributed artifact.
+
+Remaining: clean-install recording proof; self-built OpenH264 patent-policy
+decision; requested-resolution/GPU availability and sustained live A/V soak;
+the wider corresponding-source/dependency, signing and release acceptance
+gates. The local encode tests and native window do not close those gates.
+
+Independent stable-source review found no actionable defect, including the
+exact option-array assertions, bounded teardown, error localization, inventory
+anchors, normal/Show-ASIO consumers and corrected notice. This review is source
+evidence and does not establish clean-install or patent-policy acceptance.

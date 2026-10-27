@@ -44,9 +44,11 @@ not claim that this release-publication gate has been completed.
 
 FFmpeg is not part of the Syndocal MIT-licensed source code. Recipients may
 replace the dynamically linked FFmpeg libraries with a compatible build, as
-permitted by the LGPL. The normal decode payload contains seven DLLs and no
-recording encoder executable. A separately supplied recording encoder and the
-optional ASIO bridge have their own distribution requirements.
+permitted by the LGPL. The normal Windows payload contains seven DLLs and the
+recording ffmpeg.exe from the same pinned LGPL shared SDK identified above.
+Recording uses an LGPL-compatible H.264 encoder and built-in AAC; it does not
+bundle libx264 or a GPL/nonfree FFmpeg build. The optional ASIO bridge has its
+own distribution requirements.
 
 Windows x86_64 builds include Spout2 2.007.017 through the `spout2-rs` static
 binding for local inter-application video texture transport.

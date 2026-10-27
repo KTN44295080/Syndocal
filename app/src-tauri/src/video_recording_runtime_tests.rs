@@ -247,7 +247,28 @@ fn recording_audio_inputs_select_only_playing_monitored_layers_on_output() {
 #[test]
 #[ignore = "requires FFmpeg and FFprobe with H.264/AAC support"]
 fn recording_command_writes_a_real_video_and_audio_mp4() {
-    let suffix = format!("{}-{}", std::process::id(), current_unix_ms());
+    recording_real_mp4(None);
+}
+
+#[test]
+#[ignore = "requires pinned LGPL FFmpeg and FFprobe with h264_mf"]
+fn recording_command_writes_real_mp4_mf() {
+    recording_real_mp4(Some("h264_mf"));
+}
+
+#[test]
+#[ignore = "requires pinned LGPL FFmpeg and FFprobe with libopenh264"]
+fn recording_command_writes_real_mp4_openh264() {
+    recording_real_mp4(Some("libopenh264"));
+}
+
+fn recording_real_mp4(forced: Option<&str>) {
+    let suffix = format!(
+        "{}-{}-{}",
+        std::process::id(),
+        current_unix_ms(),
+        forced.unwrap_or("auto")
+    );
     let audio_path = std::env::temp_dir().join(format!("syndocal-recording-{suffix}.wav"));
     let output_path = std::env::temp_dir().join(format!("syndocal-recording-{suffix}.mp4"));
     write_test_tone_wav(&audio_path);
@@ -255,11 +276,17 @@ fn recording_command_writes_a_real_video_and_audio_mp4() {
     fs::write(&output_path, sentinel).unwrap();
     let mut artifact = recording_artifact::RecordingArtifact::reserve(&output_path).unwrap();
     let ffmpeg = env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
-    let mut command = video_recording_ffmpeg_command(
-        ffmpeg,
+    let (ffmpeg, selected) = video_recording::selection::select(Path::new(&ffmpeg)).unwrap();
+    let selected = forced.unwrap_or(selected);
+    video_recording::selection::validate_executable(&ffmpeg).unwrap();
+    video_recording::selection::probe(&ffmpeg, selected).unwrap();
+    eprintln!("Recording real MP4 test encoder: {selected}");
+    let mut command = video_recording::recording_command_for_encoder(
+        &ffmpeg,
+        selected,
         artifact.path(),
-        16,
-        16,
+        256,
+        144,
         30,
         &[RecordingAudioInput {
             path: audio_path.clone(),
@@ -268,12 +295,13 @@ fn recording_command_writes_a_real_video_and_audio_mp4() {
             speed: 1.0,
             loop_enabled: false,
         }],
-    );
+    )
+    .unwrap();
     let stop = Arc::new(AtomicBool::new(false));
     let mut encoder =
         video_recording::encoder::RecordingEncoder::spawn(&mut command, Arc::clone(&stop)).unwrap();
     let mut stdin = encoder.take_stdin().unwrap();
-    let mut frame = vec![0_u8; 16 * 16 * 4];
+    let mut frame = vec![0_u8; 256 * 144 * 4];
     for pixel in frame.chunks_exact_mut(4) {
         pixel.copy_from_slice(&[220, 30, 10, 255]);
     }
@@ -324,7 +352,7 @@ fn recording_command_writes_a_real_video_and_audio_mp4() {
         "{}",
         String::from_utf8_lossy(&decoded.stderr)
     );
-    assert_eq!(decoded.stdout.len(), 30 * 16 * 16 * 4);
+    assert_eq!(decoded.stdout.len(), 30 * 256 * 144 * 4);
 }
 
 #[test]
@@ -359,7 +387,8 @@ fn recording_command_keeps_long_av_sync_with_first_and_last_flash_clicks() {
             speed: 1.0,
             loop_enabled: false,
         }],
-    );
+    )
+    .unwrap();
     let mut child = command.spawn().unwrap();
     let mut stdin = child.stdin.take().unwrap();
     let black_frame = vec![0_u8; WIDTH * HEIGHT * 4];

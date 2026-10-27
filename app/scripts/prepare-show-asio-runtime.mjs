@@ -208,7 +208,7 @@ export function collectShowAsioInputRecords({
   assertDirectoryTreeHasNoReparsePoints(ffmpegBin, "FFMPEG_DIR/bin");
   ensureOnlyPinnedFfmpegDlls(ffmpegBin, inventory);
   validatePinnedFfmpegRuntimeDirectory(ffmpegBin, "Show-ASIO FFMPEG_DIR/bin", inventory);
-  const runtimeRecords = inventory.runtime_dlls.map((runtime) => ({
+  const runtimeRecords = [...inventory.runtime_dlls, inventory.recording_encoder].map((runtime) => ({
     runtime,
     record: verifyPinnedRuntimeFile(
       join(ffmpegBin, runtime.filename),
@@ -408,6 +408,8 @@ function makeFixture(root, label) {
   const commonResources = [
     ["../../THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md"],
     ["../../licenses/FFmpeg-LGPL-3.0.txt", "licenses/FFmpeg-LGPL-3.0.txt"],
+    ["../../licenses/GPL-3.0.txt", "licenses/GPL-3.0.txt"],
+    ["../../licenses/FFmpeg-DEPENDENCIES.txt", "licenses/FFmpeg-DEPENDENCIES.txt"],
     ["../../licenses/Spout2-BSD-2-Clause.txt", "licenses/Spout2-BSD-2-Clause.txt"],
     ["../../licenses/bcdec_rs-MIT.txt", "licenses/bcdec_rs-MIT.txt"],
   ].map(([source, destination]) => {
@@ -420,7 +422,11 @@ function makeFixture(root, label) {
   const version = "1.2.0-alpha.99";
   const commit = "d".repeat(40);
   const sourceBranch = "codex/syndocal-v1.2";
-  const inventory = { runtime_dlls: runtimeDlls, common_resources: commonResources, known_asio_bridge_sha256: [] };
+  const encoderBytes = syntheticPe({ dll: false, marker: 0x49 });
+  writeFileSync(join(ffmpegBin, "ffmpeg.exe"), encoderBytes, { flag: "wx" });
+  const recordingEncoder = { filename: "ffmpeg.exe", byte_size: encoderBytes.length, sha256: hash(encoderBytes),
+    pe_identity: { signature: "PE\0\0", machine: 0x8664, characteristics: 2, optional_magic: 0x20b } };
+  const inventory = { runtime_dlls: runtimeDlls, recording_encoder: recordingEncoder, common_resources: commonResources, known_asio_bridge_sha256: [] };
   return {
     workspace,
     appPath,
@@ -465,7 +471,7 @@ async function runSelfTest() {
       exportInspector: inspect,
       validateNormalBoundary: () => {},
     });
-    pass(result.filesVerified === 14, "exact synthetic same-host artifact is staged and post-manifest verified");
+    pass(result.filesVerified === 17, "exact synthetic same-host artifact is staged and post-manifest verified");
     rejects(
       () => prepareShowAsioRuntime({
         workspace: valid.workspace,

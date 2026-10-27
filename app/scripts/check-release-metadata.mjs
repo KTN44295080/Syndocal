@@ -180,7 +180,7 @@ export const requiredPrepareRuntimeLibsCommand = "pnpm --dir app run prepare:run
 export class MissingStagedWindowsRuntimeError extends Error {
   constructor(missingPaths, requiredCommand = requiredPrepareRuntimeLibsCommand) {
     super(
-      "Windows release metadata verification requires the pinned FFmpeg runtime DLLs staged under target/release before this gate runs, and they are absent from this checkout."
+      "Windows release metadata verification requires the pinned FFmpeg runtime DLLs and recording ffmpeg.exe staged under target/release before this gate runs, and they are absent from this checkout."
         + ` Run the required prior command exactly as printed, then rerun this check: ${requiredCommand}.`
         + ` Missing exact staged runtime path${missingPaths.length === 1 ? "" : "s"}: ${missingPaths.join("; ")}`,
     );
@@ -253,14 +253,14 @@ export function validateAsioPackagingBoundary(
   }
   if (verifyWindowsRuntimeSources) {
     if (process.platform === "win32") {
-      const missingStagedRuntimePaths = inventory.runtime_dlls
+      const missingStagedRuntimePaths = [...inventory.runtime_dlls, inventory.recording_encoder]
         .map((runtime) => resolve(tauriRoot, "../../target/release/" + runtime.filename))
         .filter((stagedPath) => !existsSync(stagedPath));
       if (missingStagedRuntimePaths.length > 0) {
         throw new MissingStagedWindowsRuntimeError(missingStagedRuntimePaths);
       }
     }
-    for (const runtime of inventory.runtime_dlls) {
+    for (const runtime of [...inventory.runtime_dlls, inventory.recording_encoder]) {
       verifyPinnedRuntimeFile(
         resolve(tauriRoot, "../../target/release/" + runtime.filename),
         runtime,

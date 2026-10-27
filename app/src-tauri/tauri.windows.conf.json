@@ -7,7 +7,8 @@
       "../../target/release/avformat-62.dll": "avformat-62.dll",
       "../../target/release/avutil-60.dll": "avutil-60.dll",
       "../../target/release/swresample-6.dll": "swresample-6.dll",
-      "../../target/release/swscale-9.dll": "swscale-9.dll"
+      "../../target/release/swscale-9.dll": "swscale-9.dll",
+      "../../target/release/ffmpeg.exe": "ffmpeg.exe"
     }
   }
 }

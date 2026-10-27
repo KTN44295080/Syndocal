@@ -65,8 +65,15 @@ export const canonicalPinnedRuntimeIdentity = Object.freeze(new Map([
   ["swscale-9.dll", Object.freeze({ byte_size: 12900864, sha256: "19873bf3978f3891c5c92f278115ea444a4dbf7502881127d6f37b953f472070" })],
 ]));
 
+export const canonicalPinnedRecordingEncoder = Object.freeze({
+  filename: "ffmpeg.exe",
+  byte_size: 540672,
+  sha256: "cc737ff68b38ba9228ee422b1c49ad0943e9132a17ff9a2b958aa47a24598d97",
+  pe_identity: Object.freeze({ ...anchoredAmd64PeIdentity, characteristics: 0x022e }),
+});
+
 export const canonicalPinnedCommonResourceIdentity = Object.freeze(new Map([
-  ["../../THIRD_PARTY_NOTICES.md\0THIRD_PARTY_NOTICES.md", Object.freeze({ byte_size: 6976, sha256: "703bc4fddc6fad1b11522bd10a00d7f0b5c060f177a977266eed914454f8ac91" })],
+  ["../../THIRD_PARTY_NOTICES.md\0THIRD_PARTY_NOTICES.md", Object.freeze({ byte_size: 7101, sha256: "d39a587a9cc3ae55e24567c0d6b338967594d5a591bd4853255cd3b852761bd1" })],
   ["../../licenses/FFmpeg-LGPL-3.0.txt\0licenses/FFmpeg-LGPL-3.0.txt", Object.freeze({ byte_size: 7652, sha256: "97628afebc60f026f5c2b25d7491c46a5c4ee61f693e7cfa07fbd2c03605979b" })],
   ["../../licenses/GPL-3.0.txt\0licenses/GPL-3.0.txt", Object.freeze({ byte_size: 35147, sha256: "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903" })],
   ["../../licenses/FFmpeg-DEPENDENCIES.txt\0licenses/FFmpeg-DEPENDENCIES.txt", Object.freeze({ byte_size: 2662745, sha256: "dc70e08c2a19eb52b3a7e5b6faf6ac1d9ab30bd44e72f7936f28e8d1c8ef8875" })],
@@ -299,6 +306,8 @@ function freezeInventory(inventory) {
     Object.freeze(runtime);
   }
   for (const resource of inventory.common_resources) Object.freeze(resource);
+  Object.freeze(inventory.recording_encoder.pe_identity);
+  Object.freeze(inventory.recording_encoder);
   Object.freeze(inventory.ffmpeg_build);
   Object.freeze(inventory.runtime_dlls);
   Object.freeze(inventory.common_resources);
@@ -307,9 +316,9 @@ function freezeInventory(inventory) {
 }
 
 export function validateWindowsRuntimeInventory(inventory, label = runtimeInventoryRelativePath) {
-  assertExactKeys(inventory, ["schema_version", "platform", "ffmpeg_build", "runtime_dlls", "common_resources", "known_asio_bridge_sha256"], label);
-  if (inventory.schema_version !== 2 || inventory.platform !== "windows-x86_64") {
-    throw new Error(label + " must be schema_version 2 for windows-x86_64 (legacy or future inventories are rejected).");
+  assertExactKeys(inventory, ["schema_version", "platform", "ffmpeg_build", "runtime_dlls", "recording_encoder", "common_resources", "known_asio_bridge_sha256"], label);
+  if (inventory.schema_version !== 3 || inventory.platform !== "windows-x86_64") {
+    throw new Error(label + " must be schema_version 3 for windows-x86_64 (legacy or future inventories are rejected).");
   }
   assertExactKeys(inventory.ffmpeg_build, Object.keys(canonicalPinnedFfmpegBuild), label + " FFmpeg provenance");
   for (const [key, expected] of Object.entries(canonicalPinnedFfmpegBuild)) {
@@ -342,6 +351,15 @@ export function validateWindowsRuntimeInventory(inventory, label = runtimeInvent
   }
   if (seenRuntimeNames.size !== canonicalWindowsFfmpegRuntimeDllNames.length) {
     throw new Error(label + " runtime DLL names are incomplete.");
+  }
+  const encoder = inventory.recording_encoder;
+  assertExactKeys(encoder, ["filename", "byte_size", "sha256", "pe_identity"], label + " recording encoder");
+  if (encoder.filename !== "ffmpeg.exe") throw new Error(label + " recording encoder must be ffmpeg.exe.");
+  assertPositiveInteger(encoder.byte_size, label + " recording encoder byte_size");
+  assertSha256(encoder.sha256, label + " recording encoder SHA-256");
+  assertExactKeys(encoder.pe_identity, Object.keys(canonicalPinnedRecordingEncoder.pe_identity), label + " recording encoder PE identity");
+  for (const [key, value] of Object.entries(canonicalPinnedRecordingEncoder.pe_identity)) {
+    if (encoder.pe_identity[key] !== value) throw new Error(label + " recording encoder PE identity must be the pinned PE32+ AMD64 executable identity (not a DLL).");
   }
   if (!Array.isArray(inventory.common_resources) || inventory.common_resources.length !== canonicalCommonBundleResources.length) {
     throw new Error(label + " common_resources must be the exact normal-bundle resource set.");
@@ -389,6 +407,10 @@ export function enforceWindowsRuntimeInventoryAnchors(inventory, label = runtime
       );
     }
   }
+  const encoder = inventory.recording_encoder;
+  if (encoder.byte_size !== canonicalPinnedRecordingEncoder.byte_size || encoder.sha256 !== canonicalPinnedRecordingEncoder.sha256) {
+    throw new Error(label + " recording encoder contradicts the independently anchored approved byte_size/SHA-256 authority.");
+  }
   for (const resource of inventory.common_resources) {
     const anchored = canonicalPinnedCommonResourceIdentity.get(resource.source + "\0" + resource.destination);
     if (!anchored || resource.byte_size !== anchored.byte_size || resource.sha256 !== anchored.sha256) {
@@ -432,7 +454,7 @@ export function commonBundleResourceMap(inventory = loadWindowsRuntimeInventory(
 
 export function windowsFfmpegBundleResourceMap(inventory = loadWindowsRuntimeInventory()) {
   return Object.freeze(
-    Object.fromEntries(inventory.runtime_dlls.map((runtime) => ["../../target/release/" + runtime.filename, runtime.filename])),
+    Object.fromEntries([...inventory.runtime_dlls, inventory.recording_encoder].map((runtime) => ["../../target/release/" + runtime.filename, runtime.filename])),
   );
 }
 

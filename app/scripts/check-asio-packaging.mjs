@@ -205,6 +205,25 @@ rejectsBoundary(
   "ASIO distribution approval drift is rejected",
 );
 
+for (const [field, value] of [["byte_size", inventory.recording_encoder.byte_size + 1], ["sha256", "0".repeat(64)]]) {
+  const mutated = structuredClone(inventory);
+  mutated.recording_encoder[field] = value;
+  rejects(() => enforceWindowsRuntimeInventoryAnchors(validateWindowsRuntimeInventory(mutated)),
+    /recording encoder contradicts the independently anchored/, "recording executable byte authority rejects " + field);
+}
+for (const [field, value] of [["characteristics", 0x222e], ["machine", 0xaa64], ["optional_magic", 0x10b], ["signature", "MZ"]]) {
+  const mutated = structuredClone(inventory);
+  mutated.recording_encoder.pe_identity[field] = value;
+  rejects(() => validateWindowsRuntimeInventory(mutated), /pinned PE32\+ AMD64 executable identity/,
+    "recording executable rejects DLL or foreign PE identity: " + field);
+}
+for (const mutate of [(value) => { delete value.recording_encoder; }, (value) => { value.schema_version = 2; }]) {
+  const mutated = structuredClone(inventory);
+  mutate(mutated);
+  rejects(() => validateWindowsRuntimeInventory(mutated), /keys are not exact|schema_version 3/,
+    "old inventory without the recording executable is rejected");
+}
+
 for (const runtime of inventory.runtime_dlls) {
   for (const [field, mutation, description] of [
     ["byte_size", (value) => value + 1, "byte_size increment"],

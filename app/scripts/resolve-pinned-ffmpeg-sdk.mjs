@@ -5,6 +5,7 @@ import {
   assertSafeExternalDirectory,
   canonicalPinnedFfmpegBuild,
   canonicalPinnedRuntimeIdentity,
+  canonicalPinnedRecordingEncoder,
   canonicalWindowsFfmpegRuntimeDllNames,
   readVerifiedRegularFile,
   verifyPinnedRuntimeFile,
@@ -37,11 +38,12 @@ export function resolvePinnedFfmpegSdk({ workspace = workspaceRoot, explicitRoot
         pe_identity: anchoredAmd64PeIdentity,
       }, `${label} runtime ${filename}`, { allowedRoots: [root] });
     }
+    verifyPinnedRuntimeFile(join(root, "bin", "ffmpeg.exe"), canonicalPinnedRecordingEncoder, `${label} recording encoder`, { allowedRoots: [root] });
     return root;
   } catch (error) {
     throw new Error(`${label} '${candidate}' is invalid: ${error.message} `
       + `Provision the exact ${canonicalPinnedFfmpegBuild.version} LGPL shared SDK described in qa/WINDOWS_NATIVE_BUILD.md. `
-      + "FFMPEG_DIR overrides must pass the same seven pinned DLL size/SHA-256/PE checks; no WinGet, GPL or PATH fallback is permitted.",
+      + "FFMPEG_DIR overrides must pass the same seven pinned DLL and recording ffmpeg.exe size/SHA-256/PE checks; no WinGet, GPL or PATH fallback is permitted.",
     { cause: error });
   }
 }

@@ -25,6 +25,9 @@ export const djLinkMachineBlockReasonText = (reason: string): string => ({
 }[reason] ?? "DJ Link is blocked until its machine authority can be verified.");
 
 const japaneseText: Record<string, string> = {
+  "Recording unavailable: Restore the bundled LGPL FFmpeg or set SYNDOCAL_FFMPEG to a valid LGPL executable.": "録画用FFmpegを確認できません。同梱のLGPL版を復元するか、SYNDOCAL_FFMPEGにLGPL版の実行ファイルを指定してください。",
+  "Recording unavailable: FFmpeg license verification failed. Restore the bundled LGPL FFmpeg; GPL and nonfree builds cannot record.": "録画用FFmpegのLGPLライセンスを確認できません。同梱版を復元してください。GPL版とnonfree版は使用できません。",
+  "Recording unavailable: No supported H.264 encoder works. Update the GPU driver or restore the bundled LGPL FFmpeg with OpenH264.": "使用できるH.264エンコーダーがありません。GPUドライバーを更新するか、OpenH264を含む同梱LGPL版FFmpegを復元してください。",
   "Visible clips": "表示中のクリップ",
   "Selected clip": "選択中のクリップ",
   Changed: "変更あり",

@@ -75,7 +75,7 @@ export function validatePinnedFfmpegRuntimeDirectory(directory, label, inventory
       return entry.name;
     });
   validateFfmpegRuntimeDllNames(names, label, inventory);
-  for (const runtime of inventory.runtime_dlls) {
+  for (const runtime of [...inventory.runtime_dlls, inventory.recording_encoder]) {
     verifyPinnedRuntimeFile(
       join(releaseDirectory, runtime.filename),
       runtime,
@@ -599,7 +599,7 @@ export function main(options = {}) {
       return entry.name;
     });
   validateFfmpegRuntimeDllNames(runtimeNames, "FFMPEG_DIR/bin", inventory);
-  for (const runtime of inventory.runtime_dlls) {
+  for (const runtime of [...inventory.runtime_dlls, inventory.recording_encoder]) {
     verifyPinnedRuntimeFile(
       join(sourceDir, runtime.filename),
       runtime,
@@ -613,11 +613,11 @@ export function main(options = {}) {
     } else {
       mkdirSync(releaseDir, { recursive: true });
     }
-    for (const runtime of inventory.runtime_dlls) {
+    for (const runtime of [...inventory.runtime_dlls, inventory.recording_encoder]) {
       copyFileSync(join(sourceDir, runtime.filename), join(releaseDir, runtime.filename));
     }
     validatePinnedFfmpegRuntimeDirectory(releaseDir, "Windows staged runtime directory", inventory);
-    console.log("Staged " + inventory.runtime_dlls.length + " pinned LGPL FFmpeg " + inventory.ffmpeg_build.version + " DLLs in " + releaseDir);
+    console.log("Staged " + inventory.runtime_dlls.length + " pinned LGPL FFmpeg " + inventory.ffmpeg_build.version + " DLLs and the pinned recording ffmpeg.exe in " + releaseDir);
   }
   validateAsioPackagingBoundary(undefined, { workspace, verifyWindowsRuntimeSources: true });
   return { stagedDirectories: releaseDirs };
