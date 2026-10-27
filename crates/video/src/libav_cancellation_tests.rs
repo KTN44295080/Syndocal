@@ -245,6 +245,9 @@ fn libav_decoder_drop_cancels_and_reaps_queued_session_without_stopping_worker_s
         served_pts_ms: 0,
         last_request_ms: Some(0),
         hardware: false,
+        ready: std::collections::VecDeque::new(),
+        frames: None,
+        control: None,
         done,
     });
     let (drop_finished, drop_done) = std::sync::mpsc::sync_channel(1);

@@ -1,3 +1,5 @@
+#[cfg(feature = "libav")]
+use std::collections::VecDeque;
 use std::{
     path::PathBuf,
     sync::{atomic::AtomicBool, Arc},
@@ -45,6 +47,10 @@ mod parallel_decode_tests;
 mod cancellation_tests;
 
 #[cfg(all(feature = "libav", test))]
+#[path = "libav_run_decode_ahead_tests.rs"]
+mod run_decode_ahead_tests;
+
+#[cfg(all(feature = "libav", test))]
 use std::cell::Cell;
 #[cfg(feature = "libav")]
 use std::cell::RefCell;
@@ -63,6 +69,21 @@ const LIBAV_DECODE_WORKERS: usize = 8;
 
 #[cfg(feature = "libav")]
 const LIBAV_SCALER_CACHE_CAPACITY: usize = 8;
+
+// A look-ahead run decodes consecutive frames until it covers the owner's next
+// expected request (its last request plus one and a half observed request
+// strides). One frame is enough while requests are closer than the source
+// frame interval; when they are farther apart (a tick slower than the source
+// rate) a single next frame never covers the next request, and every request
+// then decodes on the caller's thread. The run is bounded per owner and by a
+// total byte budget over the working set, so many inputs fall back to the
+// single next frame instead of holding many output-sized frames.
+#[cfg(feature = "libav")]
+const LIBAV_LOOKAHEAD_MAX_FRAMES: usize = 4;
+#[cfg(feature = "libav")]
+const LIBAV_LOOKAHEAD_BUDGET_BYTES: usize = 256 * 1024 * 1024;
+#[cfg(feature = "libav")]
+const LIBAV_LOOKAHEAD_MAX_STRIDE_MS: u64 = 250;
 
 // `ffmpeg_next::software::scaling::context::Context` owns a native pointer and
 // intentionally is not `Send`. Decoders, however, are moved into the native
@@ -98,6 +119,18 @@ pub struct LibavFrameDecoder {
     session_counters: LibavSessionCounters,
     #[cfg(feature = "libav")]
     hardware_enabled: bool,
+    /// Each live owner's last request and the stride before it, which size
+    /// its next look-ahead run.
+    #[cfg(feature = "libav")]
+    request_strides: Vec<LibavRequestStride>,
+}
+
+#[cfg(feature = "libav")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LibavRequestStride {
+    owner: LibavRenderInputOwner,
+    last_ms: u64,
+    stride_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,20 +211,101 @@ struct LibavDecodeJob {
     terminal: Option<Arc<VideoFrame>>,
 }
 
-/// The frame after the one just served, being decoded on the decode pool.
+/// The frames after the one just served, being decoded on the decode pool.
 /// It holds the input's session until joined.
 #[cfg(feature = "libav")]
 struct LibavLookahead {
     key: protocol::VideoRenderInputKey,
     layer_id: VideoLayerId,
-    /// The frame it looks past.
+    /// The frame it looks past: the owner's cached (last served) frame.
     served_pts_ms: u64,
     /// The session's `last_request_ms` before the look-ahead; restored on
     /// join, so the next request is judged exactly as if nothing had been
     /// decoded since.
     last_request_ms: Option<u64>,
     hardware: bool,
+    /// Consecutive frames after the served one that are already decoded:
+    /// the session's queued frames when the run started, then each frame the
+    /// run streams before its last. A request can take one without joining.
+    ready: VecDeque<Arc<VideoFrame>>,
+    /// The run's streamed frames. The worker drops its sender before it
+    /// sends `done`.
+    frames: Option<std::sync::mpsc::Receiver<Arc<VideoFrame>>>,
+    /// The run's window, shared with its worker, so later requests extend a
+    /// run that is still decoding.
+    control: Option<Arc<std::sync::Mutex<LibavRunControl>>>,
     done: std::sync::mpsc::Receiver<LibavLookaheadDone>,
+}
+
+/// What a look-ahead run may still decode. The worker decides under this
+/// lock whether a frame continues the run; once it sets `finished` it sends
+/// `done` without decoding again, so the owner either extends a run that will
+/// see the new window or joins one that has ended.
+#[cfg(feature = "libav")]
+#[derive(Debug)]
+struct LibavRunControl {
+    /// The run continues past a frame only while that frame is before this.
+    until_ms: u64,
+    /// Frames the owner may hold ahead: streamed and not yet taken, plus the
+    /// run's last frame.
+    limit: usize,
+    /// Streamed (or inherited) frames the owner has not taken yet.
+    outstanding: usize,
+    finished: bool,
+}
+
+#[cfg(feature = "libav")]
+fn lock_run_control(
+    control: &std::sync::Mutex<LibavRunControl>,
+) -> std::sync::MutexGuard<'_, LibavRunControl> {
+    control
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The end of a look-ahead run: the session and the result of its last
+/// decode, which is validated on join exactly like a single next frame.
+#[cfg(feature = "libav")]
+impl LibavLookahead {
+    /// Moves every frame the run has streamed so far into `ready`, without
+    /// waiting; returns how many arrived.
+    fn receive_streamed(&mut self) -> u64 {
+        let Some(frames) = self.frames.as_ref() else {
+            return 0;
+        };
+        let mut received = 0;
+        for frame in frames.try_iter() {
+            self.ready.push_back(frame);
+            received += 1;
+        }
+        received
+    }
+
+    /// Takes the first ready frame at or after `target_ms` (dropping the
+    /// ones before it) and returns their number to the run's allowance.
+    fn take_ready(&mut self, target_ms: u64) -> Option<Arc<VideoFrame>> {
+        let before = self.ready.len();
+        let frame = take_first_at_or_after(&mut self.ready, target_ms)?;
+        if let Some(control) = self.control.as_ref() {
+            let mut control = lock_run_control(control);
+            control.outstanding = control
+                .outstanding
+                .saturating_sub(before - self.ready.len());
+        }
+        Some(frame)
+    }
+}
+
+/// Removes and returns the first queued frame at or after `target_ms`, with
+/// every frame before it; leaves the queue unchanged when there is none.
+#[cfg(feature = "libav")]
+fn take_first_at_or_after(
+    queue: &mut VecDeque<Arc<VideoFrame>>,
+    target_ms: u64,
+) -> Option<Arc<VideoFrame>> {
+    let index = queue.iter().position(|frame| target_ms <= frame.pts_ms)?;
+    queue.drain(..index);
+    queue.pop_front()
 }
 
 #[cfg(feature = "libav")]
@@ -275,9 +389,10 @@ struct LibavDecodeSession {
     last_request_ms: Option<u64>,
     eof_sent: bool,
     decoder_drained: bool,
-    /// The frame after the cached one, decoded ahead: the frame the next
-    /// continuation returns if its time is not past this frame's.
-    next_frame: Option<Arc<VideoFrame>>,
+    /// Consecutive frames after the cached one, decoded ahead in order: a
+    /// continuation returns the first one at or after its time, which is
+    /// exactly the frame continuing the decode would return.
+    next_frames: VecDeque<Arc<VideoFrame>>,
     /// The open session was rewound for a backward jump (a loop wrap): the next
     /// decode must seek and flush even when the target is the clip start. It is
     /// taken (cleared) by the decode that performs that seek.
@@ -344,6 +459,8 @@ impl LibavFrameDecoder {
             session_counters: LibavSessionCounters::default(),
             #[cfg(feature = "libav")]
             hardware_enabled: true,
+            #[cfg(feature = "libav")]
+            request_strides: Vec::new(),
         }
     }
 
@@ -751,12 +868,12 @@ impl LibavFrameDecoder {
                     .and_then(|owner| owner.last_request_ms)
                     .or_else(|| session.and_then(|session| session.last_request_ms)),
                 cached.map(|entry| entry.frame.pts_ms),
-                session.and_then(|session| session.next_frame.as_ref().map(|frame| frame.pts_ms)),
+                session.and_then(|session| session.next_frames.front().map(|frame| frame.pts_ms)),
                 request.width,
                 request.height,
             );
         }
-        // The pending session owns only the next speculative frame. Its last
+        // The pending session owns only the speculative frames. Its last
         // served frame can still answer a covered tick without waiting for it.
         if let Some(frame) = self.reuse_pending_cached_frame(input, &path, &signature) {
             if let Err(error) = self.stop.check() {
@@ -764,6 +881,16 @@ impl LibavFrameDecoder {
             }
             #[cfg(feature = "qa-native-frame-timing")]
             trace.mark(demand_timing::DECODER_CACHED);
+            return LibavPrepared::Done(Ok(Some(frame)));
+        }
+        // A continuation the pending run already decoded (or is about to
+        // stream) is answered from it while the run goes on.
+        if let Some(frame) = self.take_pending_ready_frame(input, &path, &signature) {
+            if let Err(error) = self.stop.check() {
+                return LibavPrepared::Done(Err(error));
+            }
+            #[cfg(feature = "qa-native-frame-timing")]
+            trace.mark(demand_timing::DECODER_PREFETCH);
             return LibavPrepared::Done(Ok(Some(frame)));
         }
         // Uncovered or invalidated requests must recover the owner before the
@@ -790,11 +917,13 @@ impl LibavFrameDecoder {
         let session_matches = session_index
             .is_some_and(|index| self.sessions[index].matches(request, &path, &signature));
         let decision = if session_matches {
+            let session = &self.sessions[session_index.expect("matching session index")];
             session_decision(
-                self.sessions[session_index.expect("matching session index")].last_request_ms,
+                session.last_request_ms,
                 cached_entry_index.map(|index| self.entries[index].frame.pts_ms),
                 cached_entry_index.is_some(),
-                self.sessions[session_index.expect("matching session index")].decoder_drained,
+                // Frames queued ahead come before the end the run reached.
+                session.decoder_drained && session.next_frames.is_empty(),
                 request.position_ms,
             )
         } else {
@@ -808,8 +937,8 @@ impl LibavFrameDecoder {
                 cached_entry_index.map(|index| self.entries[index].frame.pts_ms),
                 session_index.and_then(|index| {
                     self.sessions[index]
-                        .next_frame
-                        .as_ref()
+                        .next_frames
+                        .front()
                         .map(|frame| frame.pts_ms)
                 }),
                 request.width,
@@ -838,10 +967,12 @@ impl LibavFrameDecoder {
             self.session_counters.sequential_continues =
                 self.session_counters.sequential_continues.saturating_add(1);
             let index = session_index.expect("continuation requires a matching session");
-            if let Some(next) = self.sessions[index].next_frame.take() {
-                if request.position_ms <= next.pts_ms {
-                    // The frame decoded ahead is the first one at or after
-                    // this time, which is what continuing would decode.
+            if let Some(last) = self.sessions[index].next_frames.back().cloned() {
+                let queued = &mut self.sessions[index].next_frames;
+                if let Some(next) = take_first_at_or_after(queued, request.position_ms) {
+                    // The queued frames follow the cached one without a gap,
+                    // so the first one at or after this time is exactly the
+                    // frame continuing the decode would return.
                     #[cfg(feature = "qa-native-frame-timing")]
                     trace.mark(demand_timing::DECODER_PREFETCH);
                     self.session_counters.lookahead_hits =
@@ -859,8 +990,10 @@ impl LibavFrameDecoder {
                     });
                     return LibavPrepared::Done(Ok(Some(next)));
                 }
-                // Continuing past it: it is the latest frame decoded.
-                terminal = Some(next);
+                // Continuing past them all: the last is the latest frame
+                // decoded.
+                queued.clear();
+                terminal = Some(last);
             } else {
                 terminal = cached_entry_index.map(|index| Arc::clone(&self.entries[index].frame));
             }
@@ -881,7 +1014,7 @@ impl LibavFrameDecoder {
             session.last_request_ms = None;
             session.eof_sent = false;
             session.decoder_drained = false;
-            session.next_frame = None;
+            session.next_frames.clear();
             session.rewind_pending = true;
             rewound = true;
             self.touch_input(key, request.layer_id);
@@ -978,6 +1111,132 @@ impl LibavFrameDecoder {
         Some(frame)
     }
 
+    /// Answer a continuation from the frames a pending run already decoded,
+    /// under the same identity policy as `reuse_pending_cached_frame`. The
+    /// run's frames follow the served one without a gap, so the first one at
+    /// or after the request is exactly the frame continuing would return.
+    /// While the run may still stream the needed frame this waits for its
+    /// next frame only, never for the rest of the run; when the run has
+    /// nothing more to stream it returns `None` and the caller joins it.
+    #[cfg(feature = "libav")]
+    fn take_pending_ready_frame(
+        &mut self,
+        input: &VideoRenderInput,
+        path: &std::path::Path,
+        signature: &StillImageSignature,
+    ) -> Option<Arc<VideoFrame>> {
+        let request = &input.request;
+        let pending_index = self.lookaheads.iter().position(|pending| {
+            render_input_cache_owner_matches(
+                input.key,
+                request.layer_id,
+                pending.key,
+                pending.layer_id,
+            )
+        })?;
+        let pending = &self.lookaheads[pending_index];
+        let entry_index = self.entries.iter().position(|entry| {
+            entry.key == input.key
+                && entry.layer_id == request.layer_id
+                && entry.path == path
+                && entry.width == request.width
+                && entry.height == request.height
+                && entry.signature == *signature
+                && entry.frame.pts_ms == pending.served_pts_ms
+                && session_decision(
+                    pending.last_request_ms,
+                    Some(entry.frame.pts_ms),
+                    true,
+                    false,
+                    request.position_ms,
+                ) == LibavSessionDecision::Continue
+        })?;
+        loop {
+            if self.stop.is_cancelled() {
+                return None;
+            }
+            let streamed = self.lookaheads[pending_index].receive_streamed();
+            self.count_streamed_lookahead_frames(streamed);
+            let pending = &mut self.lookaheads[pending_index];
+            if let Some(frame) = pending.take_ready(request.position_ms) {
+                pending.served_pts_ms = frame.pts_ms;
+                // join() restores this value, as for a covered tick.
+                pending.last_request_ms = Some(request.position_ms);
+                let entry = &mut self.entries[entry_index];
+                entry.position_ms = request.position_ms;
+                entry.frame = Arc::clone(&frame);
+                self.touch_input(input.key, request.layer_id);
+                self.session_counters.sequential_continues =
+                    self.session_counters.sequential_continues.saturating_add(1);
+                self.session_counters.lookahead_hits =
+                    self.session_counters.lookahead_hits.saturating_add(1);
+                return Some(frame);
+            }
+            // Wait for the run's next streamed frame; a closed stream means
+            // the rest of the run is its final frame or its end.
+            let next = pending.frames.as_ref()?.recv();
+            match next {
+                Ok(frame) => {
+                    pending.ready.push_back(frame);
+                    self.count_streamed_lookahead_frames(1);
+                }
+                Err(_) => {
+                    pending.frames = None;
+                    return None;
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "libav")]
+    fn count_streamed_lookahead_frames(&mut self, frames: u64) {
+        self.session_counters.lookahead_decodes = self
+            .session_counters
+            .lookahead_decodes
+            .saturating_add(frames);
+    }
+
+    /// The owner's next expected request is its last request plus its last
+    /// forward stride; records this request for the next one.
+    #[cfg(feature = "libav")]
+    fn note_request_stride(&mut self, input: &VideoRenderInput) -> u64 {
+        let owner = LibavRenderInputOwner::new(input.key, input.layer_id());
+        let position_ms = input.request.position_ms;
+        match self
+            .request_strides
+            .iter_mut()
+            .find(|stride| stride.owner == owner)
+        {
+            Some(stride) => {
+                stride.stride_ms = match position_ms.checked_sub(stride.last_ms) {
+                    Some(0) => stride.stride_ms,
+                    Some(forward) => forward.min(LIBAV_LOOKAHEAD_MAX_STRIDE_MS),
+                    None => 0,
+                };
+                stride.last_ms = position_ms;
+                stride.stride_ms
+            }
+            None => {
+                self.request_strides.push(LibavRequestStride {
+                    owner,
+                    last_ms: position_ms,
+                    stride_ms: 0,
+                });
+                0
+            }
+        }
+    }
+
+    /// Frames one run may hold for an owner: at most
+    /// `LIBAV_LOOKAHEAD_MAX_FRAMES`, and the working set's share of the
+    /// total budget, but always the single next frame.
+    #[cfg(feature = "libav")]
+    fn lookahead_frame_limit(&self, frame_bytes: usize) -> usize {
+        let owners = self.working_set_lru.len().max(1);
+        (LIBAV_LOOKAHEAD_BUDGET_BYTES / owners.saturating_mul(frame_bytes.max(1)))
+            .clamp(1, LIBAV_LOOKAHEAD_MAX_FRAMES)
+    }
+
     /// Joins every look-ahead: its session comes back with the next frame,
     /// or, if there is none (the clip ended) or it failed, is dropped so the
     /// next request reopens it.
@@ -1053,7 +1312,7 @@ impl LibavFrameDecoder {
         #[cfg(feature = "qa-native-frame-timing")]
         let _native_join =
             crate::native_frame_timing::span(crate::native_frame_timing::Phase::RetentionJoin);
-        for lookahead in lookaheads {
+        for mut lookahead in lookaheads {
             #[cfg(feature = "qa-native-frame-timing")]
             crate::native_frame_timing::add_retired_owner_for_layer(lookahead.layer_id);
             // A look-ahead that panicked lost its session.
@@ -1063,6 +1322,11 @@ impl LibavFrameDecoder {
             let received = lookahead.done.recv();
             #[cfg(feature = "qa-native-frame-timing")]
             drop(native_recv);
+            // The worker closed its stream before it sent `done` (or before
+            // it dropped its sender on a panic), so every streamed frame is
+            // here.
+            let streamed = lookahead.receive_streamed();
+            self.count_streamed_lookahead_frames(streamed);
             let Ok(done) = received else {
                 self.session_counters.lookahead_discards =
                     self.session_counters.lookahead_discards.saturating_add(1);
@@ -1084,21 +1348,29 @@ impl LibavFrameDecoder {
                     self.session_counters.lookahead_discards.saturating_add(1);
                 continue;
             }
+            // The run's last decode looked past its latest frame: the last
+            // ready frame, or the served one.
+            let base_pts_ms = lookahead
+                .ready
+                .back()
+                .map_or(lookahead.served_pts_ms, |frame| frame.pts_ms);
             match done.result {
                 // A frame without a timestamp is labelled with the target
-                // time (served + 1), which on demand it would not be: such a
+                // time (base + 1), which on demand it would not be: such a
                 // frame is not used ahead.
-                Ok(frame) if frame.pts_ms > lookahead.served_pts_ms.saturating_add(1) => {
+                Ok(frame) if frame.pts_ms > base_pts_ms.saturating_add(1) => {
                     session.last_request_ms = lookahead.last_request_ms;
-                    session.next_frame = Some(Arc::new(frame));
+                    session.next_frames = std::mem::take(&mut lookahead.ready);
+                    session.next_frames.push_back(Arc::new(frame));
                     self.sessions.push(session);
                 }
-                // The clip ended after the served frame (the fallback is the
-                // served frame itself): the drained session answers later
-                // requests by reuse, as on demand it would after reading to
-                // the end.
-                Ok(frame) if frame.pts_ms == lookahead.served_pts_ms && session.decoder_drained => {
+                // The clip ended after the base frame (the fallback is the
+                // base frame itself): the drained session answers later
+                // requests from its queue, then by reuse, as on demand it
+                // would after reading to the end.
+                Ok(frame) if frame.pts_ms == base_pts_ms && session.decoder_drained => {
                     session.last_request_ms = lookahead.last_request_ms;
+                    session.next_frames = std::mem::take(&mut lookahead.ready);
                     self.sessions.push(session);
                 }
                 _ => {
@@ -1112,10 +1384,17 @@ impl LibavFrameDecoder {
     #[cfg(not(feature = "libav"))]
     fn join_lookaheads(&mut self) {}
 
-    /// Starts decoding the frame after `served` for this input on the decode
-    /// pool, so a request that lands on it next is answered at once.
+    /// Starts decoding the frames after `served` (after any already queued)
+    /// for this input on the decode pool until they cover the next expected
+    /// request, `stride_ms` after this one, so that request is answered at
+    /// once. A stride within one source frame decodes exactly the next frame.
     #[cfg(feature = "libav")]
-    fn start_lookahead(&mut self, input: &VideoRenderInput, served: &Arc<VideoFrame>) {
+    fn start_lookahead(
+        &mut self,
+        input: &VideoRenderInput,
+        served: &Arc<VideoFrame>,
+        stride_ms: u64,
+    ) {
         if self.stop.is_cancelled() {
             return;
         }
@@ -1135,38 +1414,88 @@ impl LibavFrameDecoder {
         if !current {
             return;
         }
+        let limit = self.lookahead_frame_limit(served.data.len());
+        // The run decodes until a frame reaches this time: one and a half
+        // strides past the request, so tick jitter still lands inside it.
+        let until_ms = input
+            .request
+            .position_ms
+            .saturating_add(stride_ms)
+            .saturating_add(stride_ms / 2);
+        // The owner's run is still out (this request was answered from it):
+        // widen its window while it decodes, or, once it has ended, take its
+        // session back and continue from its queue below.
+        if let Some(pending_index) = self.lookaheads.iter().position(|pending| {
+            render_input_cache_owner_matches(
+                input.key,
+                input.request.layer_id,
+                pending.key,
+                pending.layer_id,
+            )
+        }) {
+            let pending = &self.lookaheads[pending_index];
+            let Some(control) = pending.control.as_ref() else {
+                return;
+            };
+            {
+                let mut control = lock_run_control(control);
+                if !control.finished {
+                    control.until_ms = control.until_ms.max(until_ms);
+                    control.limit = limit;
+                    return;
+                }
+            }
+            // An ended run sends `done` without decoding again.
+            let pending = self.lookaheads.swap_remove(pending_index);
+            self.join(vec![pending]);
+            if self.stop.is_cancelled() {
+                return;
+            }
+        }
         let Some(index) = self.session_index(input.key, input.request.layer_id) else {
             return;
         };
         let session = &self.sessions[index];
-        if session.next_frame.is_some() || session.decoder_drained || session.eof_sent {
+        if session.decoder_drained || session.eof_sent {
+            return;
+        }
+        let queued = session.next_frames.len();
+        let base = session
+            .next_frames
+            .back()
+            .cloned()
+            .unwrap_or_else(|| Arc::clone(served));
+        if queued >= limit || (queued > 0 && base.pts_ms >= until_ms) {
             return;
         }
         let mut session = self.sessions.swap_remove(index);
+        let ready = std::mem::take(&mut session.next_frames);
         let last_request_ms = session.last_request_ms;
         let hardware = session.hardware;
-        let mut request = input.request.clone();
-        request.position_ms = served.pts_ms.saturating_add(1);
-        let terminal = Arc::clone(served);
+        let request = input.request.clone();
+        let control = Arc::new(std::sync::Mutex::new(LibavRunControl {
+            until_ms,
+            limit,
+            outstanding: queued,
+            finished: false,
+        }));
+        let worker_control = Arc::clone(&control);
+        let (frames_sender, frames) = std::sync::mpsc::channel();
         let (sender, done) = std::sync::mpsc::sync_channel(1);
         pool.spawn(move || {
-            let mut hardware_frames = 0;
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                decode_libav_session_frame(
-                    &request,
-                    &mut session,
-                    false,
-                    Some(&terminal),
-                    &mut hardware_frames,
-                )
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_libav_lookahead(request, &mut session, base, &worker_control, frames_sender)
             }));
-            if let Ok(result) = result {
+            if let Ok((result, hardware_frames)) = run {
                 let _ = sender.send(LibavLookaheadDone {
                     session,
                     result,
                     hardware_frames,
                 });
             } else {
+                // A panicked run has ended: later requests join it instead
+                // of widening it.
+                lock_run_control(&worker_control).finished = true;
                 // Disconnect is the join acknowledgement. Finish native
                 // session cleanup before the captured sender can be dropped.
                 drop(session);
@@ -1178,6 +1507,9 @@ impl LibavFrameDecoder {
             served_pts_ms: served.pts_ms,
             last_request_ms,
             hardware,
+            ready,
+            frames: Some(frames),
+            control: Some(control),
             done,
         });
         self.session_counters.lookahead_decodes =
@@ -1245,9 +1577,13 @@ impl LibavFrameDecoder {
                         )
                 });
                 if let (false, Ok(Some(frame))) = (repeated, result) {
-                    self.start_lookahead(input, frame);
+                    let stride_ms = self.note_request_stride(input);
+                    self.start_lookahead(input, frame, stride_ms);
                 }
             }
+            let working_set = &self.working_set_lru;
+            self.request_strides
+                .retain(|stride| working_set.contains(&stride.owner));
         }
         #[cfg(not(feature = "libav"))]
         let _ = look_ahead;
@@ -1662,7 +1998,7 @@ fn open_libav_session_with_stop(
         last_request_ms: None,
         eof_sent: false,
         decoder_drained: false,
-        next_frame: None,
+        next_frames: VecDeque::new(),
         rewind_pending: false,
     })
 }
@@ -1779,6 +2115,56 @@ fn acquire_cached_libav_scaler(
             scaler: Some(scaler),
         })
     })
+}
+
+/// One look-ahead run on the decode pool: consecutive frames after `base`,
+/// each decoded exactly as an on-demand continuation one millisecond past the
+/// previous frame would decode it. A frame is streamed, and the run goes on,
+/// while it is before the run's window and the owner's allowance has room;
+/// otherwise the run ends with it (or at the clip end, or on any failure) and
+/// returns that last decode's result for `join` to validate. The decision and
+/// `finished` are taken under the control lock, and the stream is closed
+/// before this returns.
+#[cfg(feature = "libav")]
+fn run_libav_lookahead(
+    mut request: VideoFrameRequest,
+    session: &mut LibavDecodeSession,
+    mut base: Arc<VideoFrame>,
+    control: &std::sync::Mutex<LibavRunControl>,
+    frames: std::sync::mpsc::Sender<Arc<VideoFrame>>,
+) -> (Result<VideoFrame, VideoDecodeError>, u64) {
+    let mut hardware_frames = 0;
+    loop {
+        request.position_ms = base.pts_ms.saturating_add(1);
+        let result =
+            decode_libav_session_frame(&request, session, false, Some(&base), &mut hardware_frames);
+        let continues = {
+            let mut control = lock_run_control(control);
+            // Only a timestamped frame past the base continues the run (a
+            // frame without one is labelled base + 1 and is rejected).
+            let continues = result.as_ref().is_ok_and(|frame| {
+                frame.pts_ms > base.pts_ms.saturating_add(1)
+                    && frame.pts_ms < control.until_ms
+                    && control.outstanding + 1 < control.limit
+            }) && !session.decoder_drained;
+            if continues {
+                control.outstanding += 1;
+            } else {
+                control.finished = true;
+            }
+            continues
+        };
+        if !continues {
+            return (result, hardware_frames);
+        }
+        let frame = Arc::new(result.expect("a continuing run frame decoded"));
+        if frames.send(Arc::clone(&frame)).is_err() {
+            // The owner no longer listens; end the run on this frame.
+            lock_run_control(control).finished = true;
+            return (Ok(Arc::unwrap_or_clone(frame)), hardware_frames);
+        }
+        base = frame;
+    }
 }
 
 #[cfg(feature = "libav")]

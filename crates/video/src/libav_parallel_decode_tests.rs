@@ -677,6 +677,9 @@ fn hold_next_frame(
         served_pts_ms: served.pts_ms,
         last_request_ms,
         hardware: false,
+        ready: std::collections::VecDeque::new(),
+        frames: None,
+        control: None,
         done,
     });
     HeldLookahead {
