@@ -51,9 +51,7 @@ pub(super) struct PendingStack<'a> {
     pub encoder: Option<wgpu::CommandEncoder>,
     pub states: Vec<(IsfInstanceKey, StageResources)>,
     pub images: Vec<GpuImage>,
-    #[cfg(test)]
     pub native_pipeline_pins: Vec<Arc<IsfGpuPipeline>>,
-    #[cfg(test)]
     pub native_uniforms: Vec<wgpu::Buffer>,
     receiver: Option<mpsc::Receiver<MapCompletion>>,
     mapping_started: bool,
@@ -82,9 +80,7 @@ impl<'a> PendingStack<'a> {
             encoder: None,
             states: Vec::new(),
             images: Vec::new(),
-            #[cfg(test)]
             native_pipeline_pins: Vec::new(),
-            #[cfg(test)]
             native_uniforms: Vec::new(),
             receiver: None,
             mapping_started: false,
@@ -283,14 +279,7 @@ impl IsfGpuRuntime {
         )];
         let started = Instant::now();
         let result = self
-            .encode_pass_stack(
-                &mut pending[0],
-                frame,
-                stages,
-                None,
-                #[cfg(test)]
-                None,
-            )
+            .encode_pass_stack(&mut pending[0], frame, stages, None, None)
             .and_then(|()| self.submit_and_complete_stacks(&mut pending));
         let result = self.finish_stack_transaction(&mut pending, result);
         #[cfg(feature = "qa-native-frame-timing")]
@@ -378,7 +367,6 @@ impl IsfGpuRuntime {
                     &request.frame,
                     request.stages,
                     Some(reservation),
-                    #[cfg(test)]
                     None,
                 )
             })

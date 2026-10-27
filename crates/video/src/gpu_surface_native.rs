@@ -116,6 +116,17 @@ pub(crate) struct HardBlackoutContent;
 /// Dispatch from a content marker to the input it presents. The input's
 /// shape/identity checks run before any reservation, acquire or GPU work.
 pub(crate) trait PresentContentKind<R> {
+    /// Use the advertised P53 entry for each marker while keeping the shared
+    /// sink and direct callers on exactly the same retirement protocol.
+    fn present<T: NativePresentTarget, P: NativePresentGate<R>>(
+        presenter: &mut SharedSurfacePresenter<T>,
+        input: R,
+        gate: &P,
+        owner: &mut NativeGpuOwner,
+    ) -> Result<PresentOutcome<R, NativePresentReceipt>, NativeGpuFault>
+    where
+        R: Send + 'static;
+
     fn frame_id(input: &R) -> NativeFrameId;
     /// The extent the input was rendered at; `None` for payload-less input,
     /// which always uses the admitted extent.
@@ -126,6 +137,18 @@ pub(crate) trait PresentContentKind<R> {
 }
 
 impl<R: FrozenPresentation> PresentContentKind<R> for ResidentContent {
+    fn present<T: NativePresentTarget, P: NativePresentGate<R>>(
+        presenter: &mut SharedSurfacePresenter<T>,
+        input: R,
+        gate: &P,
+        owner: &mut NativeGpuOwner,
+    ) -> Result<PresentOutcome<R, NativePresentReceipt>, NativeGpuFault>
+    where
+        R: Send + 'static,
+    {
+        presenter.present_ready(input, gate, owner)
+    }
+
     fn frame_id(input: &R) -> NativeFrameId {
         input.cache_receipt().descriptor().snapshot.frame
     }
@@ -163,6 +186,18 @@ impl<R: FrozenPresentation> PresentContentKind<R> for ResidentContent {
 }
 
 impl<R: CpuArtisticPresentation> PresentContentKind<R> for CpuArtisticContent {
+    fn present<T: NativePresentTarget, P: NativePresentGate<R>>(
+        presenter: &mut SharedSurfacePresenter<T>,
+        input: R,
+        gate: &P,
+        owner: &mut NativeGpuOwner,
+    ) -> Result<PresentOutcome<R, NativePresentReceipt>, NativeGpuFault>
+    where
+        R: Send + 'static,
+    {
+        presenter.present_cpu_artistic(input, gate, owner)
+    }
+
     fn frame_id(input: &R) -> NativeFrameId {
         input.frame_id()
     }
@@ -195,6 +230,18 @@ impl<R: CpuArtisticPresentation> PresentContentKind<R> for CpuArtisticContent {
 }
 
 impl<R: HardBlackoutPresentation> PresentContentKind<R> for HardBlackoutContent {
+    fn present<T: NativePresentTarget, P: NativePresentGate<R>>(
+        presenter: &mut SharedSurfacePresenter<T>,
+        input: R,
+        gate: &P,
+        owner: &mut NativeGpuOwner,
+    ) -> Result<PresentOutcome<R, NativePresentReceipt>, NativeGpuFault>
+    where
+        R: Send + 'static,
+    {
+        presenter.present_hard_blackout(input, gate, owner)
+    }
+
     fn frame_id(input: &R) -> NativeFrameId {
         input.frame_id()
     }
@@ -286,10 +333,6 @@ impl NativeSurfaceTarget {
     /// Re-arm path: the same surface and window for G's next generation
     /// (`create_for_surface`, then `from_shared_unconfigured`, which
     /// configures it on the new device only after admission).
-    #[expect(
-        dead_code,
-        reason = "C4 native presenter route; I enables it with the native first-frame bootstrap"
-    )]
     pub(crate) fn into_unconfigured(self) -> UnconfiguredNativeSurface {
         self.surface
     }
@@ -544,10 +587,6 @@ pub(crate) struct SharedSurfacePresenter<T: NativePresentTarget> {
 impl SharedSurfacePresenter<NativeSurfaceTarget> {
     /// INTERFACE-01 section 3.1: the unconfigured surface whose adapter G
     /// selected. Nothing is configured, acquired or presented here.
-    #[expect(
-        dead_code,
-        reason = "C4 native presenter route; I enables it with the native first-frame bootstrap"
-    )]
     pub(crate) fn from_shared_unconfigured(
         surface: UnconfiguredNativeSurface,
         owner: &mut NativeGpuOwner,
@@ -1625,8 +1664,7 @@ where
         ready: R,
         permit: P,
     ) -> Result<PresentOutcome<R, NativePresentReceipt>, NativeGpuFault> {
-        self.presenter
-            .present_content::<K, R, P>(ready, &permit, self.owner)
+        K::present(self.presenter, ready, &permit, self.owner)
     }
 }
 

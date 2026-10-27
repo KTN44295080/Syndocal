@@ -8,6 +8,166 @@ use crate::native_gpu_history::{HistoryMaterializationRequest, HistoryScope};
 use crate::VideoEffectStageFault;
 use std::sync::Weak;
 
+#[test]
+fn native_gpu_output_real_p_fault_survives_late_cancel_and_revocation() {
+    struct Revoked;
+    impl NativeOutputAuthority for Revoked {
+        fn revalidate(
+            &self,
+            _: &NativeOutputRequest,
+            _: OutputBoundary,
+        ) -> Result<(), PresentRejection> {
+            Err(PresentRejection::Revoked)
+        }
+    }
+    for cancelled in [false, true] {
+        let mut fixture = gpu();
+        let mut reference = IsfGpuRuntime::new().unwrap();
+        let compositor = NativeGpuCompositor::from_shared(&mut fixture.owner).unwrap();
+        let mut cache = SharedNativeOutputCache::new(101);
+        let request = output_request(&fixture, &mut cache, 1);
+        let key = request.key.clone();
+        let mut case = prepare_history_case(&fixture, &mut reference, &request, batch(1));
+        let mut session = session_for(&case.identities);
+        let plan = session.plan(&case.identities, request.pts_ms).unwrap();
+        // G really submits its ISF batch. P then rejects the mismatched selected
+        // identity; a subsequent live control change must retain that P fault.
+        case.composition.layers_bottom_first[0]
+            .identity
+            .content_sequence += 1;
+        let pending = start_history(
+            &mut fixture,
+            &compositor,
+            request,
+            case.inputs,
+            &case.composition,
+            &session,
+            plan,
+        );
+        let mut retained = history_retiring(pending.poll_with_history(
+            &mut fixture.owner,
+            &mut fixture.runtime,
+            &mut cache,
+            &mut session,
+            &Revoked,
+            &|| cancelled,
+        ));
+        assert!(
+            matches!(retained.reason(), Some(OutputRejection::Fault(fault))
+            if fault.phase == GpuPhase::CompositionSnapshot
+                && fault.kind == NativeGpuFaultKind::IdentityMismatch)
+        );
+        assert!(cache.last_valid(&key).is_none());
+        assert!(fixture.owner.budget_snapshot().allocated_bytes > 0);
+        drop(session);
+        drop(fixture.runtime);
+        drop(compositor);
+        cache.blackout().unwrap();
+        reap_retirement(&mut retained, &mut fixture.owner);
+    }
+}
+
+#[test]
+fn native_gpu_output_recovered_history_resumes_healthy_owner_but_keeps_p_fault_and_stop() {
+    for mode in 0..3 {
+        let mut fixture = gpu();
+        let mut reference = IsfGpuRuntime::new().unwrap();
+        let compositor = NativeGpuCompositor::from_shared(&mut fixture.owner).unwrap();
+        let mut cache = SharedNativeOutputCache::new(101);
+        let request = output_request(&fixture, &mut cache, 1);
+        let key = request.key.clone();
+        let mut jobs = batch(1);
+        Arc::make_mut(&mut jobs[1].chain.stages[1].shader).wgsl = "not valid WGSL".into();
+        let mut case = prepare_history_case(&fixture, &mut reference, &request, jobs);
+        let mut session = session_for(&case.identities);
+        let plan = session.plan(&case.identities, request.pts_ms).unwrap();
+        if mode == 1 {
+            // Real P identity rejection while G separately performs its exact
+            // fixed-clock recovery. P failure must stay the primary fault.
+            case.composition.layers_bottom_first[0]
+                .identity
+                .content_sequence += 1;
+        }
+        let pending = start_history(
+            &mut fixture,
+            &compositor,
+            request,
+            case.inputs,
+            &case.composition,
+            &session,
+            plan,
+        );
+        let stopped = Cell::new(false);
+        let authority = Authority {
+            stopped: &stopped,
+            cancel_after_commit: false,
+        };
+        let retirement = history_retiring(finish_history(
+            pending,
+            &mut fixture,
+            &mut cache,
+            &mut session,
+            &authority,
+            &|| false,
+        ));
+        assert_eq!(fixture.runtime.native_frame_index(), 3);
+        assert!(cache.last_valid(&key).is_none());
+        if mode == 2 {
+            fixture.owner.begin_stop();
+        }
+        if mode == 0 {
+            let mut history = retirement
+                .into_recovered_history(&mut fixture.owner)
+                .unwrap_or_else(|(_, fault)| panic!("healthy recovered owner rejected: {fault:?}"));
+            assert!(history.is_recovered());
+            assert_eq!(history.faults(), case.faults);
+            session
+                .commit_recovered_with(&mut history, |faults| {
+                    assert_eq!(faults, case.faults);
+                    Ok(())
+                })
+                .unwrap();
+            assert!(history.is_committed() && !history.output_phases_valid());
+            assert_eq!(fixture.owner.state(), GpuOwnerState::Active);
+            assert_eq!(fixture.owner.initialize(|_, _| 17u8).unwrap(), 17);
+            drop(history);
+            drop(session);
+            drop(fixture.runtime);
+            drop(compositor);
+            cache.blackout().unwrap();
+            fixture.owner.begin_stop();
+            let started = Instant::now();
+            while fixture.owner.poll_retirement().unwrap() != RetirementProgress::Reaped {
+                assert!(started.elapsed() < Duration::from_secs(5));
+                std::thread::yield_now();
+            }
+            assert_eq!(fixture.owner.budget_snapshot().managed_bytes(), 0);
+        } else {
+            if mode == 1 {
+                assert!(
+                    matches!(retirement.reason(), Some(OutputRejection::Fault(fault))
+                    if fault.phase == GpuPhase::CompositionSnapshot)
+                );
+            }
+            let (mut retained, _) = retirement
+                .into_recovered_history(&mut fixture.owner)
+                .err()
+                .expect("P failure/Stop must return complete recovery ownership");
+            let history = retained
+                .take_history_outcome()
+                .expect("rejected recovery returns all CPU outcomes");
+            assert!(history.is_recovered());
+            assert_eq!(history.faults(), case.faults);
+            drop(history);
+            drop(session);
+            drop(fixture.runtime);
+            drop(compositor);
+            cache.blackout().unwrap();
+            reap_retirement(&mut retained, &mut fixture.owner);
+        }
+    }
+}
+
 struct PreparedHistoryCase {
     inputs: PreparedNativeInputs,
     composition: NativeCompositionPlan,

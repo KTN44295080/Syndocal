@@ -1,20 +1,26 @@
 //! I lane: output ownership and cache publication (INTERFACE-01 sections 6 and 9).
 //! G's resolved ISF/composition receipts and P's copied/unmapped snapshot are
-//! joined here before cache publication. Native routing stays test-only until C4.
+//! joined here before cache publication. The concrete shared pipeline serves
+//! native Display; the injected generic driver remains a policy-test harness.
 
 use protocol::{VideoOutputId, VideoOutputMapping};
 
 #[path = "native_gpu_output_cpu.rs"]
 pub(crate) mod cpu;
+#[path = "native_gpu_display.rs"]
+pub(crate) mod display;
 #[path = "native_gpu_output_history.rs"]
 pub(crate) mod history;
 #[path = "native_gpu_output_shared.rs"]
 pub(crate) mod shared;
 
+#[cfg(test)]
 use crate::native_gpu_context::ResolvedGpuPhase;
 use crate::native_gpu_contract::*;
 use crate::native_gpu_result::IsfValidatedReceipt;
-use crate::native_gpu_snapshot::{CacheBoundSnapshot, CompletedPremappingSnapshot};
+#[cfg(test)]
+use crate::native_gpu_snapshot::CacheBoundSnapshot;
+use crate::native_gpu_snapshot::CompletedPremappingSnapshot;
 use crate::{
     VideoFrame, VideoOutputLastValidKey, VideoOutputMappingIdentity, VideoOutputRenderEvidence,
     VideoOutputRenderFreshness, VideoPixelFormat, VideoRenderCancellation,
@@ -93,6 +99,7 @@ fn copy_fault(value: &NativeGpuFault) -> NativeGpuFault {
     }
 }
 
+#[cfg(test)]
 fn cancelled_or_fault(
     error: NativeGpuFault,
     cancel: &dyn VideoRenderCancellation,
@@ -166,18 +173,21 @@ fn guard(
     })
 }
 
+#[cfg(test)]
 pub(crate) enum NativePreflight<I, A> {
     Admitted(A),
     Declined { inputs: I, reason: NativeGpuDecline },
     Failed { inputs: I, fault: NativeGpuFault },
 }
 
+#[cfg(test)]
 pub(crate) enum CpuExecution<T> {
     Complete(T),
     Cancelled,
     Failed(NativeGpuFault),
 }
 
+#[cfg(test)]
 pub(crate) struct SubmissionFailure<R> {
     pub fault: NativeGpuFault,
     pub retirement: R,
@@ -185,6 +195,7 @@ pub(crate) struct SubmissionFailure<R> {
 
 /// The backend retains strong owners in its registry even when a lookup ticket
 /// is dropped. Whole-tick CPU execution is exposed only to the preflight route.
+#[cfg(test)]
 pub(crate) trait NativeOutputDriver:
     GpuCompletionPort<Completed = CompletedNativeOutput<Self::Gpu>>
 {
@@ -214,16 +225,19 @@ pub(crate) trait NativeOutputDriver:
     fn poll_retirement(&mut self, retiring: &mut Self::Retiring) -> Result<bool, NativeGpuFault>;
 }
 
+#[cfg(test)]
 pub(crate) struct PreparedNativeOutput<I> {
     request: NativeOutputRequest,
     inputs: I,
 }
 
+#[cfg(test)]
 pub(crate) enum UnsubmittedOutput<D: NativeOutputDriver> {
     Inputs(D::Inputs),
     Admitted(D::Admitted),
 }
 
+#[cfg(test)]
 pub(crate) enum BegunNativeOutput<D: NativeOutputDriver> {
     Native(PendingNativeGpuOutput<D::Pending>),
     Cpu {
@@ -237,6 +251,7 @@ pub(crate) enum BegunNativeOutput<D: NativeOutputDriver> {
     Retiring(RetiringNativeOutput<D::Retiring>),
 }
 
+#[cfg(test)]
 impl<I> PreparedNativeOutput<I> {
     pub(crate) fn new(request: NativeOutputRequest, inputs: I) -> Self {
         Self { request, inputs }
@@ -323,12 +338,14 @@ impl<I> PreparedNativeOutput<I> {
 
 /// Each state retains the affine GPU owner. In particular, a failed P cache
 /// handoff must not drop that owner before the driver's retirement path sees it.
+#[cfg(test)]
 enum OutputSnapshotOwnership<G> {
     Copied(CompletedPremappingSnapshot<G>),
     Bound(CacheBoundSnapshot<G>),
     Retained { _gpu: G },
 }
 
+#[cfg(test)]
 pub(crate) struct CompletedNativeOutput<G> {
     isf: IsfValidatedReceipt,
     composition: ResolvedGpuPhase,
@@ -336,6 +353,7 @@ pub(crate) struct CompletedNativeOutput<G> {
     snapshot: Option<OutputSnapshotOwnership<G>>,
 }
 
+#[cfg(test)]
 impl<G> CompletedNativeOutput<G> {
     /// Construction requires real G proofs and P's completed copy/unmap owner.
     /// The policy still validates their common transaction, frame, and binding.
@@ -474,17 +492,20 @@ pub(crate) trait BoundSnapshotCache: CpuSnapshotCommit {
     fn discard_binding(&mut self);
 }
 
+#[cfg(test)]
 pub(crate) struct PendingNativeGpuOutput<P> {
     request: NativeOutputRequest,
     pending: P,
 }
 
+#[cfg(test)]
 pub(crate) enum PolledNativeOutput<P, G, R> {
     Pending(PendingNativeGpuOutput<P>),
     Ready(ReadyNativeGpuOutput<G>),
     Retiring(RetiringNativeOutput<R>),
 }
 
+#[cfg(test)]
 impl<P> PendingNativeGpuOutput<P> {
     /// Consuming each poll prevents a terminal pending from being polled twice.
     pub(crate) fn poll<D: NativeOutputDriver<Pending = P>>(
@@ -549,6 +570,7 @@ impl<P> PendingNativeGpuOutput<P> {
     }
 }
 
+#[cfg(test)]
 fn complete_and_commit<G>(
     request: &NativeOutputRequest,
     completed: &mut CompletedNativeOutput<G>,
@@ -675,6 +697,7 @@ impl<R> RetiringNativeOutput<R> {
     pub(crate) fn is_retired(&self) -> bool {
         self.ticket.is_none()
     }
+    #[cfg(test)]
     pub(crate) fn poll<D: NativeOutputDriver<Retiring = R>>(
         &mut self,
         driver: &mut D,
@@ -705,6 +728,25 @@ pub(crate) struct NativePresentPermit<'a, A> {
 }
 
 impl<A: NativeOutputAuthority> NativePresentPermit<'_, A> {
+    pub(crate) fn new<'a>(
+        authority: &'a A,
+        cancel: &'a dyn VideoRenderCancellation,
+    ) -> NativePresentPermit<'a, A> {
+        NativePresentPermit { authority, cancel }
+    }
+
+    pub(crate) fn check_request(
+        &self,
+        request: &NativeOutputRequest,
+        boundary: OutputBoundary,
+    ) -> Result<(), PresentRejection> {
+        guard(request, boundary, self.authority, self.cancel).map_err(|reason| match reason {
+            OutputRejection::Cancelled => PresentRejection::Cancelled,
+            OutputRejection::Authority(reason) => reason,
+            _ => PresentRejection::Revoked,
+        })
+    }
+
     pub(crate) fn before_acquire<G>(
         &self,
         ready: &ReadyNativeGpuOutput<G>,
@@ -722,13 +764,7 @@ impl<A: NativeOutputAuthority> NativePresentPermit<'_, A> {
         ready: &ReadyNativeGpuOutput<G>,
         boundary: OutputBoundary,
     ) -> Result<(), PresentRejection> {
-        guard(&ready.request, boundary, self.authority, self.cancel).map_err(
-            |reason| match reason {
-                OutputRejection::Cancelled => PresentRejection::Cancelled,
-                OutputRejection::Authority(reason) => reason,
-                _ => PresentRejection::Revoked,
-            },
-        )
+        self.check_request(&ready.request, boundary)
     }
 }
 
@@ -766,6 +802,7 @@ pub(crate) enum NativePresentation<G, R, P> {
     Failed(NativeGpuFault),
 }
 
+#[cfg(test)]
 pub(crate) fn present_native_output<'a, D, S, A>(
     ready: ReadyNativeGpuOutput<D::Gpu>,
     driver: &mut D,
@@ -971,6 +1008,7 @@ impl CpuSnapshotCommit for NativeCacheWriter<'_> {
             .map(CacheCommitReceipt::from_publication)
     }
 
+    #[cfg(test)]
     fn invalidate_output(&mut self, output_id: VideoOutputId) {
         if self.cache.output_id == output_id {
             self.discard_binding();
@@ -1087,13 +1125,23 @@ impl NativeOutputCache {
     pub(crate) fn invalidate_configuration(&mut self) -> Result<(), CacheFenceError> {
         self.invalidate(false)
     }
+    #[cfg(test)]
     pub(crate) fn last_valid(&self, key: &VideoOutputLastValidKey) -> Option<&VideoFrame> {
         self.cached
             .as_ref()
             .and_then(|(cached_key, frame)| (cached_key == key).then_some(frame))
     }
+
+    /// Native-to-CPU handover moves the published premapping pixels rather
+    /// than cloning them. The I adapter keeps the matching charge owner beside
+    /// this value and only calls this after it has decided to leave native
+    /// ownership for the canonical CPU renderer.
+    pub(crate) fn take_last_valid(&mut self) -> Option<(VideoOutputLastValidKey, VideoFrame)> {
+        self.cached.take()
+    }
     /// Owned CPU APIs retain their independent-pixels contract. The native
     /// success path never calls this cloning accessor.
+    #[cfg(test)]
     pub(crate) fn owned_last_valid(&self, key: &VideoOutputLastValidKey) -> Option<VideoFrame> {
         self.last_valid(key).cloned()
     }

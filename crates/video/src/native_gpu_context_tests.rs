@@ -1486,3 +1486,777 @@ fn native_gpu_g3_serial_cpu_admission_and_unused_refund_ignore_only_present_reti
     owner.begin_stop();
     assert_eq!(owner.poll_retirement().unwrap(), RetirementProgress::Reaped);
 }
+
+fn g4_replacement(generation: u64) -> BrokerCore<ScriptedGpuDriver> {
+    BrokerCore::new(
+        ScriptedGpuDriver::default(),
+        GpuContextId {
+            device_generation: generation,
+            ..context()
+        },
+    )
+}
+
+#[test]
+fn native_gpu_g4_loss_or_poison_rearm_retains_both_g3_records_and_old_reservations() {
+    for kind in [
+        NativeGpuFaultKind::DeviceLost,
+        NativeGpuFaultKind::ScopeDrain,
+    ] {
+        let mut core = scripted();
+        let mut plan = NativeAllocationPlan::new(frame(1));
+        plan.add_new(ChargeKind::IsfScratch, 32).unwrap();
+        plan.add_new(ChargeKind::CpuSnapshot, 16).unwrap();
+        let reservation = core
+            .budget
+            .reserve(core.budget.quote(&plan).unwrap())
+            .unwrap();
+        let present_id = core.begin(frame(1), reservation).unwrap();
+        let present_owner = retained(&mut core, present_id, 32);
+        phase(&mut core, present_id, GpuPhase::MappingPresent, Ok(()));
+        core.seal(core.index(present_id).unwrap());
+        let reservation = reserve(&mut core, 2, 64);
+        let next_id = core.begin(frame(2), reservation).unwrap();
+        let next_owner = retained(&mut core, next_id, 64);
+        phase(&mut core, next_id, GpuPhase::IsfBatch, Ok(()));
+        core.seal(core.index(next_id).unwrap());
+        core.driver.failure = Some(DriverFailure {
+            kind,
+            message: "old generation failure".into(),
+        });
+        assert_eq!(core.progress().unwrap_err().kind, kind);
+        assert_eq!(core.budget.snapshot().managed_bytes(), 112);
+        let old_context = core.context;
+        core.rearm_with_replacement(g4_replacement(old_context.device_generation + 7))
+            .unwrap_or_else(|(fault, _)| panic!("retained re-arm: {fault:?}"));
+        assert_eq!(core.state, GpuOwnerState::Active);
+        assert!(core.frames.is_empty());
+        assert_eq!(core.retained_generations.len(), 1);
+        assert_eq!(core.retained_generations[0].frames.len(), 2);
+        assert!(present_owner.upgrade().is_some());
+        assert!(next_owner.upgrade().is_some());
+        assert_eq!(core.budget.snapshot().allocated_bytes, 96);
+        assert_eq!(core.budget.snapshot().reserved_bytes, 16);
+        assert_eq!(
+            core.budget
+                .snapshot()
+                .for_kind(ChargeKind::IsfScratch)
+                .quarantined_bytes,
+            96
+        );
+        assert_eq!(
+            core.index(present_id).unwrap_err().kind,
+            NativeGpuFaultKind::IdentityMismatch
+        );
+        assert_eq!(
+            core.retained_generations[0].frames[0]
+                .marker
+                .load(Ordering::Acquire),
+            CANCELLED_TOKEN
+        );
+
+        core.retained_generations[0]._driver.completed = u64::MAX;
+        core.retained_generations[0]._driver.scope_ready = true;
+        let old_polls = core.retained_generations[0]._driver.polls;
+        let reservation = reserve(&mut core, 3, 32);
+        let current = core.begin(frame(3), reservation).unwrap();
+        let current_owner = retained(&mut core, current, 32);
+        let receipt = phase(&mut core, current, GpuPhase::IsfBatch, Ok(()));
+        assert_eq!(receipt.submission().context, core.context);
+        assert_eq!(receipt.submission().sequence, 1);
+        core.driver.completed = 1;
+        core.driver.scope_ready = true;
+        core.progress().unwrap();
+        let mut resolved = core.finish_record(core.index(current).unwrap()).unwrap();
+        assert!(resolved.take_phase(receipt).unwrap().validation().is_ok());
+        assert!(current_owner.upgrade().is_none());
+        assert_eq!(core.budget.snapshot().managed_bytes(), 112);
+        assert_eq!(
+            core.retained_generations[0]._driver.polls, old_polls,
+            "old failed driver must not resume execution or prove a new success"
+        );
+        core.stop();
+        assert_eq!(
+            core.retirement().unwrap(),
+            RetirementProgress::Pending {
+                transactions: 2,
+                allocations: 2
+            }
+        );
+        assert!(present_owner.upgrade().is_some());
+        assert!(next_owner.upgrade().is_some());
+    }
+}
+
+#[test]
+fn native_gpu_g4_drained_generation_keeps_external_owner_until_its_last_release() {
+    let mut core = scripted();
+    let reservation = reserve(&mut core, 1, 32);
+    let id = core.begin(frame(1), reservation).unwrap();
+    let weak = retained(&mut core, id, 32);
+    let external = weak.upgrade().unwrap();
+    let allocation = external.charge.id();
+    let receipt = phase(&mut core, id, GpuPhase::IsfBatch, Ok(()));
+    core.driver.completed = receipt.submission().sequence;
+    core.driver.scope_ready = true;
+    core.progress().unwrap();
+    let mut resolved = core.finish_record(core.index(id).unwrap()).unwrap();
+    resolved
+        .take_phase(receipt)
+        .unwrap()
+        .into_validation()
+        .unwrap();
+    core.stop();
+    assert_eq!(
+        core.retirement().unwrap(),
+        RetirementProgress::Pending {
+            transactions: 0,
+            allocations: 1
+        }
+    );
+    core.rearm_with_replacement(g4_replacement(context().device_generation + 9))
+        .unwrap_or_else(|(fault, _)| panic!("drained re-arm: {fault:?}"));
+    assert_eq!(core.retained_generations.len(), 1);
+    assert_eq!(core.budget.snapshot().managed_bytes(), 32);
+    let mut alias = NativeAllocationPlan::new(frame(2));
+    alias.add_existing(allocation);
+    assert_eq!(
+        core.budget.quote(&alias).unwrap_err(),
+        NativeGpuDecline::QuoteExpired
+    );
+    core.progress().unwrap();
+    assert!(weak.upgrade().is_some());
+    drop(external);
+    core.progress().unwrap();
+    assert!(weak.upgrade().is_none());
+    assert!(core.retained_generations.is_empty());
+    assert_eq!(core.budget.snapshot().managed_bytes(), 0);
+    core.stop();
+    assert_eq!(core.retirement().unwrap(), RetirementProgress::Reaped);
+}
+
+#[test]
+fn native_gpu_g4_rearm_rejects_active_pending_foreign_and_used_bootstraps_intact() {
+    let mut core = scripted();
+    let before = core.budget.snapshot();
+    let (fault, replacement) = core
+        .rearm_with_replacement(g4_replacement(9))
+        .err()
+        .unwrap();
+    assert_eq!(fault.kind, NativeGpuFaultKind::StateMismatch);
+    assert!(replacement.is_pristine());
+    assert_eq!(core.budget.snapshot(), before);
+
+    let reservation = reserve(&mut core, 1, 0);
+    let id = core.begin(frame(1), reservation).unwrap();
+    phase(&mut core, id, GpuPhase::Initialize, Ok(()));
+    core.stop();
+    let before = core.budget.snapshot();
+    let (fault, replacement) = core.rearm_with_replacement(replacement).err().unwrap();
+    assert_eq!(fault.kind, NativeGpuFaultKind::StateMismatch);
+    assert!(replacement.is_pristine());
+    assert_eq!(core.budget.snapshot(), before);
+    core.driver.completed = 1;
+    core.driver.scope_ready = true;
+    assert_eq!(core.retirement().unwrap(), RetirementProgress::Reaped);
+
+    let mut used = replacement;
+    let reservation = reserve(&mut used, 1, 0);
+    used.budget.cancel_reservation(reservation).unwrap();
+    let used_snapshot = used.budget.snapshot();
+    let (fault, used) = core.rearm_with_replacement(used).err().unwrap();
+    assert_eq!(fault.kind, NativeGpuFaultKind::StateMismatch);
+    assert_eq!(used.budget.snapshot(), used_snapshot);
+    let before = core.budget.snapshot();
+    for replacement_context in [
+        GpuContextId {
+            owner_id: context().owner_id + 1,
+            device_generation: 9,
+        },
+        context(),
+    ] {
+        let replacement = BrokerCore::new(ScriptedGpuDriver::default(), replacement_context);
+        let (fault, replacement) = core.rearm_with_replacement(replacement).err().unwrap();
+        assert_eq!(fault.kind, NativeGpuFaultKind::IdentityMismatch);
+        assert!(replacement.is_pristine());
+        assert_eq!(replacement.context, replacement_context);
+        assert_eq!(core.budget.snapshot(), before);
+    }
+}
+
+#[test]
+fn native_gpu_g4_retained_generation_bound_includes_zero_byte_failed_scopes() {
+    let mut core = scripted();
+    for sequence in 0..=MAX_RETAINED_DEVICE_GENERATIONS {
+        let reservation = reserve(&mut core, sequence as u64 + 1, 0);
+        let id = core.begin(frame(sequence as u64 + 1), reservation).unwrap();
+        phase(&mut core, id, GpuPhase::Initialize, Ok(()));
+        core.driver.failure = Some(DriverFailure {
+            kind: NativeGpuFaultKind::ScopeDrain,
+            message: "unproved zero-byte scope".into(),
+        });
+        core.progress().unwrap_err();
+        let next = g4_replacement(core.context.device_generation + 1);
+        if sequence == MAX_RETAINED_DEVICE_GENERATIONS {
+            let before = core.budget.snapshot();
+            let (fault, next) = core.rearm_with_replacement(next).err().unwrap();
+            assert_eq!(fault.kind, NativeGpuFaultKind::StateMismatch);
+            assert!(next.is_pristine());
+            assert_eq!(
+                core.retained_generations.len(),
+                MAX_RETAINED_DEVICE_GENERATIONS
+            );
+            assert_eq!(core.frames.len(), 1);
+            assert_eq!(core.budget.snapshot(), before);
+        } else {
+            core.rearm_with_replacement(next)
+                .unwrap_or_else(|(fault, _)| panic!("bounded re-arm: {fault:?}"));
+            assert_eq!(core.retained_generations.len(), sequence + 1);
+        }
+    }
+    assert_eq!(core.budget.snapshot().managed_bytes(), 0);
+    assert_eq!(
+        core.budget.snapshot().reservation_count,
+        MAX_RETAINED_DEVICE_GENERATIONS + 1
+    );
+    core.stop();
+    assert!(
+        core.retirement().is_err(),
+        "zero-byte unresolved scopes are not a successful Stop"
+    );
+}
+
+struct G4LifetimeDriver {
+    _live: Arc<()>,
+}
+impl CompletionDriver for G4LifetimeDriver {
+    type Ticket = ();
+    type Scopes = ();
+    fn poll(&mut self) -> Result<(), DriverFailure> {
+        Ok(())
+    }
+    fn complete(&self, _: &()) -> bool {
+        false
+    }
+    fn scopes(&mut self, _: &mut ()) -> Option<Result<(), DriverFailure>> {
+        None
+    }
+}
+
+#[test]
+fn native_gpu_g4_owner_drop_retains_ledger_and_drivers_without_wait_or_false_reap() {
+    let live = Arc::new(());
+    let clean = BrokerCore::new(
+        G4LifetimeDriver {
+            _live: Arc::clone(&live),
+        },
+        context(),
+    );
+    let weak = Arc::downgrade(&live);
+    drop(live);
+    drop(OwnedBrokerCore::new(clean));
+    assert!(weak.upgrade().is_none(), "an empty owner releases normally");
+
+    let live = Arc::new(());
+    let weak = Arc::downgrade(&live);
+    let mut core = BrokerCore::new(G4LifetimeDriver { _live: live }, context());
+    let mut plan = NativeAllocationPlan::new(frame(1));
+    plan.add_new(ChargeKind::CpuLastValid, 16).unwrap();
+    let mut reservation = core
+        .budget
+        .reserve(core.budget.quote(&plan).unwrap())
+        .unwrap();
+    let id = core.budget.next_allocation_id().unwrap();
+    let external_charge = core
+        .budget
+        .bind_allocation(&mut reservation, id, ChargeKind::CpuLastValid, 16)
+        .unwrap();
+    core.budget.cancel_reservation(reservation).unwrap();
+    assert!(
+        !core.can_release(),
+        "a final external charge is part of retirement"
+    );
+    drop(OwnedBrokerCore::new(core));
+    assert!(weak.upgrade().is_some());
+    drop(external_charge);
+    assert!(
+        weak.upgrade().is_some(),
+        "abandoned ownership cannot invent a reap after a later external drop"
+    );
+
+    let old_live = Arc::new(());
+    let old_weak = Arc::downgrade(&old_live);
+    let mut core = BrokerCore::new(G4LifetimeDriver { _live: old_live }, context());
+    let plan = NativeAllocationPlan::new(frame(2));
+    let reservation = core
+        .budget
+        .reserve(core.budget.quote(&plan).unwrap())
+        .unwrap();
+    let txn = core.begin(frame(2), reservation).unwrap();
+    core.open(txn, GpuPhase::Initialize).unwrap();
+    let submission = core.submission_id(frame(2), GpuPhase::Initialize).unwrap();
+    core.register(txn, submission, GpuPhase::Initialize, (), ())
+        .unwrap();
+    core.state = GpuOwnerState::DeviceLostRetained;
+    core.budget.quarantine();
+    let new_live = Arc::new(());
+    let new_weak = Arc::downgrade(&new_live);
+    let replacement = BrokerCore::new(
+        G4LifetimeDriver { _live: new_live },
+        GpuContextId {
+            device_generation: 9,
+            ..context()
+        },
+    );
+    core.rearm_with_replacement(replacement)
+        .unwrap_or_else(|(fault, _)| panic!("owner retention test: {fault:?}"));
+    assert_eq!(core.retained_generations.len(), 1);
+    assert!(
+        !core.can_release(),
+        "an unresolved zero-byte phase still owns its driver and scopes"
+    );
+    drop(OwnedBrokerCore::new(core));
+    assert!(old_weak.upgrade().is_some());
+    assert!(new_weak.upgrade().is_some());
+}
+
+#[test]
+fn native_gpu_g4_real_rearm_uses_original_ledger_and_drains_new_device_independently() {
+    let factory = NativeGpuFactory::new();
+    let mut owner = factory
+        .create_headless(11, NativeGpuRequirements::default())
+        .unwrap();
+    let (receipt, mut pending, weak) = g3_real_present_phase(&mut owner, frame(1));
+    let external = weak.upgrade().unwrap();
+    let old_context = owner.context().id();
+    finish(&mut owner, &mut pending)
+        .take_phase(receipt)
+        .unwrap()
+        .into_validation()
+        .unwrap();
+    owner.begin_stop();
+    assert_eq!(
+        owner.poll_retirement().unwrap(),
+        RetirementProgress::Pending {
+            transactions: 0,
+            allocations: 2
+        }
+    );
+    let old_bytes = owner.budget_snapshot().managed_bytes();
+    let replacement = factory
+        .create_headless(11, NativeGpuRequirements::default())
+        .unwrap();
+    let next_context = replacement.context().id();
+    owner
+        .rearm_with_replacement(replacement)
+        .unwrap_or_else(|(fault, _)| panic!("real re-arm: {fault:?}"));
+    assert_eq!(owner.context().id(), next_context);
+    assert!(next_context.device_generation > old_context.device_generation);
+    assert_eq!(owner.budget_snapshot().managed_bytes(), old_bytes);
+    assert_eq!(owner.core.retained_generations.len(), 1);
+    let (receipt, mut pending, current_weak) = g3_real_present_phase(&mut owner, frame(2));
+    assert_eq!(owner.budget_snapshot().managed_bytes(), old_bytes * 2);
+    assert_ne!(
+        external._charge.id(),
+        current_weak.upgrade().unwrap()._charge.id()
+    );
+    finish(&mut owner, &mut pending)
+        .take_phase(receipt)
+        .unwrap()
+        .into_validation()
+        .unwrap();
+    assert!(current_weak.upgrade().is_none());
+    assert!(weak.upgrade().is_some());
+    assert_eq!(owner.budget_snapshot().managed_bytes(), old_bytes);
+    drop(external);
+    owner.poll_retirement().unwrap();
+    assert!(weak.upgrade().is_none());
+    assert!(owner.core.retained_generations.is_empty());
+    assert_eq!(owner.budget_snapshot().managed_bytes(), 0);
+    owner.begin_stop();
+    assert_eq!(owner.poll_retirement().unwrap(), RetirementProgress::Reaped);
+}
+
+#[test]
+fn native_gpu_g4_real_rearm_rejects_foreign_exposed_quoted_and_initialized_replacements() {
+    let factory = NativeGpuFactory::new();
+    let mut owner = factory
+        .create_headless(11, NativeGpuRequirements::default())
+        .unwrap();
+    owner.begin_stop();
+    assert_eq!(owner.poll_retirement().unwrap(), RetirementProgress::Reaped);
+    let original = owner.context().id();
+    let snapshot = owner.budget_snapshot();
+
+    let foreign = NativeGpuFactory::new()
+        .create_headless(11, NativeGpuRequirements::default())
+        .unwrap();
+    let foreign_context = foreign.context().id();
+    let (fault, foreign) = owner.rearm_with_replacement(foreign).err().unwrap();
+    assert_eq!(fault.kind, NativeGpuFaultKind::IdentityMismatch);
+    assert_eq!(foreign.context().id(), foreign_context);
+    drop(foreign);
+
+    let wrong_owner = factory
+        .create_headless(12, NativeGpuRequirements::default())
+        .unwrap();
+    let (fault, wrong_owner) = owner.rearm_with_replacement(wrong_owner).err().unwrap();
+    assert_eq!(fault.kind, NativeGpuFaultKind::IdentityMismatch);
+    drop(wrong_owner);
+
+    let replacement = factory
+        .create_headless(11, NativeGpuRequirements::default())
+        .unwrap();
+    let exposed = Arc::clone(replacement.context());
+    let (fault, replacement) = owner.rearm_with_replacement(replacement).err().unwrap();
+    assert_eq!(fault.kind, NativeGpuFaultKind::StateMismatch);
+    assert!(Arc::ptr_eq(&exposed, replacement.context()));
+    drop(exposed);
+    let quote = replacement
+        .quote(&NativeAllocationPlan::new(frame(1)))
+        .unwrap();
+    let (fault, mut replacement) = owner.rearm_with_replacement(replacement).err().unwrap();
+    assert_eq!(fault.kind, NativeGpuFaultKind::StateMismatch);
+    drop(quote);
+    replacement.initialize(|_, _| ()).unwrap();
+    let (fault, mut replacement) = owner.rearm_with_replacement(replacement).err().unwrap();
+    assert_eq!(fault.kind, NativeGpuFaultKind::StateMismatch);
+    replacement.begin_stop();
+    assert_eq!(
+        replacement.poll_retirement().unwrap(),
+        RetirementProgress::Reaped
+    );
+    drop(replacement);
+    assert_eq!(owner.context().id(), original);
+    assert_eq!(owner.budget_snapshot(), snapshot);
+
+    let replacement = factory
+        .create_headless(11, NativeGpuRequirements::default())
+        .unwrap();
+    owner
+        .rearm_with_replacement(replacement)
+        .unwrap_or_else(|(fault, _)| panic!("fresh replacement after rejections: {fault:?}"));
+    assert!(owner.core.retained_generations.is_empty());
+    owner.begin_stop();
+    assert_eq!(owner.poll_retirement().unwrap(), RetirementProgress::Reaped);
+}
+
+fn g4_finish_reserved_phase(
+    owner: &mut NativeGpuOwner,
+    identity: NativeFrameId,
+    reservation: FrameReservation,
+) {
+    let mut transaction = owner.begin_frame(identity, reservation).unwrap();
+    let phase = transaction.begin_phase(GpuPhase::IsfBatch).unwrap();
+    let encoder = phase
+        .device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let encoded = phase.finish(vec![encoder.finish()]);
+    let receipt = transaction.submit_phase(encoded).unwrap();
+    let mut pending = transaction.finish();
+    finish(owner, &mut pending)
+        .take_phase(receipt)
+        .unwrap()
+        .into_validation()
+        .unwrap();
+}
+
+#[test]
+fn native_gpu_g4_real_late_cancel_of_retained_pending_keeps_new_owner_and_quote_healthy() {
+    for kind in [
+        NativeGpuFaultKind::DeviceLost,
+        NativeGpuFaultKind::ScopeDrain,
+    ] {
+        let factory = NativeGpuFactory::new();
+        let mut owner = factory
+            .create_headless(11, NativeGpuRequirements::default())
+            .unwrap();
+        let (old_receipt, old_pending, old_weak) = g3_real_present_phase(&mut owner, frame(1));
+        let old_id = old_pending.id;
+        let old_marker = Arc::clone(&old_pending.marker);
+        if kind == NativeGpuFaultKind::DeviceLost {
+            owner.context.lost.store(true, Ordering::Release);
+        } else {
+            owner.context.uncaptured.store(true, Ordering::Release);
+        }
+        let replacement = factory
+            .create_headless(11, NativeGpuRequirements::default())
+            .unwrap();
+        owner
+            .rearm_with_replacement(replacement)
+            .unwrap_or_else(|(fault, _)| panic!("late-cancel re-arm: {fault:?}"));
+        let current_context = owner.context().id();
+        let old_snapshot = owner.budget_snapshot();
+        assert_eq!(old_snapshot.managed_bytes(), 32);
+        assert_eq!(old_snapshot.allocation_count, 2);
+        assert_eq!(owner.core.retained_generations.len(), 1);
+        let old_record = &owner.core.retained_generations[0].frames[0];
+        let old_allocations = old_record.owned_allocations.clone();
+        let old_resource_count = old_record.resources.len();
+        assert!(old_record.reservation.is_some());
+        assert_eq!(old_record.phases[0].id, old_receipt.submission());
+        assert!(!old_record.phases[0].complete);
+        assert!(old_record.phases[0].scope_result.is_none());
+
+        let (receipt, mut current_pending, current_weak) =
+            g3_real_present_phase(&mut owner, frame(2));
+        assert_eq!(
+            receipt.submission().sequence,
+            old_receipt.submission().sequence
+        );
+        assert_ne!(
+            receipt.submission().context,
+            old_receipt.submission().context
+        );
+        let plan = NativeAllocationPlan::new(frame(3));
+        let quote = owner.quote(&plan).unwrap();
+        let before_cancel = owner.budget_snapshot();
+        let retiring = GpuCompletionPort::cancel_and_retire(&mut owner, old_pending);
+        assert_eq!(retiring.id(), old_id);
+        assert_eq!(owner.context().id(), current_context);
+        assert_eq!(owner.state(), GpuOwnerState::Active);
+        assert_eq!(owner.budget_snapshot(), before_cancel);
+        assert_eq!(old_marker.load(Ordering::Acquire), CANCELLED_TOKEN);
+        assert_eq!(current_pending.marker.load(Ordering::Acquire), ACTIVE_TOKEN);
+        assert_eq!(owner.core.retained_generations.len(), 1);
+        assert_eq!(owner.core.retained_generations[0].frames.len(), 1);
+        let old_record = &owner.core.retained_generations[0].frames[0];
+        assert_eq!(old_record.id, old_id);
+        assert_eq!(old_record.owned_allocations, old_allocations);
+        assert_eq!(old_record.resources.len(), old_resource_count);
+        assert!(old_record.reservation.is_some());
+        assert!(!old_record.phases[0].complete);
+        assert!(old_record.phases[0].scope_result.is_none());
+        assert!(old_weak.upgrade().is_some());
+
+        let reservation = owner
+            .reserve(quote)
+            .expect("old cleanup must not expire new quote");
+        finish(&mut owner, &mut current_pending)
+            .take_phase(receipt)
+            .unwrap()
+            .into_validation()
+            .unwrap();
+        assert!(current_weak.upgrade().is_none());
+        g4_finish_reserved_phase(&mut owner, frame(3), reservation);
+        assert_eq!(owner.state(), GpuOwnerState::Active);
+        assert_eq!(
+            owner.budget_snapshot().managed_bytes(),
+            old_snapshot.managed_bytes()
+        );
+        assert_eq!(
+            owner.budget_snapshot().allocation_count,
+            old_snapshot.allocation_count
+        );
+        let old_record = &owner.core.retained_generations[0].frames[0];
+        assert_eq!(old_record.phases[0].id, old_receipt.submission());
+        assert!(!old_record.phases[0].complete);
+        assert!(old_record.phases[0].scope_result.is_none());
+        assert_eq!(old_marker.load(Ordering::Acquire), CANCELLED_TOKEN);
+        owner.begin_stop();
+        assert_eq!(
+            owner.poll_retirement().unwrap(),
+            RetirementProgress::Pending {
+                transactions: 1,
+                allocations: 2,
+            }
+        );
+        assert!(old_weak.upgrade().is_some());
+        assert_eq!(owner.budget_snapshot().managed_bytes(), 32);
+    }
+}
+
+#[test]
+fn native_gpu_g4_real_late_cancel_after_healthy_stop_does_not_reap_new_generation() {
+    for retain_external in [false, true] {
+        let factory = NativeGpuFactory::new();
+        let mut owner = factory
+            .create_headless(11, NativeGpuRequirements::default())
+            .unwrap();
+        let (_receipt, old_pending, old_weak) = g3_real_present_phase(&mut owner, frame(1));
+        let old_id = old_pending.id;
+        let old_marker = Arc::clone(&old_pending.marker);
+        let external = retain_external.then(|| old_weak.upgrade().unwrap());
+        owner.begin_stop();
+        let started = Instant::now();
+        let progress = loop {
+            let progress = owner.poll_retirement().unwrap();
+            if owner.core.frames.is_empty() {
+                break progress;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "old Stop did not drain"
+            );
+            std::thread::yield_now();
+        };
+        assert_eq!(
+            progress,
+            if retain_external {
+                RetirementProgress::Pending {
+                    transactions: 0,
+                    allocations: 2,
+                }
+            } else {
+                RetirementProgress::Reaped
+            }
+        );
+        assert_eq!(old_marker.load(Ordering::Acquire), TERMINAL_TOKEN);
+        assert!(
+            !old_pending.terminal,
+            "the caller never polled this affine token"
+        );
+        let replacement = factory
+            .create_headless(11, NativeGpuRequirements::default())
+            .unwrap();
+        owner
+            .rearm_with_replacement(replacement)
+            .unwrap_or_else(|(fault, _)| panic!("drained late-cancel re-arm: {fault:?}"));
+        assert_eq!(
+            owner.core.retained_generations.len(),
+            usize::from(retain_external)
+        );
+        assert!(owner
+            .core
+            .retained_generations
+            .iter()
+            .all(|generation| generation.frames.is_empty()));
+        let (receipt, mut current_pending, current_weak) =
+            g3_real_present_phase(&mut owner, frame(2));
+        let quote = owner.quote(&NativeAllocationPlan::new(frame(3))).unwrap();
+        let before_cancel = owner.budget_snapshot();
+        let retiring = owner.cancel_and_retire(old_pending);
+        assert_eq!(retiring.id(), old_id);
+        assert_eq!(owner.state(), GpuOwnerState::Active);
+        assert_eq!(owner.budget_snapshot(), before_cancel);
+        assert_eq!(old_marker.load(Ordering::Acquire), TERMINAL_TOKEN);
+        assert_eq!(current_pending.marker.load(Ordering::Acquire), ACTIVE_TOKEN);
+        let reservation = owner
+            .reserve(quote)
+            .expect("terminal cleanup must preserve new quote");
+        finish(&mut owner, &mut current_pending)
+            .take_phase(receipt)
+            .unwrap()
+            .into_validation()
+            .unwrap();
+        assert!(current_weak.upgrade().is_none());
+        g4_finish_reserved_phase(&mut owner, frame(3), reservation);
+        assert_eq!(owner.state(), GpuOwnerState::Active);
+        drop(external);
+        assert_eq!(
+            owner.poll_retirement().unwrap(),
+            RetirementProgress::Pending {
+                transactions: 0,
+                allocations: 0,
+            }
+        );
+        assert!(old_weak.upgrade().is_none());
+        assert!(owner.core.retained_generations.is_empty());
+        assert_eq!(owner.budget_snapshot().managed_bytes(), 0);
+        owner.begin_stop();
+        assert_eq!(owner.poll_retirement().unwrap(), RetirementProgress::Reaped);
+    }
+}
+
+#[test]
+fn native_gpu_g4_late_pending_cleanup_rejects_foreign_terminal_and_unregistered_aliases() {
+    let mut core = scripted();
+    let reservation = reserve(&mut core, 1, 32);
+    let old_id = core.begin(frame(1), reservation).unwrap();
+    let old_weak = retained(&mut core, old_id, 32);
+    phase(&mut core, old_id, GpuPhase::IsfBatch, Ok(()));
+    let old_marker = Arc::clone(&core.frames[0].marker);
+    let authentic = PendingGpuTransaction {
+        id: old_id,
+        marker: Arc::clone(&old_marker),
+        terminal: false,
+    };
+    core.driver.failure = Some(DriverFailure {
+        kind: NativeGpuFaultKind::DeviceLost,
+        message: "old pending session".into(),
+    });
+    core.progress().unwrap_err();
+    core.rearm_with_replacement(g4_replacement(context().device_generation + 4))
+        .unwrap_or_else(|(fault, _)| panic!("identity re-arm: {fault:?}"));
+
+    // Numeric equality, including a genuine terminal marker, cannot substitute
+    // for the originating session capability.
+    let mut foreign = scripted();
+    let reservation = reserve(&mut foreign, 1, 0);
+    let foreign_id = foreign.begin(frame(1), reservation).unwrap();
+    assert_eq!(foreign_id, old_id);
+    let foreign_pending = PendingGpuTransaction {
+        id: foreign_id,
+        marker: Arc::clone(&foreign.frames[0].marker),
+        terminal: false,
+    };
+    foreign.finish_record(0).unwrap();
+    assert_eq!(
+        foreign_pending.marker.load(Ordering::Acquire),
+        TERMINAL_TOKEN
+    );
+    let unregistered = RetirementId {
+        sequence: old_id.sequence + 1,
+        ..old_id
+    };
+    let aliases = [
+        foreign_pending,
+        PendingGpuTransaction {
+            id: unregistered,
+            marker: Arc::clone(&old_marker),
+            terminal: false,
+        },
+        PendingGpuTransaction {
+            id: old_id,
+            marker: Arc::new(TransactionMarker {
+                session: Arc::clone(&core.session),
+                id: old_id,
+                state: AtomicU8::new(CANCELLED_TOKEN),
+            }),
+            terminal: true,
+        },
+        PendingGpuTransaction {
+            id: unregistered,
+            marker: Arc::new(TransactionMarker {
+                session: Arc::clone(&core.session),
+                id: unregistered,
+                state: AtomicU8::new(ACTIVE_TOKEN),
+            }),
+            terminal: false,
+        },
+    ];
+    let snapshot = core.budget.snapshot();
+    let quote = core
+        .budget
+        .quote(&NativeAllocationPlan::new(frame(2)))
+        .unwrap();
+    for alias in aliases {
+        assert_eq!(
+            core.retire_pending(&alias).unwrap_err().kind,
+            NativeGpuFaultKind::IdentityMismatch
+        );
+        assert_eq!(core.state, GpuOwnerState::Active);
+        assert_eq!(core.budget.snapshot(), snapshot);
+        assert_eq!(core.driver.polls, 0);
+        assert_eq!(core.retained_generations.len(), 1);
+        assert_eq!(core.retained_generations[0].frames.len(), 1);
+        assert!(old_weak.upgrade().is_some());
+    }
+    core.retire_pending(&authentic).unwrap();
+    assert_eq!(old_marker.load(Ordering::Acquire), CANCELLED_TOKEN);
+    let reservation = core.budget.reserve(quote).unwrap();
+    let current = core.begin(frame(2), reservation).unwrap();
+    let receipt = phase(&mut core, current, GpuPhase::IsfBatch, Ok(()));
+    core.driver.completed = receipt.submission().sequence;
+    core.driver.scope_ready = true;
+    core.progress().unwrap();
+    core.finish_record(core.index(current).unwrap())
+        .unwrap()
+        .take_phase(receipt)
+        .unwrap()
+        .into_validation()
+        .unwrap();
+    assert_eq!(core.state, GpuOwnerState::Active);
+    assert_eq!(core.budget.snapshot().managed_bytes(), 32);
+    assert!(old_weak.upgrade().is_some());
+}

@@ -85,6 +85,33 @@ type History = NativeHistory<FakeRecipe, FakeLease, FakeCharge>;
 type Batch = ValidatedHistoryEntries<FakeRecipe, FakeLease, FakeCharge>;
 type FakeEntry = Entry<FakeRecipe, FakeLease, FakeCharge>;
 
+#[test]
+fn cpu_snapshot_host_validation_rejects_foreign_ledger_without_consuming_backing() {
+    let e = env();
+    let identity = identity(1, 0);
+    let pixels = Arc::new(pixels(identity));
+    let pointer = pixels.data.as_ptr();
+    let backing = e.cpu_backing(Arc::clone(&pixels), CpuBackingOrigin::Imported);
+    let mut snapshot = CpuHistorySnapshot {
+        scope: scope(),
+        host: e.host.clone(),
+        entries: vec![(identity, backing)],
+    };
+    assert_eq!(snapshot.validate_host_accounting(), Ok(()));
+    snapshot.host = HistoryHostBudget::new(1 << 20);
+    assert_eq!(
+        snapshot.validate_host_accounting(),
+        Err(HistoryError::IdentityMismatch)
+    );
+    assert_eq!(snapshot.entries[0].1.frame().data.as_ptr(), pointer);
+    assert_eq!(
+        e.host.snapshot().unique_bytes,
+        pixels.data.capacity() as u64
+    );
+    drop(snapshot);
+    assert_eq!(e.host.snapshot().unique_bytes, 0);
+}
+
 /// Drop counters for leases (d), recipes (r) and G charges (c), one host budget.
 struct Env {
     d: Arc<AtomicUsize>,
@@ -727,6 +754,43 @@ fn mixed_cpu_backing_skips_readback_and_failure_keeps_unconverted_recipes() {
     drop(cpu);
     assert_eq!(n(&e.c), 1);
 }
+#[test]
+fn host_budget_managed_alias_drop_restores_imported_unmanaged_bytes() {
+    let frame = Arc::new(pixels(identity(1, 0)));
+    let bytes = frame.data.capacity() as u64;
+    let host = HistoryHostBudget::new(bytes);
+    let imported = host
+        .charge_all(vec![HostAllocation::shared_frame(&frame, false)])
+        .unwrap();
+    let first = host
+        .charge_all(vec![HostAllocation::shared_frame(&frame, true)])
+        .unwrap();
+    let second = host
+        .charge_all(vec![HostAllocation::shared_frame(&frame, true)])
+        .unwrap();
+    assert_eq!(host.snapshot().unique_bytes, bytes);
+    assert_eq!(host.snapshot().managed_alias_bytes, bytes);
+    assert_eq!(host.snapshot().unmanaged_bytes(), 0);
+    drop(first);
+    assert_eq!(
+        host.snapshot().managed_alias_bytes,
+        bytes,
+        "another managed alias is still live"
+    );
+    drop(second);
+    assert_eq!(
+        host.snapshot().unique_bytes,
+        bytes,
+        "the original imported backing survives"
+    );
+    assert_eq!(host.snapshot().managed_alias_bytes, 0);
+    assert_eq!(host.snapshot().unmanaged_bytes(), bytes);
+    assert_eq!(host.snapshot().charges, 1);
+    drop(imported);
+    assert_eq!(host.snapshot().unique_bytes, 0);
+    assert_eq!(host.snapshot().charges, 0);
+}
+
 #[test]
 fn host_budget_counts_aliases_once_rejects_overflow_atomically_and_releases_on_last_owner() {
     let e = env();

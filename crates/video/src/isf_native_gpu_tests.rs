@@ -1008,8 +1008,13 @@ fn isf_native_gpu_all_failed_stages_return_original_pixels_and_three_chain_clock
 
 #[test]
 fn isf_native_gpu_unsupported_returns_same_prepared_inputs_without_work() {
+    // One pass keeps target-specific rejection independent of the Multipass case.
+    const PERSISTENT_TARGET: &str = r#"/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"}],"PASSES":[{"TARGET":"historyBuffer","PERSISTENT":true}]}*/
+void main() { gl_FragColor = IMG_THIS_PIXEL(inputImage); }"#;
+    const CUSTOM_TARGET: &str = r#"/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"}],"PASSES":[{"TARGET":"customBuffer"}]}*/
+void main() { gl_FragColor = IMG_THIS_PIXEL(inputImage); }"#;
     let mut fixture = gpu();
-    for case in 0..7 {
+    for case in 0..9 {
         let mut prepared = identity_jobs(3, 2);
         let mut restrictions = NativeBatchRestrictions::default();
         let expected = match case {
@@ -1039,9 +1044,17 @@ fn isf_native_gpu_unsupported_returns_same_prepared_inputs_without_work() {
                     protocol::VideoEffectScope::Output { output_id: 101 };
                 UnsupportedNativeFx::NonLayerScope
             }
-            _ => {
+            6 => {
                 prepared[0].date[0] = f32::NAN;
                 UnsupportedNativeFx::AuxiliaryResource
+            }
+            7 => {
+                prepared = jobs(3, 2, &[shader(PERSISTENT_TARGET)]);
+                UnsupportedNativeFx::PersistentTarget
+            }
+            _ => {
+                prepared = jobs(3, 2, &[shader(CUSTOM_TARGET)]);
+                UnsupportedNativeFx::CustomTarget
             }
         };
         let inputs: Vec<_> = prepared.iter().map(|job| Arc::clone(&job.input)).collect();

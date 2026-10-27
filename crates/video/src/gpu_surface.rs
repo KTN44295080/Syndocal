@@ -30,21 +30,11 @@ use crate::{
 /// so this C1 consumer of G's `SurfaceAdapterTarget`/`create_for_surface` is
 /// compiled and type-checked but not reachable until I joins the native
 /// first-frame bootstrap. Existing presenter construction is unchanged.
-#[cfg(test)]
-#[expect(
-    dead_code,
-    reason = "C1 surface bootstrap consumer; I enables it with the native first-frame route"
-)]
 pub(crate) struct UnconfiguredNativeSurface {
     instance: Arc<wgpu::Instance>,
     surface: wgpu::Surface<'static>,
 }
 
-#[cfg(test)]
-#[expect(
-    dead_code,
-    reason = "C1 surface bootstrap consumer; I enables it with the native first-frame route"
-)]
 impl UnconfiguredNativeSurface {
     /// The surface must come from the same instance as G's factory; G rejects
     /// a target from any other instance before adapter selection.
@@ -1866,7 +1856,6 @@ fn dimensions_uniform(width: u32, height: u32) -> [u8; 16] {
 
 /// C4 prerequisite: the native presenter on G's shared context. Test-gated
 /// with every shared-context module; not routed in production (I enables it).
-#[cfg(test)]
 #[path = "gpu_surface_native.rs"]
 pub(crate) mod native;
 

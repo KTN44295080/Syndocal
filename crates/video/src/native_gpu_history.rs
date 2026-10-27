@@ -6,9 +6,11 @@
 use crate::frame_history_policy::{
     plan_history_update, HistoryMeta, HistoryPlan, NATIVE_HISTORY_CAPACITY,
 };
+#[cfg(test)]
+use crate::native_gpu_contract::LayerOrigin;
 use crate::native_gpu_contract::{
-    GpuAllocationId, GpuContextId, HistoryEntryId, LayerOrigin, LayerResultIdentity,
-    MaterializationDescriptor, NativeFrameId,
+    GpuAllocationId, GpuContextId, HistoryEntryId, LayerResultIdentity, MaterializationDescriptor,
+    NativeFrameId,
 };
 use crate::{VideoFrame, VideoPixelFormat};
 use protocol::{VideoLayerId, VideoRenderInputKey};
@@ -38,6 +40,7 @@ pub(crate) trait MaterializedCpuLayer: Sized {
     fn into_charged_parts(self) -> (VideoFrame, MaterializationDescriptor, Self::Charge);
 }
 /// An affine validated GPU materialization (adapter: G's MaterializedGpuLayer).
+#[cfg(test)]
 pub(crate) trait MaterializedResident: Sized {
     type Resident;
     fn descriptor(&self) -> MaterializationDescriptor;
@@ -82,13 +85,14 @@ pub(crate) struct HistoryHostSnapshot {
 }
 impl HistoryHostSnapshot {
     /// Host bytes not already reported by G's managed ledger.
+    #[cfg(test)]
     pub(crate) fn unmanaged_bytes(&self) -> u64 {
         self.unique_bytes - self.managed_alias_bytes
     }
 }
 struct HostRecord {
     bytes: u64,
-    managed: bool,
+    managed_refs: usize,
     refs: usize,
 }
 #[derive(Default)]
@@ -114,9 +118,11 @@ impl HostLedger {
         match self.records.get_mut(&key) {
             Some(record) => {
                 record.refs += 1;
-                if managed && !record.managed {
-                    record.managed = true;
-                    self.managed_alias_bytes += record.bytes;
+                if managed {
+                    if record.managed_refs == 0 {
+                        self.managed_alias_bytes += record.bytes;
+                    }
+                    record.managed_refs += 1;
                 }
             }
             None => {
@@ -124,7 +130,7 @@ impl HostLedger {
                     key,
                     HostRecord {
                         bytes,
-                        managed,
+                        managed_refs: usize::from(managed),
                         refs: 1,
                     },
                 );
@@ -187,6 +193,7 @@ impl HistoryHostBudget {
                 HistoryHostCharge {
                     ledger: Arc::clone(&self.ledger),
                     key: allocation.key,
+                    managed: allocation.managed,
                     _keepalive: allocation.keepalive,
                 }
             })
@@ -241,6 +248,7 @@ impl HostReservation {
         HistoryHostCharge {
             ledger: Arc::clone(&self.ledger),
             key: allocation.key,
+            managed: allocation.managed,
             _keepalive: allocation.keepalive,
         }
     }
@@ -256,7 +264,28 @@ impl Drop for HostReservation {
 pub(crate) struct HistoryHostCharge {
     ledger: Arc<Mutex<HostLedger>>,
     key: usize,
+    managed: bool,
     _keepalive: Arc<dyn Any + Send + Sync>,
+}
+impl HistoryHostCharge {
+    /// Mark this same pinned allocation as managed for one active owner's
+    /// lifetime. No new unique host bytes or ledger are introduced.
+    fn managed_alias(&self) -> Self {
+        let mut ledger = lock(&self.ledger);
+        let bytes = ledger
+            .records
+            .get(&self.key)
+            .expect("live host charge")
+            .bytes;
+        ledger.insert(self.key, bytes, true);
+        drop(ledger);
+        Self {
+            ledger: Arc::clone(&self.ledger),
+            key: self.key,
+            managed: true,
+            _keepalive: Arc::clone(&self._keepalive),
+        }
+    }
 }
 impl Drop for HistoryHostCharge {
     fn drop(&mut self) {
@@ -266,12 +295,21 @@ impl Drop for HistoryHostCharge {
             return;
         };
         record.refs -= 1;
-        if record.refs == 0 {
+        let released_managed_bytes = if self.managed {
+            record.managed_refs -= 1;
+            if record.managed_refs == 0 {
+                record.bytes
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let remove = record.refs == 0;
+        ledger.managed_alias_bytes -= released_managed_bytes;
+        if remove {
             let record = ledger.records.remove(&self.key).expect("live record");
             ledger.unique_bytes -= record.bytes;
-            if record.managed {
-                ledger.managed_alias_bytes -= record.bytes;
-            }
         }
     }
 }
@@ -288,6 +326,13 @@ pub(crate) enum CpuBackingOrigin<C> {
     },
     /// G's fixed-clock CPU recovery output (canonical pixels, no recipe).
     Recovered { charge: C },
+    /// A canonical queue already owns these pixels through a complete charged
+    /// CPU owner. Retain that owner rather than extracting or recharging its G
+    /// allocation. Re-imports flatten this alias instead of nesting backings.
+    Canonical {
+        owner: Arc<dyn Any + Send + Sync>,
+        managed_allocation: Option<GpuAllocationId>,
+    },
 }
 /// Post-FX CPU history backing: pixels, their G charge/proof and their host
 /// charge as one owner. Fields drop in order, so pixels go before charges.
@@ -301,6 +346,13 @@ impl<C> CpuHistoryBacking<C> {
     /// pixels alone, when a consumer must outlive this history.
     pub(crate) fn frame(&self) -> &VideoFrame {
         &self.frame
+    }
+    /// Move this whole backing into a canonical slot together with an alias of
+    /// its exact pixel allocation. The receiver must retain both values in the
+    /// same slot and move or release them together; this never extracts a G or
+    /// host charge from its owner or creates another pixel allocation.
+    pub(crate) fn into_canonical_parts(self: Arc<Self>) -> (Arc<VideoFrame>, Arc<Self>) {
+        (Arc::clone(&self.frame), self)
     }
     pub(crate) fn origin(&self) -> &CpuBackingOrigin<C> {
         &self.origin
@@ -335,6 +387,7 @@ pub(crate) enum HistoryError {
     StateMismatch,
     IdentityMismatch,
     SequenceExhausted,
+    #[cfg(test)]
     IsfFailed,
     Cancelled,
     InvalidPixels,
@@ -348,7 +401,9 @@ pub(crate) enum HistoryPhaseOutcome {
     /// G's fixed-clock recovery after an admitted ISF failure: CPU backing
     /// only, and the provisional GPU composition is never valid.
     RecoveredCpu,
+    #[cfg(test)]
     IsfFailed,
+    #[cfg(test)]
     Cancelled,
 }
 /// Sealed: fields are private and the only production constructors consume
@@ -359,12 +414,15 @@ pub(crate) struct ValidatedHistoryEntries<R, T, C> {
     entries: Vec<Entry<R, T, C>>,
 }
 impl<R, T, C> ValidatedHistoryEntries<R, T, C> {
+    #[cfg(test)]
     pub(crate) fn frame(&self) -> NativeFrameId {
         self.frame
     }
+    #[cfg(test)]
     pub(crate) fn phase(&self) -> HistoryPhaseOutcome {
         self.phase
     }
+    #[cfg(test)]
     pub(crate) fn metadata(&self) -> Vec<HistoryMeta> {
         self.entries.iter().map(Entry::meta).collect()
     }
@@ -391,14 +449,20 @@ pub(crate) struct RetiredResident<T> {
     owner: Arc<T>,
 }
 impl<T> RetiredResident<T> {
+    pub(crate) fn into_parts(self) -> (HistoryEntryId, Arc<T>) {
+        (self.entry, self.owner)
+    }
+    #[cfg(test)]
     pub(crate) fn resource(&self) -> &T {
         &self.owner
     }
 }
+#[cfg(test)]
 pub(crate) struct HistoryReadPin<T> {
     pub entry: HistoryEntryId,
     owner: Arc<T>,
 }
+#[cfg(test)]
 impl<T> HistoryReadPin<T> {
     pub(crate) fn resource(&self) -> &T {
         &self.owner
@@ -408,9 +472,11 @@ pub(crate) struct HistoryCommit<T> {
     pub retired: Vec<RetiredResident<T>>,
     pub output_phases_valid: bool,
 }
+#[cfg(test)]
 pub(crate) struct ResidentChange<T> {
     pub retired: Vec<RetiredResident<T>>,
 }
+#[cfg(test)]
 pub(crate) struct MaterializationAttachFailure<M> {
     pub error: HistoryError,
     pub materialized: M,
@@ -498,6 +564,7 @@ impl<R, T: HistoryResident, C> NativeHistory<R, T, C> {
     pub(crate) fn metadata(&self) -> Vec<HistoryMeta> {
         self.entries.iter().map(Entry::meta).collect()
     }
+    #[cfg(test)]
     pub(crate) fn resident_count(&self) -> usize {
         self.entries.iter().filter(|e| e.resident.is_some()).count()
     }
@@ -583,6 +650,7 @@ impl<R, T: HistoryResident, C> NativeHistory<R, T, C> {
             cold_materialization_required,
         })
     }
+    #[cfg(test)]
     pub(crate) fn pin(&self, id: HistoryEntryId) -> Result<HistoryReadPin<T>, HistoryError> {
         let e = self
             .entries
@@ -658,7 +726,9 @@ impl<R, T: HistoryResident, C> NativeHistory<R, T, C> {
             let output_phases_valid = match entries.phase {
                 HistoryPhaseOutcome::IsfValid { composition_valid } => composition_valid,
                 HistoryPhaseOutcome::RecoveredCpu => false,
+                #[cfg(test)]
                 HistoryPhaseOutcome::IsfFailed => return Err(HistoryError::IsfFailed),
+                #[cfg(test)]
                 HistoryPhaseOutcome::Cancelled => return Err(HistoryError::Cancelled),
             };
             let next_revision = self
@@ -737,6 +807,7 @@ impl<R, T: HistoryResident, C> NativeHistory<R, T, C> {
             retire(&mut self.entries[i], retired);
         }
     }
+    #[cfg(test)]
     pub(crate) fn install_materialized<M>(
         &mut self,
         expected: HistoryEntryId,
@@ -798,6 +869,7 @@ impl<R, T: HistoryResident, C> NativeHistory<R, T, C> {
         }
         handover
     }
+    #[cfg(test)]
     pub(crate) fn import_cpu_history(
         snapshot: CpuHistorySnapshot<C>,
         context: GpuContextId,
@@ -827,6 +899,7 @@ impl<R, T: HistoryResident, C> NativeHistory<R, T, C> {
     /// CPU-to-native entry from the canonical CPU queue (section 5.4): every
     /// post-FX survivor moves as Imported CPU backing; no clock or recipe is
     /// invented. The caller mints fresh entry IDs in canonical ascending order.
+    #[cfg(test)]
     pub(crate) fn import_canonical_queue(
         context: GpuContextId,
         scope: HistoryScope,
@@ -935,6 +1008,28 @@ pub(crate) struct CpuHistorySnapshot<C> {
     entries: Vec<(LayerResultIdentity, Arc<CpuHistoryBacking<C>>)>,
 }
 impl<C> CpuHistorySnapshot<C> {
+    /// Verify every sealed backing belongs to this host ledger before I moves
+    /// any whole owner into the canonical queue.
+    pub(crate) fn validate_host_accounting(&self) -> Result<(), HistoryError> {
+        if self
+            .entries
+            .iter()
+            .any(|(_, backing)| !self.host.owns(&backing.host))
+        {
+            return Err(HistoryError::IdentityMismatch);
+        }
+        let snapshot = self.host.snapshot();
+        if snapshot
+            .unique_bytes
+            .checked_add(snapshot.reserved_bytes)
+            .is_none_or(|bytes| bytes > snapshot.limit)
+            || snapshot.managed_alias_bytes > snapshot.unique_bytes
+        {
+            return Err(HistoryError::HostBudgetExceeded);
+        }
+        Ok(())
+    }
+
     pub(crate) fn scope(&self) -> HistoryScope {
         self.scope
     }
@@ -973,6 +1068,7 @@ pub(crate) struct CpuHandoverFailure<M> {
     pub materialized: M,
 }
 impl<R, T: HistoryResident, C> CpuHistoryHandover<R, T, C> {
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.history.entries.len()
     }

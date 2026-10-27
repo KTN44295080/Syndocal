@@ -62,13 +62,10 @@ pub(super) struct IsfResourcePool {
     pub(super) queue_upload_pitch: Option<u64>,
     // Default standalone/test fixtures retain their existing construction.
     // Only with_native_context associates the pool with the shared broker.
-    #[cfg(test)]
     pub(super) native_context: Option<std::sync::Arc<crate::native_gpu_context::NativeGpuContext>>,
     // Identifies this logical runtime and a non-wrapping FRAMEINDEX epoch.
     // Default fixtures get their own token without another runtime constructor.
-    #[cfg(test)]
     pub(super) native_clock_epoch: std::sync::Arc<()>,
-    #[cfg(test)]
     pub(super) native_cpu_inputs:
         Vec<std::sync::Weak<crate::native_gpu_result::NativeCpuFrameOwner>>,
     entries: BTreeMap<IsfInstanceKey, StageResources>,
@@ -97,9 +94,7 @@ pub(crate) struct GpuImage {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) float: bool,
-    #[cfg(test)]
     native_origin: Option<crate::native_gpu_contract::GpuContextId>,
-    #[cfg(test)]
     native_charge: Option<std::sync::Arc<crate::native_gpu_budget::AllocationCharge>>,
 }
 
@@ -129,9 +124,7 @@ impl GpuImage {
             width,
             height,
             float,
-            #[cfg(test)]
             native_origin: None,
-            #[cfg(test)]
             native_charge: None,
         }
     }
@@ -161,7 +154,6 @@ impl GpuImage {
         );
     }
 
-    #[cfg(test)]
     pub(crate) fn native_origin(&self) -> Option<crate::native_gpu_contract::GpuContextId> {
         self.native_origin
     }
@@ -195,18 +187,15 @@ struct StageResourceLayout {
     transient_bytes: u64,
 }
 
-#[cfg(test)]
 struct NativeCpuAllocationScope<'a, 'b> {
     phase: &'a mut crate::native_gpu_context::GpuPhaseEncoder<'b>,
     buffers: Vec<std::sync::Arc<NativeCpuBuffer>>,
     failure: Option<crate::native_gpu_contract::NativeGpuFault>,
 }
-#[cfg(test)]
 struct NativeCpuBuffer {
     buffer: wgpu::Buffer,
     _charge: std::sync::Arc<crate::native_gpu_budget::AllocationCharge>,
 }
-#[cfg(test)]
 impl NativeCpuAllocationScope<'_, '_> {
     fn charge(
         &mut self,
@@ -293,10 +282,9 @@ fn planned_image(
     height: u32,
     float: bool,
     label: &str,
-    #[cfg(test)] native: &mut Option<&mut NativeCpuAllocationScope<'_, '_>>,
-    #[cfg(test)] cached: bool,
+    native: &mut Option<&mut NativeCpuAllocationScope<'_, '_>>,
+    cached: bool,
 ) -> Result<GpuImage, IsfRuntimeError> {
-    #[cfg(test)]
     if let Some(native) = native.as_deref_mut() {
         use crate::native_gpu_budget::ChargeKind;
         let bytes = u64::from(width) * u64::from(height) * if float { 16 } else { 4 };
@@ -321,9 +309,8 @@ fn planned_upload(
     image: &GpuImage,
     queue: &wgpu::Queue,
     data: &[u8],
-    #[cfg(test)] native: &mut Option<&mut NativeCpuAllocationScope<'_, '_>>,
+    native: &mut Option<&mut NativeCpuAllocationScope<'_, '_>>,
 ) -> Result<(), IsfRuntimeError> {
-    #[cfg(test)]
     if let Some(native) = native.as_deref_mut() {
         let bytes = crate::native_gpu_budget::checked_upload_staging_bytes(
             image.width,
@@ -343,12 +330,11 @@ fn planned_upload(
 
 fn planned_rgba<'a>(
     frame: &'a VideoFrame,
-    #[cfg(test)] native: &mut Option<&mut NativeCpuAllocationScope<'_, '_>>,
+    native: &mut Option<&mut NativeCpuAllocationScope<'_, '_>>,
 ) -> Result<Cow<'a, VideoFrame>, IsfRuntimeError> {
     if frame.format == VideoPixelFormat::Rgba8 {
         return Ok(Cow::Borrowed(frame));
     }
-    #[cfg(test)]
     if let Some(native) = native.as_deref_mut() {
         native.charge(
             crate::native_gpu_budget::ChargeKind::ActiveCpuInput,
@@ -492,7 +478,7 @@ impl IsfGpuRuntime {
         frame: &VideoFrame,
         stages: &[IsfStageInputs<'_>],
         batch_reservation: Option<u64>,
-        #[cfg(test)] mut native: Option<&mut NativeCpuAllocationScope<'_, '_>>,
+        mut native: Option<&mut NativeCpuAllocationScope<'_, '_>>,
     ) -> Result<(), IsfRuntimeError> {
         // Uploads are explicit children; encode exclusive time excludes their host wall.
         #[cfg(feature = "qa-native-frame-timing")]
@@ -526,11 +512,7 @@ impl IsfGpuRuntime {
         }
         let expected_len = frame.width as usize * frame.height as usize * 4;
         // Upload borrows RGBA bytes; only format conversion owns a temporary.
-        let rgba = planned_rgba(
-            frame,
-            #[cfg(test)]
-            &mut native,
-        )?;
+        let rgba = planned_rgba(frame, &mut native)?;
         if rgba.data.len() != expected_len {
             return Err(runtime_error(
                 "ISF input frame byte length does not match its dimensions",
@@ -555,13 +537,7 @@ impl IsfGpuRuntime {
         if let Some(timing) = self.resources.phase_timing.as_mut() {
             timing.mark(1);
         }
-        planned_upload(
-            input,
-            &self.queue,
-            &rgba.data,
-            #[cfg(test)]
-            &mut native,
-        )?;
+        planned_upload(input, &self.queue, &rgba.data, &mut native)?;
         #[cfg(test)]
         {
             self.resources.stack_upload_count += 1;
@@ -583,7 +559,6 @@ impl IsfGpuRuntime {
             let controls = stage.controls;
             let texture_count = self.ensure_stage_pipelines(
                 shader,
-                #[cfg(test)]
                 if !pending.native_uniforms.is_empty() || native.is_some() {
                     Some(&mut pending.native_pipeline_pins)
                 } else {
@@ -608,11 +583,7 @@ impl IsfGpuRuntime {
                 .iter()
                 .map(|input| {
                     let image = input.frame;
-                    let rgba = planned_rgba(
-                        image,
-                        #[cfg(test)]
-                        &mut native,
-                    )?;
+                    let rgba = planned_rgba(image, &mut native)?;
                     if rgba.data.len() != image.width as usize * image.height as usize * 4 {
                         return Err(runtime_error(
                             "ISF image input byte length does not match its dimensions",
@@ -629,7 +600,6 @@ impl IsfGpuRuntime {
                 pending_bytes,
                 dynamic_bytes,
                 batch_reservation.is_some(),
-                #[cfg(test)]
                 &mut native,
             )?;
             // Taking cached feedback transfers ownership to the ticket before
@@ -650,18 +620,10 @@ impl IsfGpuRuntime {
                         rgba.height,
                         false,
                         "Syndocal ISF image input",
-                        #[cfg(test)]
                         &mut native,
-                        #[cfg(test)]
                         false,
                     )?;
-                    planned_upload(
-                        &gpu,
-                        &self.queue,
-                        &rgba.data,
-                        #[cfg(test)]
-                        &mut native,
-                    )?;
+                    planned_upload(&gpu, &self.queue, &rgba.data, &mut native)?;
                     Ok(gpu)
                 })
                 .collect::<Result<Vec<_>, IsfRuntimeError>>()?;
@@ -673,18 +635,10 @@ impl IsfGpuRuntime {
                     1,
                     false,
                     "Syndocal ISF unbound image",
-                    #[cfg(test)]
                     &mut native,
-                    #[cfg(test)]
                     false,
                 )?;
-                planned_upload(
-                    &image,
-                    &self.queue,
-                    &[0, 0, 0, 0],
-                    #[cfg(test)]
-                    &mut native,
-                )?;
+                planned_upload(&image, &self.queue, &[0, 0, 0, 0], &mut native)?;
                 Some(image)
             } else {
                 None
@@ -701,7 +655,6 @@ impl IsfGpuRuntime {
                         image,
                         &self.queue,
                         &pixels[..input.width as usize * 4],
-                        #[cfg(test)]
                         &mut native,
                     )?;
                 }
@@ -733,9 +686,7 @@ impl IsfGpuRuntime {
                         height,
                         pass.float,
                         "Syndocal ISF unnamed pass",
-                        #[cfg(test)]
                         &mut native,
-                        #[cfg(test)]
                         false,
                     )?;
                     pending.images.push(image.clone());
@@ -769,11 +720,8 @@ impl IsfGpuRuntime {
                 }
                 sampled.extend(state.imports.iter().map(|image| &image.view));
                 sampled.extend(state.audio.iter().map(|image| &image.view));
-                #[cfg(test)]
                 let resident_uniform = (!pending.native_uniforms.is_empty())
                     .then(|| pending.native_uniforms[stage_index].clone());
-                #[cfg(not(test))]
-                let resident_uniform: Option<wgpu::Buffer> = None;
                 let uniforms = match resident_uniform {
                     Some(uniform) => uniform,
                     None => self.planned_pass_uniforms(
@@ -785,7 +733,6 @@ impl IsfGpuRuntime {
                         pass_index,
                         date,
                         controls,
-                        #[cfg(test)]
                         &mut native,
                     )?,
                 };
@@ -799,7 +746,6 @@ impl IsfGpuRuntime {
             // a final named FLOAT target or a size expression on the last pass.
             if current.width != frame.width || current.height != frame.height || current.float {
                 self.ensure_pass_pipeline(BLIT_SHADER, 1, false)?;
-                #[cfg(test)]
                 if !pending.native_uniforms.is_empty() || native.is_some() {
                     pending.native_pipeline_pins.push(std::sync::Arc::clone(
                         self.pipelines
@@ -816,7 +762,6 @@ impl IsfGpuRuntime {
                     0,
                     date,
                     &[],
-                    #[cfg(test)]
                     &mut native,
                 )?;
                 self.encode_pass(
@@ -1013,7 +958,7 @@ impl IsfGpuRuntime {
         pending_bytes: u64,
         dynamic_bytes: u64,
         preserve_cache: bool,
-        #[cfg(test)] native: &mut Option<&mut NativeCpuAllocationScope<'_, '_>>,
+        native: &mut Option<&mut NativeCpuAllocationScope<'_, '_>>,
     ) -> Result<StageResources, IsfRuntimeError> {
         let StageResourceLayout {
             sizes,
@@ -1044,7 +989,6 @@ impl IsfGpuRuntime {
             self.evict_resources_for(pending_bytes + bytes + transient_bytes);
         }
         if let Some(mut state) = reusable {
-            #[cfg(test)]
             if let Some(native) = native.as_deref_mut() {
                 for image in state
                     .targets
@@ -1075,9 +1019,7 @@ impl IsfGpuRuntime {
                             height,
                             pass.float,
                             "Syndocal ISF target read",
-                            #[cfg(test)]
                             native,
-                            #[cfg(test)]
                             true,
                         )?,
                         planned_image(
@@ -1086,9 +1028,7 @@ impl IsfGpuRuntime {
                             height,
                             pass.float,
                             "Syndocal ISF target write",
-                            #[cfg(test)]
                             native,
-                            #[cfg(test)]
                             true,
                         )?,
                     ],
@@ -1105,18 +1045,10 @@ impl IsfGpuRuntime {
                     image.height,
                     false,
                     "Syndocal ISF imported image",
-                    #[cfg(test)]
                     native,
-                    #[cfg(test)]
                     true,
                 )?;
-                planned_upload(
-                    &gpu,
-                    &self.queue,
-                    &image.rgba,
-                    #[cfg(test)]
-                    native,
-                )?;
+                planned_upload(&gpu, &self.queue, &image.rgba, native)?;
                 Ok(gpu)
             })
             .collect::<Result<Vec<_>, IsfRuntimeError>>()?;
@@ -1130,18 +1062,10 @@ impl IsfGpuRuntime {
                     image.height,
                     false,
                     "Syndocal ISF bound still",
-                    #[cfg(test)]
                     native,
-                    #[cfg(test)]
                     true,
                 )?;
-                planned_upload(
-                    &gpu,
-                    &self.queue,
-                    &image.rgba,
-                    #[cfg(test)]
-                    native,
-                )?;
+                planned_upload(&gpu, &self.queue, &image.rgba, native)?;
                 Ok(gpu)
             })
             .collect::<Result<Vec<_>, IsfRuntimeError>>()?;
@@ -1155,9 +1079,7 @@ impl IsfGpuRuntime {
                     1,
                     false,
                     "Syndocal ISF live audio",
-                    #[cfg(test)]
                     native,
-                    #[cfg(test)]
                     true,
                 )
             })
@@ -1188,9 +1110,8 @@ impl IsfGpuRuntime {
         pass: usize,
         date: [f32; 4],
         controls: &[[f32; 4]],
-        #[cfg(test)] native: &mut Option<&mut NativeCpuAllocationScope<'_, '_>>,
+        native: &mut Option<&mut NativeCpuAllocationScope<'_, '_>>,
     ) -> Result<wgpu::Buffer, IsfRuntimeError> {
-        #[cfg(test)]
         if let Some(native) = native.as_deref_mut() {
             let bytes = isf_uniform_data(width, height, time, delta, frame, pass, date, controls);
             return native.buffer(
@@ -1281,7 +1202,7 @@ impl IsfGpuRuntime {
     fn ensure_stage_pipelines(
         &mut self,
         shader: &PreparedIsfShader,
-        #[cfg(test)] mut pins: Option<&mut Vec<std::sync::Arc<IsfGpuPipeline>>>,
+        mut pins: Option<&mut Vec<std::sync::Arc<IsfGpuPipeline>>>,
     ) -> Result<usize, IsfRuntimeError> {
         let texture_count = shader.image_input_names.len()
             + shader
@@ -1308,7 +1229,6 @@ impl IsfGpuRuntime {
         }
         for float in formats {
             self.ensure_pass_pipeline(&shader.wgsl, texture_count, float)?;
-            #[cfg(test)]
             if let Some(pins) = pins.as_deref_mut() {
                 pins.push(std::sync::Arc::clone(
                     self.pipelines
@@ -1352,7 +1272,6 @@ impl IsfGpuRuntime {
         if missing > ISF_GPU_PIPELINE_CAPACITY {
             return Err(runtime_error("ISF pipeline request exceeds cache capacity"));
         }
-        #[cfg(test)]
         if self.native_context().is_some() {
             // Recipes retain exact pipelines. Eviction must not turn a bounded
             // cache into an unbounded list of externally pinned GPU pipelines.
@@ -1465,13 +1384,11 @@ impl IsfGpuRuntime {
 
 /// Resource handles retained by the broker before the first queue write.
 /// A completed lease takes only the final image, never this workspace owner.
-#[cfg(test)]
 pub(crate) struct NativeStackResources {
     workspace: StackWorkspace,
     uniforms: Vec<wgpu::Buffer>,
 }
 
-#[cfg(test)]
 impl NativeStackResources {
     pub(crate) fn final_image(&self, stage_count: usize) -> GpuImage {
         if stage_count % 2 == 1 {
@@ -1494,7 +1411,6 @@ impl NativeStackResources {
     }
 }
 
-#[cfg(test)]
 impl IsfGpuRuntime {
     pub(crate) fn native_create_stack_resources(
         &self,
@@ -1597,9 +1513,9 @@ impl IsfGpuRuntime {
 }
 
 #[cfg(test)]
-pub(crate) use cpu_bridge::{NativeCpuCacheEntry, NativeCpuCacheModel};
+pub(crate) use cpu_bridge::NativeCpuCacheEntry;
+pub(crate) use cpu_bridge::NativeCpuCacheModel;
 
-#[cfg(test)]
 mod cpu_bridge {
     use super::*;
     use crate::native_gpu_budget::{
@@ -1712,8 +1628,8 @@ mod cpu_bridge {
                 self.input.width as usize * self.input.height as usize * 4,
             );
             drop(mapped);
-            Arc::new(NativeCpuFrameOwner {
-                frame: Arc::new(VideoFrame {
+            Arc::new(NativeCpuFrameOwner::new(
+                Arc::new(VideoFrame {
                     layer_id: self.input.layer_id,
                     width: self.input.width,
                     height: self.input.height,
@@ -1722,8 +1638,8 @@ mod cpu_bridge {
                     format: VideoPixelFormat::Rgba8,
                     data,
                 }),
-                charge: Some(Arc::clone(&self.output_charge)),
-            })
+                Some(Arc::clone(&self.output_charge)),
+            ))
         }
     }
 

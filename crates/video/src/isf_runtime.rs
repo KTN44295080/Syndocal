@@ -37,7 +37,6 @@ pub use date::{isf_date_from_system_time, isf_date_now};
 mod independent;
 #[path = "isf_pass_runtime.rs"]
 mod pass_runtime;
-#[cfg(test)]
 pub(crate) use independent::IndependentClockReservation;
 pub(crate) use independent::{IndependentChain, StackBatch};
 #[path = "isf_resources.rs"]
@@ -46,16 +45,13 @@ mod resources;
 use resources::{IsfDimension, IsfImportedImage};
 
 #[cfg(test)]
-pub(crate) use pass_runtime::{
-    GpuImage as IsfGpuImage, NativeCpuCacheEntry, NativeCpuCacheModel, NativeStackResources,
-};
+pub(crate) use pass_runtime::NativeCpuCacheEntry;
+pub(crate) use pass_runtime::{GpuImage as IsfGpuImage, NativeCpuCacheModel, NativeStackResources};
 
-#[cfg(test)]
 pub(crate) fn native_queue_upload_pitch(adapter: &wgpu::Adapter) -> Option<u64> {
     pass_runtime::queue_upload_pitch(adapter)
 }
 
-#[cfg(test)]
 pub(crate) fn native_valid_date(date_value: [f32; 4]) -> bool {
     date::valid_isf_date(date_value)
 }
@@ -158,6 +154,26 @@ pub struct IsfStageInputs<'a> {
 }
 
 impl IsfStageInputs<'_> {
+    /// Explain native-only target declines without changing canonical CPU
+    /// execution or the existing shared-host-buffer eligibility predicate.
+    pub(crate) fn native_target_restriction(
+        &self,
+    ) -> Option<crate::native_gpu_contract::UnsupportedNativeFx> {
+        use crate::native_gpu_contract::UnsupportedNativeFx;
+        if self.shader.passes.iter().any(|pass| pass.persistent) {
+            Some(UnsupportedNativeFx::PersistentTarget)
+        } else if self
+            .shader
+            .passes
+            .iter()
+            .any(|pass| pass.target.is_some() || pass.width.is_some() || pass.height.is_some())
+        {
+            Some(UnsupportedNativeFx::CustomTarget)
+        } else {
+            None
+        }
+    }
+
     /// Only the shared host upload and ping/pong may be live. Combining stages
     /// with additional textures would increase their simultaneous reservation
     /// and could evict another stage's feedback sooner than singleton renders.
@@ -324,7 +340,6 @@ impl IsfGpuRuntime {
         time_delta_seconds: f32,
         date: [f32; 4],
     ) -> Result<VideoFrame, IsfRuntimeError> {
-        #[cfg(test)]
         self.reject_ownerless_native_entry()?;
         let frame_index = self.frame_index;
         let keys = (0..stages.len())
@@ -424,7 +439,6 @@ impl IsfGpuRuntime {
         date: [f32; 4],
         keys: &[IsfInstanceKey],
     ) -> (VideoFrame, Vec<(usize, IsfRuntimeError)>) {
-        #[cfg(test)]
         if let Err(error) = self.reject_ownerless_native_entry() {
             return (
                 frame.clone(),
@@ -486,7 +500,6 @@ impl IsfGpuRuntime {
     pub(crate) fn advance_stage_local_chain_without_prepared_stages(
         &mut self,
     ) -> Result<(), IsfRuntimeError> {
-        #[cfg(test)]
         self.reject_ownerless_native_entry()?;
         self.advance_frame_index(1);
         self.last_stack_stage_count = 0;
@@ -500,7 +513,6 @@ impl IsfGpuRuntime {
 
     fn advance_frame_index(&mut self, count: u32) {
         let next = self.frame_index.wrapping_add(count);
-        #[cfg(test)]
         if next < self.frame_index {
             // Rotate only on wrap; ordinary advancement allocates nothing.
             // Existing reservations keep the old token alive, preventing ABA.
@@ -600,7 +612,6 @@ pub(crate) fn run_stage_local_values<'s, T>(
     (current, failures)
 }
 
-#[cfg(test)]
 impl IsfGpuRuntime {
     pub(crate) fn with_native_context(
         owner: &mut crate::native_gpu_context::NativeGpuOwner,
@@ -620,6 +631,7 @@ impl IsfGpuRuntime {
         Ok(Self {
             device: context.device().clone(),
             queue: context.queue().clone(),
+            #[cfg(test)]
             adapter_info: context.capabilities().adapter_info.clone(),
             vertex_shader,
             pipelines: HashMap::new(),
@@ -647,6 +659,7 @@ impl IsfGpuRuntime {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn native_frame_index(&self) -> u32 {
         self.frame_index
     }
@@ -674,15 +687,25 @@ impl IsfGpuRuntime {
         &mut self,
         frame: &Arc<crate::native_gpu_result::NativeCpuFrameOwner>,
     ) {
-        self.resources
-            .native_cpu_inputs
-            .retain(|item| item.strong_count() != 0);
-        if !self
-            .resources
-            .native_cpu_inputs
-            .iter()
-            .any(|item| item.ptr_eq(&Arc::downgrade(frame)))
-        {
+        let mut retained_charged_alias = false;
+        self.resources.native_cpu_inputs.retain(|item| {
+            let Some(prior) = item.upgrade() else {
+                return false;
+            };
+            if !Arc::ptr_eq(&prior.frame, &frame.frame) {
+                return true;
+            }
+            // A managed upgrade of an imported host-only backing must
+            // replace the old alias: source admission looks up raw Arc
+            // identity. Never downgrade a still-live managed alias.
+            if !retained_charged_alias && prior.charge.is_some() && frame.charge.is_none() {
+                retained_charged_alias = true;
+                true
+            } else {
+                false
+            }
+        });
+        if !retained_charged_alias {
             self.resources.native_cpu_inputs.push(Arc::downgrade(frame));
         }
     }

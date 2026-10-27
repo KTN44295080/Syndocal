@@ -38,8 +38,8 @@ mod gpu_compositor;
 mod gpu_display_composition_tests;
 mod gpu_surface;
 mod hap_decoder;
-mod isf_layer_inputs;
 mod isf_chain_execution;
+mod isf_layer_inputs;
 mod isf_runtime;
 #[cfg(test)]
 mod isf_tempo_sync_tests;
@@ -52,25 +52,19 @@ mod libav_decoder;
 pub mod native_frame_timing;
 #[cfg(feature = "qa-native-frame-timing")]
 use native_frame_timing::{span as native_span, Phase as NativePhase};
-pub(crate) mod native_gpu_contract;
-#[cfg(test)]
-pub(crate) mod native_gpu_output;
-#[cfg(test)]
-pub(crate) mod native_gpu_context;
-#[cfg(test)]
-pub(crate) mod native_gpu_result;
-#[cfg(test)]
-pub(crate) mod native_gpu_budget;
-#[cfg(test)]
-pub(crate) mod isf_native_gpu;
 pub(crate) mod frame_history_policy;
-#[cfg(test)]
-pub(crate) mod native_gpu_history;
-#[cfg(test)]
-pub(crate) mod native_gpu_composition;
-#[cfg(test)]
-pub(crate) mod native_gpu_snapshot;
+pub(crate) mod isf_native_gpu;
 mod live_source;
+pub(crate) mod native_cpu_output;
+pub(crate) mod native_gpu_budget;
+pub(crate) mod native_gpu_composition;
+pub(crate) mod native_gpu_context;
+pub(crate) mod native_gpu_contract;
+mod native_gpu_frame_queue;
+pub(crate) mod native_gpu_history;
+pub(crate) mod native_gpu_output;
+pub(crate) mod native_gpu_result;
+pub(crate) mod native_gpu_snapshot;
 mod rgba_row_copy;
 mod show_spout_aspect_fit;
 mod video_render_cancellation;
@@ -90,6 +84,12 @@ pub use libav_decoder::LibavFrameDecoder;
 pub use live_source::{
     LiveVideoSourceIdentity, LiveVideoSourceRuntimeStatus, LiveVideoSourceState,
     LIVE_VIDEO_SOURCE_IDENTITY_VERSION,
+};
+pub use native_gpu_output::display::{
+    NativeResidentDisplayCreationFailure, NativeResidentDisplayFrame, NativeResidentDisplaySession,
+    NativeResidentHistoryInput, NativeResidentPrepareError, NativeResidentPresentBoundary,
+    NativeResidentPresentDecision, NativeResidentPresentResult,
+    NativeResidentPresentationAuthority,
 };
 pub use video_render_cancellation::VideoRenderCancellation;
 
@@ -245,10 +245,28 @@ struct VideoOutputLastValidKey {
     endpoint_name: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct VideoOutputLastValidFrame {
     key: VideoOutputLastValidKey,
     frame: VideoFrame,
+    /// Native premapping LastValid moves back with its charge owner. Ordinary
+    /// CPU artistic frames leave this None.
+    native_snapshot_owner: Option<Arc<native_gpu_snapshot::NativeSnapshotGpu>>,
+    native_cpu_charge: Option<Arc<native_gpu_budget::AllocationCharge>>,
+}
+
+impl std::fmt::Debug for VideoOutputLastValidFrame {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VideoOutputLastValidFrame")
+            .field("key", &self.key)
+            .field("frame", &self.frame)
+            .field(
+                "native_snapshot_owner",
+                &self.native_snapshot_owner.as_ref().map(|_| "retained"),
+            )
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -263,6 +281,12 @@ pub struct FrameQueue {
     /// Frames are shared so composition can read them without copying the
     /// pixels out of the queue every tick.
     slots: Vec<Option<Arc<VideoFrame>>>,
+    /// When a native history handover has returned to the canonical CPU queue,
+    /// retain the complete charged owner beside the exact Arc that was imported.
+    /// The raw Arc never outlives this owner once a native binding is installed.
+    native_owners: Vec<Option<native_gpu_output::cpu::history::OwnedCpuHistoryEntry>>,
+    native_entry_ids: Vec<Option<native_gpu_contract::HistoryEntryId>>,
+    native_cpu_owners: Vec<Option<Arc<native_gpu_result::NativeCpuFrameOwner>>>,
     len: usize,
     /// A private slot projection for the canonical policy. Its IDs never leave
     /// this queue and are not native history entries or authored frame clocks.
@@ -275,6 +299,9 @@ pub struct FrameQueue {
 struct PreparedFrameQueuePush {
     policy: frame_history_policy::HistoryPlan,
     sources: Vec<Option<Arc<VideoFrame>>>,
+    native_sources: Vec<Option<native_gpu_output::cpu::history::OwnedCpuHistoryEntry>>,
+    native_entry_ids: Vec<Option<native_gpu_contract::HistoryEntryId>>,
+    native_cpu_owners: Vec<Option<Arc<native_gpu_result::NativeCpuFrameOwner>>>,
     incoming: Arc<VideoFrame>,
     next_revision: u64,
 }
@@ -1334,6 +1361,8 @@ pub enum VideoRuntimeError {
     MissingComposition,
     Cancelled,
     Composite(CpuCompositeError),
+    /// Terminal native-owner or accounting failure; never a healthy CPU decline.
+    NativeGpu(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2063,6 +2092,15 @@ pub trait VideoFrameProvider {
         }
         Ok(frame)
     }
+    /// Exact-key cancellable acquisition before any artistic effect executes.
+    fn frame_for_input_shared_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Arc<VideoFrame>, VideoFrameProviderError> {
+        self.frame_for_input_with_cancellation(input, cancellation)
+            .map(Arc::new)
+    }
     fn frames_for_layer(
         &mut self,
         layer: &VideoLayerSummary,
@@ -2247,6 +2285,8 @@ pub struct VideoPreviewRenderer<P = PreviewFrameProvider> {
     last_effect_stage_faults: Vec<VideoEffectStageFault>,
     output_last_valid_frames: Vec<VideoOutputLastValidFrame>,
     last_output_render_error: Option<String>,
+    native_cpu_bridge: Option<native_cpu_output::NativeCpuBridge>,
+    native_cpu_retained_reservations: Vec<native_gpu_budget::FrameReservation>,
 }
 
 const ISF_SHADER_CACHE_CAPACITY: usize = 64;
@@ -2669,6 +2709,9 @@ impl FrameQueue {
             key,
             layer_id,
             slots: vec![None; capacity],
+            native_owners: vec![None; capacity],
+            native_entry_ids: vec![None; capacity],
+            native_cpu_owners: vec![None; capacity],
             len: 0,
             policy: Vec::with_capacity(capacity),
             policy_revision: 0,
@@ -2748,6 +2791,9 @@ impl FrameQueue {
                 .iter_shared()
                 .map(|frame| Some(Arc::clone(frame)))
                 .collect(),
+            native_sources: self.native_owners[..self.len].to_vec(),
+            native_entry_ids: self.native_entry_ids[..self.len].to_vec(),
+            native_cpu_owners: self.native_cpu_owners[..self.len].to_vec(),
             incoming: frame,
             next_revision,
         }
@@ -2760,6 +2806,9 @@ impl FrameQueue {
         let PreparedFrameQueuePush {
             policy,
             mut sources,
+            mut native_sources,
+            mut native_entry_ids,
+            mut native_cpu_owners,
             incoming,
             next_revision,
         } = prepared;
@@ -2770,6 +2819,9 @@ impl FrameQueue {
         }
         if policy.current() != self.policy.as_slice()
             || sources.len() != self.len
+            || native_sources.len() != self.len
+            || native_entry_ids.len() != self.len
+            || native_cpu_owners.len() != self.len
             || !sources
                 .iter()
                 .zip(self.iter_shared())
@@ -2857,12 +2909,37 @@ impl FrameQueue {
                     .take()
                     .expect("validated source owner")
             };
+            let (native_owner, native_entry) = if meta.id == incoming_meta.id {
+                (None, None)
+            } else {
+                let source = meta.id.sequence as usize;
+                (
+                    native_sources[source].take(),
+                    native_entry_ids[source].take(),
+                )
+            };
             let current_meta = self.slot_meta(index, &frame);
             self.policy.push(current_meta);
             self.slots[index] = Some(frame);
+            self.native_owners[index] = native_owner;
+            self.native_entry_ids[index] = native_entry;
+            self.native_cpu_owners[index] = if meta.id == incoming_meta.id {
+                None
+            } else {
+                native_cpu_owners[meta.id.sequence as usize].take()
+            };
         }
         self.len = self.policy.len();
         for slot in &mut self.slots[self.len..] {
+            *slot = None;
+        }
+        for slot in &mut self.native_owners[self.len..] {
+            *slot = None;
+        }
+        for slot in &mut self.native_entry_ids[self.len..] {
+            *slot = None;
+        }
+        for slot in &mut self.native_cpu_owners[self.len..] {
             *slot = None;
         }
         self.policy_revision = next_revision;
@@ -2907,11 +2984,26 @@ impl FrameQueue {
         for index in 0..self.policy.len() {
             let source = self.policy[index].id.sequence as usize;
             let frame = self.slots[source].take().expect("canonical retained owner");
+            let native_owner = self.native_owners[source].take();
+            let native_entry = self.native_entry_ids[source].take();
+            let native_cpu_owner = self.native_cpu_owners[source].take();
             self.policy[index] = self.slot_meta(index, &frame);
             self.slots[index] = Some(frame);
+            self.native_owners[index] = native_owner;
+            self.native_entry_ids[index] = native_entry;
+            self.native_cpu_owners[index] = native_cpu_owner;
         }
         self.len = self.policy.len();
         for slot in &mut self.slots[self.len..] {
+            *slot = None;
+        }
+        for slot in &mut self.native_owners[self.len..] {
+            *slot = None;
+        }
+        for slot in &mut self.native_entry_ids[self.len..] {
+            *slot = None;
+        }
+        for slot in &mut self.native_cpu_owners[self.len..] {
             *slot = None;
         }
         self.policy_revision = next_revision;
@@ -2924,6 +3016,17 @@ impl FrameQueue {
 
     fn iter_shared(&self) -> impl Iterator<Item = &Arc<VideoFrame>> {
         self.slots[..self.len].iter().filter_map(Option::as_ref)
+    }
+
+    fn accepts_native_entry_ids(&self, binding: &[native_gpu_contract::HistoryEntryId]) -> bool {
+        binding.len() == self.len && binding.iter().all(|id| id.input == self.key)
+    }
+
+    fn install_native_entry_ids(&mut self, binding: &[native_gpu_contract::HistoryEntryId]) {
+        debug_assert!(self.accepts_native_entry_ids(binding));
+        for (slot, id) in self.native_entry_ids[..self.len].iter_mut().zip(binding) {
+            *slot = Some(*id);
+        }
     }
 }
 
@@ -4540,6 +4643,95 @@ impl<D: VideoFrameDecoder> VideoPreviewRenderer<DecoderBackedFrameProvider<D>> {
 }
 
 impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
+    pub(crate) fn install_native_gpu_runtime(
+        &mut self,
+        owner: &mut native_gpu_context::NativeGpuOwner,
+    ) -> Result<(), String> {
+        if self
+            .isf_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.as_ref().ok())
+            .and_then(IsfGpuRuntime::native_context)
+            .is_some_and(|context| Arc::ptr_eq(context, owner.context()))
+        {
+            return Ok(());
+        }
+        if self.isf_runtime.is_some() {
+            return Err(
+                "renderer already initialized an ISF runtime before native Display binding"
+                    .to_string(),
+            );
+        }
+        let runtime = IsfGpuRuntime::with_native_context(owner)
+            .map_err(|error| format!("shared native ISF runtime creation failed: {error}"))?;
+        self.isf_runtime = Some(Ok(runtime));
+        Ok(())
+    }
+
+    pub(crate) fn replace_native_gpu_runtime(
+        &mut self,
+        owner: &mut native_gpu_context::NativeGpuOwner,
+    ) -> Result<(), String> {
+        let runtime = IsfGpuRuntime::with_native_context(owner)
+            .map_err(|error| format!("replacement shared native ISF runtime failed: {error}"))?;
+        self.isf_runtime = Some(Ok(runtime));
+        Ok(())
+    }
+
+    pub(crate) fn poison_native_gpu_runtime(&mut self, message: impl Into<String>) {
+        self.isf_runtime = Some(Err(IsfRuntimeError {
+            message: message.into(),
+        }));
+    }
+
+    pub(crate) fn accepts_native_output_last_valid(
+        &self,
+        key: &VideoOutputLastValidKey,
+        frame: &VideoFrame,
+        owner: &Arc<native_gpu_snapshot::NativeSnapshotGpu>,
+    ) -> Result<(), String> {
+        let expected = usize::try_from(key.width)
+            .ok()
+            .and_then(|width| {
+                usize::try_from(key.height)
+                    .ok()
+                    .and_then(|height| width.checked_mul(height))
+            })
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| "native output LastValid extent overflow".to_string())?;
+        if frame.layer_id != 0
+            || frame.width != key.width
+            || frame.height != key.height
+            || frame.format != VideoPixelFormat::Rgba8
+            || frame.data.len() != expected
+            || owner.cpu_capacity() < expected as u64
+        {
+            return Err("native output LastValid owner/pixel identity mismatch".to_string());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn install_native_output_last_valid(
+        &mut self,
+        key: VideoOutputLastValidKey,
+        frame: VideoFrame,
+        owner: Arc<native_gpu_snapshot::NativeSnapshotGpu>,
+    ) -> Result<(), String> {
+        self.accepts_native_output_last_valid(&key, &frame, &owner)?;
+        self.output_last_valid_frames.retain(|entry| {
+            entry.key.project_render_epoch == key.project_render_epoch
+                && entry.key.output_id != key.output_id
+        });
+        self.output_last_valid_frames
+            .push(VideoOutputLastValidFrame {
+                key,
+                frame,
+                native_snapshot_owner: Some(owner),
+                native_cpu_charge: None,
+            });
+        Ok(())
+    }
+
     pub fn with_frame_provider(config: VideoRuntimeConfig, frame_provider: P) -> Self {
         Self {
             runtime: VideoRuntime::new(config),
@@ -4557,6 +4749,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             last_effect_stage_faults: Vec::new(),
             output_last_valid_frames: Vec::new(),
             last_output_render_error: None,
+            native_cpu_bridge: None,
+            native_cpu_retained_reservations: Vec::new(),
         }
     }
 
@@ -5313,6 +5507,18 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         cancellation: Option<&dyn VideoRenderCancellation>,
         prepared: Option<Vec<VideoEffectStageFault>>,
     ) -> Result<VideoOutputArtisticRenderResult, VideoPreviewError> {
+        if self.native_cpu_bridge.is_some() {
+            return self.prepare_native_cpu_artistic_impl(
+                snapshot,
+                context,
+                transition_runtime,
+                plan,
+                width,
+                height,
+                cancellation,
+                prepared,
+            );
+        }
         check_render_cancellation(cancellation)?;
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
@@ -5389,6 +5595,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     #[cfg(feature = "qa-native-frame-timing")]
                     let _native_replace = native_span(NativePhase::LastValidReplace);
                     entry.frame = cloned;
+                    entry.native_snapshot_owner = None;
+                    entry.native_cpu_charge = None;
                 } else {
                     #[cfg(feature = "qa-native-frame-timing")]
                     drop(native_lookup);
@@ -5403,6 +5611,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                         .push(VideoOutputLastValidFrame {
                             key,
                             frame: cloned,
+                            native_snapshot_owner: None,
+                            native_cpu_charge: None,
                         });
                 }
                 Ok(VideoOutputArtisticRenderResult {
@@ -5871,6 +6081,11 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         let _native_composition = native_span(NativePhase::CpuComposition);
         check_runtime_cancellation(cancellation)?;
         let frames = self.runtime.select_frames_for_plan(plan);
+        for frame in &frames {
+            self.remember_native_cpu_input(frame, cancellation)?;
+        }
+        let _conversion_charge =
+            self.reserve_native_cpu_conversion_scratch(&frames, cancellation)?;
         let mut faults = Vec::new();
         let active_buses = transition_runtime
             .into_iter()
@@ -5897,6 +6112,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .collect::<Vec<_>>();
         let active_groups = self.active_layer_groups(snapshot, plan, &mut faults);
 
+        let output_charge = self.reserve_native_cpu_rgba(width, height, cancellation)?;
         let fast_output = if !plan.blackout
             && plan.layers.len() == 1
             && active_buses.is_empty()
@@ -6027,6 +6243,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             format: VideoPixelFormat::Rgba8,
             data: output,
         };
+        self.track_native_cpu_frame(&frame, output_charge)?;
         let scope = VideoEffectScope::Composition {
             composition_id: plan.composition_id,
         };
@@ -6060,11 +6277,13 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         check_runtime_cancellation(cancellation)?;
         let mut faults = Vec::new();
         let active_groups = self.active_layer_groups(snapshot, plan, &mut faults);
+        let output_charge = self.reserve_native_cpu_rgba(width, height, cancellation)?;
+        let _conversion_charge =
+            self.reserve_native_cpu_conversion_scratch(frames, cancellation)?;
         if active_groups.is_empty() {
-            return Ok((
-                composite_frames_rgba8(plan, frames, width, height)?.data,
-                faults,
-            ));
+            let frame = composite_frames_rgba8(plan, frames, width, height)?;
+            self.track_native_cpu_frame(&frame, output_charge)?;
+            return Ok((frame.data, faults));
         }
         let mut output = vec![0u8; width as usize * height as usize * 4];
         for layer in &plan.layers {
@@ -6094,6 +6313,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 cancellation,
             )?);
         }
+        self.track_native_cpu_bytes(&output, output_charge)?;
         Ok((output, faults))
     }
 
@@ -6399,7 +6619,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         let mut effect_faults = Vec::new();
         // Keep callback-bearing paths sequential. Dependent layer images and
         // transitions also retain their established publication boundaries.
-        let independent_layers = cancellation.is_none()
+        let independent_layers = self.native_cpu_bridge.is_none()
+            && cancellation.is_none()
             && self.isf_frame_inputs.sampled_layers.is_empty()
             && transition_runtime.map_or(true, |runtime| runtime.buses.is_empty());
         let mut pending_layers = isf_runtime::StackBatch::Empty;
@@ -6408,7 +6629,9 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             check_render_cancellation(cancellation)?;
             let Some(layer) = snapshot.layers.iter().find(|layer| layer.id == *layer_id) else {
                 self.flush_independent_layer_chains(&mut pending_layers, &mut effect_faults);
-                return Err(VideoPreviewError::MissingLayer { layer_id: *layer_id });
+                return Err(VideoPreviewError::MissingLayer {
+                    layer_id: *layer_id,
+                });
             };
             let layer_fault_start = effect_faults.len();
             let runtime_layer = clip_runtime
@@ -6448,6 +6671,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     key: outgoing.key,
                     error,
                 })?;
+                self.remember_native_cpu_owned_input(&outgoing_frame, cancellation)
+                    .map_err(VideoPreviewError::Runtime)?;
                 let incoming_frame = match cancellation {
                     Some(cancellation) => self
                         .frame_provider
@@ -6458,6 +6683,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     key: incoming.key,
                     error,
                 })?;
+                self.remember_native_cpu_owned_input(&incoming_frame, cancellation)
+                    .map_err(VideoPreviewError::Runtime)?;
                 let (outgoing_frame, outgoing_faults) = self
                     .apply_clip_chain_to_frame_with_cancellation(
                         snapshot,
@@ -6490,6 +6717,22 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                             1000u16.saturating_sub(transition.progress_millis),
                         )
                     };
+                let transition_extent = if transition.kind == protocol::VideoClipTakeKind::Cut {
+                    (base_incoming.width, base_incoming.height)
+                } else {
+                    (base_outgoing.width, base_outgoing.height)
+                };
+                let transition_charge = self
+                    .reserve_native_cpu_rgba(transition_extent.0, transition_extent.1, cancellation)
+                    .map_err(VideoPreviewError::Runtime)?;
+                let transition_scratch = self
+                    .reserve_native_cpu_scratch(
+                        base_outgoing.width.max(base_incoming.width),
+                        base_outgoing.height.max(base_incoming.height),
+                        4,
+                        cancellation,
+                    )
+                    .map_err(VideoPreviewError::Runtime)?;
                 let frame = transition_video_frames_rgba8(
                     base_outgoing,
                     base_incoming,
@@ -6498,6 +6741,9 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 )
                 .map_err(VideoRuntimeError::from)
                 .map_err(VideoPreviewError::Runtime)?;
+                drop(transition_scratch);
+                self.track_native_cpu_frame(&frame, transition_charge)
+                    .map_err(VideoPreviewError::Runtime)?;
                 let transition_scope = VideoEffectScope::Transition {
                     owner: protocol::VideoTransitionEffectOwner::ClipTake { layer_id: layer.id },
                 };
@@ -6528,7 +6774,8 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     Err(fault) => (frame, vec![*fault]),
                 };
                 effect_faults.extend(layer_faults);
-                self.runtime.push_frame(frame);
+                self.publish_native_cpu_frame(frame)
+                    .map_err(VideoPreviewError::Runtime)?;
                 self.publish_isf_layer_frame(
                     layer.id,
                     layer.state.position_ms,
@@ -6557,7 +6804,10 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 Err(error) => {
                     let error = VideoPreviewError::from(error);
                     if !error.is_cancelled() {
-                        self.flush_independent_layer_chains(&mut pending_layers, &mut effect_faults);
+                        self.flush_independent_layer_chains(
+                            &mut pending_layers,
+                            &mut effect_faults,
+                        );
                     }
                     // A provider cancellation must not start deferred GPU work.
                     return Err(error);
@@ -6588,16 +6838,24 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     Some(Err(_)) => false,
                     _ => true,
                 };
-                if independent_layers && clip_idle
-                    && layer_chain.as_ref().ok().and_then(|chain| chain.as_ref())
+                if independent_layers
+                    && clip_idle
+                    && layer_chain
+                        .as_ref()
+                        .ok()
+                        .and_then(|chain| chain.as_ref())
                         .is_some_and(resolved_chain_executes)
                 {
                     if let Ok(Some(chain)) = layer_chain {
                         #[cfg(feature = "qa-native-frame-timing")]
                         let _native_chain_preparation = native_span(NativePhase::ChainPreparation);
                         self.defer_independent_layer_chain(
-                            &mut pending_layers, frame, chain, &mut effect_faults,
-                        ).map_err(VideoPreviewError::Runtime)?;
+                            &mut pending_layers,
+                            frame,
+                            chain,
+                            &mut effect_faults,
+                        )
+                        .map_err(VideoPreviewError::Runtime)?;
                         continue;
                     }
                 }
@@ -6613,12 +6871,15 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                             effect_faults.push(fault);
                         }
                     }
-                    self.runtime.push_shared_frame(frame);
+                    self.publish_native_cpu_raw_frame(frame, cancellation)
+                        .map_err(VideoPreviewError::Runtime)?;
                     continue;
                 }
                 // Keep the decoder's shared input borrowed until a stage
                 // produces an owned output or the queue needs a fallback.
                 let input_frame = frame;
+                self.remember_native_cpu_input(&input_frame, cancellation)
+                    .map_err(VideoPreviewError::Runtime)?;
                 let frame = Cow::Borrowed(input_frame.as_ref());
                 let (frame, clip_faults) = match clip_chain {
                     Some(Ok(Some(chain))) => self
@@ -6654,11 +6915,16 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                         effect_faults.push(fault);
                     }
                 }
-                let frame = match frame {
-                    Cow::Owned(rendered) => rendered,
-                    Cow::Borrowed(_) => Arc::unwrap_or_clone(input_frame),
-                };
-                self.runtime.push_frame(frame);
+                if self.native_cpu_bridge.is_some() {
+                    self.publish_native_cpu_cow(frame, Arc::clone(&input_frame))
+                        .map_err(VideoPreviewError::Runtime)?;
+                } else {
+                    let frame = match frame {
+                        Cow::Owned(rendered) => rendered,
+                        Cow::Borrowed(_) => Arc::unwrap_or_clone(input_frame),
+                    };
+                    self.runtime.push_frame(frame);
+                }
             }
             self.publish_isf_layer_frame(
                 layer.id,
@@ -8566,16 +8832,30 @@ impl ExternalVideoTransportRuntime {
         admit_start: F,
     ) -> ExternalVideoTransportSyncReport {
         let is_target = |route: &ExternalVideoTransportRoute| {
-            route.direction == ExternalVideoTransportDirection::Output && route.route_id == output_id
+            route.direction == ExternalVideoTransportDirection::Output
+                && route.route_id == output_id
         };
         let mut scoped = Self::new();
-        scoped.active_routes = self.active_routes.iter().filter(|route| is_target(route)).cloned().collect();
+        scoped.active_routes = self
+            .active_routes
+            .iter()
+            .filter(|route| is_target(route))
+            .cloned()
+            .collect();
         let scoped_plans = ExternalVideoIoRoutePlans {
             inputs: Vec::new(),
-            outputs: plans.outputs.iter().filter(|output| output.output_id == output_id).cloned().collect(),
+            outputs: plans
+                .outputs
+                .iter()
+                .filter(|output| output.output_id == output_id)
+                .cloned()
+                .collect(),
         };
         let mut report = scoped.sync_routes_with_driver_and_role_with_start_admission(
-            &scoped_plans, driver, role, admit_start,
+            &scoped_plans,
+            driver,
+            role,
+            admit_start,
         );
         self.active_routes.retain(|route| !is_target(route));
         self.active_routes.extend(scoped.active_routes);
@@ -8654,10 +8934,7 @@ impl ExternalVideoTransportRuntime {
                 let (state, issue) = if !input.enabled {
                     (LiveVideoSourceState::Disabled, None)
                 } else if !input.ready {
-                    (
-                        LiveVideoSourceState::Unavailable,
-                        input.issue.clone(),
-                    )
+                    (LiveVideoSourceState::Unavailable, input.issue.clone())
                 } else if input.live {
                     (LiveVideoSourceState::Starting, None)
                 } else {
@@ -13542,26 +13819,38 @@ mod tests {
 
         let failed = runtime.sync_routes_with_driver(&plans, &mut driver);
         assert_eq!(failed.start_failed.len(), 1);
-        assert_eq!(runtime.status().live_sources[0].state, LiveVideoSourceState::Fault);
+        assert_eq!(
+            runtime.status().live_sources[0].state,
+            LiveVideoSourceState::Fault
+        );
         assert_eq!(runtime.status().live_sources[0].generation, 1);
         assert_eq!(runtime.status().live_sources[0].identity, identity);
 
         driver.fail_start = false;
         let recovered = runtime.sync_routes_with_driver(&plans, &mut driver);
         assert_eq!(recovered.started.len(), 1);
-        assert_eq!(runtime.status().live_sources[0].state, LiveVideoSourceState::Live);
+        assert_eq!(
+            runtime.status().live_sources[0].state,
+            LiveVideoSourceState::Live
+        );
         assert_eq!(runtime.status().live_sources[0].generation, 2);
 
         plans.inputs[0].enabled = false;
         plans.inputs[0].live = false;
         let disabled = runtime.sync_routes_with_driver(&plans, &mut driver);
         assert_eq!(disabled.stopped.len(), 1);
-        assert_eq!(runtime.status().live_sources[0].state, LiveVideoSourceState::Disabled);
-        assert_eq!(driver.events, vec![
-            "start:camera-profile-v1",
-            "start:camera-profile-v1",
-            "stop:camera-profile-v1",
-        ]);
+        assert_eq!(
+            runtime.status().live_sources[0].state,
+            LiveVideoSourceState::Disabled
+        );
+        assert_eq!(
+            driver.events,
+            vec![
+                "start:camera-profile-v1",
+                "start:camera-profile-v1",
+                "stop:camera-profile-v1",
+            ]
+        );
     }
 
     #[test]
@@ -14409,7 +14698,10 @@ mod tests {
         // Retention follows the full snapshot so alternating outputs cannot
         // evict each other's decoder sessions. Actual decode requests remain
         // scoped to the routed layer below.
-        assert_eq!(renderer.frame_provider().retained, vec![vec![1, 2], vec![1, 2]]);
+        assert_eq!(
+            renderer.frame_provider().retained,
+            vec![vec![1, 2], vec![1, 2]]
+        );
         assert_eq!(renderer.frame_provider().requested, vec![2, 2]);
 
         snapshot.outputs[0].blackout = true;
@@ -14418,14 +14710,20 @@ mod tests {
         assert!(prepared.frames.is_empty());
         let frame = renderer.render_output(&snapshot, 9).unwrap();
         assert_eq!(frame.data, vec![0, 0, 0, 255, 0, 0, 0, 255]);
-        assert_eq!(renderer.frame_provider().retained, vec![vec![1, 2], vec![1, 2]]);
+        assert_eq!(
+            renderer.frame_provider().retained,
+            vec![vec![1, 2], vec![1, 2]]
+        );
         assert_eq!(renderer.frame_provider().requested, vec![2, 2]);
 
         snapshot.outputs[0].blackout = false;
         snapshot.outputs[0].enabled = false;
         let frame = renderer.render_output(&snapshot, 9).unwrap();
         assert_eq!(frame.data, vec![0, 0, 0, 255, 0, 0, 0, 255]);
-        assert_eq!(renderer.frame_provider().retained, vec![vec![1, 2], vec![1, 2]]);
+        assert_eq!(
+            renderer.frame_provider().retained,
+            vec![vec![1, 2], vec![1, 2]]
+        );
         assert_eq!(renderer.frame_provider().requested, vec![2, 2]);
     }
 
@@ -15779,9 +16077,8 @@ mod tests {
                         1,
                     )
                 } else {
-                    renderer.prepare_output_artistic_frame_with_effects(
-                        &snapshot, context, &plan, 1, 1,
-                    )
+                    renderer
+                        .prepare_output_artistic_frame_with_effects(&snapshot, context, &plan, 1, 1)
                 }
                 .unwrap();
                 assert_eq!(frame.data, expected, "with_transitions={with_transitions}");

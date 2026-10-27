@@ -18,10 +18,48 @@ use std::time::{Duration, Instant};
 
 /// A CPU frame and its actual allocation charge share one lifetime. Native
 /// canonical invocations alias this owner instead of charging a shared Arc twice.
-#[derive(Debug)]
 pub(crate) struct NativeCpuFrameOwner {
     pub(crate) frame: Arc<VideoFrame>,
     pub(crate) charge: Option<Arc<AllocationCharge>>,
+    retained_owner: Option<Arc<dyn std::any::Any + Send + Sync>>,
+}
+
+impl std::fmt::Debug for NativeCpuFrameOwner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NativeCpuFrameOwner")
+            .field("frame", &self.frame)
+            .field("charge", &self.charge)
+            .field("retains_owner", &self.retained_owner.is_some())
+            .finish()
+    }
+}
+
+impl NativeCpuFrameOwner {
+    pub(crate) fn new(frame: Arc<VideoFrame>, charge: Option<Arc<AllocationCharge>>) -> Self {
+        Self {
+            frame,
+            charge,
+            retained_owner: None,
+        }
+    }
+
+    /// The upstream whole owner is required even for imported CPU pixels which
+    /// have a host-history charge but no G allocation charge.
+    pub(crate) fn with_retained_owner(
+        frame: Arc<VideoFrame>,
+        charge: Option<Arc<AllocationCharge>>,
+        owner: Arc<dyn std::any::Any + Send + Sync>,
+    ) -> Self {
+        Self {
+            frame,
+            charge,
+            retained_owner: Some(owner),
+        }
+    }
+
+    pub(crate) fn retained_owner(&self) -> Option<&Arc<dyn std::any::Any + Send + Sync>> {
+        self.retained_owner.as_ref()
+    }
 }
 
 #[derive(Debug)]
@@ -62,6 +100,7 @@ impl NativeCpuOutcome {
     pub(crate) fn clocks(&self) -> Option<FrozenChainClocks> {
         self.clocks
     }
+    #[cfg(test)]
     pub(crate) fn allocation_ids(&self) -> Vec<GpuAllocationId> {
         self.owner.charge.iter().map(|charge| charge.id()).collect()
     }
@@ -352,6 +391,13 @@ pub(crate) struct CanonicalCpuLayerOutcome {
     pub provenance: CpuOutcomeProvenance,
     pub(crate) charge: AllocationCharge,
 }
+/// Encoding availability is not validation or successful CPU recovery proof.
+/// Even an Encoded batch must resolve its real G phase before publication.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeCandidateAvailability {
+    Encoded,
+    UnavailableAfterEncodeFailure,
+}
 pub(crate) struct EncodedIsfBatch {
     pub candidates: StackBatch<EncodedLayerCandidate>,
     pub pending: PendingIsfReceipt,
@@ -359,6 +405,38 @@ pub(crate) struct EncodedIsfBatch {
     pub(crate) clocks: StackBatch<FrozenChainClocks>,
     pub(crate) bindings: StackBatch<NativeRecipeBindings>,
     pub(crate) inputs: StackBatch<Arc<NativeInputAllocation>>,
+    encoding_failed: bool,
+}
+impl EncodedIsfBatch {
+    /// G's sole construction path supplies the actual recorded encode outcome.
+    /// Candidate absence alone must never waive independent P identity checks.
+    pub(crate) fn from_encoding(
+        candidates: StackBatch<EncodedLayerCandidate>,
+        pending: PendingIsfReceipt,
+        jobs: StackBatch<Arc<PreparedNativeLayer>>,
+        clocks: StackBatch<FrozenChainClocks>,
+        bindings: StackBatch<NativeRecipeBindings>,
+        inputs: StackBatch<Arc<NativeInputAllocation>>,
+        encoding_failed: bool,
+    ) -> Self {
+        Self {
+            candidates,
+            pending,
+            jobs,
+            clocks,
+            bindings,
+            inputs,
+            encoding_failed,
+        }
+    }
+
+    pub(crate) fn candidate_availability(&self) -> NativeCandidateAvailability {
+        if self.encoding_failed {
+            NativeCandidateAvailability::UnavailableAfterEncodeFailure
+        } else {
+            NativeCandidateAvailability::Encoded
+        }
+    }
 }
 pub(crate) struct NativeInputAllocation {
     pub(crate) job: Arc<PreparedNativeLayer>,

@@ -56,39 +56,7 @@ pub(super) struct PendingLayerChain {
 }
 
 impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
-    #[cfg(test)]
-    pub(crate) fn prepare_native_cpu_invocation(
-        &mut self,
-        chain: ResolvedVideoEffectChain,
-        input: Arc<VideoFrame>,
-        render_input_key: Option<protocol::VideoRenderInputKey>,
-        cancellation: Option<&dyn VideoRenderCancellation>,
-    ) -> Result<crate::isf_native_gpu::PreparedNativeCpuInvocation, VideoRuntimeError> {
-        check_runtime_cancellation(cancellation)?;
-        let prepared = if resolved_chain_executes(&chain) {
-            self.prepare_effect_chain(
-                Cow::Owned(chain),
-                input.layer_id,
-                render_input_key,
-                cancellation,
-            )?
-        } else {
-            PreparedChain {
-                source: Cow::Owned(chain),
-                stages: Vec::new(),
-                keys: Vec::new(),
-                faults: Vec::new(),
-            }
-        };
-        Ok(crate::isf_native_gpu::PreparedNativeCpuInvocation::new(
-            input,
-            prepared,
-            self.isf_frame_inputs.date,
-            self.isf_audio_frame.clone(),
-        ))
-    }
-
-    fn prepare_effect_chain<'chain>(
+    pub(crate) fn prepare_effect_chain<'chain>(
         &mut self,
         chain: Cow<'chain, ResolvedVideoEffectChain>,
         layer_id: VideoLayerId,
@@ -180,6 +148,9 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         date: [f32; 4],
         cancellation: Option<&dyn VideoRenderCancellation>,
     ) -> Result<(Cow<'frame, VideoFrame>, Vec<VideoEffectStageFault>), VideoRuntimeError> {
+        if self.native_cpu_bridge.is_some() {
+            return self.execute_native_prepared_chain(prepared, frame, date, cancellation);
+        }
         self.initialize_chain_runtime();
         let runtime = match self.isf_runtime.as_mut().expect("ISF runtime initialized") {
             Ok(runtime) => runtime,

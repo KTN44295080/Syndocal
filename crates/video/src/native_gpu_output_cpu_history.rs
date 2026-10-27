@@ -8,12 +8,14 @@
 
 use std::sync::Arc;
 
-use crate::frame_history_policy::{
-    self, plan_history_update, HistoryMeta, HistoryPushKind, NATIVE_HISTORY_CAPACITY,
-};
+#[cfg(test)]
+use crate::frame_history_policy::{self, HistoryPushKind};
+use crate::frame_history_policy::{plan_history_update, HistoryMeta, NATIVE_HISTORY_CAPACITY};
 use crate::native_gpu_budget::AllocationCharge;
 use crate::native_gpu_contract::{GpuContextId, HistoryEntryId, LayerResultIdentity};
-use crate::native_gpu_history::adapter::NativeGpuHistory;
+use crate::native_gpu_history::adapter::{
+    CanonicalCpuHistoryFrame, CanonicalCpuHistoryOwner, NativeGpuHistory,
+};
 use crate::native_gpu_history::{
     CpuHandoverFailure, CpuHistoryBacking, CpuHistoryHandover, CpuHistorySnapshot, HistoryError,
     HistoryHostBudget, HistoryScope,
@@ -49,6 +51,7 @@ impl OwnedCpuHistoryEntry {
         &self.identity
     }
 
+    #[cfg(test)]
     pub(crate) fn frame(&self) -> &VideoFrame {
         self.backing.frame()
     }
@@ -56,6 +59,34 @@ impl OwnedCpuHistoryEntry {
     /// Clone this whole owner when a consumer must outlive the queue.
     pub(crate) fn backing(&self) -> &Arc<CpuHistoryBacking<AllocationCharge>> {
         &self.backing
+    }
+
+    /// Borrow this post-FX allocation into the shared canonical executor without
+    /// a second charge and without dropping its P host-history lifetime owner.
+    pub(crate) fn native_cpu_owner(
+        &self,
+    ) -> Result<Arc<crate::native_gpu_result::NativeCpuFrameOwner>, HistoryError> {
+        self.backing.native_cpu_owner()
+    }
+
+    /// Consuming publication seam for a canonical FrameQueue slot. The pixel
+    /// alias and this complete owner must be installed together after all queue
+    /// targets have been validated. No pixels, proof or budget charge are copied.
+    pub(crate) fn into_canonical_parts(self) -> (Arc<VideoFrame>, Self) {
+        let Self {
+            scope,
+            identity,
+            backing,
+        } = self;
+        let (frame, backing) = backing.into_canonical_parts();
+        (
+            frame,
+            Self {
+                scope,
+                identity,
+                backing,
+            },
+        )
     }
 }
 
@@ -65,6 +96,7 @@ pub(crate) struct NativeCpuHistoryQueue {
     scope: HistoryScope,
     entries: Vec<OwnedCpuHistoryEntry>,
     metadata: Vec<HistoryMeta>,
+    #[cfg(test)]
     last_sequence: Option<u64>,
 }
 
@@ -75,6 +107,7 @@ pub(crate) struct CpuHistorySnapshotRejection {
 }
 
 #[must_use]
+#[cfg(test)]
 pub(crate) struct CpuHistoryEntryRejection {
     pub error: HistoryError,
     pub entry: OwnedCpuHistoryEntry,
@@ -91,6 +124,7 @@ impl NativeCpuHistoryQueue {
             if snapshot.scope() != expected_scope {
                 return Err(HistoryError::IdentityMismatch);
             }
+            snapshot.validate_host_accounting()?;
             let mut metadata = Vec::with_capacity(NATIVE_HISTORY_CAPACITY);
             for (identity, backing) in snapshot.entries() {
                 validate_entry(expected_scope, identity, backing.frame())?;
@@ -104,6 +138,7 @@ impl NativeCpuHistoryQueue {
             Ok(metadata) => metadata,
             Err(error) => return Err(CpuHistorySnapshotRejection { error, snapshot }),
         };
+        #[cfg(test)]
         let last_sequence = metadata.iter().map(|meta| meta.id.sequence).max();
         let entries = snapshot
             .into_entries()
@@ -118,6 +153,7 @@ impl NativeCpuHistoryQueue {
             scope: expected_scope,
             entries,
             metadata,
+            #[cfg(test)]
             last_sequence,
         })
     }
@@ -142,6 +178,7 @@ impl NativeCpuHistoryQueue {
         &self.metadata
     }
 
+    #[cfg(test)]
     pub(crate) fn select(&self, target_ms: u64) -> Option<OwnedCpuHistoryEntry> {
         self.selected(frame_history_policy::select_at_or_before_or_nearest(
             &self.metadata,
@@ -149,6 +186,7 @@ impl NativeCpuHistoryQueue {
         ))
     }
 
+    #[cfg(test)]
     pub(crate) fn nearest(&self, target_ms: u64) -> Option<OwnedCpuHistoryEntry> {
         self.selected(frame_history_policy::select_nearest(
             &self.metadata,
@@ -156,6 +194,7 @@ impl NativeCpuHistoryQueue {
         ))
     }
 
+    #[cfg(test)]
     fn selected(&self, selected: Option<HistoryEntryId>) -> Option<OwnedCpuHistoryEntry> {
         selected.and_then(|id| {
             self.entries
@@ -167,6 +206,7 @@ impl NativeCpuHistoryQueue {
 
     /// Apply one already sealed CPU owner. Sequence validation survives
     /// eviction/drop_before, so an old completion cannot replace a newer slot.
+    #[cfg(test)]
     pub(crate) fn push(
         &mut self,
         entry: OwnedCpuHistoryEntry,
@@ -215,6 +255,7 @@ impl NativeCpuHistoryQueue {
         Ok(plan.pushes()[0])
     }
 
+    #[cfg(test)]
     pub(crate) fn drop_before(&mut self, target_ms: u64) -> usize {
         let dropped = frame_history_policy::drop_before(&mut self.metadata, target_ms);
         self.entries.retain(|entry| {
@@ -228,11 +269,13 @@ impl NativeCpuHistoryQueue {
 
 /// Ownership only: the canonical caller decides when a result is LastValid.
 /// This is per input/layer, separate from the output premapping CPU cache.
+#[cfg(test)]
 pub(crate) struct NativeCpuHistoryLastValid {
     scope: HistoryScope,
     entry: Option<OwnedCpuHistoryEntry>,
 }
 
+#[cfg(test)]
 impl NativeCpuHistoryLastValid {
     pub(crate) fn new(scope: HistoryScope) -> Self {
         Self { scope, entry: None }
@@ -273,21 +316,122 @@ impl CpuHistoryEntrySequence {
         Self { scope, last_issued }
     }
 
+    #[cfg(test)]
     pub(crate) fn last_issued(&self) -> Option<u64> {
         self.last_issued
+    }
+
+    pub(crate) fn prospective_next(&self) -> Result<HistoryEntryId, HistoryError> {
+        let sequence = self
+            .last_issued
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or(HistoryError::SequenceExhausted)?;
+        Ok(HistoryEntryId {
+            input: self.scope.input,
+            queue_epoch: self.scope.queue_epoch,
+            sequence,
+        })
+    }
+
+    pub(crate) fn commit_issued(&mut self, entry: HistoryEntryId) -> Result<(), HistoryError> {
+        if entry.input != self.scope.input
+            || entry.queue_epoch != self.scope.queue_epoch
+            || self.prospective_next()? != entry
+        {
+            return Err(HistoryError::IdentityMismatch);
+        }
+        self.last_issued = Some(entry.sequence);
+        Ok(())
     }
 }
 
 #[must_use]
+#[cfg(test)]
 pub(crate) struct LegacyCpuHistoryRejection {
     pub error: HistoryError,
     pub frames: Vec<Arc<VideoFrame>>,
+}
+
+pub(crate) type CanonicalCpuHistorySource = (Arc<VideoFrame>, Option<CanonicalCpuHistoryOwner>);
+
+#[must_use]
+pub(crate) struct CanonicalCpuHistoryRejection {
+    pub error: HistoryError,
+    pub frames: Vec<CanonicalCpuHistorySource>,
+}
+
+/// Like the legacy import, but preserves complete G/P owners accompanying
+/// canonical slots. Entry issuance changes only after P accepts every slot.
+pub(crate) fn import_canonical_cpu_history_with_binding(
+    context: GpuContextId,
+    scope: HistoryScope,
+    host: &HistoryHostBudget,
+    sequence: &mut CpuHistoryEntrySequence,
+    frames: Vec<CanonicalCpuHistorySource>,
+) -> Result<(NativeGpuHistory, Vec<HistoryEntryId>), CanonicalCpuHistoryRejection> {
+    let checked = (|| {
+        if sequence.scope != scope {
+            return Err(HistoryError::IdentityMismatch);
+        }
+        if frames.len() > NATIVE_HISTORY_CAPACITY {
+            return Err(HistoryError::InvalidPolicy);
+        }
+        let mut last_issued = sequence.last_issued;
+        let mut binding = Vec::with_capacity(frames.len());
+        for _ in &frames {
+            let next = last_issued
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or(HistoryError::SequenceExhausted)?;
+            binding.push(HistoryEntryId {
+                input: scope.input,
+                queue_epoch: scope.queue_epoch,
+                sequence: next,
+            });
+            last_issued = Some(next);
+        }
+        Ok((last_issued, binding))
+    })();
+    let (last_issued, binding) = match checked {
+        Ok(value) => value,
+        Err(error) => return Err(CanonicalCpuHistoryRejection { error, frames }),
+    };
+    let records = frames
+        .into_iter()
+        .zip(binding.iter().copied())
+        .map(|((frame, owner), entry)| CanonicalCpuHistoryFrame {
+            entry,
+            frame,
+            owner,
+        })
+        .collect();
+    match NativeGpuHistory::import_canonical_queue_with_owners(
+        context,
+        scope,
+        host.clone(),
+        records,
+    ) {
+        Ok(history) => {
+            sequence.last_issued = last_issued;
+            Ok((history, binding))
+        }
+        Err(failure) => Err(CanonicalCpuHistoryRejection {
+            error: failure.error,
+            frames: failure
+                .frames
+                .into_iter()
+                .map(|frame| (frame.frame, frame.owner))
+                .collect(),
+        }),
+    }
 }
 
 /// Import an existing legacy CPU queue using the output session's host budget.
 /// These are already raw CPU Arcs: this API never extracts one from a charged
 /// backing. Clone only those Arc handles while P validates its consuming input,
 /// so failure can return the complete original queue and leave issuance intact.
+#[cfg(test)]
 pub(crate) fn import_legacy_cpu_history(
     context: GpuContextId,
     scope: HistoryScope,
@@ -295,6 +439,18 @@ pub(crate) fn import_legacy_cpu_history(
     sequence: &mut CpuHistoryEntrySequence,
     frames: Vec<Arc<VideoFrame>>,
 ) -> Result<NativeGpuHistory, LegacyCpuHistoryRejection> {
+    import_legacy_cpu_history_with_binding(context, scope, host, sequence, frames)
+        .map(|(history, _)| history)
+}
+
+#[cfg(test)]
+pub(crate) fn import_legacy_cpu_history_with_binding(
+    context: GpuContextId,
+    scope: HistoryScope,
+    host: &HistoryHostBudget,
+    sequence: &mut CpuHistoryEntrySequence,
+    frames: Vec<Arc<VideoFrame>>,
+) -> Result<(NativeGpuHistory, Vec<HistoryEntryId>), LegacyCpuHistoryRejection> {
     let checked = (|| {
         if sequence.scope != scope {
             return Err(HistoryError::IdentityMismatch);
@@ -319,13 +475,14 @@ pub(crate) fn import_legacy_cpu_history(
             ));
             last_issued = Some(next);
         }
+        let binding = entries.iter().map(|(id, _)| *id).collect::<Vec<_>>();
         NativeGpuHistory::import_canonical_queue(context, scope, host.clone(), entries)
-            .map(|history| (history, last_issued))
+            .map(|history| (history, last_issued, binding))
     })();
     match checked {
-        Ok((history, last_issued)) => {
+        Ok((history, last_issued, binding)) => {
             sequence.last_issued = last_issued;
-            Ok(history)
+            Ok((history, binding))
         }
         Err(error) => Err(LegacyCpuHistoryRejection { error, frames }),
     }
@@ -376,3 +533,11 @@ fn validate_entry(
 #[cfg(test)]
 #[path = "native_gpu_output_cpu_history_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "native_gpu_output_cpu_history_canonical_tests.rs"]
+mod canonical_tests;
+
+#[cfg(test)]
+#[path = "native_gpu_output_cpu_history_reciprocal_tests.rs"]
+mod reciprocal_tests;

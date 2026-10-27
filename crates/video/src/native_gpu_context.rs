@@ -5,20 +5,24 @@
 //! a registry which keeps strong resource ownership even when a caller drops one.
 use std::any::Any;
 use std::future::Future;
+use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+use crate::native_gpu_budget::NativeGpuBudgetSnapshot;
 use crate::native_gpu_budget::{
     AllocationCharge, BudgetQuote, ChargeKind, FrameReservation, NativeAllocationPlan,
-    NativeGpuBudget, NativeGpuBudgetSnapshot,
+    NativeGpuBudget,
 };
+#[cfg(test)]
+use crate::native_gpu_contract::GpuCompletionPort;
 use crate::native_gpu_contract::{
-    CompletionProgress, GpuAllocationId, GpuCompletionPort, GpuContextId, GpuOwnerState, GpuPhase,
-    GpuSubmissionId, NativeFrameId, NativeGpuDecline, NativeGpuFault, NativeGpuFaultKind,
-    RetirementId,
+    CompletionProgress, GpuAllocationId, GpuContextId, GpuOwnerState, GpuPhase, GpuSubmissionId,
+    NativeFrameId, NativeGpuDecline, NativeGpuFault, NativeGpuFaultKind, RetirementId,
 };
 use crate::VideoRenderCancellation;
 
@@ -27,12 +31,14 @@ const ACTIVE_TOKEN: u8 = 0;
 const CANCELLED_TOKEN: u8 = 1;
 const TERMINAL_TOKEN: u8 = 2;
 const MAX_UNCAPTURED_ERROR_CHARS: usize = 2_048;
+// Failed drivers retain unmanaged handles as well as charged allocations.
+// A byte limit alone cannot bound repeated zero-byte failed generations.
+const MAX_RETAINED_DEVICE_GENERATIONS: usize = 8;
 
 pub(crate) struct NativeGpuFactory {
     instance: Arc<wgpu::Instance>,
 }
 
-#[expect(dead_code, reason = "C1 surface-dependent API; headless G gate")]
 pub(crate) struct SurfaceAdapterTarget<'a> {
     pub instance: &'a Arc<wgpu::Instance>,
     pub surface: &'a wgpu::Surface<'static>,
@@ -58,7 +64,9 @@ impl Default for NativeGpuRequirements {
 #[derive(Debug)]
 pub(crate) struct NativeGpuCapabilities {
     pub context: GpuContextId,
+    #[cfg(test)]
     pub adapter_info: wgpu::AdapterInfo,
+    #[cfg(test)]
     pub enabled_features: wgpu::Features,
     pub limits: wgpu::Limits,
     pub upload_row_pitch: Option<u64>,
@@ -163,7 +171,6 @@ impl NativeGpuFactory {
         &self.instance
     }
 
-    #[expect(dead_code, reason = "C1 surface-dependent API; headless G gate")]
     pub(crate) fn create_for_surface(
         &self,
         target: SurfaceAdapterTarget<'_>,
@@ -240,7 +247,9 @@ impl NativeGpuFactory {
         }));
         let capabilities = NativeGpuCapabilities {
             context: context_id,
+            #[cfg(test)]
             adapter_info: adapter.get_info(),
+            #[cfg(test)]
             enabled_features: device.features(),
             limits: device.limits(),
             upload_row_pitch: crate::isf_runtime::native_queue_upload_pitch(&adapter),
@@ -256,12 +265,12 @@ impl NativeGpuFactory {
             uncaptured_error,
         });
         Ok(NativeGpuOwner {
-            core: BrokerCore::new(
+            core: OwnedBrokerCore::new(BrokerCore::new(
                 RealGpuDriver {
                     context: Arc::clone(&context),
                 },
                 context_id,
-            ),
+            )),
             context,
         })
     }
@@ -430,11 +439,27 @@ enum FrameRecordStage {
     PresentRetirement,
 }
 
+/// The existing affine marker carries its private session capability and exact
+/// transaction identity. Its terminal state is minted only after the registry
+/// actually finishes that record, so a late token needs no session tombstone.
+struct TransactionMarker {
+    session: Arc<()>,
+    id: RetirementId,
+    state: AtomicU8,
+}
+
+impl Deref for TransactionMarker {
+    type Target = AtomicU8;
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
 struct FrameRecord<D: CompletionDriver> {
     id: RetirementId,
     frame: NativeFrameId,
     stage: FrameRecordStage,
-    marker: Arc<AtomicU8>,
+    marker: Arc<TransactionMarker>,
     reservation: Option<FrameReservation>,
     resources: Vec<Arc<dyn Any + Send + Sync>>,
     allocations: Vec<GpuAllocationId>,
@@ -445,14 +470,24 @@ struct FrameRecord<D: CompletionDriver> {
     queued_write: bool,
 }
 
+/// Frozen after re-arm: no queue calls, scope polling or success publication may
+/// originate from this generation. Its exact owners stay with the session.
+struct RetainedGeneration<D: CompletionDriver> {
+    context: GpuContextId,
+    _driver: D,
+    frames: Vec<FrameRecord<D>>,
+}
+
 struct BrokerCore<D: CompletionDriver> {
     driver: D,
     context: GpuContextId,
+    session: Arc<()>,
     state: GpuOwnerState,
     budget: NativeGpuBudget,
     next_transaction: u64,
     next_submission: u64,
     frames: Vec<FrameRecord<D>>,
+    retained_generations: Vec<RetainedGeneration<D>>,
 }
 
 impl<D: CompletionDriver> BrokerCore<D> {
@@ -460,12 +495,108 @@ impl<D: CompletionDriver> BrokerCore<D> {
         Self {
             driver,
             context,
+            session: Arc::new(()),
             state: GpuOwnerState::Active,
             budget: NativeGpuBudget::new(context),
             next_transaction: 1,
             next_submission: 1,
             frames: Vec::new(),
+            retained_generations: Vec::new(),
         }
+    }
+
+    fn is_pristine(&self) -> bool {
+        self.state == GpuOwnerState::Active
+            && self.next_transaction == 1
+            && self.next_submission == 1
+            && self.frames.is_empty()
+            && self.retained_generations.is_empty()
+            && self.budget.is_pristine()
+    }
+
+    fn can_release(&self) -> bool {
+        let budget = self.budget.snapshot();
+        self.frames.is_empty()
+            && self.retained_generations.is_empty()
+            && budget.allocation_count == 0
+            && budget.reservation_count == 0
+    }
+
+    /// Adopt only the device/driver from a fresh factory bootstrap. The empty
+    /// bootstrap ledger is discarded; the original session ledger never moves
+    /// or resets. Every fallible check precedes the ownership transfer.
+    fn rearm_with_replacement(&mut self, replacement: Self) -> Result<(), (NativeGpuFault, Self)> {
+        let valid = (|| {
+            if !replacement.is_pristine() {
+                return Err(self.fault(
+                    None,
+                    GpuPhase::Retirement,
+                    NativeGpuFaultKind::StateMismatch,
+                    "replacement device already owns work, quotes or capacity",
+                ));
+            }
+            match self.state {
+                GpuOwnerState::Active => {
+                    return Err(self.fault(
+                        None,
+                        GpuPhase::Retirement,
+                        NativeGpuFaultKind::StateMismatch,
+                        "stop or retire the old generation before re-arm",
+                    ));
+                }
+                GpuOwnerState::Retiring | GpuOwnerState::Reaped if !self.frames.is_empty() => {
+                    return Err(self.fault(
+                        None,
+                        GpuPhase::Retirement,
+                        NativeGpuFaultKind::StateMismatch,
+                        "healthy old submissions and scopes must drain before re-arm",
+                    ));
+                }
+                _ => {}
+            }
+            let retain = !self.frames.is_empty() || self.budget.retains_generation(self.context);
+            if retain {
+                if self.retained_generations.len() >= MAX_RETAINED_DEVICE_GENERATIONS {
+                    return Err(self.fault(
+                        None,
+                        GpuPhase::Retirement,
+                        NativeGpuFaultKind::StateMismatch,
+                        "retained device generation limit reached; session owners remain held",
+                    ));
+                }
+                self.retained_generations.try_reserve(1).map_err(|error| {
+                    self.fault(
+                        None,
+                        GpuPhase::Retirement,
+                        NativeGpuFaultKind::OutOfMemory,
+                        format!("cannot retain old device generation: {error}"),
+                    )
+                })?;
+            }
+            self.budget.rearm_generation(replacement.context)?;
+            Ok(retain)
+        })();
+        let retain = match valid {
+            Ok(retain) => retain,
+            Err(fault) => return Err((fault, replacement)),
+        };
+        let previous = std::mem::replace(&mut self.driver, replacement.driver);
+        let frames = std::mem::take(&mut self.frames);
+        for frame in &frames {
+            frame.marker.store(CANCELLED_TOKEN, Ordering::Release);
+        }
+        if retain {
+            self.retained_generations.push(RetainedGeneration {
+                context: self.context,
+                _driver: previous,
+                frames,
+            });
+        }
+        self.context = replacement.context;
+        self.state = GpuOwnerState::Active;
+        self.next_transaction = 1;
+        self.next_submission = 1;
+        Ok(())
     }
 
     fn fault(
@@ -536,7 +667,11 @@ impl<D: CompletionDriver> BrokerCore<D> {
             id,
             frame,
             stage: FrameRecordStage::Recording,
-            marker: Arc::new(AtomicU8::new(ACTIVE_TOKEN)),
+            marker: Arc::new(TransactionMarker {
+                session: Arc::clone(&self.session),
+                id,
+                state: AtomicU8::new(ACTIVE_TOKEN),
+            }),
             reservation: Some(reservation),
             resources: Vec::new(),
             allocations: Vec::new(),
@@ -777,6 +912,9 @@ impl<D: CompletionDriver> BrokerCore<D> {
                 self.budget.release_reaped(receipt)?;
             }
         }
+        self.retained_generations.retain(|generation| {
+            !generation.frames.is_empty() || self.budget.retains_generation(generation.context)
+        });
         Ok(())
     }
 
@@ -794,7 +932,6 @@ impl<D: CompletionDriver> BrokerCore<D> {
         if let Some(reservation) = frame.reservation.take() {
             self.budget.cancel_reservation_tree(reservation)?;
         }
-        frame.marker.store(TERMINAL_TOKEN, Ordering::Release);
         let results = frame
             .phases
             .into_iter()
@@ -819,6 +956,7 @@ impl<D: CompletionDriver> BrokerCore<D> {
         // completed, including phases which read an earlier candidate.
         drop(frame.resources);
         self.reap()?;
+        frame.marker.store(TERMINAL_TOKEN, Ordering::Release);
         Ok(ResolvedGpuTransaction {
             id: frame.id,
             phases: results,
@@ -826,6 +964,18 @@ impl<D: CompletionDriver> BrokerCore<D> {
     }
 
     fn retire(&mut self, id: RetirementId) -> Result<(), NativeGpuFault> {
+        if let Some(frame) = self
+            .retained_generations
+            .iter()
+            .flat_map(|generation| &generation.frames)
+            .find(|frame| frame.id == id)
+        {
+            // Re-arm already froze and quarantined this exact record. A late
+            // cancellation transfers no charge, polls no old driver and cannot
+            // expire a current-generation quote by changing the ledger revision.
+            frame.marker.store(CANCELLED_TOKEN, Ordering::Release);
+            return Ok(());
+        }
         let index = self.index(id)?;
         self.frames[index]
             .marker
@@ -834,6 +984,37 @@ impl<D: CompletionDriver> BrokerCore<D> {
             self.budget.mark_retired(*allocation)?;
         }
         Ok(())
+    }
+
+    fn retire_pending(&mut self, pending: &PendingGpuTransaction) -> Result<(), NativeGpuFault> {
+        let own_marker =
+            Arc::ptr_eq(&self.session, &pending.marker.session) && pending.id == pending.marker.id;
+        if own_marker {
+            let registered = self
+                .frames
+                .iter()
+                .chain(
+                    self.retained_generations
+                        .iter()
+                        .flat_map(|generation| &generation.frames),
+                )
+                .any(|frame| frame.id == pending.id && Arc::ptr_eq(&frame.marker, &pending.marker));
+            if registered {
+                return self.retire(pending.id);
+            }
+            // Healthy Stop may have drained this record while its affine token
+            // was still outside the owner. The authentic marker proves only
+            // that record's finished cleanup, never this generation's Reaped.
+            if pending.marker.load(Ordering::Acquire) == TERMINAL_TOKEN {
+                return Ok(());
+            }
+        }
+        Err(self.fault(
+            None,
+            GpuPhase::Retirement,
+            NativeGpuFaultKind::IdentityMismatch,
+            "pending token has no matching session retirement record",
+        ))
     }
 
     fn stop(&mut self) -> StopRetirement {
@@ -870,6 +1051,7 @@ impl<D: CompletionDriver> BrokerCore<D> {
         let live = self.budget.live_allocation_ids().count();
         let snapshot = self.budget.snapshot();
         if self.frames.is_empty()
+            && self.retained_generations.is_empty()
             && live == 0
             && snapshot.reservation_count == 0
             && self.state == GpuOwnerState::Retiring
@@ -878,16 +1060,58 @@ impl<D: CompletionDriver> BrokerCore<D> {
             Ok(RetirementProgress::Reaped)
         } else {
             Ok(RetirementProgress::Pending {
-                transactions: self.frames.len(),
+                transactions: self.frames.len()
+                    + self
+                        .retained_generations
+                        .iter()
+                        .map(|generation| generation.frames.len())
+                        .sum::<usize>(),
                 allocations: live,
             })
         }
     }
 }
 
+/// An accidental owner drop is not completion evidence. Normal lifecycle code
+/// keeps this owner and polls retirement; the last-resort abandonment path keeps
+/// the complete driver, ledger and registry until process teardown, without a
+/// blocking destructor, detached cleanup or an invented successful Stop ACK.
+struct OwnedBrokerCore<D: CompletionDriver>(Option<BrokerCore<D>>);
+
+impl<D: CompletionDriver> OwnedBrokerCore<D> {
+    fn new(core: BrokerCore<D>) -> Self {
+        Self(Some(core))
+    }
+}
+
+impl<D: CompletionDriver> Deref for OwnedBrokerCore<D> {
+    type Target = BrokerCore<D>;
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().expect("native GPU core is owned")
+    }
+}
+
+impl<D: CompletionDriver> DerefMut for OwnedBrokerCore<D> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut().expect("native GPU core is owned")
+    }
+}
+
+impl<D: CompletionDriver> Drop for OwnedBrokerCore<D> {
+    fn drop(&mut self) {
+        if let Some(mut core) = self.0.take() {
+            if !core.can_release() {
+                core.stop();
+                core.budget.quarantine();
+                std::mem::forget(core);
+            }
+        }
+    }
+}
+
 pub(crate) struct NativeGpuOwner {
     context: Arc<NativeGpuContext>,
-    core: BrokerCore<RealGpuDriver>,
+    core: OwnedBrokerCore<RealGpuDriver>,
 }
 
 pub(crate) struct NativeGpuFrameTxn<'a> {
@@ -921,9 +1145,11 @@ impl PendingPhaseReceipt {
     pub(crate) fn submission(&self) -> GpuSubmissionId {
         self.submission
     }
+    #[cfg(test)]
     pub(crate) fn frame(&self) -> NativeFrameId {
         self.frame
     }
+    #[cfg(test)]
     pub(crate) fn phase(&self) -> GpuPhase {
         self.phase
     }
@@ -931,7 +1157,7 @@ impl PendingPhaseReceipt {
 
 pub(crate) struct PendingGpuTransaction {
     id: RetirementId,
-    marker: Arc<AtomicU8>,
+    marker: Arc<TransactionMarker>,
     terminal: bool,
 }
 
@@ -1047,6 +1273,52 @@ impl ResolvedGpuPhase {
 }
 
 impl NativeGpuOwner {
+    /// Keep this output session's ledger and retained generations while adopting
+    /// a newly-created, unused device from the same factory and output owner.
+    /// I must call this before constructing replacement runtimes/presenters.
+    /// Rejection returns the complete replacement owner; no capacity is refunded
+    /// and no old result/history/clock is rerun or declared recovered here.
+    pub(crate) fn rearm_with_replacement(
+        &mut self,
+        mut replacement: Self,
+    ) -> Result<(), (NativeGpuFault, Self)> {
+        if self.context.lost.load(Ordering::Acquire)
+            || self.context.uncaptured.load(Ordering::Acquire)
+        {
+            // Record real callback evidence even if no completion poll ran.
+            let _ = self.check_device();
+        }
+        let foreign = !Arc::ptr_eq(self.context.instance(), replacement.context.instance())
+            || self.context.id().owner_id != replacement.context.id().owner_id;
+        let exposed = Arc::strong_count(&replacement.context) != 2;
+        let unhealthy = replacement.context.lost.load(Ordering::Acquire)
+            || replacement.context.uncaptured.load(Ordering::Acquire);
+        if foreign || exposed || unhealthy {
+            let fault = self.core.fault(
+                None,
+                GpuPhase::Retirement,
+                if foreign {
+                    NativeGpuFaultKind::IdentityMismatch
+                } else {
+                    NativeGpuFaultKind::StateMismatch
+                },
+                "replacement must be healthy, private and from this output's factory",
+            );
+            return Err((fault, replacement));
+        }
+        let next = replacement
+            .core
+            .0
+            .take()
+            .expect("replacement core is owned");
+        if let Err((fault, next)) = self.core.rearm_with_replacement(next) {
+            replacement.core.0 = Some(next);
+            return Err((fault, replacement));
+        }
+        self.context = Arc::clone(&replacement.context);
+        Ok(())
+    }
+
     pub(crate) fn context(&self) -> &Arc<NativeGpuContext> {
         &self.context
     }
@@ -1072,6 +1344,7 @@ impl NativeGpuOwner {
     ) -> Result<FrameReservation, NativeGpuDecline> {
         self.core.budget.reserve(quote)
     }
+    #[cfg(test)]
     pub(crate) fn budget_snapshot(&self) -> NativeGpuBudgetSnapshot {
         self.core.budget.snapshot()
     }
@@ -1177,23 +1450,21 @@ impl NativeGpuOwner {
         kind: ChargeKind,
         capacity: u64,
     ) -> Result<AllocationCharge, NativeGpuFault> {
-        let index = self.core.index(transaction)?;
-        let id = self.core.budget.next_allocation_id()?;
-        let reservation = self.core.frames[index]
+        let core = &mut *self.core;
+        let index = core.index(transaction)?;
+        let id = core.budget.next_allocation_id()?;
+        let reservation = core.frames[index]
             .reservation
             .as_mut()
             .expect("active reservation");
-        let charge = self
-            .core
+        let charge = core
             .budget
             .bind_allocation(reservation, id, kind, capacity)?;
         // Bind precedes creation. Even a creation error keeps the bound charge
         // alive until the phase scopes and issued work are safely completed.
-        self.core.frames[index]
-            .resources
-            .push(Arc::new(charge.pin()));
-        self.core.frames[index].allocations.push(id);
-        self.core.frames[index].owned_allocations.push(id);
+        core.frames[index].resources.push(Arc::new(charge.pin()));
+        core.frames[index].allocations.push(id);
+        core.frames[index].owned_allocations.push(id);
         Ok(charge)
     }
 
@@ -1204,21 +1475,20 @@ impl NativeGpuOwner {
         allocations: &[GpuAllocationId],
     ) -> Result<(), NativeGpuFault> {
         let index = self.core.index(transaction)?;
+        // Validate the complete list before publishing any alias into the
+        // transaction. Old CPU records use the same bound-ledger proof as the
+        // quote and reserved-plan checks; old GPU handles remain forbidden.
         for id in allocations {
-            if id.context != self.core.context
-                || !self
-                    .core
-                    .budget
-                    .live_allocation_ids()
-                    .any(|known| known == *id)
-            {
+            if !self.core.budget.can_retain_allocation(*id) {
                 return Err(self.core.fault(
                     Some(self.core.frames[index].frame),
                     GpuPhase::Initialize,
                     NativeGpuFaultKind::IdentityMismatch,
-                    "resource from another device generation",
+                    "resource has no live compatible allocation in this session",
                 ));
             }
+        }
+        for id in allocations {
             if !self.core.frames[index].allocations.contains(id) {
                 self.core.frames[index].allocations.push(*id);
             }
@@ -1276,9 +1546,8 @@ impl NativeGpuOwner {
                 "phase is not the current open scope",
             ));
         }
-        let submission = self
-            .core
-            .submission_id(self.core.frames[index].frame, encoded.phase)?;
+        let frame = self.core.frames[index].frame;
+        let submission = self.core.submission_id(frame, encoded.phase)?;
         self.context.queue.submit(encoded.commands);
         let completed = Arc::new(AtomicBool::new(false));
         let callback = Arc::clone(&completed);
@@ -1364,7 +1633,7 @@ impl NativeGpuOwner {
         &mut self,
         mut pending: PendingGpuTransaction,
     ) -> RetiringGpuTransaction {
-        if self.core.retire(pending.id).is_err() {
+        if self.core.retire_pending(&pending).is_err() {
             self.core.state = GpuOwnerState::PoisonedRetained;
             self.core.budget.quarantine();
         }
@@ -1374,6 +1643,12 @@ impl NativeGpuOwner {
 
     pub(crate) fn begin_stop(&mut self) -> StopRetirement {
         self.core.stop()
+    }
+    /// A revoked preparation may resume on the next tick only when no logical
+    /// frame remains. A prior physical-present retirement is independently
+    /// owned by P and does not block the next logical output.
+    pub(crate) fn has_unfinished_logical_frame(&self) -> bool {
+        self.core.has_logical_frame()
     }
     pub(crate) fn poll_retirement(&mut self) -> Result<RetirementProgress, NativeGpuFault> {
         self.core.retirement()
@@ -1512,12 +1787,13 @@ impl NativeGpuFrameTxn<'_> {
         &mut self,
         plan: &NativeAllocationPlan,
     ) -> Result<FrameReservation, NativeGpuFault> {
-        let index = self.owner.core.index(self.id)?;
-        let reservation = self.owner.core.frames[index]
+        let core = &mut *self.owner.core;
+        let index = core.index(self.id)?;
+        let reservation = core.frames[index]
             .reservation
             .as_mut()
             .expect("active reservation");
-        self.owner.core.budget.split_reservation(reservation, plan)
+        core.budget.split_reservation(reservation, plan)
     }
     pub(crate) fn begin_phase(
         &mut self,
@@ -1582,6 +1858,7 @@ impl Drop for NativeGpuFrameTxn<'_> {
     }
 }
 
+#[cfg(test)]
 impl GpuCompletionPort for NativeGpuOwner {
     type Pending = PendingGpuTransaction;
     type Completed = ResolvedGpuTransaction;
@@ -1667,3 +1944,7 @@ impl Drop for GpuPhaseEncoder<'_> {
 #[cfg(test)]
 #[path = "native_gpu_context_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "native_gpu_context_cpu_rearm_tests.rs"]
+mod cpu_rearm_tests;

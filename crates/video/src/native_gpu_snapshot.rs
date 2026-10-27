@@ -69,6 +69,7 @@ pub(crate) struct NativeSnapshotGpu {
 }
 
 impl NativeSnapshotGpu {
+    #[cfg(test)]
     pub(crate) fn premapping(&self) -> &NativeChargedBuffer {
         &self.premapping
     }
@@ -507,6 +508,7 @@ impl<R, M> PendingPremappingSnapshot<R, M> {
 }
 
 impl<R> CompletedPremappingSnapshot<R> {
+    #[cfg(test)]
     pub(crate) fn pixels(&self) -> &VideoFrame {
         &self.pixels
     }

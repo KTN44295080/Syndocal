@@ -71,6 +71,7 @@ pub(crate) struct NativeCompositionPlan {
     pub context: GpuContextId,
     pub frame: NativeFrameId,
     pub extent: (u32, u32),
+    #[cfg(test)]
     pub clear_color: [u8; 4],
     pub layers_bottom_first: Vec<CompositionLayerEncoding>,
     pub allocations: CompositionAllocationPlan,
@@ -211,6 +212,7 @@ impl NativeCompositionPlan {
             context,
             frame,
             extent,
+            #[cfg(test)]
             clear_color,
             layers_bottom_first: layers,
             allocations: CompositionAllocationPlan {

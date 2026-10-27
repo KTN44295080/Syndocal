@@ -94,7 +94,6 @@ impl StackWorkspace {
         Self::create(device, width, height, true)
     }
 
-    #[cfg(test)]
     pub(super) fn resident(device: &wgpu::Device, width: u32, height: u32) -> Self {
         Self::create(device, width, height, false)
     }

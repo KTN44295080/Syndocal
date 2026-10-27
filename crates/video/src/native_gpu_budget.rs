@@ -161,12 +161,15 @@ impl BudgetQuote {
     pub(crate) fn context(&self) -> GpuContextId {
         self.context
     }
+    #[cfg(test)]
     pub(crate) fn frame(&self) -> NativeFrameId {
         self.plan.frame
     }
+    #[cfg(test)]
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
+    #[cfg(test)]
     pub(crate) fn matches_plan(&self, plan: &NativeAllocationPlan) -> bool {
         Arc::ptr_eq(&self.plan.identity, &plan.identity) && self.plan == *plan
     }
@@ -203,6 +206,7 @@ impl FrameReservation {
     pub(crate) fn frame(&self) -> NativeFrameId {
         self.frame
     }
+    #[cfg(test)]
     pub(crate) fn capacity_bytes(&self) -> u64 {
         self.remaining
     }
@@ -217,12 +221,30 @@ struct AllocationLiveness {
 
 /// Keep this inside the actual GPU/CPU allocation owner, never beside a raw
 /// handle whose lifetime may outlive it. Aliases use pins of this same charge.
-#[derive(Debug)]
 pub(crate) struct AllocationCharge {
     live: Arc<AllocationLiveness>,
+    retained_owner: Option<Arc<dyn std::any::Any + Send + Sync>>,
+}
+
+impl std::fmt::Debug for AllocationCharge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AllocationCharge")
+            .field("live", &self.live)
+            .field("retains_owner", &self.retained_owner.is_some())
+            .finish()
+    }
 }
 
 impl AllocationCharge {
+    /// Alias the same physical allocation while retaining the complete owner
+    /// whose pixels this alias protects. No ledger entry or capacity is minted.
+    pub(crate) fn alias_retaining(&self, owner: Arc<dyn std::any::Any + Send + Sync>) -> Self {
+        Self {
+            live: Arc::clone(&self.live),
+            retained_owner: Some(owner),
+        }
+    }
+
     pub(crate) fn id(&self) -> GpuAllocationId {
         self.live.id
     }
@@ -301,6 +323,7 @@ impl NativeGpuBudgetSnapshot {
     pub(crate) fn managed_bytes(&self) -> u64 {
         self.allocated_bytes + self.reserved_bytes
     }
+    #[cfg(test)]
     pub(crate) fn for_kind(&self, kind: ChargeKind) -> &BudgetKindSnapshot {
         &self.by_kind[kind as usize]
     }
@@ -339,15 +362,67 @@ impl NativeGpuBudget {
         }
     }
 
-    fn validate_plan(&self, plan: &NativeAllocationPlan) -> Result<(), NativeGpuDecline> {
-        if self.quarantined
-            || plan.existing.iter().any(|id| {
-                id.context != self.context
-                    || self.allocations.get(id).is_none_or(|a| {
-                        a.reap_issued || a.retired || a.quarantined || a.live.strong_count() == 0
-                    })
+    /// Only an unused factory bootstrap may be adopted by an existing session.
+    /// Outstanding quotes also hold this private identity and forbid adoption.
+    pub(crate) fn is_pristine(&self) -> bool {
+        Arc::strong_count(&self.identity) == 1
+            && self.revision == 0
+            && self.allocation_sequence == 0
+            && self.reservation_sequence == 0
+            && self.unbound_ids.is_empty()
+            && self.allocations.is_empty()
+            && self.reservations.is_empty()
+            && self.completed.is_empty()
+            && self.high_water == 0
+            && !self.quarantined
+    }
+
+    pub(crate) fn retains_generation(&self, context: GpuContextId) -> bool {
+        self.allocations.keys().any(|id| id.context == context)
+            || self
+                .reservations
+                .values()
+                .any(|record| record.context == context)
+    }
+
+    /// Only immutable CPU allocations can cross a device generation. Looking
+    /// up the bound record in this ledger proves its actual kind and liveness;
+    /// numeric owner/generation equality alone is never sufficient authority.
+    /// Before changing submission contexts, the previous device's final use
+    /// must already be complete, so one last-use receipt remains sufficient.
+    pub(crate) fn can_retain_allocation(&self, id: GpuAllocationId) -> bool {
+        self.allocations.get(&id).is_some_and(|record| {
+            !record.reap_issued
+                && !record.quarantined
+                && record.live.strong_count() != 0
+                && (id.context == self.context
+                    || (id.context.owner_id == self.context.owner_id
+                        && id.context.device_generation < self.context.device_generation
+                        && matches!(
+                            record.kind,
+                            ChargeKind::ActiveCpuInput
+                                | ChargeKind::CpuSnapshot
+                                | ChargeKind::CpuLastValid
+                        )
+                        && record.last_use.is_none_or(|last| {
+                            last.context == self.context
+                                || self.completed.get(&last.context).copied().unwrap_or(0)
+                                    >= last.sequence
+                        })))
+        })
+    }
+
+    fn can_plan_alias(&self, id: GpuAllocationId) -> bool {
+        self.can_retain_allocation(id)
+            && self.allocations.get(&id).is_some_and(|record| {
+                // Re-arm retires every old record. A completed CPU owner stays
+                // charged as retired while its pixels are used by the new GPU.
+                id.context != self.context || !record.retired
             })
-        {
+    }
+
+    fn validate_plan(&self, plan: &NativeAllocationPlan) -> Result<(), NativeGpuDecline> {
+        if self.quarantined || plan.existing.iter().any(|id| !self.can_plan_alias(*id)) {
             return Err(NativeGpuDecline::QuoteExpired);
         }
         let live = self.snapshot().managed_bytes();
@@ -506,16 +581,10 @@ impl NativeGpuBudget {
             self.reservations
                 .values()
                 .any(|record| record.root == reservation.id && record.entries.contains(entry))
-        }) && plan.existing.iter().all(|id| {
-            root.existing.contains(id)
-                && id.context == self.context
-                && self.allocations.get(id).is_some_and(|allocation| {
-                    !allocation.retired
-                        && !allocation.quarantined
-                        && !allocation.reap_issued
-                        && allocation.live.strong_count() > 0
-                })
-        });
+        }) && plan
+            .existing
+            .iter()
+            .all(|id| root.existing.contains(id) && self.can_plan_alias(*id));
         if !covered {
             return Err(self.fault(
                 Some(plan.frame),
@@ -690,7 +759,10 @@ impl NativeGpuBudget {
             },
         );
         self.revision = revision;
-        Ok(AllocationCharge { live })
+        Ok(AllocationCharge {
+            live,
+            retained_owner: None,
+        })
     }
 
     /// Transfer an exact subset, once, without granting additional capacity.
@@ -768,6 +840,7 @@ impl NativeGpuBudget {
 
     /// Only unused reservations are refunded. Bound or pending allocations are
     /// unaffected; a fault path must separately retire their actual owners.
+    #[cfg(test)]
     pub(crate) fn cancel_reservation(
         &mut self,
         reservation: FrameReservation,
@@ -828,9 +901,9 @@ impl NativeGpuBudget {
         id: GpuAllocationId,
         submission: GpuSubmissionId,
     ) -> Result<(), NativeGpuFault> {
-        if submission.context != id.context
-            || id.context != self.context
+        if submission.context != self.context
             || submission.sequence == 0
+            || (id.context != self.context && !self.can_retain_allocation(id))
         {
             return Err(self.fault(
                 None,
@@ -842,8 +915,9 @@ impl NativeGpuBudget {
             a.reap_issued
                 || a.quarantined
                 || a.live.strong_count() == 0
-                || a.last_use
-                    .is_some_and(|last| last.sequence > submission.sequence)
+                || a.last_use.is_some_and(|last| {
+                    last.context == submission.context && last.sequence > submission.sequence
+                })
         });
         if invalid {
             return Err(self.fault(
@@ -902,13 +976,21 @@ impl NativeGpuBudget {
     /// unproved cleanup. A future device generation cannot reset these bytes.
     pub(crate) fn quarantine(&mut self) {
         self.quarantined = true;
-        for record in self.allocations.values_mut() {
-            record.quarantined = true;
+        for (id, record) in &mut self.allocations {
+            if id.context == self.context
+                || record
+                    .last_use
+                    .is_some_and(|last| last.context == self.context)
+            {
+                record.quarantined = true;
+            }
         }
     }
 
-    /// Keep old-generation charges while the same session creates a new device.
-    /// This is unavailable during unproved cleanup and does not reset counters.
+    /// Legacy ledger-only oracle for a strict, healthy successor transition.
+    /// Production re-arm must transfer the driver/registry through the owner and
+    /// uses rearm_generation instead of advancing a ledger in isolation.
+    #[cfg(test)]
     pub(crate) fn advance_generation(&mut self, next: GpuContextId) -> Result<(), NativeGpuFault> {
         if self.quarantined || !self.reservations.is_empty() {
             return Err(self.fault(
@@ -941,6 +1023,59 @@ impl NativeGpuBudget {
         Ok(())
     }
 
+    /// Broker-only cold transition after it has retained the old driver and
+    /// registry. This keeps the same private ledger identity, every outstanding
+    /// reservation, all charges and monotonically increasing allocation IDs.
+    /// The new generation may spend only the session's remaining capacity.
+    /// Quarantine belongs to the old records; this does not prove their cleanup.
+    /// GPU objects remain unusable. Completed, unquarantined CPU owners may be
+    /// retained by a later device through the live-ledger alias checks above.
+    pub(crate) fn rearm_generation(&mut self, next: GpuContextId) -> Result<(), NativeGpuFault> {
+        let minimum = self
+            .context
+            .device_generation
+            .checked_add(1)
+            .ok_or_else(|| {
+                self.fault(
+                    None,
+                    NativeGpuFaultKind::SequenceExhausted,
+                    "device generation exhausted",
+                )
+            })?;
+        if next.owner_id != self.context.owner_id || next.device_generation < minimum {
+            return Err(self.fault(
+                None,
+                NativeGpuFaultKind::IdentityMismatch,
+                "replacement device is not a later generation of this output session",
+            ));
+        }
+        let revision = self.next_revision(None)?;
+        for (id, record) in &mut self.allocations {
+            if id.context == self.context {
+                record.retired = true;
+            }
+        }
+        self.context = next;
+        self.revision = revision;
+        self.quarantined = false;
+        self.unbound_ids.clear();
+        self.prune_completed_contexts();
+        Ok(())
+    }
+
+    fn prune_completed_contexts(&mut self) {
+        // An old CPU allocation may have its last use on an intermediate
+        // generation. Keep that exact completion proof across another re-arm
+        // until the allocation is reaped or records a later completed use.
+        self.completed.retain(|context, _| {
+            *context == self.context
+                || self.allocations.iter().any(|(id, record)| {
+                    id.context == *context
+                        || record.last_use.is_some_and(|last| last.context == *context)
+                })
+        });
+    }
+
     pub(crate) fn live_allocation_ids(&self) -> impl Iterator<Item = GpuAllocationId> + '_ {
         self.allocations.keys().copied()
     }
@@ -959,8 +1094,7 @@ impl NativeGpuBudget {
         let gpu_complete = record.last_use.is_none_or(|last| {
             self.completed.get(&last.context).copied().unwrap_or(0) >= last.sequence
         });
-        if self.quarantined
-            || record.quarantined
+        if record.quarantined
             || record.reap_issued
             || record.live.strong_count() != 0
             || !gpu_complete
@@ -989,7 +1123,6 @@ impl NativeGpuBudget {
                     && r.capacity == receipt.capacity
                     && r.live.strong_count() == 0
                     && !r.quarantined
-                    && !self.quarantined
             })
         {
             return Err(self.fault(
@@ -1000,6 +1133,7 @@ impl NativeGpuBudget {
         }
         let revision = self.next_revision(None)?;
         self.allocations.remove(&receipt.id);
+        self.prune_completed_contexts();
         self.revision = revision;
         Ok(())
     }
@@ -1104,3 +1238,7 @@ pub(crate) fn checked_upload_staging_bytes(
 #[cfg(test)]
 #[path = "native_gpu_budget_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "native_gpu_budget_cpu_rearm_tests.rs"]
+mod cpu_rearm_tests;

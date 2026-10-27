@@ -8,7 +8,12 @@ use crate::isf_runtime::StackBatch;
 use crate::native_gpu_contract::{GpuContextId, LayerResultIdentity, NativeFrameId};
 use crate::native_gpu_history::adapter::{NativeGpuHistory, NativeGpuValidatedEntries};
 use crate::native_gpu_history::{
-    HistoryCommit, HistoryError, HistoryHostBudget, HistoryScope, RetiredResident,
+    HistoryCommit, HistoryError, HistoryHostBudget, HistoryMaterializationRequest, HistoryScope,
+    RetiredResident,
+};
+use crate::native_gpu_output::cpu::history::{
+    import_canonical_cpu_history_with_binding, CanonicalCpuHistoryRejection,
+    CanonicalCpuHistorySource, CpuHistoryEntrySequence,
 };
 use crate::native_gpu_result::{
     CanonicalCpuLayerOutcome, GpuLayerLease, IsfValidatedReceipt, ValidatedLayerResult,
@@ -35,6 +40,14 @@ pub(crate) struct NativeOutputHistoryPlan {
     context: GpuContextId,
     frame: NativeFrameId,
     inputs: Vec<PlannedInput>,
+}
+
+/// Exact prospective selection for each incoming chain, before any execution.
+/// Cold replay and CPU imports remain explicit pre-execution CPU declines.
+pub(crate) enum NativeHistorySelected<'a> {
+    Incoming(LayerResultIdentity),
+    Resident(&'a GpuLayerLease),
+    NeedsMaterialization,
 }
 
 impl NativeOutputHistoryPlan {
@@ -116,10 +129,22 @@ impl NativeOutputHistoryFrame {
 }
 
 impl NativeOutputHistorySession {
+    #[cfg(test)]
     pub(crate) fn new(
         context: GpuContextId,
         scopes: Vec<HistoryScope>,
         extent: (u32, u32),
+    ) -> Result<Self, HistoryError> {
+        let limit = HistoryHostBudget::planning_limit(scopes.len(), extent)
+            .ok_or(HistoryError::HostBudgetExceeded)?;
+        Self::with_host_budget(context, scopes, extent, HistoryHostBudget::new(limit))
+    }
+
+    pub(crate) fn with_host_budget(
+        context: GpuContextId,
+        scopes: Vec<HistoryScope>,
+        extent: (u32, u32),
+        host: HistoryHostBudget,
     ) -> Result<Self, HistoryError> {
         let first = scopes.first().ok_or(HistoryError::InvalidPolicy)?;
         if extent.0 == 0 || extent.1 == 0 {
@@ -136,9 +161,6 @@ impl NativeOutputHistorySession {
                 return Err(HistoryError::IdentityMismatch);
             }
         }
-        let limit = HistoryHostBudget::planning_limit(scopes.len(), extent)
-            .ok_or(HistoryError::HostBudgetExceeded)?;
-        let host = HistoryHostBudget::new(limit);
         let histories = scopes
             .into_iter()
             .map(|scope| NativeGpuHistory::new(context, scope, host.clone()))
@@ -159,6 +181,29 @@ impl NativeOutputHistorySession {
         self.histories.get(index)
     }
 
+    pub(crate) fn import_canonical_queue(
+        &mut self,
+        index: usize,
+        sequence: &mut CpuHistoryEntrySequence,
+        frames: Vec<CanonicalCpuHistorySource>,
+    ) -> Result<Vec<crate::native_gpu_contract::HistoryEntryId>, CanonicalCpuHistoryRejection> {
+        let Some(current) = self.histories.get(index) else {
+            return Err(CanonicalCpuHistoryRejection {
+                error: HistoryError::IdentityMismatch,
+                frames,
+            });
+        };
+        let (history, binding) = import_canonical_cpu_history_with_binding(
+            self.context,
+            current.scope(),
+            &self.host,
+            sequence,
+            frames,
+        )?;
+        self.histories[index] = history;
+        Ok(binding)
+    }
+
     pub(crate) fn into_histories(self) -> Vec<NativeGpuHistory> {
         self.histories
     }
@@ -171,17 +216,96 @@ impl NativeOutputHistorySession {
         self.accepts_plan(&frame.plan)
     }
 
+    pub(crate) fn selected_layers<'a>(
+        &'a self,
+        plan: &NativeOutputHistoryPlan,
+    ) -> Result<Vec<NativeHistorySelected<'a>>, HistoryError> {
+        if !self.accepts_plan(plan) {
+            return Err(HistoryError::IdentityMismatch);
+        }
+        let mut selected = Vec::with_capacity(plan.inputs.len());
+        for input in &plan.inputs {
+            let history_plan = input.plan.as_ref().ok_or(HistoryError::StateMismatch)?;
+            let selection =
+                self.histories[input.history].select_materialization_requests(history_plan)?;
+            if selection.layer_id != input.identity.layer_id {
+                return Err(HistoryError::IdentityMismatch);
+            }
+            selected.push(match selection.selected {
+                Some(HistoryMaterializationRequest::Incoming { entry })
+                    if entry == input.identity.entry
+                        && selection.selected_identity.is_none()
+                        && !selection.cold_materialization_required =>
+                {
+                    NativeHistorySelected::Incoming(input.identity)
+                }
+                Some(HistoryMaterializationRequest::Resident(resident)) => {
+                    if selection.cold_materialization_required
+                        || selection
+                            .selected_identity
+                            .is_none_or(|identity| identity.entry != resident.identity().entry)
+                    {
+                        return Err(HistoryError::IdentityMismatch);
+                    }
+                    NativeHistorySelected::Resident(resident)
+                }
+                Some(HistoryMaterializationRequest::Incoming { .. }) => {
+                    return Err(HistoryError::IdentityMismatch)
+                }
+                Some(HistoryMaterializationRequest::Replay { entry, frozen }) => {
+                    if !selection.cold_materialization_required
+                        || entry != frozen.identity().entry
+                        || selection
+                            .selected_identity
+                            .is_none_or(|identity| identity.entry != entry)
+                    {
+                        return Err(HistoryError::IdentityMismatch);
+                    }
+                    NativeHistorySelected::NeedsMaterialization
+                }
+                Some(HistoryMaterializationRequest::UploadCpuPostFx { entry, frame }) => {
+                    if !selection.cold_materialization_required
+                        || selection.selected_identity.is_none_or(|identity| {
+                            identity.entry != entry
+                                || identity.width != frame.width
+                                || identity.height != frame.height
+                                || identity.pts_ms != frame.pts_ms
+                                || identity.duration_ms != frame.duration_ms
+                                || identity.format != frame.format
+                        })
+                    {
+                        return Err(HistoryError::IdentityMismatch);
+                    }
+                    NativeHistorySelected::NeedsMaterialization
+                }
+                None => NativeHistorySelected::NeedsMaterialization,
+            });
+        }
+        Ok(selected)
+    }
+
     pub(crate) fn plan(
         &self,
         identities: &[LayerResultIdentity],
         target_ms: u64,
     ) -> Result<NativeOutputHistoryPlan, HistoryError> {
-        let frame = identities.first().ok_or(HistoryError::InvalidPolicy)?.frame;
         if identities.len() > 3 {
             return Err(HistoryError::InvalidPolicy);
         }
+        self.plan_with_targets(identities, &[target_ms; 3][..identities.len()])
+    }
+
+    pub(crate) fn plan_with_targets(
+        &self,
+        identities: &[LayerResultIdentity],
+        target_ms: &[u64],
+    ) -> Result<NativeOutputHistoryPlan, HistoryError> {
+        let frame = identities.first().ok_or(HistoryError::InvalidPolicy)?.frame;
+        if identities.len() > 3 || identities.len() != target_ms.len() {
+            return Err(HistoryError::InvalidPolicy);
+        }
         let mut inputs: Vec<PlannedInput> = Vec::with_capacity(identities.len());
-        for identity in identities {
+        for (identity, target_ms) in identities.iter().zip(target_ms) {
             let index = self
                 .histories
                 .iter()
@@ -209,7 +333,7 @@ impl NativeOutputHistorySession {
                     pts_ms: identity.pts_ms,
                     duration_ms: identity.duration_ms,
                 }],
-                target_ms,
+                *target_ms,
             )?;
             inputs.push(PlannedInput {
                 history: index,

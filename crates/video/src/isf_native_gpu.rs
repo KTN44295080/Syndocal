@@ -150,6 +150,7 @@ impl PreparedNativeInputs {
         Ok((jobs, clocks))
     }
 
+    #[cfg(test)]
     pub(crate) fn into_layers(self) -> StackBatch<Arc<PreparedNativeLayer>> {
         match self.work {
             PreparedNativeWork::Layers(jobs) => jobs,
@@ -159,6 +160,16 @@ impl PreparedNativeInputs {
 }
 pub(crate) struct PreparedNativeBatch {
     inputs: PreparedNativeInputs,
+}
+impl PreparedNativeBatch {
+    /// Read-only P selection preflight against the original frozen G inputs.
+    /// This neither reserves new clocks nor supplies execution/completion proof.
+    pub(crate) fn prospective_identities(
+        &self,
+        runtime: &IsfGpuRuntime,
+    ) -> Result<StackBatch<LayerResultIdentity>, NativeProspectiveIdentityError> {
+        self.inputs.prospective_identities(runtime)
+    }
 }
 pub(crate) enum NativeBatchAdmission {
     Accepted(PreparedNativeBatch),
@@ -481,14 +492,15 @@ impl IsfGpuRuntime {
             }
             candidates
         };
-        Ok(EncodedIsfBatch {
+        Ok(EncodedIsfBatch::from_encoding(
             candidates,
-            pending: PendingIsfReceipt::new(receipt),
+            PendingIsfReceipt::new(receipt),
             jobs,
             clocks,
             bindings,
-            inputs: managed_inputs,
-        })
+            managed_inputs,
+            failed,
+        ))
     }
 
     fn encode_resident_job(
@@ -816,6 +828,15 @@ fn validate_job(job: &PreparedNativeLayer, max_extent: u32) -> Result<(), Native
         }
         if stage.shader.passes.len() != 1 {
             return Err(unsupported(UnsupportedNativeFx::Multipass));
+        }
+        if let Some(reason) = (IsfStageInputs {
+            shader: &stage.shader,
+            controls: &stage.controls,
+            images: &[],
+        })
+        .native_target_restriction()
+        {
+            return Err(unsupported(reason));
         }
         if !(IsfStageInputs {
             shader: &stage.shader,
@@ -1347,6 +1368,7 @@ pub(crate) struct MaterializedGpuLayer {
     // I's C1 adapter can mint the common proof only from this affine completion.
     phase: ResolvedGpuPhase,
 }
+#[cfg(test)]
 impl MaterializedGpuLayer {
     pub(crate) fn descriptor(&self) -> MaterializationDescriptor {
         MaterializationDescriptor {
@@ -1387,13 +1409,16 @@ impl IsfGpuRuntime {
     ) -> Result<EncodedLayerCandidate, NativeGpuFault> {
         let frame = txn.frame();
         self.check_native_transaction(txn, frame)?;
-        if recipe.identity().context != txn.context().id() || recipe.identity().entry != entry {
+        if recipe.identity().context != txn.context().id()
+            || recipe.identity().entry != entry
+            || recipe.pinned_pipeline_count() != recipe.job().chain.stages.len()
+        {
             return Err(fault(
                 txn.context().id(),
                 frame,
                 GpuPhase::HistoricalReplay,
                 NativeGpuFaultKind::IdentityMismatch,
-                "historical replay entry/generation mismatch",
+                "historical replay entry/generation or frozen pipeline binding mismatch",
             ));
         }
         let transaction = txn.id();
@@ -1506,6 +1531,22 @@ impl IsfGpuRuntime {
             .map_err(materialization_fault)?;
         let replay = self.complete_historical_replay(candidate, phase, owner)?;
         check_cancel(cancel)?;
+        replay
+            .phase
+            .validation()
+            .map_err(|fault| materialization_fault(copy_fault(fault)))?;
+        if replay.phase.context() != owner.context().id()
+            || replay.phase.frame() != recipe.identity().frame
+            || replay.phase.phase() != GpuPhase::HistoricalReplay
+        {
+            return Err(materialization_fault(fault(
+                owner.context().id(),
+                frame,
+                GpuPhase::HistoricalReplay,
+                NativeGpuFaultKind::IdentityMismatch,
+                "CPU replay readback does not match its resolved replay phase",
+            )));
+        }
         self.materialize_validated_layer(entry, &replay.lease, owner, cancel)
     }
     pub(crate) fn materialize_validated_layer(
@@ -1571,6 +1612,9 @@ impl IsfGpuRuntime {
 }
 
 pub(crate) use cpu::{NativeCpuRenderFailure, PreparedNativeCpuInvocation};
+
+#[path = "isf_native_continuation.rs"]
+pub(crate) mod continuation;
 
 // The shared-context CPU bridge is a separate policy/lifecycle section. It
 // delegates every shader pass and stage-local decision to the canonical code.
@@ -1676,7 +1720,13 @@ mod cpu {
         fn new_bytes(&self) -> u64 {
             match self {
                 Self::Frame(frame) => frame.data.capacity() as u64,
-                Self::Existing(_) => 0,
+                Self::Existing(owner) => {
+                    if owner.charge.is_none() {
+                        owner.frame.data.capacity() as u64
+                    } else {
+                        0
+                    }
+                }
                 Self::Bytes(bytes) => bytes.len() as u64,
                 Self::Audio(_) => std::mem::size_of::<protocol::LiveAudioTextureFrame>() as u64,
             }
@@ -1741,7 +1791,8 @@ mod cpu {
                 if let Some(charge) = &prior.charge {
                     plan.add_existing(charge.id());
                 }
-            } else if input.new_bytes() != 0 {
+            }
+            if input.new_bytes() != 0 {
                 plan.add_new(ChargeKind::ActiveCpuInput, input.new_bytes())
                     .map_err(|reason| {
                         materialization_fault(fault(
@@ -1779,6 +1830,14 @@ mod cpu {
             };
             match input {
                 CpuInput::Existing(prior) => {
+                    let prior = match charge {
+                        Some(charge) => {
+                            crate::native_gpu_history::adapter::activate_native_cpu_owner(
+                                prior, charge,
+                            )
+                        }
+                        None => prior,
+                    };
                     txn.retain_resource(
                         Arc::clone(&prior),
                         &prior
@@ -1791,7 +1850,7 @@ mod cpu {
                     held.frames.push(prior);
                 }
                 CpuInput::Frame(frame) => {
-                    let retained = Arc::new(NativeCpuFrameOwner { frame, charge });
+                    let retained = Arc::new(NativeCpuFrameOwner::new(frame, charge));
                     txn.retain_resource(
                         Arc::clone(&retained),
                         &retained

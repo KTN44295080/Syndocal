@@ -110,7 +110,6 @@ impl IsfGpuRuntime {
         if !(2..=3).contains(&chains.len()) {
             return None;
         }
-        #[cfg(test)]
         if let Err(error) = self.reject_ownerless_native_entry() {
             return Some(StackBatch::from_fn(chains.len(), |index| {
                 let chain = &chains[index];
@@ -182,7 +181,6 @@ impl IsfGpuRuntime {
 pub(crate) struct IndependentClockReservation {
     first: u32,
     count: usize,
-    #[cfg(test)]
     epoch: Arc<()>,
 }
 
@@ -199,12 +197,10 @@ impl IsfGpuRuntime {
         IndependentClockReservation {
             first: self.frame_index,
             count,
-            #[cfg(test)]
             epoch: Arc::clone(&self.resources.native_clock_epoch),
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn native_clocks_current(&self, clocks: &IndependentClockReservation) -> bool {
         self.frame_index == clocks.first
             && Arc::ptr_eq(&self.resources.native_clock_epoch, &clocks.epoch)

@@ -1,6 +1,6 @@
 //! I-owned join of the real G transaction and P composition/snapshot/present.
-//! This remains behind native_gpu_output's test gate until canonical renderer,
-//! charged history handover and G/P production consumers are joined.
+//! The resident Display facade joins canonical renderer, charged history handover
+//! and G/P production consumers through this shared owner.
 //! No window operations, new device, or whole-tick retry lives here.
 use std::sync::Arc;
 
@@ -9,8 +9,10 @@ use super::history::{
 };
 use super::*;
 use crate::gpu_surface::native::{
-    AdmittedPhysicalGeometry, NativePresentTarget, SharedPresentSink, SharedSurfacePresenter,
+    AdmittedPhysicalGeometry, CpuArtisticContent, HardBlackoutContent, NativePresentTarget,
+    NativeSurfaceTarget, SharedPresentSink, SharedSurfacePresenter,
 };
+use crate::gpu_surface::UnconfiguredNativeSurface;
 use crate::isf_native_gpu::PreparedNativeBatch;
 use crate::isf_runtime::{IsfGpuRuntime, StackBatch};
 use crate::native_gpu_budget::FrameReservation;
@@ -24,7 +26,8 @@ use crate::native_gpu_context::{
 };
 use crate::native_gpu_history::HistoryError;
 use crate::native_gpu_result::{
-    EncodedIsfBatch, GpuLayerLease, NativeIsfCompletion, ValidatedLayerResult,
+    EncodedIsfBatch, GpuLayerLease, NativeCandidateAvailability, NativeIsfCompletion,
+    ValidatedLayerResult,
 };
 use crate::native_gpu_snapshot::{
     NativeGpuSnapshotter, NativeSnapshotGpu, NativeSnapshotMap, RetiringPremappingSnapshot,
@@ -40,6 +43,7 @@ pub(crate) struct SharedNativePresenter<T: NativePresentTarget> {
 }
 
 impl<T: NativePresentTarget> SharedNativePresenter<T> {
+    #[cfg(test)]
     pub(crate) fn new(target: T, owner: &mut NativeGpuOwner) -> Result<Self, NativeGpuFault> {
         let presenter = SharedSurfacePresenter::new(target, owner)?;
         Ok(Self {
@@ -80,6 +84,7 @@ impl<T: NativePresentTarget> SharedNativePresenter<T> {
         self.presenter.poll_retirements(owner)
     }
 
+    #[cfg(test)]
     pub(crate) fn drain_retirements(
         &mut self,
         owner: &mut NativeGpuOwner,
@@ -100,10 +105,49 @@ impl<T: NativePresentTarget> SharedNativePresenter<T> {
         self.presenter.presents()
     }
 
+    pub(crate) fn configured_extent(&self) -> Option<(u32, u32)> {
+        self.presenter.configured_extent()
+    }
+
+    pub(crate) fn cpu_artistic_sink<'p, R, P>(
+        &'p mut self,
+        owner: &'p mut NativeGpuOwner,
+    ) -> Result<SharedPresentSink<'p, T, R, P, CpuArtisticContent>, NativeGpuFault> {
+        self.check_owner(owner)?;
+        Ok(self.presenter.cpu_artistic_sink(owner))
+    }
+
+    pub(crate) fn hard_blackout_sink<'p, R, P>(
+        &'p mut self,
+        owner: &'p mut NativeGpuOwner,
+    ) -> Result<SharedPresentSink<'p, T, R, P, HardBlackoutContent>, NativeGpuFault> {
+        self.check_owner(owner)?;
+        Ok(self.presenter.hard_blackout_sink(owner))
+    }
+
+    pub(crate) fn hard_blackout_presents(&self) -> u64 {
+        self.presenter.hard_blackout_presents()
+    }
+
     fn release_for_stop(&mut self, owner: &NativeGpuOwner) -> Result<(), NativeGpuFault> {
         self.check_owner(owner)?;
         self.presenter.release_for_stop();
         Ok(())
+    }
+}
+
+impl SharedNativePresenter<NativeSurfaceTarget> {
+    pub(crate) fn from_shared_unconfigured(
+        surface: UnconfiguredNativeSurface,
+        owner: &mut NativeGpuOwner,
+    ) -> Result<Self, crate::native_gpu_context::ContextCreateError> {
+        let context = owner.context().id();
+        let presenter = SharedSurfacePresenter::from_shared_unconfigured(surface, owner)?;
+        Ok(Self { context, presenter })
+    }
+
+    pub(crate) fn into_unconfigured(self) -> UnconfiguredNativeSurface {
+        self.presenter.into_target().into_unconfigured()
     }
 }
 
@@ -135,8 +179,33 @@ impl SharedNativeOutputCache {
         result
     }
 
+    #[cfg(test)]
     pub(crate) fn last_valid(&self, key: &VideoOutputLastValidKey) -> Option<&VideoFrame> {
         self.cache.last_valid(key)
+    }
+
+    pub(crate) fn last_valid_with_owner(
+        &self,
+    ) -> Option<(
+        &VideoOutputLastValidKey,
+        &VideoFrame,
+        &Arc<NativeSnapshotGpu>,
+    )> {
+        let (key, frame) = self.cache.cached.as_ref()?;
+        Some((key, frame, self.snapshot_owner.as_ref()?))
+    }
+
+    pub(crate) fn take_last_valid_with_owner(
+        &mut self,
+    ) -> Option<(VideoOutputLastValidKey, VideoFrame, Arc<NativeSnapshotGpu>)> {
+        let owner = self.snapshot_owner.take()?;
+        match self.cache.take_last_valid() {
+            Some((key, frame)) => Some((key, frame, owner)),
+            None => {
+                self.snapshot_owner = Some(owner);
+                None
+            }
+        }
     }
 
     pub(crate) fn blackout(&mut self) -> Result<(), CacheFenceError> {
@@ -205,6 +274,7 @@ impl SharedNativeOutputCache {
             ) -> Result<CacheCommitReceipt, SnapshotCommitRejection> {
                 Err(self.0)
             }
+            #[cfg(test)]
             fn invalidate_output(&mut self, _: VideoOutputId) {}
         }
         match snapshot.commit(&mut Reject(reason), descriptor, cancel) {
@@ -296,6 +366,56 @@ pub(crate) fn release_shared_presenter_for_stop<T: NativePresentTarget>(
 }
 
 impl SharedNativeOutputRetirement {
+    /// A fixed-clock CPU recovery has already drained the real two-phase
+    /// transaction. Release only its failed resident output buffers without
+    /// stopping the healthy shared owner. Every other case returns the complete
+    /// aggregate so cancellation/fault cleanup retains all outstanding work.
+    pub(crate) fn into_recovered_history(
+        mut self,
+        owner: &mut NativeGpuOwner,
+    ) -> Result<NativeOutputHistoryFrame, (Self, NativeGpuFault)> {
+        let valid = self.context == owner.context().id()
+            && owner.state() == GpuOwnerState::Active
+            && self.reason.is_none()
+            && self.transaction.is_none()
+            && self.unsubmitted.is_none()
+            && self.admitted.is_none()
+            && self.encoded_isf.is_none()
+            && self.isf_outcome.is_none()
+            && self
+                .history_outcome
+                .as_ref()
+                .is_some_and(|history| history.is_recovered() && history.error().is_none());
+        if !valid {
+            let fault = NativeGpuFault {
+                context: self.context,
+                frame: None,
+                phase: GpuPhase::Retirement,
+                kind: NativeGpuFaultKind::StateMismatch,
+                message: "only drained fixed-clock CPU recovery may resume a healthy owner".into(),
+            };
+            return Err((self, fault));
+        }
+        // `transaction == None` in this recovery branch is established only
+        // after poll_transaction returned its real resolved transaction. No
+        // submission or error scope can still use these failed output owners.
+        if let Some(snapshot) = self.snapshot.take() {
+            let (gpu, mapper) = snapshot.into_parts();
+            drop(mapper);
+            drop(gpu);
+        }
+        self.failed_snapshot = None;
+        self.completed = None;
+        self.gpu = None;
+        if let Err(fault) = owner.poll_retirement() {
+            return Err((self, fault));
+        }
+        Ok(self
+            .history_outcome
+            .take()
+            .expect("checked recovered history owner"))
+    }
+
     pub(crate) fn reason(&self) -> Option<&OutputRejection> {
         self.reason.as_ref()
     }
@@ -433,6 +553,7 @@ impl PendingSharedNativeOutput {
 
     /// Bind the prospective history plan made before submit. Rejection returns
     /// both affine owners; no already-submitted work is discarded.
+    #[cfg(test)]
     pub(crate) fn bind_history(
         mut self,
         plan: NativeOutputHistoryPlan,
@@ -453,6 +574,7 @@ impl PendingSharedNativeOutput {
     /// P drains that work only before its next MappingPresent phase. Recheck
     /// authority/Stop after the poll and before beginning the new transaction.
     /// A failure keeps the unsubmitted affine admission/reservation intact.
+    #[cfg(test)]
     pub(crate) fn submit_after_present<T: NativePresentTarget>(
         owner: &mut NativeGpuOwner,
         runtime: &mut IsfGpuRuntime,
@@ -561,6 +683,50 @@ impl PendingSharedNativeOutput {
         if let Err(reason) = Self::validate_submission(owner, &request, &reservation, composition) {
             return Err(Self::retain_unsubmitted(reason, admitted, reservation));
         }
+        let identities = match admitted.prospective_identities(runtime) {
+            Ok(identities) => identities,
+            Err(error) => {
+                let reason = OutputRejection::Fault(NativeGpuFault {
+                    context: request.context,
+                    frame: Some(request.frame),
+                    phase: GpuPhase::IsfBatch,
+                    kind: NativeGpuFaultKind::StateMismatch,
+                    message: format!("admitted native identities changed before submit: {error:?}"),
+                });
+                return Err(Self::retain_unsubmitted(reason, admitted, reservation));
+            }
+        };
+        // Validate the original frozen selection even if G later cannot encode
+        // its resident candidates. An independent P mismatch remains a fault,
+        // while a valid selection does not invent one from G's missing textures.
+        let selection_failure = composition
+            .layers_bottom_first
+            .iter()
+            .any(|layer| {
+                let count = match layer.kind {
+                    SelectedTextureKind::InThisTransaction => identities
+                        .iter()
+                        .filter(|identity| {
+                            **identity == layer.identity && identity.entry == layer.selected_entry
+                        })
+                        .count(),
+                    SelectedTextureKind::Validated => history
+                        .iter()
+                        .filter(|lease| {
+                            lease.identity() == &layer.identity
+                                && lease.identity().entry == layer.selected_entry
+                        })
+                        .count(),
+                };
+                count != 1
+            })
+            .then(|| {
+                fault(
+                    &request,
+                    GpuPhase::CompositionSnapshot,
+                    NativeGpuFaultKind::IdentityMismatch,
+                )
+            });
         let transaction = owner.begin_frame(request.frame, reservation);
         let mut txn = match transaction {
             Ok(txn) => txn,
@@ -601,55 +767,68 @@ impl PendingSharedNativeOutput {
         };
         // Every current chain executes, but only the canonical plan's selected
         // entry composes. A historical predecessor can replace current layer 1.
-        let selected = composition
-            .layers_bottom_first
-            .iter()
-            .map(|layer| {
-                let mismatch = || {
-                    fault(
-                        &request,
-                        GpuPhase::CompositionSnapshot,
-                        NativeGpuFaultKind::IdentityMismatch,
-                    )
-                };
-                match layer.kind {
-                    SelectedTextureKind::Validated => {
-                        let mut matches = history.iter().copied().filter(|lease| {
-                            lease.identity() == &layer.identity
-                                && lease.identity().entry == layer.selected_entry
-                        });
-                        let lease = matches.next().ok_or_else(mismatch)?;
-                        if matches.next().is_some() {
-                            return Err(mismatch());
+        let encoded = if let Some(error) = selection_failure {
+            drop(p_reservation);
+            Some(Err(error))
+        } else if isf.candidate_availability()
+            == NativeCandidateAvailability::UnavailableAfterEncodeFailure
+        {
+            // G owns an actual failed phase and all immutable recovery inputs.
+            // No resident P phase can be encoded. Await G's real completion;
+            // only a validated fixed-clock CPU recovery may resume canonically.
+            drop(p_reservation);
+            None
+        } else {
+            let selected = composition
+                .layers_bottom_first
+                .iter()
+                .map(|layer| {
+                    let mismatch = || {
+                        fault(
+                            &request,
+                            GpuPhase::CompositionSnapshot,
+                            NativeGpuFaultKind::IdentityMismatch,
+                        )
+                    };
+                    match layer.kind {
+                        SelectedTextureKind::Validated => {
+                            let mut matches = history.iter().copied().filter(|lease| {
+                                lease.identity() == &layer.identity
+                                    && lease.identity().entry == layer.selected_entry
+                            });
+                            let lease = matches.next().ok_or_else(mismatch)?;
+                            if matches.next().is_some() {
+                                return Err(mismatch());
+                            }
+                            Ok(SelectedLayerInput::Validated(lease))
                         }
-                        Ok(SelectedLayerInput::Validated(lease))
-                    }
-                    SelectedTextureKind::InThisTransaction => {
-                        let mut matches = isf.candidates.iter().filter(|candidate| {
-                            candidate.identity() == &layer.identity
-                                && candidate.identity().entry == layer.selected_entry
-                        });
-                        let candidate = matches.next().ok_or_else(mismatch)?;
-                        if matches.next().is_some() {
-                            return Err(mismatch());
+                        SelectedTextureKind::InThisTransaction => {
+                            let mut matches = isf.candidates.iter().filter(|candidate| {
+                                candidate.identity() == &layer.identity
+                                    && candidate.identity().entry == layer.selected_entry
+                            });
+                            let candidate = matches.next().ok_or_else(mismatch)?;
+                            if matches.next().is_some() {
+                                return Err(mismatch());
+                            }
+                            Ok(SelectedLayerInput::InThisTransaction(candidate))
                         }
-                        Ok(SelectedLayerInput::InThisTransaction(candidate))
                     }
-                }
+                })
+                .collect::<Result<Vec<_>, NativeGpuFault>>();
+            Some(match selected {
+                Ok(selected) => compositor.encode_composition_and_snapshot(
+                    &mut txn,
+                    composition,
+                    &selected,
+                    p_reservation,
+                ),
+                Err(error) => Err(error),
             })
-            .collect::<Result<Vec<_>, NativeGpuFault>>();
-        let encoded = match selected {
-            Ok(selected) => compositor.encode_composition_and_snapshot(
-                &mut txn,
-                composition,
-                &selected,
-                p_reservation,
-            ),
-            Err(error) => Err(error),
         };
         let pending = txn.finish();
         let (snapshot, failed_snapshot, composition_failure) = match encoded {
-            Ok(encoded) => {
+            Some(Ok(encoded)) => {
                 // P's real constructor binds this submitted copy to the map.
                 match NativeGpuSnapshotter::begin_shared(
                     encoded,
@@ -667,7 +846,8 @@ impl PendingSharedNativeOutput {
                     }
                 }
             }
-            Err(error) => (None, None, Some(error)),
+            Some(Err(error)) => (None, None, Some(error)),
+            None => (None, None, None),
         };
         Ok(Self {
             request,
@@ -706,7 +886,7 @@ impl PendingSharedNativeOutput {
         }
     }
 
-    fn retire(
+    pub(crate) fn retire(
         self,
         owner: &mut NativeGpuOwner,
         reason: OutputRejection,
@@ -719,6 +899,14 @@ impl PendingSharedNativeOutput {
         owner: &mut NativeGpuOwner,
         reason: Option<OutputRejection>,
     ) -> SharedNativeOutputRetirement {
+        // A P fault already observed during submit/resolution survives a later
+        // Stop or authority revocation. Keep its typed diagnostic together with
+        // the complete transaction owner; control must not erase an actual fault.
+        let reason = self
+            .composition_failure
+            .take()
+            .map(OutputRejection::Fault)
+            .or(reason);
         let transaction = self
             .pending
             .take()
@@ -753,6 +941,7 @@ impl PendingSharedNativeOutput {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn poll(
         self,
         owner: &mut NativeGpuOwner,
@@ -832,7 +1021,7 @@ impl PendingSharedNativeOutput {
                 }
                 CompletionProgress::Complete(Err(error)) => {
                     return SharedNativeOutputProgress::Retiring(
-                        self.retire(owner, cancelled_or_fault(error, cancel)),
+                        self.retire(owner, OutputRejection::Fault(error)),
                     );
                 }
                 CompletionProgress::Complete(Ok(resolved)) => resolved,
@@ -849,7 +1038,7 @@ impl PendingSharedNativeOutput {
                 Err(error) => {
                     self.isf = Some(encoded);
                     return SharedNativeOutputProgress::Retiring(
-                        self.retire(owner, cancelled_or_fault(error, cancel)),
+                        self.retire(owner, OutputRejection::Fault(error)),
                     );
                 }
             };
@@ -874,6 +1063,15 @@ impl PendingSharedNativeOutput {
                     }
                 }
                 NativeIsfCompletion::RecoveredCpu { layers } if self.history_plan.is_some() => {
+                    // G drains both submissions, but P's separate validation
+                    // outcome still has to be consumed before healthy recovery.
+                    if self.composition_failure.is_none() {
+                        if let Some(snapshot) = self.snapshot.as_mut() {
+                            if let Err(error) = snapshot.resolve_shared_phase(&mut resolved) {
+                                self.composition_failure = Some(error);
+                            }
+                        }
+                    }
                     let recovered = history
                         .as_deref()
                         .expect("history session checked before polling")
@@ -881,9 +1079,15 @@ impl PendingSharedNativeOutput {
                             self.history_plan.take().expect("recovery keeps its plan"),
                             layers,
                         );
-                    let reason = recovered
-                        .error()
-                        .map(|error| history_rejection(&self.request, error));
+                    let reason = self
+                        .composition_failure
+                        .take()
+                        .map(OutputRejection::Fault)
+                        .or_else(|| {
+                            recovered
+                                .error()
+                                .map(|error| history_rejection(&self.request, error))
+                        });
                     self.validated = Some(SharedValidatedOutput::History(recovered));
                     return SharedNativeOutputProgress::Retiring(
                         self.retire_with_reason(owner, reason),
@@ -891,9 +1095,26 @@ impl PendingSharedNativeOutput {
                 }
                 outcome => {
                     let reason = match &outcome {
-                        NativeIsfCompletion::Cancelled { .. } => Some(OutputRejection::Cancelled),
-                        NativeIsfCompletion::Failed { fault, .. } => {
-                            Some(cancelled_or_fault(copy_fault(fault), cancel))
+                        NativeIsfCompletion::Cancelled { retirement } => {
+                            if retirement.is_some_and(|id| id.context != self.request.context) {
+                                Some(OutputRejection::Fault(fault(
+                                    &self.request,
+                                    GpuPhase::Retirement,
+                                    NativeGpuFaultKind::IdentityMismatch,
+                                )))
+                            } else {
+                                Some(OutputRejection::Cancelled)
+                            }
+                        }
+                        NativeIsfCompletion::Failed { fault, retirement } => {
+                            let mut diagnostic = copy_fault(fault);
+                            if let Some(retirement) = retirement {
+                                diagnostic.message = format!(
+                                    "{}; retained G retirement {retirement:?}",
+                                    diagnostic.message
+                                );
+                            }
+                            Some(OutputRejection::Fault(diagnostic))
                         }
                         NativeIsfCompletion::RecoveredCpu { .. } => None,
                         NativeIsfCompletion::Validated { .. } => unreachable!(),
@@ -928,7 +1149,7 @@ impl PendingSharedNativeOutput {
             // publication also rejects; its typed error remains in history_outcome.
             if let Some(error) = self.composition_failure.take() {
                 return SharedNativeOutputProgress::Retiring(
-                    self.retire(owner, cancelled_or_fault(error, cancel)),
+                    self.retire(owner, OutputRejection::Fault(error)),
                 );
             }
             if let Err(reason) = history_result {
@@ -958,7 +1179,7 @@ impl PendingSharedNativeOutput {
                 }
                 SnapshotProgress::Failed(error) => {
                     return SharedNativeOutputProgress::Retiring(
-                        self.retire(owner, cancelled_or_fault(error, cancel)),
+                        self.retire(owner, OutputRejection::Fault(error)),
                     )
                 }
                 SnapshotProgress::Complete(completed) => completed,

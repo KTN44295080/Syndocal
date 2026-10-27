@@ -369,12 +369,8 @@ fn control_plane_native_gpu_startup_selection_is_captured_once_for_rearm() {
 fn control_plane_native_gpu_startup_entry_keeps_its_process_choice() {
     // Exercise the production entry without modifying process environment or
     // requesting a backend. Either configured choice is stable for this process.
-    let first = validate_native_display_startup_route();
-    assert_eq!(validate_native_display_startup_route(), first);
-    match first {
-        Ok(()) => {}
-        Err(message) => assert_eq!(message, RESIDENT_ROUTE_UNAVAILABLE),
-    }
+    let first = native_display_startup_route();
+    assert_eq!(native_display_startup_route(), first);
 }
 
 #[test]
@@ -387,7 +383,7 @@ fn control_plane_native_gpu_startup_off_preserves_existing_owner_and_hooks() {
             },
         ] {
             let route = NativeDisplayStartupRoute::from_opt_in(value);
-            route.require_available().unwrap();
+            assert_eq!(route, NativeDisplayStartupRoute::Existing);
             let (mut backend, witness) = FakeBackend::new();
             backend.authority_error = Some(Check::Initial);
             backend.fail_operation = Some(Op::InitializeUnconfigured);
@@ -409,29 +405,18 @@ fn control_plane_native_gpu_startup_off_preserves_existing_owner_and_hooks() {
 }
 
 #[test]
-fn control_plane_native_gpu_startup_opt_in_is_unavailable_before_backend_hooks() {
+fn control_plane_native_gpu_startup_opt_in_enters_joined_bootstrap_once() {
     let route = NativeDisplayStartupRoute::from_opt_in(Some(OsStr::new("1")));
+    assert_eq!(route, NativeDisplayStartupRoute::ResidentRequested);
     let (backend, witness) = FakeBackend::new();
-    let mut untouched = Some(backend);
-    let outcome = (|| {
-        route.require_available()?;
-        let backend = untouched.take().expect("same unconsumed startup owner");
-        Ok::<_, &'static str>(dispatch_native_display(
-            BootstrapRouteGate::default(),
-            backend,
-            hidden(),
-        ))
-    })();
-    match outcome {
-        Err(message) => assert_eq!(message, RESIDENT_ROUTE_UNAVAILABLE),
-        Ok(_) => panic!("an unavailable resident route cannot continue with a CPU fallback"),
-    }
-    assert_eq!(
-        untouched.as_ref().unwrap().owned_names(),
-        vec!["window", "stop"],
-    );
-    assert!(witness.events.lock().unwrap().is_empty());
-    witness.assert_retained();
+    let outcome = dispatch_native_display(BootstrapRouteGate::for_test_joined(), backend, hidden());
+    let BootstrapDispatch::Resident(Ok(prepared)) = outcome else {
+        panic!("the explicit joined route must prepare the resident owner");
+    };
+    assert_eq!(prepared.extent(), EXPECTED);
+    let (_, backend) = prepared.into_parts();
+    assert!(!backend.is_stopped());
+    assert_eq!(witness.preparations(), 1);
 }
 
 #[test]
@@ -456,7 +441,7 @@ fn control_plane_native_gpu_bootstrap_default_gate_retains_existing_route_withou
         for stopped in [false, true] {
             let (mut backend, witness) = FakeBackend::new();
             // Neither a failed authority nor a failing resident initializer is
-            // consulted while C4 is unavailable. The original route owns both.
+            // consulted by an OFF selection. The original route owns both.
             backend.authority_error = Some(Check::Initial);
             backend.fail_operation = Some(Op::InitializeUnconfigured);
             witness.stop.store(stopped, Ordering::Release);

@@ -1,32 +1,39 @@
 //! I-owned lifetime bridges for exact CPU history materializations.
 //!
-//! G proves copy/completion/unmap. The original single-frame owner keeps that
-//! evidence and its physical allocation charge inseparable. The `history`
+//! G proves copy/completion/unmap. The original single-frame test owner keeps
+//! that evidence and its physical allocation charge inseparable. The `history`
 //! adapter receives P's full charged CPU handover and retains whole owners for
 //! queue and LastValid consumers. Neither adapter mints a completion proof.
 
 #[path = "native_gpu_output_cpu_history.rs"]
 pub(crate) mod history;
 
+#[cfg(test)]
 use std::sync::Arc;
 
+#[cfg(test)]
 use crate::native_gpu_budget::{AllocationCharge, ChargeKind};
+#[cfg(test)]
 use crate::native_gpu_contract::{
     GpuAllocationId, GpuPhase, LayerResultIdentity, MaterializationDescriptor, NativeGpuFault,
     NativeGpuFaultKind,
 };
+#[cfg(test)]
 use crate::native_gpu_result::ValidatedCpuMaterialization;
+#[cfg(test)]
 use crate::{VideoFrame, VideoPixelFormat};
 
 /// Share this complete owner with Arc::clone. There is deliberately no raw-frame
 /// Arc accessor, mutable pixel access, Clone implementation or parts extraction.
 /// Fields drop in declaration order: the pixels go before their charge.
+#[cfg(test)]
 pub(crate) struct ChargedCpuHistoryFrame {
     frame: VideoFrame,
     descriptor: MaterializationDescriptor,
     charge: AllocationCharge,
 }
 
+#[cfg(test)]
 impl ChargedCpuHistoryFrame {
     /// Consume real G evidence against the history entry selected by the caller.
     /// Rejection retains all three original parts; it never discards pixels or
@@ -124,11 +131,13 @@ impl ChargedCpuHistoryFrame {
 /// the caller's failure/cleanup owner until it is safe to discard the CPU frame.
 /// No method turns a mismatch into a valid history backing or extracts a charge.
 #[must_use]
+#[cfg(test)]
 pub(crate) struct RejectedCpuHistoryFrame {
     fault: NativeGpuFault,
     owner: ChargedCpuHistoryFrame,
 }
 
+#[cfg(test)]
 impl RejectedCpuHistoryFrame {
     pub(crate) fn fault(&self) -> &NativeGpuFault {
         &self.fault

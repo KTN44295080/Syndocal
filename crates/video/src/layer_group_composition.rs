@@ -151,7 +151,11 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             layers,
         };
         let (width, height) = size;
+        let group_charge = self.reserve_native_cpu_rgba(width, height, cancellation)?;
+        let conversion_charge = self.reserve_native_cpu_conversion_scratch(frames, cancellation)?;
         let mut frame = composite_frames_rgba8(&group_plan, frames, width, height)?;
+        drop(conversion_charge);
+        self.track_native_cpu_frame(&frame, group_charge)?;
         // The compositor's transparent destination contains premultiplied RGB.
         // Effects and the outer layer sampler consume straight-alpha pixels.
         straighten_group_frame(&mut frame);
@@ -170,6 +174,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         check_runtime_cancellation(cancellation)?;
         let transform = group_transform(group);
         if transform != Transform2D::default() {
+            let transformed_charge = self.reserve_native_cpu_rgba(width, height, cancellation)?;
             let mut transformed = vec![0u8; width as usize * height as usize * 4];
             blend_transformed_rgba8(BlendTransformedRgba8Params {
                 destination: &mut transformed,
@@ -183,6 +188,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 fx: &VideoFxAdjust::default(),
             });
             frame.data = transformed;
+            self.track_native_cpu_frame(&frame, transformed_charge)?;
             straighten_group_frame(&mut frame);
         }
         frame.layer_id = outer.layer_id;

@@ -1,9 +1,9 @@
-//! I3 startup selection for native Display; resident routing stays unavailable.
+//! Immutable default-off selection for the joined native resident Display route.
 //!
 //! main.rs consults the immutable QA opt-in after its existing Stop/authority
 //! checks and before creating a surface or renderer. OFF keeps the existing
-//! route. An explicit request fails closed until the real C4 adapter is joined;
-//! it cannot silently fall back or manufacture a resident success.
+//! route. An explicit request enters native_display_resident, which owns the
+//! shared session and preserves fail-closed presentation and retirement.
 //! The bootstrap ownership policy below remains test-only. Its adapter owns
 //! the window/surface, shared GPU owner/context, runtime, history, cache fence
 //! and the one Stop token. This module creates no window, device or thread.
@@ -14,10 +14,10 @@ use std::ffi::{OsStr, OsString};
 use std::sync::OnceLock;
 
 const QA_NATIVE_GPU_ENV: &str = "SYNDOCAL_QA_NATIVE_GPU";
-const RESIDENT_ROUTE_UNAVAILABLE: &str = "SYNDOCAL_QA_NATIVE_GPU=1 requested the native GPU route, but the C4 adapter is not joined; native Display was not started";
+static STARTUP_ROUTE: OnceLock<NativeDisplayStartupRoute> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum NativeDisplayStartupRoute {
+pub(crate) enum NativeDisplayStartupRoute {
     Existing,
     ResidentRequested,
 }
@@ -28,13 +28,6 @@ impl NativeDisplayStartupRoute {
             Self::ResidentRequested
         } else {
             Self::Existing
-        }
-    }
-
-    fn require_available(self) -> Result<(), &'static str> {
-        match self {
-            Self::Existing => Ok(()),
-            Self::ResidentRequested => Err(RESIDENT_ROUTE_UNAVAILABLE),
         }
     }
 }
@@ -49,9 +42,8 @@ fn capture_startup_route(
 /// Capture the process-wide choice at its first authorized Display startup.
 /// Re-arming/starting another output cannot change it, and frame rendering
 /// never reads the environment. This gate does not grant output authority.
-pub(crate) fn validate_native_display_startup_route() -> Result<(), &'static str> {
-    static DECISION: OnceLock<NativeDisplayStartupRoute> = OnceLock::new();
-    capture_startup_route(&DECISION, || std::env::var_os(QA_NATIVE_GPU_ENV)).require_available()
+pub(crate) fn native_display_startup_route() -> NativeDisplayStartupRoute {
+    capture_startup_route(&STARTUP_ROUTE, || std::env::var_os(QA_NATIVE_GPU_ENV))
 }
 
 /// Integration availability only, never native authority or a present permit.

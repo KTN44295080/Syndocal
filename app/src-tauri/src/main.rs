@@ -104,6 +104,7 @@ mod live_video_monitor_packet;
 mod live_video_output_health;
 mod native_display_lease_boundary;
 mod native_display_gpu;
+mod native_display_resident;
 mod video_output_pacer;
 mod output_owner_retirement;
 use live_video_monitor_packet::*;
@@ -13651,6 +13652,9 @@ struct NativeVideoOutputWorker {
     /// Failed authoring construction remains counted until this exact
     /// worker/shell receives both its join and native retirement ACK.
     retained_creation_leases: Vec<engine::OutputOwnershipCreationLease>,
+    /// ON-only whole shared GPU owners retained after a worker exits or fails.
+    /// The ordinary route leaves this empty and keeps its existing lifecycle.
+    resident_retirements: Vec<native_display_resident::ResidentRetirement>,
 }
 
 impl NativeVideoOutputWorker {
@@ -13681,6 +13685,7 @@ impl NativeVideoOutputWorker {
             start_gate,
             teardown_lease,
             retained_creation_leases: Vec::new(),
+            resident_retirements: Vec::new(),
         }
     }
 
@@ -13691,6 +13696,7 @@ impl NativeVideoOutputWorker {
             start_gate: None,
             teardown_lease: Arc::new(Mutex::new(lease)),
             retained_creation_leases: Vec::new(),
+            resident_retirements: Vec::new(),
         }
     }
 
@@ -13711,8 +13717,28 @@ impl NativeVideoOutputWorker {
             .ok_or_else(|| format!("Native video output worker {label} was already joined"))?;
         let result = join
             .join()
-            .map_err(|_| format!("Native video output worker {label} panicked"))?;
-        result.map_err(|error| format!("Native video output worker {label} failed: {error}"))
+            .map_err(|_| format!("Native video output worker {label} panicked"))
+            .and_then(|result| {
+                result
+                    .map_err(|error| format!("Native video output worker {label} failed: {error}"))
+            });
+        let retirement = self.poll_resident_retirements(label, Instant::now());
+        match (result, retirement) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(error), Err(retirement)) => Err(format!("{error}; {retirement}")),
+        }
+    }
+
+    fn poll_resident_retirements(&mut self, label: &str, deadline: Instant) -> Result<(), String> {
+        for retirement in &self.resident_retirements {
+            retirement
+                .poll_with_deadline(deadline)
+                .map_err(|error| format!("Native video output worker {label}: {error}"))?;
+        }
+        self.resident_retirements
+            .retain(|retirement| !retirement.is_empty());
+        Ok(())
     }
 
     /// Join only after the render thread has reported that it finished.  A
@@ -13723,6 +13749,9 @@ impl NativeVideoOutputWorker {
     /// rather than pretending that the native resource was reclaimed.
     fn join_with_deadline(&mut self, label: &str, timeout: Duration) -> Result<(), String> {
         let deadline = Instant::now() + timeout;
+        if self.join.is_none() && !self.resident_retirements.is_empty() {
+            return self.poll_resident_retirements(label, deadline);
+        }
         loop {
             let Some(join) = self.join.as_ref() else {
                 return Err(format!(
@@ -13743,6 +13772,15 @@ impl NativeVideoOutputWorker {
     }
 
     fn release_teardown_lease_after_retirement_ack(&mut self) {
+        // A joined thread/window is not proof that a quarantined GPU owner was
+        // reaped. ON retains its fence until the whole-owner poll succeeds.
+        if self
+            .resident_retirements
+            .iter()
+            .any(|retirement| !retirement.is_empty())
+        {
+            return;
+        }
         let lease = match self.teardown_lease.lock() {
             Ok(mut lease) => lease.take(),
             Err(poisoned) => poisoned.into_inner().take(),
@@ -75528,7 +75566,7 @@ fn retire_native_video_output_window(
     let mut worker = worker;
     let mut worker_joined = true;
     if let Some(worker) = worker.as_mut() {
-        worker_joined = if worker.join.is_none() {
+        worker_joined = if worker.join.is_none() && worker.resident_retirements.is_empty() {
             true
         } else {
             match worker.join_with_deadline(label, NativeVideoOutputWorker::JOIN_TIMEOUT) {
@@ -83454,6 +83492,7 @@ struct NativeVideoOutputMetrics {
     width: u32,
     height: u32,
     buffer_stats: video::GpuSurfaceBufferStats,
+    resident_presentation: Option<NativeResidentPresentationMetrics>,
     decoder_diagnostics: video::VideoDecoderDiagnostics,
     last_error: Option<String>,
     warmup_remaining: u32,
@@ -83481,11 +83520,22 @@ impl Default for NativeVideoOutputMetrics {
             width: 0,
             height: 0,
             buffer_stats: video::GpuSurfaceBufferStats::default(),
+            resident_presentation: None,
             decoder_diagnostics: video::VideoDecoderDiagnostics::default(),
             last_error: None,
             warmup_remaining: NATIVE_VIDEO_OUTPUT_METRICS_WARMUP_FRAMES,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+struct NativeResidentPresentationMetrics {
+    frames_presented: u64,
+    hard_blackout_frames_presented: u64,
+}
+
+fn native_legacy_buffer_stats_available(available: &bool) -> bool {
+    *available
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -83503,6 +83553,12 @@ struct NativeVideoOutputPerformance {
     output_reallocations: u64,
     layer_reallocations: u64,
     compressed_layer_uploads: u64,
+    /// The resident presenter has a different allocation ledger. Its counters
+    /// must not be misreported as measurements of legacy buffer pools.
+    #[serde(skip_serializing_if = "native_legacy_buffer_stats_available")]
+    legacy_buffer_stats_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resident_presentation: Option<NativeResidentPresentationMetrics>,
     decoder_diagnostics: video::VideoDecoderDiagnostics,
     last_error: Option<String>,
     warmup_remaining: u32,
@@ -83660,6 +83716,36 @@ impl NativeVideoOutputMetrics {
         self.append_observation_sample(elapsed);
     }
 
+    fn record_resident(
+        &mut self,
+        width: u32,
+        height: u32,
+        elapsed: Duration,
+        frames_presented: u64,
+        hard_blackout_frames_presented: u64,
+        decoder_diagnostics: video::VideoDecoderDiagnostics,
+        error: Option<String>,
+        validation_identity: Option<NativeVideoOutputValidationIdentity>,
+        validation_boundary: Option<String>,
+    ) {
+        self.resident_presentation = Some(NativeResidentPresentationMetrics {
+            frames_presented,
+            hard_blackout_frames_presented,
+        });
+        // Leave unmeasured legacy allocation data untouched and mark it as
+        // unavailable in the snapshot. Timing/identity use the same validator.
+        self.record_with_validation(
+            width,
+            height,
+            elapsed,
+            self.buffer_stats,
+            decoder_diagnostics,
+            error,
+            validation_identity,
+            validation_boundary,
+        );
+    }
+
     #[cfg(test)]
     fn record(
         &mut self,
@@ -83733,6 +83819,8 @@ impl NativeVideoOutputMetrics {
             output_reallocations: self.buffer_stats.output_reallocations,
             layer_reallocations: self.buffer_stats.layer_reallocations,
             compressed_layer_uploads: self.buffer_stats.compressed_layer_uploads,
+            legacy_buffer_stats_available: self.resident_presentation.is_none(),
+            resident_presentation: self.resident_presentation,
             decoder_diagnostics: self.decoder_diagnostics,
             last_error: self.last_error.clone(),
             warmup_remaining: self.warmup_remaining,
@@ -85350,6 +85438,12 @@ struct NativeVideoLiveOutputRequest {
     teardown_lease: Arc<Mutex<Option<engine::OutputOwnershipTeardownLease>>>,
 }
 
+fn start_native_resident_video_live_output_authorized(
+    request: NativeVideoLiveOutputRequest,
+) -> Result<NativeVideoOutputWorker, String> {
+    native_display_resident::start(request)
+}
+
 fn start_native_video_live_output(
     request: NativeVideoLiveOutputRequest,
 ) -> Result<NativeVideoOutputWorker, String> {
@@ -85388,9 +85482,33 @@ fn start_native_video_live_output(
         );
         return Err(error);
     }
-    // OFF leaves the existing Display startup below unchanged. Explicit QA
-    // opt-in cannot create a surface/renderer until the C4 adapter is joined.
-    native_display_gpu::validate_native_display_startup_route().map_err(str::to_string)?;
+    // Capture the process-wide route only after the ordinary Stop/ownership
+    // preflight above. OFF continues through the existing body unchanged.
+    if native_display_gpu::native_display_startup_route()
+        == native_display_gpu::NativeDisplayStartupRoute::ResidentRequested
+    {
+        return start_native_resident_video_live_output_authorized(NativeVideoLiveOutputRequest {
+            window,
+            engine,
+            output_id,
+            metrics,
+            #[cfg(feature = "ndi")]
+            ndi_inputs,
+            #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+            spout_inputs,
+            capture_inputs,
+            initial_size_override,
+            fullscreen,
+            unpublished_snapshot,
+            gate_render_loop_until_publication,
+            first_frame_fence,
+            first_frame_admission,
+            phase_cancelled: Some(stop),
+            show_before_first_frame,
+            label,
+            teardown_lease,
+        });
+    }
     let mut initial_size = match initial_size_override {
         Some((width, height)) => (width.max(1), height.max(1)),
         None => {
@@ -85440,7 +85558,11 @@ fn start_native_video_live_output(
     let _trace_retirement = video::native_frame_timing::ThreadRetirementGuard::new();
     #[cfg(feature = "qa-native-frame-timing")]
     let first_trace = video::native_frame_timing::begin_parent(
-        output_id, trace_epoch, initial_size.0, initial_size.1);
+        output_id,
+        trace_epoch,
+        initial_size.0,
+        initial_size.1,
+    );
     let first_started = Instant::now();
     let first_result = {
     #[cfg(feature = "qa-native-frame-timing")]
@@ -85604,7 +85726,11 @@ fn start_native_video_live_output(
         first_validation_identity,
         first_validation_boundary,
     );
-    if let Some(error) = first_result.as_ref().err().filter(|_| !stop.load(Ordering::Acquire)) {
+    if let Some(error) = first_result
+        .as_ref()
+        .err()
+        .filter(|_| !stop.load(Ordering::Acquire))
+    {
         if let Some(follow) = first_observed_follow {
             acknowledge_native_timeline_follow_video_settlement(
                 &engine,

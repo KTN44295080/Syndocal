@@ -1092,3 +1092,233 @@ fn sequence_exhaustion_is_typed_and_never_wraps_or_resets_the_ledger() {
     );
     assert_eq!(budget.snapshot().managed_bytes(), 0);
 }
+
+#[test]
+fn native_gpu_g4_rearm_keeps_quarantined_bytes_and_reservations_at_exact_session_limit() {
+    let mut budget = NativeGpuBudget::new(context());
+    let old_bytes = 128 * 1024 * 1024;
+    let reserved_bytes = 16 * 1024 * 1024;
+    let old = allocate(&mut budget, ChargeKind::ResidentLayer, old_bytes);
+    let old_id = old.id();
+    let old_pin = old.pin();
+    budget.record_use(old_id, submission(9)).unwrap();
+    let unused = budget
+        .reserve(
+            budget
+                .quote(&plan(ChargeKind::CpuSnapshot, reserved_bytes))
+                .unwrap(),
+        )
+        .unwrap();
+    let stale_quote = budget.quote(&plan(ChargeKind::CpuSnapshot, 1)).unwrap();
+    budget.quarantine();
+    let next = GpuContextId {
+        device_generation: 9,
+        ..context()
+    };
+    budget.rearm_generation(next).unwrap();
+    assert_eq!(budget.snapshot().context, next);
+    assert_eq!(budget.snapshot().allocated_bytes, old_bytes);
+    assert_eq!(budget.snapshot().reserved_bytes, reserved_bytes);
+    assert_eq!(
+        budget
+            .snapshot()
+            .for_kind(ChargeKind::ResidentLayer)
+            .quarantined_bytes,
+        old_bytes
+    );
+    assert_eq!(
+        budget.reserve(stale_quote).unwrap_err(),
+        NativeGpuDecline::QuoteExpired
+    );
+    assert_eq!(
+        budget
+            .validate_reservation(&unused, unused.frame())
+            .unwrap_err()
+            .kind,
+        NativeGpuFaultKind::IdentityMismatch
+    );
+    let mut alias = NativeAllocationPlan::new(frame(2));
+    alias.add_existing(old_id);
+    assert_eq!(
+        budget.quote(&alias).unwrap_err(),
+        NativeGpuDecline::QuoteExpired
+    );
+
+    let current = allocate(
+        &mut budget,
+        ChargeKind::IsfScratch,
+        NATIVE_MANAGED_LIMIT - old_bytes - reserved_bytes,
+    );
+    let current_id = current.id();
+    assert_eq!(current_id.context, next);
+    assert!(current_id.sequence > old_id.sequence);
+    assert_eq!(budget.snapshot().managed_bytes(), NATIVE_MANAGED_LIMIT);
+    assert!(matches!(
+        budget.quote(&plan(ChargeKind::CpuSnapshot, 1)),
+        Err(NativeGpuDecline::BudgetExceeded {
+            live: NATIVE_MANAGED_LIMIT,
+            requested: 1,
+            limit: NATIVE_MANAGED_LIMIT
+        })
+    ));
+    drop((old, old_pin));
+    budget.acknowledge_completed(submission(9)).unwrap();
+    assert!(
+        budget.try_reap(old_id).unwrap().is_none(),
+        "late completion cannot release quarantined old bytes"
+    );
+    drop(current);
+    let receipt = budget.try_reap(current_id).unwrap().unwrap();
+    budget.release_reaped(receipt).unwrap();
+    assert_eq!(
+        budget.snapshot().managed_bytes(),
+        old_bytes + reserved_bytes
+    );
+    assert_eq!(budget.snapshot().high_water_bytes, NATIVE_MANAGED_LIMIT);
+    drop(unused);
+    assert_eq!(
+        budget.snapshot().reserved_bytes,
+        reserved_bytes,
+        "dropping an old reservation is not a refund"
+    );
+}
+
+#[test]
+fn native_gpu_g4_completed_old_generation_reaps_only_after_final_pin_and_not_from_new_completion() {
+    let mut budget = NativeGpuBudget::new(context());
+    let old = allocate(&mut budget, ChargeKind::CpuLastValid, 64);
+    let old_id = old.id();
+    let old_pin = old.pin();
+    budget.record_use(old_id, submission(9)).unwrap();
+    let next = GpuContextId {
+        device_generation: 7,
+        ..context()
+    };
+    budget.rearm_generation(next).unwrap();
+    assert_eq!(
+        budget
+            .snapshot()
+            .for_kind(ChargeKind::CpuLastValid)
+            .retired_bytes,
+        64
+    );
+    let current = allocate(&mut budget, ChargeKind::IsfScratch, 32);
+    let current_id = current.id();
+    budget
+        .record_use(
+            current_id,
+            GpuSubmissionId {
+                context: next,
+                sequence: 1,
+            },
+        )
+        .unwrap();
+    budget
+        .acknowledge_completed(GpuSubmissionId {
+            context: next,
+            sequence: 99,
+        })
+        .unwrap();
+    drop(old);
+    assert!(budget.try_reap(old_id).unwrap().is_none());
+    drop(old_pin);
+    assert!(
+        budget.try_reap(old_id).unwrap().is_none(),
+        "a new device's completion sequence cannot complete old work"
+    );
+    budget.acknowledge_completed(submission(9)).unwrap();
+
+    budget.quarantine();
+    let receipt = budget.try_reap(old_id).unwrap().unwrap();
+    budget.release_reaped(receipt).unwrap();
+    assert_eq!(budget.snapshot().managed_bytes(), 32);
+    assert!(!budget.retains_generation(context()));
+    assert!(budget.retains_generation(next));
+    assert!(!budget.completed.contains_key(&context()));
+    drop(current);
+    assert!(budget.try_reap(current_id).unwrap().is_none());
+    assert_eq!(
+        budget
+            .snapshot()
+            .for_kind(ChargeKind::IsfScratch)
+            .quarantined_bytes,
+        32
+    );
+}
+
+#[test]
+fn native_gpu_g4_rearm_identity_and_exhaustion_fail_without_ledger_mutation() {
+    let mut budget = NativeGpuBudget::new(context());
+    let charge = allocate(&mut budget, ChargeKind::IsfScratch, 32);
+    budget.quarantine();
+    let before = budget.snapshot();
+    for next in [
+        context(),
+        GpuContextId {
+            device_generation: 0,
+            ..context()
+        },
+        GpuContextId {
+            owner_id: context().owner_id + 1,
+            device_generation: 7,
+        },
+    ] {
+        assert_eq!(
+            budget.rearm_generation(next).unwrap_err().kind,
+            NativeGpuFaultKind::IdentityMismatch
+        );
+        assert_eq!(budget.snapshot(), before);
+        assert!(budget.quarantined);
+    }
+    budget.revision = u64::MAX;
+    let before = budget.snapshot();
+    assert_eq!(
+        budget
+            .rearm_generation(GpuContextId {
+                device_generation: 7,
+                ..context()
+            })
+            .unwrap_err()
+            .kind,
+        NativeGpuFaultKind::SequenceExhausted
+    );
+    assert_eq!(budget.snapshot(), before);
+    assert!(budget.quarantined);
+    drop(charge);
+    let mut exhausted = NativeGpuBudget::new(GpuContextId {
+        device_generation: u64::MAX,
+        ..context()
+    });
+    assert_eq!(
+        exhausted.rearm_generation(context()).unwrap_err().kind,
+        NativeGpuFaultKind::SequenceExhausted
+    );
+}
+
+#[test]
+fn native_gpu_g4_bootstrap_is_pristine_only_before_quotes_and_any_capacity_authority() {
+    let mut budget = NativeGpuBudget::new(context());
+    assert!(budget.is_pristine());
+    let quote = budget.quote(&NativeAllocationPlan::new(frame(1))).unwrap();
+    assert!(
+        !budget.is_pristine(),
+        "an outstanding quote still owns the bootstrap ledger identity"
+    );
+    drop(quote);
+    assert!(
+        budget.is_pristine(),
+        "an unreserved, dropped quote issued no work or capacity"
+    );
+    let reservation = budget
+        .reserve(budget.quote(&NativeAllocationPlan::new(frame(1))).unwrap())
+        .unwrap();
+    budget.cancel_reservation(reservation).unwrap();
+    assert_eq!(budget.snapshot().managed_bytes(), 0);
+    assert!(
+        !budget.is_pristine(),
+        "even zero-byte admission means this is no longer an unused bootstrap"
+    );
+    let mut allocated_id = NativeGpuBudget::new(context());
+    allocated_id.next_allocation_id().unwrap();
+    assert!(!allocated_id.is_pristine());
+}
