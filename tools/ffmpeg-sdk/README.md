@@ -41,8 +41,10 @@ approved durable SDK download URL.
 Run 40366564270 (commit `7d0af757`) produced the adopted candidate, archive
 SHA-256 `81587fa070a9fa2da3d8ff3e63beb9654729782bc8e9899ee951baf5fc5d9f1a`.
 Its build and DLL scan passed; the step failed only on the literal `LGPL`
-grep, fixed in `inspect-candidate.sh`. The local inventory, resolver, notices
-and build documentation now name this SDK. CI still downloads the previous
-BtbN archive until durable hosting exists; that SDK fails closed at runtime
-staging and at the release-packaging guard (`TODO(ffmpeg-sdk-hosting)` in
-`.github/workflows/cross-platform.yml`).
+grep, fixed in `inspect-candidate.sh`. That exact ZIP is hosted with its
+source, patch, provenance and `SHA256SUMS` as the build-dependency prerelease
+`ffmpeg-sdk-lgpl-n8.1.3-r40366564270` (tag on `7d0af757`). The inventory,
+resolver, notices, build documentation and CI download now name it. Rebuilds
+are not byte-identical (rerun 40377168832 differs), so never substitute a
+rebuild for the hosted archive. CI keeps a release-packaging guard that rejects
+the old BtbN Chromaprint `avformat-62.dll`.

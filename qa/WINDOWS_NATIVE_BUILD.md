@@ -56,11 +56,12 @@ Chromaprint/FFTW3 recipes removed (`tools/ffmpeg-sdk/`, workflow
 
 - Version: `n8.1.3-9-g29e619e767-20260930-syndocal-r40366564270` (the DLLs
   self-report `n8.1.3-9-g29e619e767-20260930`).
-- Archive: `ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip` inside the
-  Actions artifact
-  <https://github.com/KTN44295080/Syndocal/actions/runs/40366564270/artifacts/12674399245>
-  (`gh run download 40366564270 -R KTN44295080/Syndocal`). The artifact expires
-  2027-01-24 and is **not** durable hosting; a durable URL is an owner decision.
+- Archive: <https://github.com/KTN44295080/Syndocal/releases/download/ffmpeg-sdk-lgpl-n8.1.3-r40366564270/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip>
+  from the build-dependency prerelease
+  <https://github.com/KTN44295080/Syndocal/releases/tag/ffmpeg-sdk-lgpl-n8.1.3-r40366564270>
+  (annotated tag on `7d0af757`; it also hosts the FFmpeg source tarball, patch,
+  base-image digests, build log and `SHA256SUMS`). This is not a Syndocal
+  application release.
 - SHA-256: `81587fa070a9fa2da3d8ff3e63beb9654729782bc8e9899ee951baf5fc5d9f1a`.
 - Archive root: `ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1`.
 - Exact source: <https://github.com/FFmpeg/FFmpeg/archive/29e619e767cde9045a75c29bc9a8278ae7b3a98b.tar.gz>.

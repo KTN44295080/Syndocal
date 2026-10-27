@@ -10,8 +10,8 @@ or later. Its measured configure line enables shared libraries and version 3
 licensing, and contains neither `--enable-gpl`, `--enable-nonfree` nor
 `--enable-chromaprint`; none of the seven DLLs contains a Chromaprint or FFTW
 string. The upstream LGPL self-description is not a completed license audit.
-Publication is blocked until the exact SDK archive has durable hosting and the
-actual build inputs/linkage and resulting license obligations are reconciled;
+Publication is blocked until the actual build inputs/linkage and resulting
+license obligations are reconciled;
 the collected notices do not grant release clearance or establish exact binary
 dependency closure.
 
@@ -21,9 +21,10 @@ dependency closure.
 - License texts: `licenses/FFmpeg-LGPL-3.0.txt` and `licenses/GPL-3.0.txt`
   (the LGPLv3 incorporates the GPLv3 terms)
 - Dependency license texts and source provenance: `licenses/FFmpeg-DEPENDENCIES.txt`
-- Exact Windows binary archive: `ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip`
-  inside workflow artifact https://github.com/KTN44295080/Syndocal/actions/runs/40366564270/artifacts/12674399245
-  (interim, expires 2027-01-24; durable hosting is pending)
+- Exact Windows binary archive: https://github.com/KTN44295080/Syndocal/releases/download/ffmpeg-sdk-lgpl-n8.1.3-r40366564270/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip
+  (prerelease https://github.com/KTN44295080/Syndocal/releases/tag/ffmpeg-sdk-lgpl-n8.1.3-r40366564270,
+  which also carries the FFmpeg source archive, the recipe patch, build
+  provenance and SHA256SUMS)
 - Archive SHA-256: `81587fa070a9fa2da3d8ff3e63beb9654729782bc8e9899ee951baf5fc5d9f1a`
 - Exact FFmpeg source: https://github.com/FFmpeg/FFmpeg/archive/29e619e767cde9045a75c29bc9a8278ae7b3a98b.tar.gz
 - Build recipes, dependency source revisions and patches: https://github.com/BtbN/FFmpeg-Builds/tree/6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b
