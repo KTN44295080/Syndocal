@@ -2250,3 +2250,85 @@ fn native_output_ready_rejects_unbound_snapshot_without_losing_its_owner() {
     );
     assert_eq!(h.driver.drops.get(), 1);
 }
+
+fn begun(
+    cache: &mut NativeOutputCache,
+    base: &NativeOutputRequest,
+    sequence: u64,
+) -> NativeOutputRequest {
+    let mut request = base.clone();
+    request.frame.request_sequence = sequence;
+    request.fence = cache
+        .begin_request(request.key.clone(), request.frame)
+        .unwrap();
+    request
+}
+
+fn accepts(cache: &NativeOutputCache, request: &NativeOutputRequest) -> bool {
+    cache.accepts_publication(&request.key, request.frame, request.fence)
+}
+
+/// ADR-01 section 7.2 snapshot ring: exactly one displaced, unpublished
+/// request of the same key and fences stays publishable after the next
+/// request began, and only in logical order. A newer publication, blackout
+/// or a configuration change revokes it; nothing older is ever publishable.
+#[test]
+fn native_output_cache_snapshot_ring_publishes_one_displaced_request_in_logical_order() {
+    let stop = Stop(Rc::new(Cell::new(false)));
+    let base = request();
+    let mut cache = NativeOutputCache::new(base.frame.output_id);
+    let first = begun(&mut cache, &base, 1);
+    let second = begun(&mut cache, &base, 2);
+    assert!(accepts(&cache, &first) && accepts(&cache, &second));
+    replay_cache_commit(&mut cache, &first, &stop).unwrap();
+    assert!(cache.last_valid(&first.key).is_some());
+    assert!(matches!(
+        replay_cache_commit(&mut cache, &first, &stop),
+        Err(SnapshotCommitRejection::StaleRequest)
+    ));
+    replay_cache_commit(&mut cache, &second, &stop).unwrap();
+
+    // Two requests began: only the one displaced request is publishable.
+    let third = begun(&mut cache, &base, 3);
+    let fourth = begun(&mut cache, &base, 4);
+    let fifth = begun(&mut cache, &base, 5);
+    assert!(
+        !accepts(&cache, &third),
+        "nothing older than one displaced request"
+    );
+    assert!(matches!(
+        replay_cache_commit(&mut cache, &third, &stop),
+        Err(SnapshotCommitRejection::StaleRequest)
+    ));
+    assert!(accepts(&cache, &fourth) && accepts(&cache, &fifth));
+    // A newer publication first revokes the displaced request (no reversal).
+    replay_cache_commit(&mut cache, &fifth, &stop).unwrap();
+    assert!(!accepts(&cache, &fourth));
+    assert!(matches!(
+        replay_cache_commit(&mut cache, &fourth, &stop),
+        Err(SnapshotCommitRejection::StaleRequest)
+    ));
+
+    // Blackout fences the displaced request.
+    let sixth = begun(&mut cache, &base, 6);
+    let _seventh = begun(&mut cache, &base, 7);
+    assert!(accepts(&cache, &sixth));
+    cache.blackout().unwrap();
+    assert!(matches!(
+        replay_cache_commit(&mut cache, &sixth, &stop),
+        Err(SnapshotCommitRejection::BlackoutFence)
+    ));
+
+    // A geometry (configuration) change leaves no displaced request.
+    let eighth = begun(&mut cache, &base, 8);
+    let mut resized = base.clone();
+    resized.frame.geometry_generation += 1;
+    let ninth = begun(&mut cache, &resized, 9);
+    assert!(!accepts(&cache, &eighth));
+    assert!(matches!(
+        replay_cache_commit(&mut cache, &eighth, &stop),
+        Err(SnapshotCommitRejection::ConfigurationChanged)
+    ));
+    assert!(accepts(&cache, &ninth));
+    replay_cache_commit(&mut cache, &ninth, &stop).unwrap();
+}

@@ -11,6 +11,8 @@ use std::sync::Arc;
 mod prepare;
 #[path = "native_gpu_display_present.rs"]
 mod present;
+#[path = "native_gpu_display_ring.rs"]
+mod ring;
 
 #[cfg(all(test, feature = "qa-native-frame-timing"))]
 #[path = "native_gpu_display_bench_tests.rs"]
@@ -166,6 +168,7 @@ pub struct NativeResidentDisplaySession {
     next_input_id: u64,
     history_host: Option<HistoryHostBudget>,
     follow_last_valid: Option<prepare::ResidentFollowLastValid>,
+    ring: ring::ResidentSnapshotRing,
 }
 
 /// Initialization can fail after a broker has retained real GPU work. The app
@@ -261,6 +264,7 @@ impl NativeResidentDisplaySession {
             next_input_id: 1,
             history_host: None,
             follow_last_valid: None,
+            ring: ring::ResidentSnapshotRing::default(),
         };
         session.presenter =
             match SharedNativePresenter::from_shared_unconfigured(surface, &mut session.owner) {
@@ -511,6 +515,13 @@ impl NativeResidentDisplaySession {
         cancellation: &dyn VideoRenderCancellation,
     ) -> Result<(), String> {
         self.ensure_usable()?;
+        // A CPU handover consumes the history session that a resolved ring
+        // predecessor was sealed against: it can no longer be published.
+        self.discard_ring_resolved();
+        self.ring.disarm();
+        if self.ring.owns_in_flight() {
+            return Err("CPU history handover requires the snapshot ring to drain first".into());
+        }
         let state = self
             .history
             .take()
@@ -1008,7 +1019,7 @@ impl NativeResidentDisplaySession {
             .unwrap_or(0);
         request.duration_ms = 0;
         let limits = &self.owner.capabilities().limits;
-        let composition = match NativeCompositionPlan::preflight(
+        let mut composition = match NativeCompositionPlan::preflight(
             request.context,
             request.frame,
             (request.key.width, request.key.height),
@@ -1035,6 +1046,16 @@ impl NativeResidentDisplaySession {
                 );
             }
         };
+        // Snapshot ring: reuse a completed readback of this geometry instead of
+        // charging a new one; a stale buffer is dropped here.
+        if let Some(readback) = self
+            .ring
+            .take_free(request.context, composition.allocations.readback_bytes)
+        {
+            if let Err(stale) = composition.reuse_readback(readback) {
+                drop(stale);
+            }
+        }
         allocation
             .merge(composition.allocation_plan())
             .map_err(|reason| format!("native allocation plans cannot merge: {reason:?}"))?;
@@ -1157,7 +1178,9 @@ impl NativeResidentDisplaySession {
                 pending.retire(&mut self.owner, reason),
             ));
         }
-        let progress = pending.poll_with_history(
+        // Nonblocking: transaction/history only. The snapshot copy and cache
+        // publication follow either synchronously or through the snapshot ring.
+        let progress = pending.poll_phases_with_history(
             &mut self.owner,
             renderer
                 .isf_runtime
@@ -1206,6 +1229,9 @@ impl NativeResidentDisplaySession {
             return Err(
                 "shared native history must complete its CPU handover before re-arm".into(),
             );
+        }
+        if !self.reset_ring_for_rearm() {
+            return Err("shared native snapshot ring must retire before re-arm".into());
         }
         self.terminal_fault = Some("shared native Display re-arm is rebuilding".to_string());
         self.reserved_geometry = None;
@@ -1316,6 +1342,9 @@ impl NativeResidentDisplaySession {
     /// available after a failed re-arm so the authoritative owner/ledger can be
     /// driven to Reaped instead of being abandoned behind the terminal latch.
     pub fn begin_stop(&mut self) -> Result<(), String> {
+        // The in-flight ring output joins `retirements` with its complete
+        // transaction owner before the history it was planned against drops.
+        self.retire_ring_for_stop();
         self.recovered_history = None;
         self.history = None;
         self.history_host = None;

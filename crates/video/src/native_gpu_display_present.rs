@@ -112,6 +112,10 @@ pub(super) enum ResidentDisplayContent {
     Cpu(NativeCpuArtisticDisplay),
     HardBlackout(NativeHardBlackoutDisplay),
     Rejected,
+    /// Snapshot-ring tick whose own output is still in flight and which has
+    /// no predecessor to present (pipeline fill or a discarded predecessor).
+    /// Never Fresh: zero presents; the next tick presents the in-flight output.
+    InFlight,
 }
 
 fn validate_receipt(
@@ -147,8 +151,16 @@ pub struct NativeResidentDisplayFrame {
     pub(super) extent: (u32, u32),
     pub(super) pts_ms: u64,
     pub(super) output_mapping: VideoOutputMapping,
+    /// A resident output prepared by the previous tick (snapshot ring).
+    pub(super) pipelined: bool,
 }
 impl NativeResidentDisplayFrame {
+    /// True when this resident output was prepared by the previous tick and
+    /// published by this one (ADR-01 section 7.2, one frame of latency).
+    /// Evidence that describes the prepared input belongs to that tick.
+    pub fn prepared_by_previous_tick(&self) -> bool {
+        self.pipelined
+    }
     pub fn evidence(&self) -> &VideoOutputRenderEvidence {
         &self.evidence
     }
@@ -185,6 +197,11 @@ impl NativeResidentDisplaySession {
             ResidentDisplayContent::Rejected => {
                 return Ok(NativeResidentPresentResult::NotPresented {
                     reason: "rejected artistic output".into(),
+                })
+            }
+            ResidentDisplayContent::InFlight => {
+                return Ok(NativeResidentPresentResult::NotPresented {
+                    reason: "resident output in flight; presented by the next tick".into(),
                 })
             }
         }
@@ -347,6 +364,9 @@ impl NativeResidentDisplaySession {
             }
             ResidentDisplayContent::Rejected => Ok(NativeResidentPresentResult::NotPresented {
                 reason: "rejected artistic output".into(),
+            }),
+            ResidentDisplayContent::InFlight => Ok(NativeResidentPresentResult::NotPresented {
+                reason: "resident output in flight; presented by the next tick".into(),
             }),
         }
     }

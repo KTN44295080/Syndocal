@@ -17,8 +17,8 @@ use crate::isf_native_gpu::PreparedNativeBatch;
 use crate::isf_runtime::{IsfGpuRuntime, StackBatch};
 use crate::native_gpu_budget::FrameReservation;
 use crate::native_gpu_composition::{
-    EncodedPremappingSnapshot, NativeCompositionPlan, NativeGpuCompositor, SelectedLayerInput,
-    SelectedTextureKind,
+    EncodedPremappingSnapshot, NativeChargedBuffer, NativeCompositionPlan, NativeGpuCompositor,
+    SelectedLayerInput, SelectedTextureKind,
 };
 use crate::native_gpu_context::{
     NativeGpuOwner, PendingGpuTransaction, RetirementProgress, RetiringGpuTransaction,
@@ -208,6 +208,13 @@ impl SharedNativeOutputCache {
         }
     }
 
+    /// Whether this request's completed snapshot may still be published:
+    /// the current request, or the snapshot ring's displaced predecessor.
+    pub(crate) fn accepts_publication(&self, request: &NativeOutputRequest) -> bool {
+        self.cache
+            .accepts_publication(&request.key, request.frame, request.fence)
+    }
+
     pub(crate) fn blackout(&mut self) -> Result<(), CacheFenceError> {
         let result = self.cache.blackout();
         // Pixels are destroyed before releasing their charge owner, on overflow too.
@@ -333,6 +340,9 @@ pub(crate) enum SharedNativeOutputProgress {
     HistoryReady {
         ready: ReadyNativeGpuOutput<Arc<NativeSnapshotGpu>>,
         history: NativeOutputHistoryFrame,
+        /// The completed, unmapped snapshot readback, returned for reuse by
+        /// the resident snapshot ring. `None` drops it with this output.
+        readback: Option<Arc<NativeChargedBuffer>>,
     },
     Retiring(SharedNativeOutputRetirement),
 }
@@ -950,7 +960,7 @@ impl PendingSharedNativeOutput {
         authority: &impl NativeOutputAuthority,
         cancel: &dyn VideoRenderCancellation,
     ) -> SharedNativeOutputProgress {
-        self.poll_inner(owner, runtime, cache, None, authority, cancel)
+        self.poll_inner(owner, runtime, cache, None, authority, cancel, false)
     }
 
     pub(crate) fn poll_with_history(
@@ -962,7 +972,80 @@ impl PendingSharedNativeOutput {
         authority: &impl NativeOutputAuthority,
         cancel: &dyn VideoRenderCancellation,
     ) -> SharedNativeOutputProgress {
-        self.poll_inner(owner, runtime, cache, Some(history), authority, cancel)
+        self.poll_inner(
+            owner,
+            runtime,
+            cache,
+            Some(history),
+            authority,
+            cancel,
+            false,
+        )
+    }
+
+    /// Snapshot-ring first stage: drive the G transaction, ISF completion and
+    /// the canonical history commit exactly as `poll_with_history`, but stop
+    /// before P's snapshot map/copy and the cache commit. The returned
+    /// `Pending` keeps the resolved snapshot; a later `poll_with_history`
+    /// resumes at the snapshot. Never yields Ready.
+    pub(crate) fn poll_phases_with_history(
+        self,
+        owner: &mut NativeGpuOwner,
+        runtime: &mut IsfGpuRuntime,
+        cache: &mut SharedNativeOutputCache,
+        history: &mut NativeOutputHistorySession,
+        authority: &impl NativeOutputAuthority,
+        cancel: &dyn VideoRenderCancellation,
+    ) -> SharedNativeOutputProgress {
+        self.poll_inner(
+            owner,
+            runtime,
+            cache,
+            Some(history),
+            authority,
+            cancel,
+            true,
+        )
+    }
+
+    /// The G transaction drained and history committed: only the snapshot
+    /// map/copy and cache publication remain. No GPU work uses its owners.
+    pub(crate) fn phases_resolved(&self) -> bool {
+        self.pending.is_none()
+            && self.isf.is_none()
+            && self.composition_resolved.is_none()
+            && self.composition_failure.is_none()
+            && self.snapshot.is_some()
+            && matches!(&self.validated, Some(SharedValidatedOutput::History(frame))
+                if frame.output_phases_valid())
+    }
+
+    pub(crate) fn request(&self) -> &NativeOutputRequest {
+        &self.request
+    }
+
+    /// Release the residents the committed history evicted. They were last
+    /// read by this already completed transaction.
+    pub(crate) fn take_history_retired(
+        &mut self,
+    ) -> Vec<crate::native_gpu_history::RetiredResident<GpuLayerLease>> {
+        match self.validated.as_mut() {
+            Some(SharedValidatedOutput::History(frame)) => frame.take_retired(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Zero-present discard of a resolved output whose publication is no
+    /// longer wanted (blackout, configuration or mapping change, a revoked
+    /// tick, a non-resident tick). Its transaction completed and its history
+    /// is committed, so no submission or scope uses these owners; G reaps the
+    /// charges once they drop. Any other state is returned for retirement.
+    pub(crate) fn discard_resolved(self) -> Result<(), Self> {
+        if !self.phases_resolved() {
+            return Err(self);
+        }
+        drop(self);
+        Ok(())
     }
 
     fn poll_inner(
@@ -973,6 +1056,7 @@ impl PendingSharedNativeOutput {
         mut history: Option<&mut NativeOutputHistorySession>,
         authority: &impl NativeOutputAuthority,
         cancel: &dyn VideoRenderCancellation,
+        defer_snapshot: bool,
     ) -> SharedNativeOutputProgress {
         if owner.context().id() != self.request.context {
             let error = fault(
@@ -1159,6 +1243,9 @@ impl PendingSharedNativeOutput {
         if let Err(reason) = self.validate_completion() {
             return SharedNativeOutputProgress::Retiring(self.retire(owner, reason));
         }
+        if defer_snapshot {
+            return SharedNativeOutputProgress::Pending(self);
+        }
         let snapshot = self
             .snapshot
             .as_mut()
@@ -1233,9 +1320,14 @@ impl PendingSharedNativeOutput {
                     isf: receipt,
                 }
             }
-            SharedValidatedOutput::History(history) => {
-                SharedNativeOutputProgress::HistoryReady { ready, history }
-            }
+            SharedValidatedOutput::History(history) => SharedNativeOutputProgress::HistoryReady {
+                ready,
+                history,
+                readback: self
+                    .snapshot
+                    .take()
+                    .and_then(SharedPremappingSnapshot::into_reusable_readback),
+            },
         }
     }
 

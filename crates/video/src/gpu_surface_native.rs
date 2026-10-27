@@ -1033,7 +1033,7 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
 
         // Physical boundary 1: authority/Stop/epoch immediately before acquire.
         if let Err(reason) = gate.before_acquire(&input) {
-            return match owner.discard_unsubmitted_reservation(reservation) {
+            return match owner.discard_unsubmitted_auxiliary_reservation(reservation) {
                 Ok(()) => not_presented(reason, input),
                 Err((fault, _reservation)) => self.retain_failure(input, None, None, fault),
             };
@@ -1042,7 +1042,7 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
             Ok(acquired) => acquired,
             Err(error) => {
                 if let Err((fault, _reservation)) =
-                    owner.discard_unsubmitted_reservation(reservation)
+                    owner.discard_unsubmitted_auxiliary_reservation(reservation)
                 {
                     return self.retain_failure(input, None, None, fault);
                 }
@@ -1071,7 +1071,10 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
             }
         };
         let view = self.target.view(&acquired);
-        let mut txn = match owner.begin_frame(frame, reservation) {
+        // Auxiliary admission: with the resident snapshot ring the next
+        // logical output may already execute; this present follows it on the
+        // queue and never shares its logical slot or its scopes.
+        let mut txn = match owner.begin_auxiliary_frame(frame, reservation) {
             Ok(txn) => txn,
             Err(fault) => {
                 self.target.discard(acquired);

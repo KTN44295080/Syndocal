@@ -459,6 +459,10 @@ struct FrameRecord<D: CompletionDriver> {
     id: RetirementId,
     frame: NativeFrameId,
     stage: FrameRecordStage,
+    /// Admitted beside one in-flight logical output. Such a record may open
+    /// only a MappingPresent or Initialize phase and never carries ISF,
+    /// composition/snapshot or replay work.
+    auxiliary: bool,
     marker: Arc<TransactionMarker>,
     reservation: Option<FrameReservation>,
     resources: Vec<Arc<dyn Any + Send + Sync>>,
@@ -632,13 +636,51 @@ impl<D: CompletionDriver> BrokerCore<D> {
         frame: NativeFrameId,
         reservation: FrameReservation,
     ) -> Result<RetirementId, NativeGpuFault> {
+        self.admit(frame, reservation, false)
+    }
+
+    /// Present or cold-initialization work beside at most one in-flight
+    /// logical output (ADR-01 section 7.2 snapshot ring). Only one auxiliary
+    /// record may be unretired at a time, so the registry stays bounded at one
+    /// logical transaction, one auxiliary transaction and one retiring present.
+    fn begin_auxiliary(
+        &mut self,
+        frame: NativeFrameId,
+        reservation: FrameReservation,
+    ) -> Result<RetirementId, NativeGpuFault> {
+        self.admit(frame, reservation, true)
+    }
+
+    fn admit(
+        &mut self,
+        frame: NativeFrameId,
+        reservation: FrameReservation,
+        auxiliary: bool,
+    ) -> Result<RetirementId, NativeGpuFault> {
         let admission = self.active().and_then(|()| {
-            if self.has_logical_frame() {
+            let occupied = if auxiliary {
+                // Queue order keeps the logical output ahead of this submission
+                // only once that output has finished recording.
+                self.frames.iter().any(|record| {
+                    if record.auxiliary {
+                        record.stage != FrameRecordStage::PresentRetirement
+                    } else {
+                        record.stage == FrameRecordStage::Recording
+                    }
+                })
+            } else {
+                self.has_logical_frame()
+            };
+            if occupied {
                 return Err(self.fault(
                     Some(frame),
                     GpuPhase::Initialize,
                     NativeGpuFaultKind::StateMismatch,
-                    "one logical output may be in flight",
+                    if auxiliary {
+                        "one auxiliary present/initialize transaction may be in flight"
+                    } else {
+                        "one logical output may be in flight"
+                    },
                 ));
             }
             self.budget.validate_frame_reservation(&reservation, frame)
@@ -667,6 +709,7 @@ impl<D: CompletionDriver> BrokerCore<D> {
             id,
             frame,
             stage: FrameRecordStage::Recording,
+            auxiliary,
             marker: Arc::new(TransactionMarker {
                 session: Arc::clone(&self.session),
                 id,
@@ -738,6 +781,16 @@ impl<D: CompletionDriver> BrokerCore<D> {
                 phase,
                 NativeGpuFaultKind::StateMismatch,
                 "sealed or cancelled transaction, or unsealed phase",
+            ));
+        }
+        if self.frames[index].auxiliary
+            && !matches!(phase, GpuPhase::MappingPresent | GpuPhase::Initialize)
+        {
+            return Err(self.fault(
+                Some(self.frames[index].frame),
+                phase,
+                NativeGpuFaultKind::StateMismatch,
+                "an auxiliary transaction carries only present or initialization work",
             ));
         }
         // At most one present retirement plus one logical output may be live.
@@ -1400,6 +1453,19 @@ impl NativeGpuOwner {
             .map_err(|fault| (fault, reservation))
     }
 
+    /// Return a wholly unused present/initialization root before its
+    /// auxiliary admission. Unlike the logical refund this is permitted while a
+    /// logical output is in flight: an unbound root shares no slot with it.
+    pub(crate) fn discard_unsubmitted_auxiliary_reservation(
+        &mut self,
+        reservation: FrameReservation,
+    ) -> Result<(), (NativeGpuFault, FrameReservation)> {
+        self.core
+            .budget
+            .refund_unused_root(&reservation)
+            .map_err(|fault| (fault, reservation))
+    }
+
     pub(crate) fn begin_frame(
         &mut self,
         frame: NativeFrameId,
@@ -1412,6 +1478,29 @@ impl NativeGpuOwner {
             return Err(error);
         }
         let id = self.core.begin(frame, reservation)?;
+        Ok(NativeGpuFrameTxn {
+            owner: self,
+            id,
+            finished: false,
+        })
+    }
+
+    /// Admit one MappingPresent or Initialize transaction while one logical
+    /// output may still be executing. The physical present of output N then
+    /// runs while output N+1 owns the logical slot; queue order keeps N+1's
+    /// work ahead of this submission, so completion stays ordered.
+    pub(crate) fn begin_auxiliary_frame(
+        &mut self,
+        frame: NativeFrameId,
+        reservation: FrameReservation,
+    ) -> Result<NativeGpuFrameTxn<'_>, NativeGpuFault> {
+        if let Err(error) = self.check_device() {
+            if reservation.context() == self.core.context {
+                self.core.budget.cancel_reservation_tree(reservation)?;
+            }
+            return Err(error);
+        }
+        let id = self.core.begin_auxiliary(frame, reservation)?;
         Ok(NativeGpuFrameTxn {
             owner: self,
             id,
@@ -1644,6 +1733,13 @@ impl NativeGpuOwner {
     pub(crate) fn begin_stop(&mut self) -> StopRetirement {
         self.core.stop()
     }
+
+    /// Test-only device-loss injection: the next broker poll observes loss
+    /// exactly as the real device-lost callback would report it.
+    #[cfg(test)]
+    pub(crate) fn mark_device_lost_for_tests(&self) {
+        self.context.lost.store(true, Ordering::Release);
+    }
     /// A revoked preparation may resume on the next tick only when no logical
     /// frame remains. A prior physical-present retirement is independently
     /// owned by P and does not block the next logical output.
@@ -1686,7 +1782,7 @@ impl NativeGpuOwner {
                 "initialization reservation expired",
             )
         })?;
-        let mut txn = self.begin_frame(frame, reservation)?;
+        let mut txn = self.begin_auxiliary_frame(frame, reservation)?;
         let mut phase = txn.begin_phase(GpuPhase::Initialize)?;
         let resource = Arc::new(create(phase.device(), phase.queue()));
         phase.retain_resource(Arc::clone(&resource), &[])?;

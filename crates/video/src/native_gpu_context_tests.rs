@@ -2260,3 +2260,174 @@ fn native_gpu_g4_late_pending_cleanup_rejects_foreign_terminal_and_unregistered_
     assert_eq!(core.budget.snapshot().managed_bytes(), 32);
     assert!(old_weak.upgrade().is_some());
 }
+
+/// ADR-01 section 7.2 snapshot ring, G side: one auxiliary present or cold
+/// initialization transaction is admitted beside one in-flight logical output.
+/// It may not carry logical work, a second auxiliary waits, a second logical
+/// output is still refused, and the single-retiring-present bound holds.
+#[test]
+fn native_gpu_ring_auxiliary_admission_runs_beside_one_logical_output_and_stays_bounded() {
+    let mut core = scripted();
+    let reservation = reserve(&mut core, 1, 0);
+    let logical = core.begin(frame(1), reservation).unwrap();
+    phase(&mut core, logical, GpuPhase::IsfBatch, Ok(()));
+    let reservation = reserve(&mut core, 9, 0);
+    assert_eq!(
+        core.begin_auxiliary(frame(9), reservation)
+            .unwrap_err()
+            .kind,
+        NativeGpuFaultKind::StateMismatch,
+        "no auxiliary transaction while the logical output is still recording"
+    );
+    core.seal(core.index(logical).unwrap());
+    assert_eq!(core.frames[0].stage, FrameRecordStage::Sealed);
+    assert!(core.has_logical_frame());
+    let reservation = reserve(&mut core, 2, 0);
+    assert_eq!(
+        core.begin(frame(2), reservation).unwrap_err().kind,
+        NativeGpuFaultKind::StateMismatch,
+        "a second logical output stays refused"
+    );
+
+    let reservation = reserve(&mut core, 3, 0);
+    let present = core.begin_auxiliary(frame(3), reservation).unwrap();
+    for logical_phase in [
+        GpuPhase::IsfBatch,
+        GpuPhase::CompositionSnapshot,
+        GpuPhase::HistoricalReplay,
+        GpuPhase::Retirement,
+    ] {
+        assert_eq!(
+            core.open(present, logical_phase).unwrap_err().kind,
+            NativeGpuFaultKind::StateMismatch,
+            "auxiliary transaction cannot open {logical_phase:?}"
+        );
+    }
+    let reservation = reserve(&mut core, 4, 0);
+    assert_eq!(
+        core.begin_auxiliary(frame(4), reservation)
+            .unwrap_err()
+            .kind,
+        NativeGpuFaultKind::StateMismatch,
+        "one auxiliary transaction at a time"
+    );
+    phase(&mut core, present, GpuPhase::MappingPresent, Ok(()));
+    core.seal(core.index(present).unwrap());
+    assert_eq!(core.frames[1].stage, FrameRecordStage::PresentRetirement);
+
+    // Cold initialization may follow while that present retires, but no
+    // second mapping phase can open until it does.
+    let reservation = reserve(&mut core, 5, 0);
+    let initialize = core.begin_auxiliary(frame(5), reservation).unwrap();
+    assert_eq!(
+        core.open(initialize, GpuPhase::MappingPresent)
+            .unwrap_err()
+            .kind,
+        NativeGpuFaultKind::StateMismatch
+    );
+    core.open(initialize, GpuPhase::Initialize).unwrap();
+    assert_eq!(core.frames.len(), 3);
+    assert_eq!(core.driver.polls, 0, "admission never waits");
+    assert_eq!(core.budget.snapshot().managed_bytes(), 0);
+}
+
+struct RingBuffer {
+    buffer: wgpu::Buffer,
+    _charge: AllocationCharge,
+}
+
+fn ring_phase(
+    owner: &mut NativeGpuOwner,
+    frame: NativeFrameId,
+    gpu_phase: GpuPhase,
+    auxiliary: bool,
+) -> (
+    PendingPhaseReceipt,
+    PendingGpuTransaction,
+    std::sync::Weak<RingBuffer>,
+) {
+    let mut plan = NativeAllocationPlan::new(frame);
+    plan.add_new(ChargeKind::IsfScratch, 16).unwrap();
+    let quote = owner.quote(&plan).unwrap();
+    let reservation = owner.reserve(quote).unwrap();
+    let mut txn = if auxiliary {
+        owner.begin_auxiliary_frame(frame, reservation).unwrap()
+    } else {
+        owner.begin_frame(frame, reservation).unwrap()
+    };
+    let mut phase = txn.begin_phase(gpu_phase).unwrap();
+    let charge = phase.bind_allocation(ChargeKind::IsfScratch, 16).unwrap();
+    let id = charge.id();
+    let resource = Arc::new(RingBuffer {
+        buffer: phase.device().create_buffer(&wgpu::BufferDescriptor {
+            label: Some("snapshot ring broker test buffer"),
+            size: 16,
+            usage: wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }),
+        _charge: charge,
+    });
+    let weak = Arc::downgrade(&resource);
+    phase.retain_resource(Arc::clone(&resource), &[id]).unwrap();
+    let mut encoder = phase
+        .device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("snapshot ring broker test clear"),
+        });
+    encoder.clear_buffer(&resource.buffer, 0, None);
+    drop(resource);
+    let encoded = phase.finish(vec![encoder.finish()]);
+    let receipt = txn.submit_phase(encoded).unwrap();
+    (receipt, txn.finish(), weak)
+}
+
+/// Real-device counterpart: while a submitted logical output executes, an
+/// unused present root refunds only through the auxiliary path, an auxiliary
+/// MappingPresent submits after it and completes in queue order, and cold
+/// initialization runs; the logical record keeps its slot until polled.
+#[test]
+fn native_gpu_ring_real_present_and_initialize_run_while_a_logical_output_executes() {
+    let mut owner = headless(74);
+    let (logical_receipt, mut logical, logical_weak) =
+        ring_phase(&mut owner, frame(1), GpuPhase::IsfBatch, false);
+    assert!(owner.has_unfinished_logical_frame());
+
+    let mut plan = NativeAllocationPlan::new(frame(2));
+    plan.add_new(ChargeKind::MappingBuffer, 16).unwrap();
+    let quote = owner.quote(&plan).unwrap();
+    let unused = owner.reserve(quote).unwrap();
+    let (fault, unused) = owner.discard_unsubmitted_reservation(unused).unwrap_err();
+    assert_eq!(fault.kind, NativeGpuFaultKind::StateMismatch);
+    owner
+        .discard_unsubmitted_auxiliary_reservation(unused)
+        .unwrap();
+
+    let (present_receipt, mut present, present_weak) =
+        ring_phase(&mut owner, frame(2), GpuPhase::MappingPresent, true);
+    assert!(present_receipt.submission().sequence > logical_receipt.submission().sequence);
+    assert!(
+        owner.has_unfinished_logical_frame(),
+        "the logical slot stays owned"
+    );
+    assert_eq!(owner.initialize(|_, _| 41_u32).unwrap(), 41);
+
+    finish(&mut owner, &mut present)
+        .take_phase(present_receipt)
+        .unwrap()
+        .into_validation()
+        .unwrap();
+    assert!(
+        owner.has_unfinished_logical_frame(),
+        "the present never resolves N+1"
+    );
+    finish(&mut owner, &mut logical)
+        .take_phase(logical_receipt)
+        .unwrap()
+        .into_validation()
+        .unwrap();
+    assert!(!owner.has_unfinished_logical_frame());
+    assert!(logical_weak.upgrade().is_none() && present_weak.upgrade().is_none());
+    owner.poll_retirement().unwrap();
+    assert_eq!(owner.budget_snapshot().managed_bytes(), 0);
+    assert_eq!(owner.budget_snapshot().reservation_count, 0);
+}

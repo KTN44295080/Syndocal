@@ -326,6 +326,39 @@ fn with_prepared_output<T>(
     }
 }
 
+/// ADR-01 section 7.2 snapshot ring: a resident output may be presented by the
+/// tick after the one that prepared it. Its validation identity and render
+/// time are that preparing tick's, carried exactly one tick; a tick that is not
+/// presentable drops the carried evidence with its abandoned output.
+fn settle_pipelined_evidence(
+    prepared: Result<PreparedOutput, video::NativeResidentPrepareError>,
+    render_time: Duration,
+    output_in_flight: bool,
+    carried: &mut Option<(NativeVideoOutputValidationIdentity, Duration)>,
+) -> (
+    Result<PreparedOutput, video::NativeResidentPrepareError>,
+    Duration,
+) {
+    let previous = carried.take();
+    match prepared {
+        Ok(PreparedOutput::Presentable(mut frame)) => {
+            let current = (frame.validation_identity.clone(), render_time);
+            let mut effective = render_time;
+            if frame.payload.prepared_by_previous_tick() {
+                if let Some((identity, time)) = previous {
+                    frame.validation_identity = identity;
+                    effective = time;
+                }
+            }
+            if output_in_flight {
+                *carried = Some(current);
+            }
+            (Ok(PreparedOutput::Presentable(frame)), effective)
+        }
+        other => (other, render_time),
+    }
+}
+
 fn startup_rejected(boundary: &mut Option<String>, reason: impl Into<String>) -> FrameProgress {
     *boundary = Some(reason.into());
     FrameProgress::StartupRejected
@@ -1134,6 +1167,7 @@ fn run(
     health.restart_cadence();
     let mut pacer =
         video_output_pacer::VideoOutputPacer::new(Duration::from_nanos(1_000_000_000 / 60));
+    let mut pipelined_evidence = None;
     while !stop.load(Ordering::Acquire) {
         let started = Instant::now();
         let size = window.inner_size().map_err(|error| error.to_string())?;
@@ -1234,6 +1268,17 @@ fn run(
             }
             #[cfg(feature = "qa-native-frame-timing")]
             drop(prepare_trace);
+            let (prepared, render_time) = settle_pipelined_evidence(
+                prepared,
+                render_started.elapsed(),
+                resources.session.has_pipelined_output(),
+                &mut pipelined_evidence,
+            );
+            if !matches!(prepared, Ok(PreparedOutput::Presentable(_))) {
+                // A tick that ends before or without a session preparation
+                // never presents the output it may have left in flight.
+                resources.session.abandon_pipelined_output();
+            }
             with_prepared_output(prepared, |prepared| {
                 present(
                     resources,
@@ -1244,7 +1289,7 @@ fn run(
                     None,
                     None,
                     health,
-                    render_started.elapsed(),
+                    render_time,
                     &mut validation,
                     &mut boundary,
                 )

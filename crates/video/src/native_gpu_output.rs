@@ -950,6 +950,11 @@ pub(crate) enum CacheFenceError {
 pub(crate) struct NativeOutputCache {
     output_id: VideoOutputId,
     target: Option<(VideoOutputLastValidKey, NativeFrameId)>,
+    /// The resident snapshot ring publishes output N after request N+1 began
+    /// (ADR-01 section 7.2). Exactly one displaced, still unpublished target
+    /// of the same key and fences stays publishable, in logical order only;
+    /// blackout or a configuration change clears it with the target.
+    previous: Option<(VideoOutputLastValidKey, NativeFrameId)>,
     fence: CachePublicationFence,
     last_request: Option<u64>,
     published_request: Option<u64>,
@@ -1035,6 +1040,7 @@ impl NativeOutputCache {
         Self {
             output_id,
             target: None,
+            previous: None,
             fence: CachePublicationFence {
                 request_sequence: 0,
                 blackout_generation: 0,
@@ -1091,12 +1097,19 @@ impl NativeOutputCache {
         }
         self.last_request = Some(frame.request_sequence);
         self.fence.request_sequence = frame.request_sequence;
+        // A configuration change above already cleared the target, so only a
+        // same-key, same-geometry predecessor can remain publishable.
+        let published = self.published_request;
+        self.previous = self.target.take().filter(|(_, displaced)| {
+            published.is_none_or(|sequence| displaced.request_sequence > sequence)
+        });
         self.target = Some((key, frame));
         Ok(self.fence)
     }
 
     fn invalidate(&mut self, blackout: bool) -> Result<(), CacheFenceError> {
         self.target = None;
+        self.previous = None;
         if blackout {
             self.cached = None;
         }
@@ -1164,33 +1177,13 @@ impl NativeOutputCache {
         if fence.blackout_generation != self.fence.blackout_generation {
             return Err(SnapshotCommitRejection::BlackoutFence);
         }
-        if fence.configuration_generation != self.fence.configuration_generation {
-            return Err(SnapshotCommitRejection::ConfigurationChanged);
-        }
-        let (current_key, current_frame) = self
-            .target
-            .as_ref()
-            .ok_or(SnapshotCommitRejection::StaleRequest)?;
-        if frame.project_epoch != current_frame.project_epoch {
-            return Err(SnapshotCommitRejection::StaleEpoch);
-        }
-        if fence.request_sequence != self.fence.request_sequence
-            || frame.request_sequence != current_frame.request_sequence
-            || self
-                .published_request
-                .is_some_and(|sequence| frame.request_sequence <= sequence)
-        {
-            return Err(SnapshotCommitRejection::StaleRequest);
-        }
-        if key != current_key {
-            return Err(SnapshotCommitRejection::KeyMismatch);
-        }
+        let current_frame = self.publication_target(key, frame, fence)?;
         let descriptor = binding.descriptor;
         let image = descriptor.snapshot;
         if descriptor.key != *key
             || descriptor.fence != fence
             || image.frame != frame
-            || frame != *current_frame
+            || frame != current_frame
             || image.width != key.width
             || image.height != key.height
             || image.format != VideoPixelFormat::Rgba8
@@ -1212,7 +1205,61 @@ impl NativeOutputCache {
         }
         self.cached = Some((key.clone(), pixels));
         self.published_request = Some(frame.request_sequence);
+        // Publication is in logical order: nothing older stays publishable.
+        self.previous = None;
         Ok(PublishedSnapshot { descriptor })
+    }
+
+    /// The exact publishable target for `frame`: the current request, or the
+    /// one displaced unpublished request the snapshot ring may still commit.
+    fn publication_target(
+        &self,
+        key: &VideoOutputLastValidKey,
+        frame: NativeFrameId,
+        fence: CachePublicationFence,
+    ) -> Result<NativeFrameId, SnapshotCommitRejection> {
+        if self.poisoned {
+            return Err(SnapshotCommitRejection::ConfigurationChanged);
+        }
+        if fence.blackout_generation != self.fence.blackout_generation {
+            return Err(SnapshotCommitRejection::BlackoutFence);
+        }
+        if fence.configuration_generation != self.fence.configuration_generation {
+            return Err(SnapshotCommitRejection::ConfigurationChanged);
+        }
+        let (target_key, target_frame) = self
+            .previous
+            .as_ref()
+            .filter(|(_, previous)| *previous == frame)
+            .or(self.target.as_ref())
+            .ok_or(SnapshotCommitRejection::StaleRequest)?;
+        if frame.project_epoch != target_frame.project_epoch {
+            return Err(SnapshotCommitRejection::StaleEpoch);
+        }
+        if fence.request_sequence != target_frame.request_sequence
+            || frame.request_sequence != target_frame.request_sequence
+            || self
+                .published_request
+                .is_some_and(|sequence| frame.request_sequence <= sequence)
+        {
+            return Err(SnapshotCommitRejection::StaleRequest);
+        }
+        if key != target_key {
+            return Err(SnapshotCommitRejection::KeyMismatch);
+        }
+        Ok(*target_frame)
+    }
+
+    /// Whether a completed snapshot of `request` would be accepted now. The
+    /// snapshot ring checks this before copying, so a fenced output is
+    /// discarded (zero presents) instead of failing its healthy owner.
+    pub(crate) fn accepts_publication(
+        &self,
+        key: &VideoOutputLastValidKey,
+        frame: NativeFrameId,
+        fence: CachePublicationFence,
+    ) -> bool {
+        self.publication_target(key, frame, fence).is_ok()
     }
 }
 

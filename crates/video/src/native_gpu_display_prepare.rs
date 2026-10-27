@@ -428,14 +428,6 @@ impl NativeResidentDisplaySession {
         cancellation: &LivePreparationCancellation<'_, A>,
         renderer: &VideoPreviewRenderer<P>,
     ) -> Result<NativeResidentDisplayFrame, NativeResidentPrepareError> {
-        // A successful frame needs the final authority check. An earlier
-        // genuine error must not be relabeled by a later plan edit: failures
-        // use only the control rejection observed while executing that tick.
-        if result.is_ok() {
-            cancellation.final_probe();
-        } else {
-            cancellation.stopped();
-        }
         let observed = cancellation
             .observed
             .load(std::sync::atomic::Ordering::Relaxed);
@@ -487,6 +479,7 @@ impl NativeResidentDisplaySession {
         request: NativeOutputRequest,
         cancellation: &dyn VideoRenderCancellation,
     ) -> Result<NativeResidentDisplayFrame, String> {
+        self.leave_resident_tick();
         // Canonical CPU output (and any history handover) runs brokered work.
         cancellation.enter_committed_work();
         #[cfg(feature = "qa-native-frame-timing")]
@@ -534,6 +527,7 @@ impl NativeResidentDisplaySession {
                 extent,
                 pts_ms,
                 output_mapping,
+                pipelined: false,
             });
         }
         VideoOutputPresentationContract {
@@ -572,6 +566,7 @@ impl NativeResidentDisplaySession {
             extent,
             pts_ms,
             output_mapping,
+            pipelined: false,
         })
     }
 
@@ -588,6 +583,10 @@ impl NativeResidentDisplaySession {
         authority: &A,
     ) -> Result<NativeResidentDisplayFrame, NativeResidentPrepareError> {
         let live = LivePreparationCancellation::new(cancellation, authority);
+        // Completing the snapshot ring's committed work is interrupted only by
+        // Stop; its own latch never probes presentation authority.
+        let committed = LivePreparationCancellation::new(cancellation, authority);
+        committed.enter_committed_work();
         let result = self.prepare_output_inner(
             renderer,
             snapshot,
@@ -596,8 +595,45 @@ impl NativeResidentDisplaySession {
             extent,
             &live,
             &live,
+            &committed,
         );
-        self.classify_preparation(result, &live, renderer)
+        self.settle_tick(result, &live, &committed, renderer, snapshot)
+    }
+
+    /// Latch the tick's one final authority decision, settle the snapshot
+    /// ring and classify. A revoked tick discards its committed work, so its
+    /// in-flight output drains (history committed, zero presents) and the
+    /// owner keeps no logical frame; Stop leaves it to Stop's retirement.
+    fn settle_tick<P: VideoFrameProvider, A: NativeResidentPresentationAuthority>(
+        &mut self,
+        mut result: Result<NativeResidentDisplayFrame, String>,
+        live: &LivePreparationCancellation<'_, A>,
+        committed: &LivePreparationCancellation<'_, A>,
+        renderer: &mut VideoPreviewRenderer<P>,
+        snapshot: &VideoSnapshot,
+    ) -> Result<NativeResidentDisplayFrame, NativeResidentPrepareError> {
+        // Anything the tick did not hand off is never presented.
+        self.discard_ring_resolved();
+        // A successful frame needs the final authority check. An earlier
+        // genuine error must not be relabeled by a later plan edit: failures
+        // use only the control rejection observed while executing that tick.
+        if result.is_ok() {
+            live.final_probe();
+        } else {
+            live.stopped();
+        }
+        let observed = live.observed.load(std::sync::atomic::Ordering::Relaxed);
+        if observed != 0 || result.is_err() {
+            // The pipeline broke this tick: the next resident tick is
+            // synchronous again, so it produces a presentable frame.
+            self.ring.disarm();
+        }
+        if observed == 2 && self.ring.owns_in_flight() {
+            if let Err(error) = self.drain_ring(renderer, snapshot, committed) {
+                result = Err(error);
+            }
+        }
+        self.classify_preparation(result, live, renderer)
     }
 
     fn prepare_output_inner<P: VideoFrameProvider, A: NativeResidentPresentationAuthority>(
@@ -609,6 +645,7 @@ impl NativeResidentDisplaySession {
         extent: (u32, u32),
         cancellation: &dyn VideoRenderCancellation,
         authority: &A,
+        committed: &(impl VideoRenderCancellation + NativeResidentPresentationAuthority),
     ) -> Result<NativeResidentDisplayFrame, String> {
         self.ensure_usable()?;
         if cancellation.is_cancelled()
@@ -617,6 +654,9 @@ impl NativeResidentDisplaySession {
         {
             return Err("native output preparation cancelled or revoked".into());
         }
+        // Snapshot ring stage A: the previous tick's output drains and commits
+        // its history before this tick plans, quotes or hands history over.
+        self.resolve_ring_submitted(renderer, snapshot, committed)?;
         // Leaving Follow releases its complete cached CPU owner before any
         // ordinary frame admission, including an ordinary preparation failure.
         self.follow_last_valid = None;
@@ -628,6 +668,8 @@ impl NativeResidentDisplaySession {
         if plan.output_blackout || plan.output_opacity <= f32::EPSILON || plan.composition.blackout
         {
             self.follow_last_valid = None;
+            // The resolved predecessor is fenced by this blackout: zero presents.
+            self.leave_resident_tick();
             self.cache
                 .blackout()
                 .map_err(|error| format!("native blackout fence failed: {error:?}"))?;
@@ -704,6 +746,8 @@ impl NativeResidentDisplaySession {
                 .collect(),
         };
         if self.history_configuration.as_ref() != Some(&configuration) && self.history.is_some() {
+            // The predecessor belongs to the old history session/geometry.
+            self.leave_resident_tick();
             cancellation.enter_committed_work();
             self.handover_all_history_to_cpu(renderer, cancellation)?;
             self.normalize_cpu_queue_keys(renderer);
@@ -972,6 +1016,7 @@ impl NativeResidentDisplaySession {
         }
         match execution {
             NativeResidentExecution::Cpu { reason, results } => {
+                self.leave_resident_tick();
                 #[cfg(feature = "qa-native-frame-timing")]
                 let _cpu_trace = crate::native_frame_timing::span(
                     crate::native_frame_timing::Phase::CpuComposition,
@@ -1001,7 +1046,21 @@ impl NativeResidentDisplaySession {
                     })?,
                 )
             }
+            NativeResidentExecution::Gpu(SharedNativeOutputProgress::Pending(pending))
+                if self.ring.pipelined() =>
+            {
+                // Snapshot ring: output N stays in flight (owned before any
+                // fallible step), and the resolved N-1 is copied, published
+                // and returned while N executes.
+                self.ring.keep_submitted(pending);
+                Ok(self
+                    .hand_off_ring_resolved(renderer, &request, committed)?
+                    .unwrap_or_else(|| {
+                        ring::in_flight_display_frame(&request, "the next tick presents it")
+                    }))
+            }
             NativeResidentExecution::Gpu(progress) => {
+                self.discard_ring_resolved();
                 #[cfg(feature = "qa-native-frame-timing")]
                 let wait_trace =
                     crate::native_frame_timing::span(crate::native_frame_timing::Phase::IsfMapWait);
@@ -1010,7 +1069,11 @@ impl NativeResidentDisplaySession {
                 #[cfg(feature = "qa-native-frame-timing")]
                 drop(wait_trace);
                 match completion {
-                    ResidentOutputCompletion::Ready(frame) => Ok(frame),
+                    ResidentOutputCompletion::Ready(frame) => {
+                        // One synchronous resident success arms the ring.
+                        self.ring.arm();
+                        Ok(frame)
+                    }
                     ResidentOutputCompletion::Retiring(retirement) => self.finish_recovered_output(
                         renderer,
                         retirement,
@@ -1025,19 +1088,30 @@ impl NativeResidentDisplaySession {
                     ),
                 }
             }
-            NativeResidentExecution::Retiring(retirement) => self.finish_recovered_output(
-                renderer,
-                retirement,
-                request,
-                snapshot,
-                context,
-                transitions,
-                &plan,
-                extent,
-                &live,
-                cancellation,
-            ),
+            NativeResidentExecution::Retiring(retirement) => {
+                self.leave_resident_tick();
+                self.finish_recovered_output(
+                    renderer,
+                    retirement,
+                    request,
+                    snapshot,
+                    context,
+                    transitions,
+                    &plan,
+                    extent,
+                    &live,
+                    cancellation,
+                )
+            }
         }
+    }
+
+    /// A tick whose output is not the resident route: the resolved predecessor
+    /// is discarded (zero presents) and the ring re-arms only after the next
+    /// synchronous resident success.
+    fn leave_resident_tick(&mut self) {
+        self.discard_ring_resolved();
+        self.ring.release_idle();
     }
 
     pub fn prepare_follow_output<P: VideoFrameProvider, A: NativeResidentPresentationAuthority>(
@@ -1058,6 +1132,8 @@ impl NativeResidentDisplaySession {
         authority: &A,
     ) -> Result<NativeResidentDisplayFrame, NativeResidentPrepareError> {
         let live = LivePreparationCancellation::new(cancellation, authority);
+        let committed = LivePreparationCancellation::new(cancellation, authority);
+        committed.enter_committed_work();
         let result = self.prepare_follow_output_inner(
             renderer,
             outgoing,
@@ -1073,8 +1149,9 @@ impl NativeResidentDisplaySession {
             extent,
             &live,
             &live,
+            &committed,
         );
-        self.classify_preparation(result, &live, renderer)
+        self.settle_tick(result, &live, &committed, renderer, incoming)
     }
 
     fn prepare_follow_output_inner<
@@ -1096,6 +1173,7 @@ impl NativeResidentDisplaySession {
         extent: (u32, u32),
         cancellation: &dyn VideoRenderCancellation,
         authority: &A,
+        committed: &(impl VideoRenderCancellation + NativeResidentPresentationAuthority),
     ) -> Result<NativeResidentDisplayFrame, String> {
         self.ensure_usable()?;
         if cancellation.is_cancelled()
@@ -1104,6 +1182,8 @@ impl NativeResidentDisplaySession {
         {
             return Err("native Follow preparation cancelled or revoked".into());
         }
+        // Follow composes on the canonical CPU path: drain the snapshot ring.
+        self.drain_ring(renderer, incoming, committed)?;
         self.follow_last_valid = self.follow_last_valid.take().filter(|cached| {
             cached.source_timeline_id == source_timeline_id
                 && cached.generation == follow_generation
@@ -1276,10 +1356,10 @@ impl NativeResidentDisplaySession {
         Ok(frame)
     }
 
-    fn reject_retiring_output(
+    pub(super) fn reject_retiring_output<T>(
         &mut self,
         retirement: SharedNativeOutputRetirement,
-    ) -> Result<NativeResidentDisplayFrame, String> {
+    ) -> Result<T, String> {
         let reason = format!(
             "native output requires retained retirement: {:?}",
             retirement.reason()
@@ -1302,11 +1382,65 @@ impl NativeResidentDisplaySession {
         authority: &impl NativeOutputAuthority,
         cancellation: &dyn VideoRenderCancellation,
     ) -> Result<NativeResidentDisplayFrame, String> {
+        let faults = self.commit_recovered_history(
+            renderer,
+            retirement,
+            &request,
+            snapshot,
+            authority,
+            cancellation,
+        )?;
+        crate::native_gpu_output::guard(
+            &request,
+            OutputBoundary::BeforeCpuFallback,
+            authority,
+            cancellation,
+        )
+        .map_err(|reason| format!("recovered CPU output revoked: {reason:?}"))?;
+        let owner = self.owner.take();
+        let (owner, output) = renderer.finish_native_cpu_history(
+            owner,
+            request.frame,
+            snapshot,
+            context,
+            transitions,
+            plan,
+            extent.0,
+            extent.1,
+            cancellation,
+            faults,
+        );
+        self.owner.restore(owner);
+        crate::native_gpu_output::guard(
+            &request,
+            OutputBoundary::BeforeCacheCommit,
+            authority,
+            cancellation,
+        )
+        .map_err(|reason| format!("recovered CPU output revoked after completion: {reason:?}"))?;
+        self.cpu_display_frame(
+            request,
+            output.map_err(|error| format!("canonical recovered CPU output failed: {error:?}"))?,
+        )
+    }
+
+    /// Commit a drained fixed-clock CPU recovery (exact faults first) into the
+    /// canonical history, then hand every history entry to CPU. Shared by the
+    /// synchronous tick and by snapshot-ring stage A.
+    pub(super) fn commit_recovered_history<P: VideoFrameProvider>(
+        &mut self,
+        renderer: &mut VideoPreviewRenderer<P>,
+        retirement: SharedNativeOutputRetirement,
+        request: &NativeOutputRequest,
+        snapshot: &VideoSnapshot,
+        authority: &impl NativeOutputAuthority,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Vec<crate::VideoEffectStageFault>, String> {
         if retirement.reason().is_some() {
             return self.reject_retiring_output(retirement);
         }
         if let Err(reason) = crate::native_gpu_output::guard(
-            &request,
+            request,
             OutputBoundary::AfterPoll,
             authority,
             cancellation,
@@ -1361,38 +1495,7 @@ impl NativeResidentDisplaySession {
         self.recovered_history = None;
         self.handover_all_history_to_cpu(renderer, cancellation)?;
         self.normalize_cpu_queue_keys(renderer);
-        crate::native_gpu_output::guard(
-            &request,
-            OutputBoundary::BeforeCpuFallback,
-            authority,
-            cancellation,
-        )
-        .map_err(|reason| format!("recovered CPU output revoked: {reason:?}"))?;
-        let owner = self.owner.take();
-        let (owner, output) = renderer.finish_native_cpu_history(
-            owner,
-            request.frame,
-            snapshot,
-            context,
-            transitions,
-            plan,
-            extent.0,
-            extent.1,
-            cancellation,
-            faults,
-        );
-        self.owner.restore(owner);
-        crate::native_gpu_output::guard(
-            &request,
-            OutputBoundary::BeforeCacheCommit,
-            authority,
-            cancellation,
-        )
-        .map_err(|reason| format!("recovered CPU output revoked after completion: {reason:?}"))?;
-        self.cpu_display_frame(
-            request,
-            output.map_err(|error| format!("canonical recovered CPU output failed: {error:?}"))?,
-        )
+        Ok(faults)
     }
 
     fn finish_resident_output<P: VideoFrameProvider>(
@@ -1405,7 +1508,11 @@ impl NativeResidentDisplaySession {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             match progress {
-                SharedNativeOutputProgress::HistoryReady { ready, mut history } => {
+                SharedNativeOutputProgress::HistoryReady {
+                    ready,
+                    mut history,
+                    readback,
+                } => {
                     if !history.output_phases_valid() {
                         return Err("native Ready lacks committed output history".into());
                     }
@@ -1416,18 +1523,9 @@ impl NativeResidentDisplaySession {
                         }
                         drop(owner);
                     }
-                    let evidence = ready.evidence();
-                    let extent = (ready.request.key.width, ready.request.key.height);
-                    let pts_ms = ready.request.pts_ms;
-                    let output_mapping = ready.mapping().clone();
+                    self.ring.recycle(readback);
                     return Ok(ResidentOutputCompletion::Ready(
-                        NativeResidentDisplayFrame {
-                            content: ResidentDisplayContent::Resident(ready),
-                            evidence,
-                            extent,
-                            pts_ms,
-                            output_mapping,
-                        },
+                        ring::resident_display_frame(ready),
                     ));
                 }
                 SharedNativeOutputProgress::Ready { ready, layers, isf } => {

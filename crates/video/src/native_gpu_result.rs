@@ -520,6 +520,12 @@ impl NativeReadbackMap {
         }
     }
 
+    /// The map completed and was explicitly unmapped: the buffer may be
+    /// reused as a copy destination and mapped again.
+    pub(crate) fn is_unmapped(&self) -> bool {
+        self.state == CpuReadbackMapState::Unmapped
+    }
+
     pub(crate) fn unmap(&mut self) {
         if self.state == CpuReadbackMapState::Pending {
             // Cancellation/validation rejection can leave a delivered callback

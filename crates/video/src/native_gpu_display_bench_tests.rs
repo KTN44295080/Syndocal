@@ -129,6 +129,7 @@ fn session() -> NativeResidentDisplaySession {
         next_input_id: 1,
         history_host: None,
         follow_last_valid: None,
+        ring: Default::default(),
     };
     session.compositor = Some(NativeGpuCompositor::from_shared(&mut session.owner).unwrap());
     session.reserve_geometry(EXTENT.0, EXTENT.1).unwrap();

@@ -42,6 +42,7 @@ fn headless_session() -> NativeResidentDisplaySession {
         next_input_id: 1,
         history_host: None,
         follow_last_valid: None,
+        ring: Default::default(),
     }
 }
 

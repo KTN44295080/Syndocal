@@ -76,6 +76,9 @@ pub(crate) struct NativeCompositionPlan {
     pub layers_bottom_first: Vec<CompositionLayerEncoding>,
     pub allocations: CompositionAllocationPlan,
     native_allocations: NativeAllocationPlan,
+    /// A completed, unmapped snapshot readback of exactly this extent, reused
+    /// instead of a new allocation (ADR-01 section 7.2 ring, section 11 C/E).
+    reused_readback: Option<Arc<NativeChargedBuffer>>,
 }
 
 /// Checked minimum capacities. G must also account for actual grown capacities,
@@ -188,26 +191,8 @@ impl NativeCompositionPlan {
                 params,
             });
         }
-        // One exact charge per physical allocation, in the order the shared
-        // adapter binds them: premapping target, its single readback, the owned
-        // packed CPU snapshot, then each layer's lookup and parameter buffer.
-        let mut native_allocations = NativeAllocationPlan::new(frame);
-        let per_layer = layers.iter().flat_map(|layer| {
-            [
-                (ChargeKind::CompositionBuffer, layer.lookup.len() as u64 * 4),
-                (ChargeKind::CompositionBuffer, LAYER_PARAMS_BYTES),
-            ]
-        });
-        for (kind, bytes) in [
-            (ChargeKind::CompositionBuffer, output_bytes),
-            (ChargeKind::SnapshotReadback, output_bytes),
-            (ChargeKind::CpuSnapshot, output_bytes),
-        ]
-        .into_iter()
-        .chain(per_layer)
-        {
-            native_allocations.add_new(kind, bytes).map_err(decline)?;
-        }
+        let native_allocations =
+            composition_allocations(frame, output_bytes, &layers, None).map_err(decline)?;
         Ok(Self {
             context,
             frame,
@@ -222,7 +207,40 @@ impl NativeCompositionPlan {
                 uniform_bytes,
             },
             native_allocations,
+            reused_readback: None,
         })
+    }
+
+    /// Replace this plan's new snapshot readback by an existing, completed and
+    /// unmapped readback of the same context and exact capacity. Call before
+    /// the plan is merged into the frame quote; the readback then becomes an
+    /// existing alias of that quote instead of a second charge. A mismatching
+    /// or still-shared buffer is returned unchanged for the caller to drop.
+    pub(crate) fn reuse_readback(
+        &mut self,
+        readback: Arc<NativeChargedBuffer>,
+    ) -> Result<(), Arc<NativeChargedBuffer>> {
+        let id = readback.allocation_id();
+        if self.reused_readback.is_some()
+            || Arc::strong_count(&readback) != 1
+            || id.context != self.context
+            || readback.charge.kind() != ChargeKind::SnapshotReadback
+            || readback.capacity() != self.allocations.readback_bytes
+            || readback.buffer.size() != self.allocations.readback_bytes
+        {
+            return Err(readback);
+        }
+        let Ok(native_allocations) = composition_allocations(
+            self.frame,
+            self.allocations.premapping_bytes,
+            &self.layers_bottom_first,
+            Some(id),
+        ) else {
+            return Err(readback);
+        };
+        self.native_allocations = native_allocations;
+        self.reused_readback = Some(readback);
+        Ok(())
     }
 
     /// Merge this exact private sub-plan into the G/P frame quote before the
@@ -508,6 +526,7 @@ impl NativeGpuCompositor {
 
 /// A charged physical buffer. The charge lives exactly as long as the buffer
 /// owner, including retained GPU uses and the later mapping input.
+#[derive(Debug)]
 pub(crate) struct NativeChargedBuffer {
     buffer: wgpu::Buffer,
     charge: AllocationCharge,
@@ -647,11 +666,14 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
             ChargeKind::CompositionBuffer,
             plan.allocations.premapping_bytes,
         )?;
-        let readback_charge = phase.bind_reserved_allocation(
-            &mut self.reservation,
-            ChargeKind::SnapshotReadback,
-            plan.allocations.readback_bytes,
-        )?;
+        let readback_charge = match plan.reused_readback.as_ref() {
+            Some(_) => None,
+            None => Some(phase.bind_reserved_allocation(
+                &mut self.reservation,
+                ChargeKind::SnapshotReadback,
+                plan.allocations.readback_bytes,
+            )?),
+        };
         let cpu_charge = phase.bind_reserved_allocation(
             &mut self.reservation,
             ChargeKind::CpuSnapshot,
@@ -681,15 +703,21 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
             }),
             charge: output_charge,
         });
-        let readback = Arc::new(NativeChargedBuffer {
-            buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Syndocal shared premapping snapshot readback"),
-                size: plan.allocations.readback_bytes,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
+        // A reused ring readback is an existing alias of this frame's quote; the
+        // retained resource below records this submission's use of it.
+        let readback = match (plan.reused_readback.as_ref(), readback_charge) {
+            (Some(reused), None) => Arc::clone(reused),
+            (None, Some(charge)) => Arc::new(NativeChargedBuffer {
+                buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Syndocal shared premapping snapshot readback"),
+                    size: plan.allocations.readback_bytes,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+                charge,
             }),
-            charge: readback_charge,
-        });
+            _ => unreachable!("readback is either reused or bound above"),
+        };
         let mut ids = vec![output.allocation_id(), readback.allocation_id()];
         let mut layers = Vec::with_capacity(layer_charges.len());
         for ((layer, read), (lookup_charge, params_charge)) in plan
@@ -842,6 +870,30 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
             cpu_charge: encoding.cpu_charge,
         })
     }
+}
+
+/// One exact charge per physical allocation, in the order the shared adapter
+/// binds them: premapping target, its single readback (or an existing ring
+/// readback alias), the owned packed CPU snapshot, then each layer's lookup
+/// and parameter buffer.
+fn composition_allocations(
+    frame: NativeFrameId,
+    output_bytes: u64,
+    layers: &[CompositionLayerEncoding],
+    reused_readback: Option<GpuAllocationId>,
+) -> Result<NativeAllocationPlan, NativeGpuDecline> {
+    let mut native_allocations = NativeAllocationPlan::new(frame);
+    native_allocations.add_new(ChargeKind::CompositionBuffer, output_bytes)?;
+    match reused_readback {
+        Some(id) => native_allocations.add_existing(id),
+        None => native_allocations.add_new(ChargeKind::SnapshotReadback, output_bytes)?,
+    }
+    native_allocations.add_new(ChargeKind::CpuSnapshot, output_bytes)?;
+    for layer in layers {
+        native_allocations.add_new(ChargeKind::CompositionBuffer, layer.lookup.len() as u64 * 4)?;
+        native_allocations.add_new(ChargeKind::CompositionBuffer, LAYER_PARAMS_BYTES)?;
+    }
+    Ok(native_allocations)
 }
 
 fn composition_fault(

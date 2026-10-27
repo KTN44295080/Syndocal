@@ -2093,3 +2093,109 @@ fn shared_present_drives_resident_cpu_artistic_and_blackout_through_one_retireme
     wait_for_allocations(&mut env.fixture.owner, 5);
     stop_and_reap(&mut presenter, &mut env.fixture.owner);
 }
+
+struct InFlightBuffer {
+    buffer: wgpu::Buffer,
+    _charge: AllocationCharge,
+}
+
+/// A real submitted, unpolled logical output (the resident ring's output N+1).
+fn in_flight_logical_output(
+    owner: &mut NativeGpuOwner,
+    frame: NativeFrameId,
+) -> (PendingPhaseReceipt, PendingGpuTransaction) {
+    let mut plan = NativeAllocationPlan::new(frame);
+    plan.add_new(ChargeKind::IsfScratch, 16).unwrap();
+    let quote = owner.quote(&plan).unwrap();
+    let reservation = owner.reserve(quote).unwrap();
+    let mut txn = owner.begin_frame(frame, reservation).unwrap();
+    let mut phase = txn.begin_phase(GpuPhase::IsfBatch).unwrap();
+    let charge = phase.bind_allocation(ChargeKind::IsfScratch, 16).unwrap();
+    let id = charge.id();
+    let resource = Arc::new(InFlightBuffer {
+        buffer: phase.device().create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ring next logical output"),
+            size: 16,
+            usage: wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }),
+        _charge: charge,
+    });
+    phase.retain_resource(Arc::clone(&resource), &[id]).unwrap();
+    let mut encoder = phase
+        .device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("ring next logical output clear"),
+        });
+    encoder.clear_buffer(&resource.buffer, 0, None);
+    let encoded = phase.finish(vec![encoder.finish()]);
+    let receipt = txn.submit_phase(encoded).unwrap();
+    (receipt, txn.finish())
+}
+
+/// ADR-01 section 7.2 snapshot ring, P side: output N presents while output
+/// N+1 already owns G's logical slot. The present is an auxiliary
+/// transaction queued after N+1; a revoked acquire refunds only its own unused
+/// root, N+1 resolves independently, and the presented pixels are N's.
+#[test]
+fn shared_present_runs_beside_the_next_in_flight_logical_output() {
+    let mut env = shared_env();
+    let size = (23, 17);
+    let target = OffscreenTarget::new(&env);
+    let mut presenter = new_presenter(&mut env, target);
+    presenter
+        .configure_admitted(geometry(size), &mut env.fixture.owner)
+        .unwrap();
+    let mapping = projection();
+    let (ready, pixels, _) = real_ready(&mut env, 1, size, mapping.clone());
+    let (next_receipt, next) =
+        in_flight_logical_output(&mut env.fixture.owner, display_frame_id(2));
+    assert!(env.fixture.owner.has_unfinished_logical_frame());
+    let reservations = env.fixture.owner.budget_snapshot().reservation_count;
+
+    let gate = ScriptedGate {
+        acquire: Some(PresentRejection::Revoked),
+        ..Default::default()
+    };
+    let ready = expect_not_presented(
+        presenter.present_ready(ready, &gate, &mut env.fixture.owner),
+        PresentRejection::Revoked,
+    );
+    assert_eq!(presenter.target.acquires, 0);
+    assert_eq!(
+        env.fixture.owner.budget_snapshot().reservation_count,
+        reservations,
+        "only the present's unused root was refunded"
+    );
+
+    let receipt = expect_presented(presenter.present_ready(
+        ready,
+        &ScriptedGate::default(),
+        &mut env.fixture.owner,
+    ));
+    assert!(receipt.submission().sequence > next_receipt.submission().sequence);
+    assert!(
+        env.fixture.owner.has_unfinished_logical_frame(),
+        "output N+1 keeps the logical slot through N's present"
+    );
+    let mut resolved = await_transaction(&mut env.fixture.owner, next, &|| false)
+        .unwrap_or_else(|_| panic!("output N+1 did not resolve"));
+    resolved
+        .take_phase(next_receipt)
+        .unwrap()
+        .into_validation()
+        .unwrap();
+    let started = Instant::now();
+    while presenter.poll_retirements(&mut env.fixture.owner).unwrap() != 0 {
+        assert!(started.elapsed() < Duration::from_secs(5));
+        std::thread::yield_now();
+    }
+    assert_eq!(presenter.presents(), 1);
+    let image = read_image(&env, &presenter.target.presented[0]);
+    assert_eq!(
+        image,
+        apply_video_output_mapping(pixels, &mapping).data,
+        "the presented image is output N's premapping snapshot, mapped once"
+    );
+    stop_and_reap(&mut presenter, &mut env.fixture.owner);
+}

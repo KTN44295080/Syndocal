@@ -331,7 +331,7 @@ fn finish_history(
 
 fn history_ready(result: SharedNativeOutputProgress) -> (SharedReady, NativeOutputHistoryFrame) {
     match result {
-        SharedNativeOutputProgress::HistoryReady { ready, history } => (ready, history),
+        SharedNativeOutputProgress::HistoryReady { ready, history, .. } => (ready, history),
         SharedNativeOutputProgress::Retiring(retirement) => {
             panic!("history did not become Ready: {:?}", retirement.reason())
         }

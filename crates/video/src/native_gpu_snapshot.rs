@@ -472,6 +472,20 @@ impl NativeGpuSnapshotter {
 }
 
 impl SharedPremappingSnapshot {
+    /// The resident snapshot ring (ADR-01 section 7.2) reuses the readback of
+    /// a snapshot that completed: copied, view dropped, unmapped, and its GPU
+    /// source handed to the cache. Any other state returns nothing, so a
+    /// pending, failed or still-mapped buffer is only ever dropped.
+    pub(crate) fn into_reusable_readback(self) -> Option<Arc<NativeChargedBuffer>> {
+        if !self.terminal || self.gpu.is_some() || self.mapper.mapped {
+            return None;
+        }
+        let NativeSnapshotMap { readback, map, .. } = self.mapper;
+        let unmapped = map.is_unmapped();
+        drop(map);
+        unmapped.then_some(readback)
+    }
+
     /// After G resolved the whole transaction, consume only P's phase. ISF's
     /// distinct receipt stays with its history/publication owner. A foreign,
     /// repeated or failed phase makes this snapshot terminal (no receipt).
