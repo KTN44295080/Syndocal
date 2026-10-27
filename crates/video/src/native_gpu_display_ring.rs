@@ -14,8 +14,10 @@
 //!    the snapshot copy/unmap and the cache publication remain.
 //! 3. hand-off: after tick N+1 submits N+1, stage B copies N's snapshot,
 //!    publishes it to the CPU cache and constructs its Ready (stage B), or the
-//!    output is discarded with zero presents when its key, mapping, geometry,
+//!    output is discarded with zero presents when its key, geometry,
 //!    blackout or configuration fence no longer matches the current request.
+//!    Mapping edits use the predecessor's frozen mapping (one-tick latency).
+//!    Any discard disarms the ring so the next tick presents synchronously.
 //! 4. The unmapped readback returns to `free` for the next composition plan,
 //!    so the ledger charges exactly two readbacks per geometry in steady state.
 //!
@@ -46,6 +48,9 @@ pub(super) struct ResidentSnapshotRing {
     /// (an app-level revocation or settlement): the in-flight output belongs
     /// to a tick that was never presented and is discarded, never published.
     abandoned: bool,
+    /// Abandonment belongs to the resolved predecessor, independently of the
+    /// new submitted output and its abandonment flag.
+    resolved_abandoned: bool,
     #[cfg(test)]
     pub(super) discarded: u64,
 }
@@ -133,6 +138,7 @@ impl NativeResidentDisplaySession {
         let Some(mut pending) = self.ring.submitted.take() else {
             return Ok(());
         };
+        self.ring.resolved_abandoned = std::mem::take(&mut self.ring.abandoned);
         #[cfg(feature = "qa-native-frame-timing")]
         let _wait = crate::native_frame_timing::span(crate::native_frame_timing::Phase::IsfMapWait);
         let authority = super::present::ResidentAuthority(committed);
@@ -189,6 +195,14 @@ impl NativeResidentDisplaySession {
                     // not presented; the current tick continues from CPU
                     // history exactly as the tick after a synchronous recovery.
                     self.ring.armed = false;
+                    // PendingSharedNativeOutput retains its request, mapping,
+                    // frozen clocks and exact faults, but no VideoSnapshot or
+                    // historical layer labels. The diagnostic API below uses
+                    // a snapshot only for label lookup, so stage-A recovery
+                    // currently formats N-1's faults using tick N's labels.
+                    // Scope/stage identities remain those of N-1; its returned
+                    // faults are not attached to N's successful frame. Avoid a
+                    // full snapshot clone per tick solely for this diagnostic.
                     self.commit_recovered_history(
                         renderer, retirement, &request, snapshot, &authority, committed,
                     )?;
@@ -238,11 +252,10 @@ impl NativeResidentDisplaySession {
             return Ok(None);
         };
         let previous = pending.request();
-        let publishable = !self.ring.abandoned
+        let publishable = !self.ring.resolved_abandoned
             && previous.context == current.context
             && previous.context == self.owner.context().id()
             && previous.key == current.key
-            && previous.mapping_identity == current.mapping_identity
             && previous.frame.geometry_generation == current.frame.geometry_generation
             && previous.frame.geometry_generation == self.geometry_generation
             && previous.frame.request_sequence < current.frame.request_sequence
@@ -316,6 +329,7 @@ impl NativeResidentDisplaySession {
                         drop(owner);
                     }
                     self.ring.recycle(readback);
+                    self.ring.resolved_abandoned = false;
                     let mut frame = resident_display_frame(ready);
                     frame.pipelined = true;
                     return Ok(Some(frame));
@@ -342,7 +356,10 @@ impl NativeResidentDisplaySession {
         let Some(pending) = self.ring.resolved.take() else {
             return;
         };
-        self.ring.abandoned = false;
+        // A successful InFlight return does not make this discard publishable.
+        // The next tick must render synchronously rather than repeat a stall.
+        self.ring.disarm();
+        self.ring.resolved_abandoned = false;
         #[cfg(test)]
         {
             self.ring.discarded += 1;

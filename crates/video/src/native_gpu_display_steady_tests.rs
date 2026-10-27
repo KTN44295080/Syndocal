@@ -806,3 +806,117 @@ fn native_gpu_output_display_snapshot_ring_abandoned_output_is_never_published()
     drop(next);
     stop_and_reap(&mut ring.session, &mut ring.renderer);
 }
+
+/// Mapping edits do not invalidate premapping pixels. Every output keeps its
+/// own captured mapping, with exactly the ring's accepted one-tick latency.
+#[test]
+fn native_gpu_output_display_snapshot_ring_animated_mapping_returns_fresh_predecessor_pixels() {
+    for layers in [1, 3] {
+        let mut ring = RingFixture::new(layers, EXTENT);
+        let mut reference = RingFixture::new(layers, EXTENT);
+        let mut previous = None;
+        for tick in 1..=24 {
+            let mapping = protocol::VideoOutputMapping {
+                corner_top_left_x: tick as f32 / 100.0,
+                mask_softness: tick as f32 / 200.0,
+                ..Default::default()
+            };
+            ring.snapshot.outputs[0].mapping = mapping.clone();
+            reference.snapshot.outputs[0].mapping = mapping.clone();
+            reference.session.ring.disarm();
+            let oracle = reference.prepare(EXTENT);
+            let ResidentDisplayContent::Resident(oracle_ready) = &oracle.content else {
+                panic!("synchronous reference must be resident");
+            };
+            let pixels = reference
+                .session
+                .cache
+                .last_valid(&oracle_ready.request.key)
+                .unwrap()
+                .clone();
+            let frame = ring.prepare(EXTENT);
+            if tick == 2 {
+                assert_eq!(path_of(frame), Path::InFlight, "single fill tick");
+            } else {
+                let (expected_mapping, expected_pixels) = if tick == 1 {
+                    (&mapping, &pixels)
+                } else {
+                    let (mapping, pixels) = previous.as_ref().unwrap();
+                    (mapping, pixels)
+                };
+                let ResidentDisplayContent::Resident(ready) = &frame.content else {
+                    panic!("mapping changed at tick {tick}: expected Fresh predecessor");
+                };
+                assert_eq!(
+                    frame.evidence().freshness,
+                    crate::VideoOutputRenderFreshness::Fresh
+                );
+                assert_eq!(
+                    resident_identity(&frame),
+                    Some((if tick == 1 { 1 } else { tick - 1 }, expected_pixels.pts_ms))
+                );
+                assert_eq!(ready.mapping(), expected_mapping);
+                assert_eq!(&frame.output_mapping, expected_mapping);
+                let cached = ring.session.cache.last_valid(&ready.request.key).unwrap();
+                assert_eq!(
+                    cached.data, expected_pixels.data,
+                    "{layers} layers tick {tick}: exact predecessor pixels"
+                );
+                assert_eq!(
+                    crate::apply_video_output_mapping(cached.clone(), ready.mapping()).data,
+                    crate::apply_video_output_mapping(expected_pixels.clone(), expected_mapping)
+                        .data
+                );
+            }
+            previous = Some((mapping, pixels));
+        }
+        assert_eq!(ring.session.ring.discarded, 0);
+        stop_and_reap(&mut ring.session, &mut ring.renderer);
+        stop_and_reap(&mut reference.session, &mut reference.renderer);
+    }
+}
+
+#[test]
+fn native_gpu_output_display_snapshot_ring_nonpublishable_discard_forces_synchronous_next_tick() {
+    let mut ring = RingFixture::new(1, EXTENT);
+    ring.warm(EXTENT);
+    // Invalidate only publication, without the ordinary blackout/disarm path.
+    ring.session.cache.blackout().unwrap();
+    assert_eq!(path_of(ring.prepare(EXTENT)), Path::InFlight);
+    assert_eq!(ring.session.ring.discarded, 1);
+    assert!(!ring.session.ring.armed());
+    let frame = ring.prepare(EXTENT);
+    assert_eq!(resident_identity(&frame), Some((5, ring.position)));
+    assert!(!frame.prepared_by_previous_tick());
+    assert_eq!(
+        frame.evidence().freshness,
+        crate::VideoOutputRenderFreshness::Fresh
+    );
+    drop(frame);
+    assert!(!ring.session.has_pipelined_output());
+    assert_eq!(path_of(ring.prepare(EXTENT)), Path::InFlight);
+    assert_eq!(path_of(ring.prepare(EXTENT)), Path::Resident);
+    stop_and_reap(&mut ring.session, &mut ring.renderer);
+}
+
+#[test]
+fn native_gpu_output_display_snapshot_ring_abandoned_output_stays_fenced_when_rearmed() {
+    let mut ring = RingFixture::new(1, EXTENT);
+    ring.warm(EXTENT);
+    ring.session.abandon_pipelined_output();
+    // Exercise the independent abandonment fence even if arming changes.
+    ring.session.ring.arm();
+    let frame = ring.prepare(EXTENT);
+    assert_eq!(
+        path_of(frame),
+        Path::InFlight,
+        "abandoned predecessor must never become Ready"
+    );
+    assert_eq!(ring.session.ring.discarded, 1);
+    assert!(!ring.session.ring.armed());
+    let frame = ring.prepare(EXTENT);
+    assert_eq!(resident_identity(&frame), Some((5, ring.position)));
+    assert!(!frame.prepared_by_previous_tick());
+    drop(frame);
+    stop_and_reap(&mut ring.session, &mut ring.renderer);
+}
