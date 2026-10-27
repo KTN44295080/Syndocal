@@ -957,3 +957,46 @@ assets and notes were only staged locally (see Remaining work).
 4. A native `tauri build` and launch with the candidate DLLs beside the
    executable were not repeated in this task; the video-crate regressions and
    framecrc matrix are the acceptance evidence.
+
+### Hosting addendum - 2026-10-27
+
+The owner chose GitHub Release hosting. The supervisor created build-dependency
+prerelease
+[`ffmpeg-sdk-lgpl-n8.1.3-r40366564270`](https://github.com/KTN44295080/Syndocal/releases/tag/ffmpeg-sdk-lgpl-n8.1.3-r40366564270),
+an annotated tag on `7d0af757` (not latest). It carries the 14 staged assets
+plus `SHA256SUMS`. All 15 assets were re-downloaded into an empty directory:
+`sha256sum -c SHA256SUMS` passed for all 14, and that `SHA256SUMS` is identical
+to the locally staged one. The SDK ZIP still hashes to `81587fa0...`.
+
+Commit `cbd8cd55` points the CI download, `archive_url` in the inventory and
+anchors, the native build doc and the third-party notice locator at the
+release asset. `THIRD_PARTY_NOTICES.md` is now 6,976 bytes, SHA-256
+`703bc4fddc6fad1b11522bd10a00d7f0b5c060f177a977266eed914454f8ac91`. The
+`TODO(ffmpeg-sdk-hosting)` block is removed; the old-avformat and
+Chromaprint/FFTW string guard stays as a regression check before Windows
+packaging.
+
+Local checks all exit 0: notice `--check`, resolver default and self-test
+(23), ASIO packaging (175), Windows artifact self-test, `prepare:runtime-libs`
+and `check:release`.
+
+CI results:
+
+- **Windows, runs 40442259482 (`cbd8cd55`) and 40446728698 (`9c58e96a`).**
+  The SDK download hash check, `Stage Windows runtime libraries`, the
+  staged-runtime assertion, ASIO packaging and the warning ratchets passed;
+  staging had failed in every completed run inspected back to 2026-10-24.
+  Both runs were then cancelled
+  by newer pushes (`cancel-in-progress`) during `Test Rust workspace`.
+  The packaging guard and bundling were not reached.
+- **Ubuntu, both runs.** Failed in `Test Rust workspace` on
+  `tests::synchronous_project_runtime_routes_hold_the_identity_fence_through_dispatch`:
+  `app/src-tauri/src/main.rs:99567` asserts 182 runtime mutation routes but
+  183 are registered. The first CI failure is run 39543079797 on `2907a2ea`
+  (2026-10-21, adds the video authoring lease routes). Its parent `7b32ad68`
+  passed that step. The failure appears in every completed run since.
+  It reproduced **5/5** locally (Windows, debug, isolated `git archive
+  cbd8cd55`), with left 183 vs right 182 each time. It is a deterministic
+  stale count, not a flake, and belongs to the native lane. The Windows
+  `Test Rust workspace` step runs the same test, so the Windows job cannot
+  turn green until that count is reconciled.
