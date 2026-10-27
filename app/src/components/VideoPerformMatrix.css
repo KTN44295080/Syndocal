@@ -241,8 +241,8 @@
 
 .videoPerformMatrix .videoPerformClipTrigger {
   display: grid;
-  grid-template-rows: minmax(48px, 1fr) 24px;
-  grid-template-columns: minmax(0, 1fr) 24px;
+  grid-template-rows: minmax(48px, 1fr) minmax(40px, auto);
+  grid-template-columns: minmax(0, 1fr);
   min-height: 92px;
   padding: 0;
   overflow: hidden;
@@ -297,19 +297,24 @@
 }
 
 .videoPerformClipTitle {
-  display: block;
+  display: -webkit-box;
+  grid-column: 1 / -1;
   padding: 0 4px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
   line-height: 20px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .videoPerformClipState {
+  position: absolute;
+  z-index: 3;
+  top: 4px;
+  right: 4px;
   display: inline-grid;
   place-items: center;
-  align-self: center;
-  justify-self: center;
   width: 18px;
   height: 18px;
   padding: 0;

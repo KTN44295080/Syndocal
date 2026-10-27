@@ -92,6 +92,18 @@ export function detectBatch4TruncationInPage(surface) {
   };
   const root = document.querySelector(surfaceRoots[surface] ?? "body") ?? document.body;
   const nodes = [root, ...root.querySelectorAll("*")].filter(rendered);
+  const normalizedText = (node) => (node.textContent ?? "").replace(/\s+/g, " ").trim();
+  const completeValueVisibleElsewhere = (node, value) => {
+    if (!value) return false;
+    return nodes.some((candidate) => {
+      if (candidate === node || candidate.contains(node) || node.contains(candidate)) return false;
+      if (normalizedText(candidate) !== value) return false;
+      const style = getComputedStyle(candidate);
+      return candidate.scrollWidth <= candidate.clientWidth + 1 &&
+        candidate.scrollHeight <= candidate.clientHeight + 1 &&
+        style.textOverflow !== "ellipsis";
+    });
+  };
   const raw = [];
   for (const node of nodes) {
     const style = getComputedStyle(node);
@@ -108,6 +120,12 @@ export function detectBatch4TruncationInPage(surface) {
     const userData = node.matches("[data-no-localize]") || Boolean(node.closest("[data-no-localize]"));
     const title = node.getAttribute("title") ?? node.closest("[title]")?.getAttribute("title") ?? "";
     const completeViaTitle = Boolean(title && text && title.includes(text));
+    const completeVisibleElsewhere = userData && completeViaTitle && completeValueVisibleElsewhere(node, title);
+    const primaryLiveName = Boolean(
+      node.matches(".videoPerformClipTitle,.videoPerformLayerName,.sceneMatrixCuePrimaryRow [data-no-localize],.sceneMatrixCueListTabs [data-no-localize],.sceneMatrixBankJumpStrip [data-no-localize]") ||
+      node.closest(".videoPerformClipTrigger,.sceneMatrixCuePrimaryRow button,.sceneMatrixCueListTabs button,.sceneMatrixBankJumpStrip button")
+    );
+    const titleExempt = userData && completeViaTitle && (!primaryLiveName || completeVisibleElsewhere);
     const rect = node.getBoundingClientRect();
     const visuallyHidden = node.classList.contains("srOnly") ||
       node.getAttribute("aria-hidden") === "true" ||
@@ -118,7 +136,7 @@ export function detectBatch4TruncationInPage(surface) {
     const actionable = Boolean(text) &&
       !visuallyHidden &&
       !scrollOwner &&
-      !(userData && completeViaTitle) &&
+      !titleExempt &&
       (interactive || semantic) &&
       (ellipsis || textOwnsWidthOverflow);
     raw.push({
@@ -133,6 +151,9 @@ export function detectBatch4TruncationInPage(surface) {
       semantic,
       userData,
       completeViaTitle,
+      completeVisibleElsewhere,
+      primaryLiveName,
+      titleExempt,
       visuallyHidden,
       actionable,
       reason: actionable ? (ellipsis ? "ellipsis" : "own-text-width-overflow") : null,
@@ -147,6 +168,50 @@ export function detectBatch4TruncationInPage(surface) {
     raw,
     actionable,
     observed: { locale: document.documentElement.lang, width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
+  };
+}
+
+export function detectPerformClipNameReadabilityInPage() {
+  const titles = [...document.querySelectorAll("[data-video-perform-layout] .videoPerformMatrixCell.occupied .videoPerformClipTitle")];
+  const clips = titles.map((node) => {
+    const text = (node.textContent ?? "").replace(/\s+/g, " ").trim();
+    const requiredVisibleCharacters = Math.min(12, text.length);
+    const bounds = node.getBoundingClientRect();
+    const textNode = [...node.childNodes].find((child) => child.nodeType === Node.TEXT_NODE);
+    let visibleCharacters = 0;
+    if (textNode && bounds.width > 0 && bounds.height > 0) {
+      for (let index = 0; index < textNode.textContent.length; index += 1) {
+        const range = document.createRange();
+        range.setStart(textNode, index);
+        range.setEnd(textNode, index + 1);
+        const rects = [...range.getClientRects()];
+        const visible = rects.some((rect) =>
+          rect.width >= 0 &&
+          rect.height > 0 &&
+          rect.left >= bounds.left - 1 &&
+          rect.right <= bounds.right + 1 &&
+          rect.top >= bounds.top - 1 &&
+          rect.bottom <= bounds.bottom + 1);
+        range.detach();
+        if (!visible) break;
+        visibleCharacters = index + 1;
+      }
+    }
+    return {
+      text,
+      visibleCharacters,
+      requiredVisibleCharacters,
+      passed: visibleCharacters >= requiredVisibleCharacters,
+      clientWidth: node.clientWidth,
+      clientHeight: node.clientHeight,
+      scrollWidth: node.scrollWidth,
+      scrollHeight: node.scrollHeight,
+    };
+  });
+  return {
+    clipCount: clips.length,
+    clips,
+    passed: clips.length > 0 && clips.every((clip) => clip.passed),
   };
 }
 
@@ -205,6 +270,11 @@ export async function runUiDensityBatch4Checks({ CdpClient, cdpPort, appUrl, scr
             result.surfaces[surface] = finding;
             result.totalRaw += finding.rawCount;
             result.totalActionable += finding.actionableCount;
+            if (surface === "perform") {
+              const clipNameReadability = await page.evaluate("(" + detectPerformClipNameReadabilityInPage.toString() + ")()");
+              result.clipNameReadability = clipNameReadability;
+              result.checks.clipNamesReadableAtGlance = clipNameReadability.passed;
+            }
             const filename = label + "-" + surface + ".png";
             const shot = await page.send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
             writeFileSync(join(screenshotDir, filename), shot.data, "base64");
