@@ -627,6 +627,10 @@ impl NativeResidentDisplaySession {
             // The pipeline broke this tick: the next resident tick is
             // synchronous again, so it produces a presentable frame.
             self.ring.disarm();
+            self.owner.release_resource_pools();
+            if let Some(compositor) = &self.compositor {
+                compositor.release_pooled_outputs();
+            }
         }
         if observed == 2 && self.ring.owns_in_flight() {
             if let Err(error) = self.drain_ring(renderer, snapshot, committed) {
@@ -1112,6 +1116,10 @@ impl NativeResidentDisplaySession {
     fn leave_resident_tick(&mut self) {
         self.discard_ring_resolved();
         self.ring.release_idle();
+        self.owner.release_resource_pools();
+        if let Some(compositor) = &self.compositor {
+            compositor.release_pooled_outputs();
+        }
     }
 
     pub fn prepare_follow_output<P: VideoFrameProvider, A: NativeResidentPresentationAuthority>(
@@ -1360,6 +1368,7 @@ impl NativeResidentDisplaySession {
         &mut self,
         retirement: SharedNativeOutputRetirement,
     ) -> Result<T, String> {
+        self.owner.release_resource_pools();
         let reason = format!(
             "native output requires retained retirement: {:?}",
             retirement.reason()

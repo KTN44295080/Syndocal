@@ -231,6 +231,7 @@ pub struct IsfGpuRuntime {
     frame_index: u32,
     last_stack_stage_count: usize,
     last_stack_render_us: u64,
+    pub(crate) native_stack_pool: crate::isf_native_gpu::pool::NativeStackPool,
 }
 
 #[derive(Clone)]
@@ -273,6 +274,7 @@ impl IsfGpuRuntime {
             frame_index: 0,
             last_stack_stage_count: 0,
             last_stack_render_us: 0,
+            native_stack_pool: Default::default(),
         })
     }
 
@@ -640,6 +642,7 @@ impl IsfGpuRuntime {
             frame_index: 0,
             last_stack_stage_count: 0,
             last_stack_render_us: 0,
+            native_stack_pool: Default::default(),
         })
     }
 

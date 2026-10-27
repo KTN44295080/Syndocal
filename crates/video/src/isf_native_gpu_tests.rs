@@ -164,6 +164,18 @@ pub(crate) fn encode(
     jobs: StackBatch<PreparedNativeLayer>,
 ) -> (EncodedIsfBatch, PendingGpuTransaction) {
     let frame = request(sequence);
+    // Match the production cold shape boundary without invalidating reuse on
+    // ordinary ticks with unchanged geometry and stage shape.
+    let mut shape = [None; 3];
+    for (slot, job) in shape.iter_mut().zip(jobs.iter()) {
+        *slot = Some((
+            job.input.width,
+            job.input.height,
+            job.input.format,
+            job.chain.stages.len(),
+        ));
+    }
+    fixture.owner.configure_stack_pool_shape(shape);
     let first_clock = fixture.runtime.native_frame_index();
     let expected = jobs
         .iter()
@@ -453,6 +465,11 @@ fn isf_native_gpu_g2_resourceful_and_cpu_prospective_queries_return_typed_declin
 fn isf_native_gpu_g2_clock_advance_after_query_declines_even_with_a_fresh_covering_quote() {
     let mut fixture = gpu();
     let jobs = identity_jobs(3, 2);
+    // Establish the cold workload shape before freezing either reservation.
+    // The intervening validated tick then changes clocks alone, not pool epoch.
+    fixture
+        .owner
+        .configure_stack_pool_shape([Some((3, 2, VideoPixelFormat::Rgba8, 3)); 3]);
     let originals = jobs
         .iter()
         .map(|job| Arc::clone(&job.input))
@@ -518,6 +535,9 @@ fn isf_native_gpu_g2_clock_advance_after_query_declines_even_with_a_fresh_coveri
 #[test]
 fn isf_native_gpu_g2_clock_advance_after_admission_rejects_before_phase_binding_or_submission() {
     let mut fixture = gpu();
+    fixture
+        .owner
+        .configure_stack_pool_shape([Some((3, 2, VideoPixelFormat::Rgba8, 3)); 3]);
     let jobs = identity_jobs(3, 2);
     let originals = jobs
         .iter()
@@ -541,6 +561,10 @@ fn isf_native_gpu_g2_clock_advance_after_admission_rejects_before_phase_binding_
         Ok(_) => panic!("admission must not authorize stale clocks at encode"),
     };
     assert_eq!(fault.kind, NativeGpuFaultKind::StateMismatch);
+    assert!(
+        fault.message.contains("StaleClock"),
+        "pool invalidation must not mask clock rejection"
+    );
     txn.validate_plan(&plan).unwrap();
     let pending = txn.finish();
     assert_eq!(fixture.runtime.native_frame_index(), 3);
@@ -1290,11 +1314,45 @@ fn isf_native_gpu_replay_setup_rejection_returns_retirement_and_reclaims_reserva
     let after = fixture.owner.budget_snapshot();
     assert_eq!(after.reserved_bytes, 0);
     assert_eq!(after.reservation_count, 0);
+    // Rejected replay invalidates idle pooled scratch/finals. Referenced
+    // history remains charged; compare its exact bytes rather than requiring
+    // the invalidated idle bank to survive this failure.
+    let history_bytes: u64 = layers
+        .iter()
+        .map(|layer| u64::from(layer.identity.width) * u64::from(layer.identity.height) * 4)
+        .sum();
+    let resident_bytes = |snapshot: &crate::native_gpu_budget::NativeGpuBudgetSnapshot| {
+        let kind = snapshot.for_kind(ChargeKind::ResidentLayer);
+        kind.active_bytes + kind.retired_bytes + kind.quarantined_bytes
+    };
+    assert_eq!(resident_bytes(&before), history_bytes);
     assert_eq!(
-        after.allocated_bytes, before.allocated_bytes,
-        "setup failure must neither release old history nor leak its reservation"
+        resident_bytes(&after),
+        history_bytes,
+        "setup failure released referenced history"
     );
-    assert_eq!(after.allocation_count, before.allocation_count);
+    assert_eq!(
+        after.allocated_bytes, history_bytes,
+        "setup failure leaked an allocation beyond referenced history"
+    );
+    assert_eq!(after.allocation_count, layers.len());
+    for layer in &*layers {
+        let actual = NativeGpuMaterializer::new(&mut fixture.runtime)
+            .materialize_cpu(
+                CpuMaterializationRequest::ValidatedGpu {
+                    entry: layer.identity.entry,
+                    lease: &layer.lease,
+                },
+                &mut fixture.owner,
+                &|| false,
+            )
+            .unwrap();
+        assert_eq!(
+            actual.frame(),
+            &*layer.recipe.job().input,
+            "setup rejection altered preserved history pixels"
+        );
+    }
     assert_eq!(fixture.owner.state(), GpuOwnerState::Active);
     drop(layers);
     stop(&mut fixture.owner);

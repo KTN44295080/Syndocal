@@ -11,7 +11,8 @@
 //! buffer (clear, every layer, one premapping snapshot copy) after the ISF
 //! submission. It never waits, maps, acquires a surface or publishes.
 
-use std::sync::Arc;
+use std::cell::RefCell;
+use std::sync::{Arc, Weak};
 
 use wgpu::util::DeviceExt;
 
@@ -79,6 +80,8 @@ pub(crate) struct NativeCompositionPlan {
     /// A completed, unmapped snapshot readback of exactly this extent, reused
     /// instead of a new allocation (ADR-01 section 7.2 ring, section 11 C/E).
     reused_readback: Option<Arc<NativeChargedBuffer>>,
+    reused_output: Option<Arc<NativeChargedBuffer>>,
+    pool_epoch: Option<u64>,
 }
 
 /// Checked minimum capacities. G must also account for actual grown capacities,
@@ -192,7 +195,7 @@ impl NativeCompositionPlan {
             });
         }
         let native_allocations =
-            composition_allocations(frame, output_bytes, &layers, None).map_err(decline)?;
+            composition_allocations(frame, output_bytes, &layers, None, None).map_err(decline)?;
         Ok(Self {
             context,
             frame,
@@ -208,6 +211,8 @@ impl NativeCompositionPlan {
             },
             native_allocations,
             reused_readback: None,
+            reused_output: None,
+            pool_epoch: None,
         })
     }
 
@@ -235,6 +240,9 @@ impl NativeCompositionPlan {
             self.allocations.premapping_bytes,
             &self.layers_bottom_first,
             Some(id),
+            self.reused_output
+                .as_ref()
+                .map(|buffer| buffer.allocation_id()),
         ) else {
             return Err(readback);
         };
@@ -316,6 +324,7 @@ struct NativeCompositionPipelines {
 pub(crate) struct NativeGpuCompositor {
     context: GpuContextId,
     pipelines: Arc<NativeCompositionPipelines>,
+    output_pool: RefCell<CompositionOutputPool<NativeChargedBuffer>>,
 }
 
 /// P's exact sub-reservation, split from the admitted frame root before ISF
@@ -326,7 +335,106 @@ pub(crate) struct CompositionReservation {
     reservation: FrameReservation,
 }
 
+/// G owns the bank's strong references and releases them at the lifecycle
+/// fence. P keeps only weak metadata, so it cannot prolong revoked resources.
+/// Ready/LastValid and the transaction registry pin the same Arc; checkout is
+/// possible only when G's bank is the sole remaining strong owner.
+struct CompositionOutputPool<T> {
+    key: Option<(u64, u64, (u32, u32))>,
+    slots: Vec<Weak<T>>,
+}
+
+const COMPOSITION_OUTPUT_POOL_SLOTS: usize = 3;
+
+impl<T> Default for CompositionOutputPool<T> {
+    fn default() -> Self {
+        Self {
+            key: None,
+            slots: Vec::new(),
+        }
+    }
+}
+
+impl<T> CompositionOutputPool<T> {
+    fn prepare(&mut self, key: (u64, u64, (u32, u32))) -> Result<Option<Arc<T>>, ()> {
+        if self.key != Some(key) {
+            self.slots.clear();
+            self.key = Some(key);
+        }
+        self.slots.retain(|slot| slot.strong_count() != 0);
+        for slot in &self.slots {
+            if let Some(output) = slot.upgrade() {
+                if Arc::strong_count(&output) == 2 {
+                    return Ok(Some(output));
+                }
+            }
+        }
+        if self.slots.len() == COMPOSITION_OUTPUT_POOL_SLOTS {
+            Err(())
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn retain(&mut self, key: (u64, u64, (u32, u32)), output: &Arc<T>) {
+        let weak = Arc::downgrade(output);
+        if self.key == Some(key)
+            && self.slots.len() < COMPOSITION_OUTPUT_POOL_SLOTS
+            && !self.slots.iter().any(|slot| Weak::ptr_eq(slot, &weak))
+        {
+            self.slots.push(weak);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.slots.clear();
+        self.key = None;
+    }
+}
+
 impl NativeGpuCompositor {
+    /// Call before merging the composition allocation plan into the quote.
+    /// Existing slots contribute aliases, never duplicate physical charges.
+    pub(crate) fn prepare_pooled_output(
+        &self,
+        plan: &mut NativeCompositionPlan,
+        pool_epoch: u64,
+    ) -> Result<(), NativeGpuDecline> {
+        if plan.context != self.context || plan.reused_output.is_some() {
+            return Err(NativeGpuDecline::QuoteExpired);
+        }
+        let mut pool = self
+            .output_pool
+            .try_borrow_mut()
+            .map_err(|_| NativeGpuDecline::QuoteExpired)?;
+        let output = pool
+            .prepare((pool_epoch, plan.frame.geometry_generation, plan.extent))
+            .map_err(|_| NativeGpuDecline::BudgetExceeded {
+                live: plan.allocations.premapping_bytes * COMPOSITION_OUTPUT_POOL_SLOTS as u64,
+                requested: plan.allocations.premapping_bytes,
+                limit: plan.allocations.premapping_bytes * COMPOSITION_OUTPUT_POOL_SLOTS as u64,
+            })?;
+        plan.native_allocations = composition_allocations(
+            plan.frame,
+            plan.allocations.premapping_bytes,
+            &plan.layers_bottom_first,
+            plan.reused_readback
+                .as_ref()
+                .map(|buffer| buffer.allocation_id()),
+            output.as_ref().map(|buffer| buffer.allocation_id()),
+        )?;
+        plan.reused_output = output;
+        plan.pool_epoch = Some(pool_epoch);
+        Ok(())
+    }
+
+    /// Stop, authority revocation/HardBlackout and device loss must release
+    /// the bank through G. This clears weak metadata only; outstanding owners
+    /// remain charged until safely retired.
+    pub(crate) fn release_pooled_outputs(&self) {
+        self.output_pool.borrow_mut().clear();
+    }
+
     pub(crate) fn from_shared(owner: &mut NativeGpuOwner) -> Result<Self, NativeGpuFault> {
         let context = owner.context().id();
         let pipelines = owner.initialize(|device, _| {
@@ -395,6 +503,7 @@ impl NativeGpuCompositor {
         Ok(Self {
             context,
             pipelines: Arc::new(pipelines),
+            output_pool: RefCell::new(CompositionOutputPool::default()),
         })
     }
 
@@ -406,6 +515,9 @@ impl NativeGpuCompositor {
         if self.context != txn.context().id()
             || plan.context != self.context
             || txn.frame() != plan.frame
+            || plan
+                .pool_epoch
+                .is_some_and(|epoch| epoch != txn.context().resource_pool_epoch())
         {
             return Err(composition_fault(
                 plan.context,
@@ -512,6 +624,17 @@ impl NativeGpuCompositor {
         };
         drop(port);
         let receipt = txn.submit_phase(encoded.phase)?;
+        // Retain only after submission was admitted. The transaction's
+        // ComposedResources Arc pins this output until verified retirement.
+        if let Some(epoch) = plan.pool_epoch {
+            self.output_pool
+                .try_borrow_mut()
+                .map_err(|_| mismatch("composition output pool already borrowed"))?
+                .retain(
+                    (epoch, plan.frame.geometry_generation, plan.extent),
+                    &encoded.output,
+                );
+        }
         Ok(EncodedPremappingSnapshot {
             output: encoded.output,
             readback: encoded.readback,
@@ -661,11 +784,14 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
             return Err(self.state_fault("composition phase is already sealed"));
         };
         // Bind every charge before creating its physical allocation.
-        let output_charge = phase.bind_reserved_allocation(
-            &mut self.reservation,
-            ChargeKind::CompositionBuffer,
-            plan.allocations.premapping_bytes,
-        )?;
+        let output_charge = match plan.reused_output.as_ref() {
+            Some(_) => None,
+            None => Some(phase.bind_reserved_allocation(
+                &mut self.reservation,
+                ChargeKind::CompositionBuffer,
+                plan.allocations.premapping_bytes,
+            )?),
+        };
         let readback_charge = match plan.reused_readback.as_ref() {
             Some(_) => None,
             None => Some(phase.bind_reserved_allocation(
@@ -694,15 +820,19 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
             layer_charges.push((lookup, params));
         }
         let device = phase.device();
-        let output = Arc::new(NativeChargedBuffer {
-            buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Syndocal shared premapping composition"),
-                size: plan.allocations.premapping_bytes,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
+        let output = match (plan.reused_output.as_ref(), output_charge) {
+            (Some(reused), None) => Arc::clone(reused),
+            (None, Some(charge)) => Arc::new(NativeChargedBuffer {
+                buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Syndocal shared premapping composition"),
+                    size: plan.allocations.premapping_bytes,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                }),
+                charge,
             }),
-            charge: output_charge,
-        });
+            _ => unreachable!("output is either reused or bound above"),
+        };
         // A reused ring readback is an existing alias of this frame's quote; the
         // retained resource below records this submission's use of it.
         let readback = match (plan.reused_readback.as_ref(), readback_charge) {
@@ -788,6 +918,9 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
             pass.set_pipeline(&self.pipelines.clear);
             pass.set_bind_group(0, &layers[0].bind_group, &[]);
             pass.dispatch_workgroups(self.extent.0.div_ceil(8), self.extent.1.div_ceil(8), 1);
+        }
+        if plan.pool_epoch.is_some() && plan.reused_output.is_none() {
+            phase.retain_pooled_resource(Arc::clone(&output))?;
         }
         let resources = Arc::new(ComposedResources {
             output,
@@ -881,9 +1014,13 @@ fn composition_allocations(
     output_bytes: u64,
     layers: &[CompositionLayerEncoding],
     reused_readback: Option<GpuAllocationId>,
+    reused_output: Option<GpuAllocationId>,
 ) -> Result<NativeAllocationPlan, NativeGpuDecline> {
     let mut native_allocations = NativeAllocationPlan::new(frame);
-    native_allocations.add_new(ChargeKind::CompositionBuffer, output_bytes)?;
+    match reused_output {
+        Some(id) => native_allocations.add_existing(id),
+        None => native_allocations.add_new(ChargeKind::CompositionBuffer, output_bytes)?,
+    }
     match reused_readback {
         Some(id) => native_allocations.add_existing(id),
         None => native_allocations.add_new(ChargeKind::SnapshotReadback, output_bytes)?,

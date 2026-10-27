@@ -108,9 +108,14 @@ pub(crate) struct NativeGpuContext {
     lost: Arc<AtomicBool>,
     uncaptured: Arc<AtomicBool>,
     uncaptured_error: Arc<OnceLock<String>>,
+    resource_pool_epoch: AtomicU64,
 }
 
 impl NativeGpuContext {
+    pub(crate) fn resource_pool_epoch(&self) -> u64 {
+        self.resource_pool_epoch.load(Ordering::Acquire)
+    }
+
     pub(crate) fn id(&self) -> GpuContextId {
         self.capabilities.context
     }
@@ -263,6 +268,7 @@ impl NativeGpuFactory {
             lost,
             uncaptured,
             uncaptured_error,
+            resource_pool_epoch: AtomicU64::new(0),
         });
         Ok(NativeGpuOwner {
             core: OwnedBrokerCore::new(BrokerCore::new(
@@ -272,6 +278,8 @@ impl NativeGpuFactory {
                 context_id,
             )),
             context,
+            pooled_resources: Vec::new(),
+            stack_pool_shape: [None; 3],
         })
     }
 }
@@ -1165,6 +1173,33 @@ impl<D: CompletionDriver> Drop for OwnedBrokerCore<D> {
 pub(crate) struct NativeGpuOwner {
     context: Arc<NativeGpuContext>,
     core: OwnedBrokerCore<RealGpuDriver>,
+    // Only this owner keeps idle pool entries alive. Runtime/P metadata is weak;
+    // transaction registries and validated leases independently pin active uses.
+    pooled_resources: Vec<Arc<dyn Any + Send + Sync>>,
+    stack_pool_shape: [Option<(u32, u32, crate::VideoPixelFormat, usize)>; 3],
+}
+
+impl Drop for NativeGpuOwner {
+    fn drop(&mut self) {
+        // Idle cache ownership must end before OwnedBrokerCore decides whether
+        // the remaining transaction registry requires quarantine on drop.
+        self.pooled_resources.clear();
+    }
+}
+
+impl NativeGpuOwner {
+    /// One active resident workload shape per owner. Replacing the cache bank
+    /// before preflight prevents alternating stage/extent shapes accumulating
+    /// idle charges. Existing transaction and history references remain intact.
+    pub(crate) fn configure_stack_pool_shape(
+        &mut self,
+        shape: [Option<(u32, u32, crate::VideoPixelFormat, usize)>; 3],
+    ) {
+        if self.stack_pool_shape != shape {
+            self.release_resource_pools();
+            self.stack_pool_shape = shape;
+        }
+    }
 }
 
 pub(crate) struct NativeGpuFrameTxn<'a> {
@@ -1326,6 +1361,28 @@ impl ResolvedGpuPhase {
 }
 
 impl NativeGpuOwner {
+    /// Invalidate idle reuse without dropping transaction/history/present pins.
+    /// Advancing the epoch also rejects plans prepared before this barrier.
+    pub(crate) fn release_resource_pools(&mut self) {
+        if self
+            .context
+            .resource_pool_epoch
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |epoch| {
+                epoch.checked_add(1)
+            })
+            .is_err()
+        {
+            self.context.lost.store(true, Ordering::Release);
+        }
+        self.pooled_resources.clear();
+        self.stack_pool_shape = [None; 3];
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pooled_resource_count(&self) -> usize {
+        self.pooled_resources.len()
+    }
+
     /// Keep this output session's ledger and retained generations while adopting
     /// a newly-created, unused device from the same factory and output owner.
     /// I must call this before constructing replacement runtimes/presenters.
@@ -1335,6 +1392,7 @@ impl NativeGpuOwner {
         &mut self,
         mut replacement: Self,
     ) -> Result<(), (NativeGpuFault, Self)> {
+        self.release_resource_pools();
         if self.context.lost.load(Ordering::Acquire)
             || self.context.uncaptured.load(Ordering::Acquire)
         {
@@ -1510,6 +1568,7 @@ impl NativeGpuOwner {
 
     fn check_device(&mut self) -> Result<(), NativeGpuFault> {
         if self.context.lost.load(Ordering::Acquire) {
+            self.release_resource_pools();
             self.core.state = GpuOwnerState::DeviceLostRetained;
             self.core.budget.quarantine();
             return Err(self.core.fault(
@@ -1520,6 +1579,7 @@ impl NativeGpuOwner {
             ));
         }
         if self.context.uncaptured.load(Ordering::Acquire) {
+            self.release_resource_pools();
             self.core.state = GpuOwnerState::PoisonedRetained;
             self.core.budget.quarantine();
             return Err(self.core.fault(
@@ -1656,6 +1716,7 @@ impl NativeGpuOwner {
     // Drop performs no wait. Any issued writes remain owned by this registry;
     // an empty submit makes them drainable under their original phase scopes.
     fn abandon_phase(&mut self, id: RetirementId) {
+        self.release_resource_pools();
         if let Ok(index) = self.core.index(id) {
             if let Some(phase) = self.core.frames[index].open {
                 if self
@@ -1698,15 +1759,18 @@ impl NativeGpuOwner {
             }
         };
         if cancel.is_cancelled() || pending.marker.load(Ordering::Acquire) != ACTIVE_TOKEN {
+            self.release_resource_pools();
             pending.terminal = true;
             pending.marker.store(CANCELLED_TOKEN, Ordering::Release);
             return CompletionProgress::Cancelled;
         }
         if let Err(error) = self.core.progress() {
+            self.release_resource_pools();
             pending.terminal = true;
             return CompletionProgress::Complete(Err(error));
         }
         if cancel.is_cancelled() || pending.marker.load(Ordering::Acquire) != ACTIVE_TOKEN {
+            self.release_resource_pools();
             pending.terminal = true;
             pending.marker.store(CANCELLED_TOKEN, Ordering::Release);
             return CompletionProgress::Cancelled;
@@ -1715,13 +1779,20 @@ impl NativeGpuOwner {
             return CompletionProgress::Pending;
         }
         pending.terminal = true;
-        CompletionProgress::Complete(self.core.finish_record(index))
+        let result = self.core.finish_record(index);
+        if result.as_ref().map_or(true, |resolved| {
+            resolved.phases.iter().any(|phase| phase.result.is_err())
+        }) {
+            self.release_resource_pools();
+        }
+        CompletionProgress::Complete(result)
     }
 
     pub(crate) fn cancel_and_retire(
         &mut self,
         mut pending: PendingGpuTransaction,
     ) -> RetiringGpuTransaction {
+        self.release_resource_pools();
         if self.core.retire_pending(&pending).is_err() {
             self.core.state = GpuOwnerState::PoisonedRetained;
             self.core.budget.quarantine();
@@ -1731,6 +1802,7 @@ impl NativeGpuOwner {
     }
 
     pub(crate) fn begin_stop(&mut self) -> StopRetirement {
+        self.release_resource_pools();
         self.core.stop()
     }
 
@@ -1747,7 +1819,11 @@ impl NativeGpuOwner {
         self.core.has_logical_frame()
     }
     pub(crate) fn poll_retirement(&mut self) -> Result<RetirementProgress, NativeGpuFault> {
-        self.core.retirement()
+        let result = self.core.retirement();
+        if result.is_err() {
+            self.release_resource_pools();
+        }
+        result
     }
 
     /// Constructor-only cold path for pipeline/layout/sampler driver resources.
@@ -1974,6 +2050,26 @@ impl GpuCompletionPort for NativeGpuOwner {
 }
 
 impl GpuPhaseEncoder<'_> {
+    /// Cache a newly charged allocation for later ticks. Call before queue
+    /// writes and separately retain the full transaction owner with its IDs.
+    /// This bank is never completion evidence and is invalidated by Stop/loss.
+    pub(crate) fn retain_pooled_resource<T: Any + Send + Sync>(
+        &mut self,
+        resource: Arc<T>,
+    ) -> Result<(), NativeGpuFault> {
+        self.owner.core.index(self.transaction)?;
+        let resource: Arc<dyn Any + Send + Sync> = resource;
+        if !self
+            .owner
+            .pooled_resources
+            .iter()
+            .any(|old| Arc::ptr_eq(old, &resource))
+        {
+            self.owner.pooled_resources.push(resource);
+        }
+        Ok(())
+    }
+
     pub(crate) fn context(&self) -> &Arc<NativeGpuContext> {
         self.owner.context()
     }

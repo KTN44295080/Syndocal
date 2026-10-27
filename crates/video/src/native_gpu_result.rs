@@ -127,6 +127,10 @@ pub(crate) struct NativeTextureAllocation {
     charge: AllocationCharge,
 }
 impl NativeTextureAllocation {
+    pub(crate) fn pool_image(&self) -> IsfGpuImage {
+        self.image.clone()
+    }
+
     pub(crate) fn new(image: IsfGpuImage, charge: AllocationCharge) -> Self {
         Self { image, charge }
     }

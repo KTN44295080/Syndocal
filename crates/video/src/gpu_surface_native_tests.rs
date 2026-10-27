@@ -457,6 +457,9 @@ fn read_image(env: &Env, texture: &wgpu::Texture) -> Vec<u8> {
 }
 
 fn wait_for_allocations(owner: &mut NativeGpuOwner, expected: usize) {
+    // Measure only the explicitly retained surface/Ready owners; idle ISF
+    // resources are independently released through the production bank fence.
+    owner.release_resource_pools();
     let started = Instant::now();
     loop {
         match owner.poll_retirement().unwrap() {

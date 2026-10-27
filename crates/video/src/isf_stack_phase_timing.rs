@@ -218,6 +218,7 @@ fn dx12_runtime() -> IsfGpuRuntime {
         frame_index: 0,
         last_stack_stage_count: 0,
         last_stack_render_us: 0,
+        native_stack_pool: Default::default(),
     }
 }
 

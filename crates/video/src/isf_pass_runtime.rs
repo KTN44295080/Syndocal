@@ -1412,6 +1412,132 @@ impl NativeStackResources {
 }
 
 impl IsfGpuRuntime {
+    /// Two scratch images only. The final slot aliases input until assembled
+    /// with a separately charged resident allocation for this invocation.
+    pub(crate) fn native_create_pool_scratch(
+        &self,
+        phase: &crate::native_gpu_context::GpuPhaseEncoder<'_>,
+        frame: &VideoFrame,
+        stage_count: usize,
+    ) -> Result<NativeStackResources, IsfRuntimeError> {
+        if self
+            .native_context()
+            .is_none_or(|context| !std::sync::Arc::ptr_eq(context, phase.context()))
+        {
+            return Err(runtime_error(
+                "pooled scratch requires its device phase capability",
+            ));
+        }
+        self.validate_pass_size(frame.width, frame.height)?;
+        let mut input = GpuImage::new(
+            &self.device,
+            frame.width,
+            frame.height,
+            false,
+            "Syndocal pooled ISF input",
+        );
+        let mut intermediate = GpuImage::new(
+            &self.device,
+            frame.width,
+            frame.height,
+            false,
+            "Syndocal pooled ISF intermediate",
+        );
+        input.native_origin = Some(phase.context().id());
+        intermediate.native_origin = Some(phase.context().id());
+        let (ping, pong) = if stage_count % 2 == 1 {
+            (input.clone(), intermediate)
+        } else {
+            (intermediate, input.clone())
+        };
+        let workspace = StackWorkspace {
+            input,
+            ping,
+            pong,
+            readback: None,
+            sampler: self.device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("Syndocal pooled ISF sampler"),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            }),
+        };
+        let uniforms = (0..stage_count)
+            .map(|_| {
+                self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Syndocal pooled ISF uniforms"),
+                    size: 48 + crate::isf_runtime::ISF_MAX_CONTROL_INPUTS as u64 * 16,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            })
+            .collect();
+        Ok(NativeStackResources {
+            workspace,
+            uniforms,
+        })
+    }
+
+    pub(crate) fn native_pool_final_image(
+        &self,
+        phase: &crate::native_gpu_context::GpuPhaseEncoder<'_>,
+        width: u32,
+        height: u32,
+    ) -> Result<GpuImage, IsfRuntimeError> {
+        if self
+            .native_context()
+            .is_none_or(|context| !std::sync::Arc::ptr_eq(context, phase.context()))
+        {
+            return Err(runtime_error(
+                "pooled final image requires its device phase capability",
+            ));
+        }
+        self.validate_pass_size(width, height)?;
+        let mut image = GpuImage::new(
+            &self.device,
+            width,
+            height,
+            false,
+            "Syndocal pooled ISF final",
+        );
+        image.native_origin = Some(phase.context().id());
+        Ok(image)
+    }
+
+    /// Only called with an exclusively checked-out, retired scratch owner.
+    pub(crate) fn native_assemble_pool_stack(
+        &self,
+        template: &NativeStackResources,
+        final_image: GpuImage,
+        frame: &VideoFrame,
+        stages: &[IsfStageInputs<'_>],
+        clocks: crate::native_gpu_contract::FrozenChainClocks,
+    ) -> NativeStackResources {
+        let mut workspace = template.workspace.clone();
+        if stages.len() % 2 == 1 {
+            workspace.ping = final_image;
+        } else {
+            workspace.pong = final_image;
+        }
+        for (uniform, stage) in template.uniforms.iter().zip(stages) {
+            let bytes = isf_uniform_data(
+                frame.width,
+                frame.height,
+                f32::from_bits(clocks.time_seconds_bits),
+                f32::from_bits(clocks.time_delta_seconds_bits),
+                clocks.frame_index,
+                0,
+                clocks.date_bits.map(f32::from_bits),
+                stage.controls,
+            );
+            self.queue.write_buffer(uniform, 0, &bytes);
+        }
+        NativeStackResources {
+            workspace,
+            uniforms: template.uniforms.clone(),
+        }
+    }
+
     pub(crate) fn native_create_stack_resources(
         &self,
         phase: &crate::native_gpu_context::GpuPhaseEncoder<'_>,

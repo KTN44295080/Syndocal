@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 const OUTPUT: u64 = 101;
 const EPOCH: u64 = 7;
 const EXTENT: (u32, u32) = (64, 40);
-const TICKS: u64 = 40;
+const TICKS: u64 = 240;
 /// The C4 ordinary fixture: one top ISF pass plus two stacked passes.
 const STAGES: usize = 3;
 
@@ -267,6 +267,7 @@ fn stop_and_reap(
     renderer: &mut VideoPreviewRenderer<Provider>,
 ) {
     session.begin_stop_with_renderer(renderer).unwrap();
+    assert_eq!(session.owner.pooled_resource_count(), 0);
     let started = Instant::now();
     while !session.poll_stop().unwrap() {
         assert!(
@@ -340,12 +341,47 @@ fn native_gpu_output_display_ordinary_fixture_stays_resident_with_steady_budget(
     }
 }
 
+#[test]
+fn native_gpu_output_display_pool_shape_changes_release_old_idle_banks() {
+    let mut session = session_with_compositor(EXTENT);
+    let mut renderer = VideoPreviewRenderer::with_frame_provider(
+        VideoRuntimeConfig::default(),
+        Provider::default(),
+    );
+    let mut last_epoch = session.owner.context().resource_pool_epoch();
+    for index in 0..30 {
+        let mut snapshot = scene(3, EXTENT);
+        for layer in &mut snapshot.layers {
+            layer.state.position_ms = index * 16;
+            layer
+                .isf_effect
+                .as_mut()
+                .unwrap()
+                .stack
+                .truncate(index as usize % STAGES);
+        }
+        let path = tick(&mut session, &mut renderer, &snapshot, EXTENT);
+        assert!(matches!(path, Path::Resident | Path::InFlight));
+        let epoch = session.owner.context().resource_pool_epoch();
+        assert!(
+            epoch > last_epoch,
+            "changed stage shape did not replace idle bank"
+        );
+        last_epoch = epoch;
+        assert!(
+            session.owner.pooled_resource_count() <= 15,
+            "old shape kept idle pool owners"
+        );
+    }
+    stop_and_reap(&mut session, &mut renderer);
+}
+
 /// QA diagnostic at the C4 physical extent. Run explicitly with --ignored.
 #[test]
 #[ignore = "QA diagnostic: allocates 2560x1600 frames for three layers"]
 fn native_gpu_output_display_ordinary_fixture_budget_trace_at_c4_extent() {
-    for layers in [1, 3] {
-        let (paths, live) = run_ordinary_fixture(layers, (2560, 1600), 24);
+    for layers in 1..=3 {
+        let (paths, live) = run_ordinary_fixture(layers, (2560, 1600), 240);
         println!("layers={layers} paths={paths:?} live={live:?}");
     }
 }
@@ -456,6 +492,7 @@ fn native_gpu_output_display_revocation_at_every_boundary_keeps_owner_then_black
                 result.as_ref().err()
             );
             assert_healthy(&session, &format!("{layers} layers, probe {from}"));
+            assert_eq!(session.owner.pooled_resource_count(), 0);
             advance(&mut snapshot);
             assert_eq!(
                 tick(&mut session, &mut renderer, &snapshot, EXTENT),
@@ -476,6 +513,7 @@ fn native_gpu_output_display_revocation_at_every_boundary_keeps_owner_then_black
             "blackout decodes nothing"
         );
         assert_healthy(&session, "after blackout");
+        assert_eq!(session.owner.pooled_resource_count(), 0);
         snapshot.blackout = false;
         advance(&mut snapshot);
         assert_eq!(
@@ -659,6 +697,7 @@ fn native_gpu_output_display_snapshot_ring_resize_discards_old_geometry_and_real
     assert_eq!(readback_bytes(&ring.session), 2 * old_bytes);
     let generation = ring.session.geometry_generation();
     ring.session.reserve_geometry(resized.0, resized.1).unwrap();
+    assert_eq!(ring.session.owner.pooled_resource_count(), 0);
     ring.session.reserved_geometry = None;
     assert_eq!(ring.session.geometry_generation(), generation + 1);
     ring.snapshot = scene(2, resized);
@@ -722,6 +761,7 @@ fn native_gpu_output_display_snapshot_ring_device_loss_with_a_slot_in_flight_fai
         "device loss is a fault, not a control interruption: {:?}",
         result.as_ref().err()
     );
+    assert_eq!(ring.session.owner.pooled_resource_count(), 0);
     assert!(!ring.session.ring.owns_in_flight());
     assert_eq!(ring.session.retirements.len(), 1);
     assert!(ring.session.terminal_fault.is_some());

@@ -20,6 +20,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "isf_native_pool.rs"]
+pub(crate) mod pool;
+
 pub(crate) struct PreparedNativeLayer {
     pub input: Arc<VideoFrame>,
     pub chain: PreparedChain<'static>,
@@ -83,6 +86,7 @@ pub(crate) struct PreparedNativeInputs {
     audio: Option<protocol::LiveAudioTextureFrame>,
     plan: Result<NativeAllocationPlan, NativeGpuDecline>,
     clocks: Option<IndependentClockReservation>,
+    pooled: Vec<pool::StackSelection>,
 }
 enum PreparedNativeWork {
     Layers(StackBatch<Arc<PreparedNativeLayer>>),
@@ -96,6 +100,7 @@ pub(crate) enum NativeProspectiveIdentityError {
     Declined(NativeGpuDecline),
     ContextMismatch,
     StaleClock,
+    StalePool,
 }
 
 impl PreparedNativeInputs {
@@ -141,6 +146,19 @@ impl PreparedNativeInputs {
             .is_none_or(|context| context.id() != self.context)
         {
             return Err(NativeProspectiveIdentityError::ContextMismatch);
+        }
+        let epoch = runtime
+            .native_context()
+            .expect("validated native context")
+            .resource_pool_epoch();
+        if self.pooled.len() != jobs.len()
+            || self
+                .pooled
+                .iter()
+                .zip(jobs.iter())
+                .any(|(selection, job)| !selection.current(epoch, self.frame, job))
+        {
+            return Err(NativeProspectiveIdentityError::StalePool);
         }
         let clocks = self
             .clocks
@@ -304,6 +322,7 @@ impl IsfGpuRuntime {
                 ));
             }
         }
+        let mut pooled = Vec::new();
         let plan = (|| {
             // One to three independent layer jobs share the same resident
             // batch executor; a single-layer Display is the ordinary case.
@@ -333,14 +352,18 @@ impl IsfGpuRuntime {
                 }) {
                     return Err(unsupported(UnsupportedNativeFx::InterLayerDependency));
                 }
-                add_stack_plan(
+                let selection = self.native_stack_pool.select(
+                    context.resource_pool_epoch(),
+                    frame,
+                    job,
+                    &pooled,
+                )?;
+                selection.add_plan(
                     &mut plan,
                     &job.input,
-                    job.chain.stages.len(),
                     context.capabilities().upload_row_pitch,
-                    false,
-                    None,
                 )?;
+                pooled.push(selection);
             }
             Ok(plan)
         })();
@@ -355,6 +378,7 @@ impl IsfGpuRuntime {
             audio: self.native_audio_snapshot(),
             plan,
             clocks,
+            pooled,
         })
     }
 
@@ -370,7 +394,8 @@ impl IsfGpuRuntime {
             Err(NativeProspectiveIdentityError::Declined(reason)) => Some(reason),
             Err(
                 NativeProspectiveIdentityError::ContextMismatch
-                | NativeProspectiveIdentityError::StaleClock,
+                | NativeProspectiveIdentityError::StaleClock
+                | NativeProspectiveIdentityError::StalePool,
             ) => Some(NativeGpuDecline::QuoteExpired),
             Ok(_)
                 if !inputs.plan.as_ref().is_ok_and(|plan| {
@@ -462,6 +487,7 @@ impl IsfGpuRuntime {
                 inputs.frame,
                 Some(&managed_inputs[index]),
                 None,
+                Some(&inputs.pooled[index]),
             );
             match result {
                 Ok((command, image, pins)) => {
@@ -513,6 +539,7 @@ impl IsfGpuRuntime {
         request: NativeFrameId,
         managed_input: Option<&Arc<NativeInputAllocation>>,
         frozen_sampler: Option<&wgpu::Sampler>,
+        pooled: Option<&pool::StackSelection>,
     ) -> Result<
         (
             wgpu::CommandBuffer,
@@ -533,9 +560,15 @@ impl IsfGpuRuntime {
             )
         })?;
         let mut charges = Vec::with_capacity(stages.len() + 4);
-        charges.push(phase.bind_allocation(ChargeKind::IsfScratch, pixels)?);
-        charges.push(phase.bind_allocation(ChargeKind::IsfScratch, pixels)?);
-        let final_charge = phase.bind_allocation(ChargeKind::ResidentLayer, pixels)?;
+        // Pool charges belong to persistent owners; per-tick input/upload
+        // charges remain transaction scoped.
+        let legacy_final_charge = if pooled.is_none() {
+            charges.push(phase.bind_allocation(ChargeKind::IsfScratch, pixels)?);
+            charges.push(phase.bind_allocation(ChargeKind::IsfScratch, pixels)?);
+            Some(phase.bind_allocation(ChargeKind::ResidentLayer, pixels)?)
+        } else {
+            None
+        };
         if let Some(managed) = managed_input {
             if !Arc::ptr_eq(&managed.job.input, &job.input) {
                 return Err(fault(
@@ -570,28 +603,33 @@ impl IsfGpuRuntime {
             )
         })?;
         charges.push(phase.bind_allocation(ChargeKind::QueueUploadStaging, upload)?);
-        for _ in &stages {
-            charges.push(phase.bind_allocation(ChargeKind::CachedEffectResource, UNIFORM_BYTES)?);
-        }
-        let mut resources = self
-            .native_create_stack_resources(&phase, &job.input, &stages, clocks, false)
-            .map_err(|error| {
-                fault(
-                    context,
-                    request,
-                    GpuPhase::IsfBatch,
-                    NativeGpuFaultKind::Validation,
-                    error.message,
-                )
-            })?;
-        if let Some(sampler) = frozen_sampler {
-            resources.use_frozen_sampler(sampler);
-        }
-        let resources = Arc::new(resources);
-        let final_image = Arc::new(NativeTextureAllocation::new(
-            resources.final_image(stages.len()),
-            final_charge,
-        ));
+        let (resources, final_image) = if let Some(selection) = pooled {
+            self.acquire_native_stack(phase, job, clocks, request, selection)?
+        } else {
+            for _ in &stages {
+                charges
+                    .push(phase.bind_allocation(ChargeKind::CachedEffectResource, UNIFORM_BYTES)?);
+            }
+            let mut resources = self
+                .native_create_stack_resources(&phase, &job.input, &stages, clocks, false)
+                .map_err(|error| {
+                    fault(
+                        context,
+                        request,
+                        GpuPhase::IsfBatch,
+                        NativeGpuFaultKind::Validation,
+                        error.message,
+                    )
+                })?;
+            if let Some(sampler) = frozen_sampler {
+                resources.use_frozen_sampler(sampler);
+            }
+            let final_image = Arc::new(NativeTextureAllocation::new(
+                resources.final_image(stages.len()),
+                legacy_final_charge.expect("legacy final charge"),
+            ));
+            (Arc::new(resources), final_image)
+        };
         let retained = Arc::new(ScratchOwner {
             _resources: Arc::clone(&resources),
             charges,
@@ -1432,6 +1470,7 @@ impl IsfGpuRuntime {
             frame,
             None,
             Some(recipe.sampler()),
+            None,
         );
         let (commands, image) = match result {
             Ok((command, image, _)) => (vec![command], Some(image)),
@@ -2542,6 +2581,7 @@ mod cpu {
                 }),
                 plan,
                 clocks: None,
+                pooled: Vec::new(),
             })
         }
     }

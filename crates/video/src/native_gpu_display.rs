@@ -332,6 +332,10 @@ impl NativeResidentDisplaySession {
             .geometry_generation
             .checked_add(1)
             .ok_or_else(|| "shared native Display geometry generation exhausted".to_string())?;
+        self.owner.release_resource_pools();
+        if let Some(compositor) = &self.compositor {
+            compositor.release_pooled_outputs();
+        }
         self.reserved_geometry = Some((width, height, self.geometry_generation));
         Ok(self.geometry_generation)
     }
@@ -753,6 +757,9 @@ impl NativeResidentDisplaySession {
         authority: &impl NativeOutputAuthority,
         cancellation: &dyn VideoRenderCancellation,
     ) -> Result<NativeResidentExecution, String> {
+        // Idle resident storage must not consume the CPU handover envelope.
+        // Prepared checkout pins and active history/transactions remain charged.
+        self.owner.release_resource_pools();
         crate::native_gpu_output::guard(
             request,
             crate::native_gpu_output::OutputBoundary::BeforeCpuFallback,
@@ -891,6 +898,22 @@ impl NativeResidentDisplaySession {
         cancellation: &dyn VideoRenderCancellation,
     ) -> Result<NativeResidentExecution, String> {
         self.ensure_usable()?;
+        let shape = std::array::from_fn(|index| {
+            layers.get(index).map(|layer| {
+                (
+                    layer.input.width,
+                    layer.input.height,
+                    layer.input.format,
+                    layer
+                        .chain
+                        .stages
+                        .iter()
+                        .filter(|stage| stage.enabled)
+                        .count(),
+                )
+            })
+        });
+        self.owner.configure_stack_pool_shape(shape);
         let history = match self.history.as_mut() {
             Some(ResidentHistoryState::Active(active)) => active,
             Some(ResidentHistoryState::Handover(_)) => {
@@ -1054,6 +1077,23 @@ impl NativeResidentDisplaySession {
         {
             if let Err(stale) = composition.reuse_readback(readback) {
                 drop(stale);
+            }
+        }
+        if let Some(compositor) = &self.compositor {
+            if let Err(reason) = compositor
+                .prepare_pooled_output(&mut composition, self.owner.context().resource_pool_epoch())
+            {
+                let cpu = continuation.into_cpu().map_err(|fault| {
+                    format!("premapping pool decline could not enter CPU continuation: {fault:?}")
+                })?;
+                return self.run_cpu_continuation(
+                    cpu,
+                    reason,
+                    &issued,
+                    &request,
+                    authority,
+                    cancellation,
+                );
             }
         }
         allocation

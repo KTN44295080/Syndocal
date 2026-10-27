@@ -670,6 +670,9 @@ fn opaque_pixel(layer: u64, index: usize) -> [u8; 4] {
 }
 
 fn wait_for_allocations(fixture: &mut Fixture, expected: usize) {
+    // These assertions isolate outstanding snapshot/lease owners. Idle pool
+    // storage now deliberately survives a tick, so release that bank first.
+    fixture.owner.release_resource_pools();
     let started = Instant::now();
     loop {
         match fixture.owner.poll_retirement().unwrap() {

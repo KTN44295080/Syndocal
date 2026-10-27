@@ -311,6 +311,9 @@ fn assert_cpu(
 }
 
 fn wait_allocations(owner: &mut NativeGpuOwner, count: usize) {
+    // Isolate retained LastValid/Ready/transaction ownership from the new
+    // explicitly cached idle ISF storage; keep the exact charge assertions.
+    owner.release_resource_pools();
     let started = Instant::now();
     loop {
         let progress = owner.poll_retirement().unwrap();

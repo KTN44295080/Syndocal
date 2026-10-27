@@ -928,6 +928,19 @@ pub(crate) fn submit_shared_frame(
     let predicted = predicted_identities(fixture, frame, &batch);
     let candidate_inputs = batch.iter().map(|job| Arc::clone(&job.input)).collect();
     let extent = (batch[0].input.width, batch[0].input.height);
+    // This low-level fixture bypasses the resident session's resize fence.
+    // Mirror its shape configuration without resetting unchanged banks.
+    let shape = std::array::from_fn(|index| {
+        batch.get(index).map(|layer| {
+            (
+                layer.input.width,
+                layer.input.height,
+                layer.input.format,
+                layer.chain.stages.len(),
+            )
+        })
+    });
+    fixture.owner.configure_stack_pool_shape(shape);
     let inputs = fixture
         .runtime
         .prepare_native_inputs(frame, batch, NativeBatchRestrictions::default())
@@ -1060,8 +1073,263 @@ fn real_shared_composition_rejects_mismatched_selection_before_its_phase() {
     );
     drop(layers);
     drop(resolved);
+    // Successful ISF resources may remain in G's idle bank even though P
+    // rejected its selection. Release bank ownership before zero-ledger proof.
+    fixture.owner.release_resource_pools();
     fixture.owner.poll_retirement().unwrap();
     // P's never-spent sub-reservation was refunded with the frame.
     assert_eq!(fixture.owner.budget_snapshot().managed_bytes(), 0);
+    stop(&mut fixture.owner);
+}
+
+#[test]
+fn pure_output_pool_reuses_240_ticks_but_never_a_referenced_slot() {
+    let key = (1, 4, (19, 13));
+    let mut pool = CompositionOutputPool::default();
+    assert!(pool.prepare(key).unwrap().is_none());
+    // This owner stands for G's charged strong bank reference.
+    let bank = Arc::new(7u64);
+    pool.retain(key, &bank);
+    for _ in 0..240 {
+        let lease = pool.prepare(key).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&lease, &bank));
+        // Ready/LastValid/registry holds the lease until safe retirement.
+        assert!(pool.prepare(key).unwrap().is_none());
+        drop(lease);
+        assert_eq!(pool.slots.len(), 1);
+    }
+    let lease = Arc::clone(&bank);
+    let bank2 = Arc::new(8u64);
+    pool.retain(key, &bank2);
+    let lease2 = Arc::clone(&bank2);
+    let bank3 = Arc::new(9u64);
+    pool.retain(key, &bank3);
+    let lease3 = Arc::clone(&bank3);
+    assert!(
+        pool.prepare(key).is_err(),
+        "full referenced bank is bounded"
+    );
+    drop(lease2);
+    assert!(Arc::ptr_eq(&pool.prepare(key).unwrap().unwrap(), &bank2));
+    drop((lease, lease3));
+}
+
+#[test]
+fn pure_output_pool_revocation_resize_and_loss_never_recycle_old_leases() {
+    for next_key in [(2, 4, (19, 13)), (1, 5, (20, 13)), (2, 5, (19, 13))] {
+        let key = (1, 4, (19, 13));
+        let mut pool = CompositionOutputPool::default();
+        pool.prepare(key).unwrap();
+        let bank = Arc::new(7u64);
+        pool.retain(key, &bank);
+        let ready = Arc::clone(&bank);
+        // Stop/revoke/blackout/loss drops G bank ownership, increments epoch,
+        // and leaves in-flight/Ready references valid until safely released.
+        drop(bank);
+        assert!(pool.prepare(next_key).unwrap().is_none());
+        assert_eq!(*ready, 7);
+        assert!(pool.slots.is_empty());
+        drop(ready);
+    }
+    let mut pool = CompositionOutputPool::default();
+    let key = (1, 4, (19, 13));
+    pool.prepare(key).unwrap();
+    let bank = Arc::new(7u64);
+    let weak = Arc::downgrade(&bank);
+    pool.retain(key, &bank);
+    pool.clear();
+    assert_eq!(Arc::strong_count(&bank), 1, "P metadata owns no charge");
+    drop(bank);
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn pure_output_pool_existing_alias_does_not_add_allocation_bytes() {
+    let output = GpuAllocationId {
+        context: context(),
+        sequence: 50,
+    };
+    let readback = GpuAllocationId {
+        context: context(),
+        sequence: 51,
+    };
+    let fresh = composition_allocations(frame(), 748, &[], None, None).unwrap();
+    let reused = composition_allocations(frame(), 748, &[], Some(readback), Some(output)).unwrap();
+    assert_eq!(fresh.requested_bytes(), 748 * 3);
+    assert_eq!(
+        reused.requested_bytes(),
+        748,
+        "only owned CPU snapshot remains new"
+    );
+}
+
+/// Uses the actual G/P/I submission, snapshot map, cache commit and Ready
+/// constructor. No manufactured completion receipt or Ready is involved.
+#[test]
+fn real_shared_output_pool_reuses_allocation_ids_but_never_held_ready() {
+    use crate::isf_native_gpu::tests::{gpu, request, stop};
+    use crate::native_gpu_contract::PresentRejection;
+    use crate::native_gpu_output::shared::{
+        PendingSharedNativeOutput, SharedNativeOutputCache, SharedNativeOutputProgress,
+    };
+    use crate::native_gpu_output::{NativeOutputAuthority, NativeOutputRequest, OutputBoundary};
+    use crate::{VideoOutputLastValidKey, VideoOutputMappingIdentity};
+    use protocol::{VideoOutputKind, VideoOutputMapping};
+    use std::time::{Duration, Instant};
+
+    struct Authority;
+    impl NativeOutputAuthority for Authority {
+        fn revalidate(
+            &self,
+            _: &NativeOutputRequest,
+            _: OutputBoundary,
+        ) -> Result<(), PresentRejection> {
+            Ok(())
+        }
+    }
+    let mut fixture = gpu();
+    let compositor = NativeGpuCompositor::from_shared(&mut fixture.owner).unwrap();
+    let size = (19, 13);
+    let mut cache = SharedNativeOutputCache::new(request(1).output_id);
+    let plans = [layer(
+        3,
+        VideoBlendMode::Normal,
+        1.0,
+        Transform2D::default(),
+    )];
+    let mut ids = Vec::new();
+    let mut held_ready = None;
+    for sequence in 1..=12 {
+        let frame = request(sequence);
+        let key = VideoOutputLastValidKey {
+            project_render_epoch: frame.project_epoch,
+            output_id: frame.output_id,
+            width: size.0,
+            height: size.1,
+            composition_id: 1,
+            kind: VideoOutputKind::Display,
+            fullscreen: false,
+            monitor_id: Some(1),
+            endpoint_name: None,
+        };
+        let fence = cache.begin_request(key.clone(), frame).unwrap();
+        let mapping = VideoOutputMapping::default();
+        let request = NativeOutputRequest {
+            context: fixture.owner.context().id(),
+            frame,
+            key,
+            fence,
+            pts_ms: 33,
+            duration_ms: 33,
+            mapping_identity: VideoOutputMappingIdentity::from_mapping(&mapping),
+            mapping,
+        };
+        let batch = identity_batch(size, 1, |_, index| [index as u8, 42, sequence as u8, 255]);
+        let identities = predicted_identities(&fixture, frame, &batch);
+        let inputs = fixture
+            .runtime
+            .prepare_native_inputs(frame, batch, NativeBatchRestrictions::default())
+            .unwrap();
+        let selected = [NativeCompositionLayer {
+            plan: &plans[0],
+            selected_entry: identities[0].entry,
+            identity: identities[0],
+            kind: SelectedTextureKind::InThisTransaction,
+        }];
+        let limits = &fixture.owner.capabilities().limits;
+        let mut plan = NativeCompositionPlan::preflight(
+            request.context,
+            frame,
+            size,
+            [0; 4],
+            &selected,
+            limits.max_texture_dimension_2d,
+            u64::from(limits.max_storage_buffer_binding_size),
+        )
+        .unwrap();
+        compositor
+            .prepare_pooled_output(&mut plan, fixture.owner.context().resource_pool_epoch())
+            .unwrap();
+        let mut allocations = inputs.allocation_plan().unwrap().clone();
+        allocations.merge(plan.allocation_plan()).unwrap();
+        let quote = fixture.owner.quote(&allocations).unwrap();
+        let admitted = match fixture.runtime.admit_native_batch(inputs, &quote) {
+            NativeBatchAdmission::Accepted(admitted) => admitted,
+            NativeBatchAdmission::Declined { reason, .. } => {
+                panic!("pooled frame declined: {reason:?}")
+            }
+        };
+        let reservation = fixture.owner.reserve(quote).unwrap();
+        let mut pending = PendingSharedNativeOutput::submit(
+            &mut fixture.owner,
+            &mut fixture.runtime,
+            &compositor,
+            request,
+            admitted,
+            reservation,
+            &plan,
+            &[],
+        )
+        .unwrap_or_else(|failure| panic!("pooled submission failed: {:?}", failure.reason()));
+        drop(plan);
+        let started = Instant::now();
+        let ready = loop {
+            match pending.poll(
+                &mut fixture.owner,
+                &mut fixture.runtime,
+                &mut cache,
+                &Authority,
+                &|| false,
+            ) {
+                SharedNativeOutputProgress::Pending(next) => {
+                    assert!(started.elapsed() < Duration::from_secs(5));
+                    pending = next;
+                    std::thread::yield_now();
+                }
+                SharedNativeOutputProgress::Ready { ready, layers, isf } => {
+                    drop((layers, isf));
+                    break ready;
+                }
+                _ => panic!("pooled output failed to become Ready"),
+            }
+        };
+        let id = ready.payload().premapping().allocation_id();
+        let cached = cache
+            .last_valid(&ready.cache_receipt().descriptor().key)
+            .unwrap();
+        for (index, pixel) in cached.data.chunks_exact(4).enumerate() {
+            assert_eq!(
+                pixel,
+                [index as u8, 42, sequence as u8, 255],
+                "reused premapping must publish this tick's pixels"
+            );
+        }
+        if sequence > 1 && sequence <= 4 {
+            assert_ne!(id, ids[0], "held real Ready must not be overwritten");
+        }
+        ids.push(id);
+        if sequence == 1 {
+            held_ready = Some(ready);
+        } else {
+            drop(ready);
+        }
+        if sequence == 4 {
+            assert_eq!(ids[3], ids[1], "retired second output should be reused");
+            drop(held_ready.take());
+        }
+        fixture.owner.poll_retirement().unwrap();
+    }
+    assert_eq!(
+        ids[4], ids[0],
+        "first slot is reusable only after real Ready release"
+    );
+    assert_ne!(ids[1], ids[2], "LastValid pins the preceding output");
+    assert!(
+        ids.iter().all(|id| ids[..3].contains(id)),
+        "bounded bank never grows after warmup"
+    );
+    cache.blackout().unwrap();
+    fixture.owner.release_resource_pools();
+    compositor.release_pooled_outputs();
     stop(&mut fixture.owner);
 }
