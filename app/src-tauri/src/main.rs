@@ -107,6 +107,7 @@ mod native_display_gpu;
 mod native_display_resident;
 mod video_output_pacer;
 mod output_owner_retirement;
+mod main_window_close_shutdown;
 use live_video_monitor_packet::*;
 mod video_recording_lifecycle;
 mod video_recording_runtime;
@@ -60603,6 +60604,31 @@ fn retire_project_transaction_owner_for_window(
     window_label: &str,
 ) -> Result<Option<ProjectHistoryMutationResult>, String> {
     retire_project_transaction_owner_for_window_incarnation(state, window_label, None)
+}
+
+/// Global `WindowEvent::Destroyed` authority retirement: the managed output
+/// lease boundary first, then the renderer's AppState/query authority.
+fn retire_destroyed_window_authority(window: &tauri::Window) {
+    let state = window.state::<AppState>();
+    if let Err(error) = output_lease_keepalive_integration::execute_window_destroyed_boundary(
+        window.app_handle(),
+        &state,
+        window.label(),
+    ) {
+        eprintln!("Destroyed window managed output boundary was fail-closed: {error}");
+        // Do not let generic owner retirement orphan/rewrite the
+        // exact managed lease after a physical all-deny or exact
+        // release failure. The retained Faulted manager state is
+        // the sole visible recovery authority.
+        return;
+    }
+    if let Err(error) = handle_destroyed_window_authority_retirement(
+        &state,
+        &window.state::<ControlPlaneQueryState>(),
+        window.label(),
+    ) {
+        eprintln!("Destroyed window authority was fail-closed: {error}");
+    }
 }
 
 /// Retire one destroyed renderer's AppState and query authority as one
@@ -136967,28 +136993,16 @@ fn main() {
         .manage(ShowClockIpcState::with_engine(engine.clone()))
         .manage(PaneWindowLifecycleRegistry::default())
         .manage(control_plane_query_state)
+        .manage(main_window_close_shutdown::MainWindowCloseShutdown::default())
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
-                let state = window.state::<AppState>();
-                if let Err(error) = output_lease_keepalive_integration::execute_window_destroyed_boundary(
-                    &window.app_handle(),
-                    &state,
+                retire_destroyed_window_authority(window);
+                // A confirmed main-window close stops outputs and ends the
+                // process even while Display windows remain open.
+                main_window_close_shutdown::begin_after_window_destroyed(
+                    window.app_handle(),
                     window.label(),
-                ) {
-                    eprintln!("Destroyed window managed output boundary was fail-closed: {error}");
-                    // Do not let generic owner retirement orphan/rewrite the
-                    // exact managed lease after a physical all-deny or exact
-                    // release failure. The retained Faulted manager state is
-                    // the sole visible recovery authority.
-                    return;
-                }
-                if let Err(error) = handle_destroyed_window_authority_retirement(
-                    &state,
-                    &window.state::<ControlPlaneQueryState>(),
-                    window.label(),
-                ) {
-                    eprintln!("Destroyed window authority was fail-closed: {error}");
-                }
+                );
             }
         })
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -137632,7 +137646,14 @@ fn main() {
                 // cleanup.  Keep the process alive if the canonical all-deny
                 // sequence could not reach its exact release/supersession.
                 let state = app_handle.state::<AppState>();
-                if let Err(error) = output_lease_keepalive_integration::execute_current_boundary(
+                if app_handle
+                    .state::<main_window_close_shutdown::MainWindowCloseShutdown>()
+                    .hold_exit()
+                {
+                    // Outputs are still entering Standby after the main
+                    // window closed; that worker requests exit when done.
+                    api.prevent_exit();
+                } else if let Err(error) = output_lease_keepalive_integration::execute_current_boundary(
                     app_handle,
                     state.inner(),
                     output_lease::output_lease_keepalive::OutputLeaseKeepaliveBoundary::SessionIdentityChanged,
