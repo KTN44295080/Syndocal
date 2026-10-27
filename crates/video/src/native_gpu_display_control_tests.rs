@@ -187,6 +187,7 @@ fn headless_session() -> NativeResidentDisplaySession {
         history_host: None,
         follow_last_valid: None,
         ring: Default::default(),
+        deferred_budget: None,
     };
     session.reserve_geometry(EXTENT.0, EXTENT.1).unwrap();
     session

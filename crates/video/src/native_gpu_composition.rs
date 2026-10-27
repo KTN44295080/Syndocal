@@ -152,13 +152,21 @@ impl NativeCompositionPlan {
             if identity.format != VideoPixelFormat::Rgba8 {
                 return Err(decline(NativeGpuDecline::UnsupportedFormat));
             }
-            if (identity.width, identity.height) != extent {
+            if identity.width == 0
+                || identity.height == 0
+                || identity.width > max_texture_dimension_2d
+                || identity.height > max_texture_dimension_2d
+            {
                 return Err(decline(NativeGpuDecline::UnsupportedExtent));
             }
             if !gpu_composition_layer_plan(layer.plan) {
                 return Err(decline(NativeGpuDecline::UnsupportedComposition));
             }
-            let lookup = axis_aligned_source_lookup(&layer.plan.transform, extent, extent);
+            let lookup = axis_aligned_source_lookup(
+                &layer.plan.transform,
+                extent,
+                (identity.width, identity.height),
+            );
             let bytes = u64::try_from(lookup.len())
                 .ok()
                 .and_then(|len| len.checked_mul(4))

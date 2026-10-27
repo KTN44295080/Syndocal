@@ -99,6 +99,7 @@ enum ResidentHistoryState {
 }
 
 pub(crate) enum NativeResidentExecution {
+    BudgetDeclined(crate::native_gpu_contract::NativeGpuDecline),
     Gpu(SharedNativeOutputProgress),
     Cpu {
         reason: crate::native_gpu_contract::NativeGpuDecline,
@@ -169,6 +170,7 @@ pub struct NativeResidentDisplaySession {
     history_host: Option<HistoryHostBudget>,
     follow_last_valid: Option<prepare::ResidentFollowLastValid>,
     ring: ring::ResidentSnapshotRing,
+    deferred_budget: Option<(u64, u64, u64)>,
 }
 
 /// Initialization can fail after a broker has retained real GPU work. The app
@@ -181,14 +183,33 @@ pub struct NativeResidentDisplayCreationFailure {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeResidentPrepareError {
-    Cancelled { retirement_required: bool },
-    Revoked { retirement_required: bool },
+    /// Admission refused before execution. Keep the healthy session and skip
+    /// this tick; there is no Fresh result or presentation/Follow receipt.
+    BudgetDeferred {
+        live: u64,
+        requested: u64,
+        limit: u64,
+    },
+    Cancelled {
+        retirement_required: bool,
+    },
+    Revoked {
+        retirement_required: bool,
+    },
     Fault(String),
 }
 
 impl std::fmt::Display for NativeResidentPrepareError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::BudgetDeferred {
+                live,
+                requested,
+                limit,
+            } => write!(
+                f,
+                "native tick budget deferred: live={live}, requested={requested}, limit={limit}"
+            ),
             Self::Cancelled {
                 retirement_required,
             } => write!(
@@ -265,6 +286,7 @@ impl NativeResidentDisplaySession {
             history_host: None,
             follow_last_valid: None,
             ring: ring::ResidentSnapshotRing::default(),
+            deferred_budget: None,
         };
         session.presenter =
             match SharedNativePresenter::from_shared_unconfigured(surface, &mut session.owner) {
@@ -388,6 +410,26 @@ impl NativeResidentDisplaySession {
         extent: (u32, u32),
         inputs: Vec<NativeResidentHistoryInput>,
     ) -> Result<(), String> {
+        let input_extents = vec![extent; inputs.len()];
+        self.bind_cpu_history_extents(
+            renderer,
+            project_epoch,
+            request_sequence,
+            extent,
+            inputs,
+            &input_extents,
+        )
+    }
+
+    fn bind_cpu_history_extents<P: VideoFrameProvider>(
+        &mut self,
+        renderer: &mut VideoPreviewRenderer<P>,
+        project_epoch: u64,
+        request_sequence: u64,
+        extent: (u32, u32),
+        inputs: Vec<NativeResidentHistoryInput>,
+        input_extents: &[(u32, u32)],
+    ) -> Result<(), String> {
         self.ensure_usable()?;
         if self.history.is_some() {
             return Err("shared native history is already bound for this session".into());
@@ -403,21 +445,28 @@ impl NativeResidentDisplaySession {
             request_sequence,
             geometry_generation: self.geometry_generation,
         };
+        if input_extents.len() != inputs.len() {
+            return Err("native history input extent cardinality mismatch".into());
+        }
         let scopes = inputs
             .iter()
-            .map(|input| HistoryScope {
+            .zip(input_extents)
+            .map(|(input, &input_extent)| HistoryScope {
                 frame_scope: frame,
                 input: input.input,
                 layer_id: input.layer_id,
                 queue_epoch: input.queue_epoch,
                 source_generation: input.source_generation,
-                extent,
+                extent: input_extent,
             })
             .collect::<Vec<_>>();
         let host = match self.history_host.as_ref() {
             Some(host) => host.clone(),
             None => {
-                let limit = HistoryHostBudget::planning_limit(inputs.len().max(3), extent)
+                let largest = input_extents
+                    .iter()
+                    .fold(extent, |(w, h), &(iw, ih)| (w.max(iw), h.max(ih)));
+                let limit = HistoryHostBudget::planning_limit(inputs.len().max(3), largest)
                     .ok_or_else(|| "native history host capacity overflow".to_string())?;
                 HistoryHostBudget::new(limit)
             }
@@ -767,6 +816,22 @@ impl NativeResidentDisplaySession {
             cancellation,
         )
         .map_err(|reason| format!("CPU continuation revoked before execution: {reason:?}"))?;
+        // Task66: a budget refusal must not first consume the resident
+        // history. Quote the prepared plan while the tick is still pure; a
+        // refusal skips this tick with history, clocks and LastValid intact.
+        // Completed retired owners stay charged until the broker observes
+        // them, so reap them first. The exact plan is requoted below.
+        self.owner.poll_retirement().map_err(|fault| {
+            format!("native retirement poll failed before CPU pre-quote: {fault:?}")
+        })?;
+        if let Ok(plan) = continuation.allocation_plan() {
+            if let Err(
+                decline @ crate::native_gpu_contract::NativeGpuDecline::BudgetExceeded { .. },
+            ) = self.owner.quote(plan)
+            {
+                return Ok(NativeResidentExecution::BudgetDeclined(decline));
+            }
+        }
         // From here the tick admits brokered work. A later revocation lets it
         // complete on the healthy owner and is classified as zero presents.
         cancellation.enter_committed_work();
@@ -787,6 +852,22 @@ impl NativeResidentDisplaySession {
                 format!("brokered CPU continuation declined before quote: {decline:?}")
             })?
             .clone();
+        // Completed retired owners stay charged until the broker observes
+        // them. Reap them before quoting so admission sees the real live set.
+        self.owner.poll_retirement().map_err(|fault| {
+            format!("native retirement poll failed before CPU quote: {fault:?}")
+        })?;
+        let quote = match self.owner.quote(&plan) {
+            Ok(quote) => quote,
+            Err(decline @ crate::native_gpu_contract::NativeGpuDecline::BudgetExceeded { .. }) => {
+                return Ok(NativeResidentExecution::BudgetDeclined(decline));
+            }
+            Err(decline) => {
+                return Err(format!(
+                    "brokered CPU continuation ({reason:?}) quote declined: {decline:?}"
+                ))
+            }
+        };
         // Validate every sequence before allocating a reservation. The checked
         // commits below cannot fail while this affine continuation owns the tick.
         if let Some(ResidentHistoryState::Handover(history)) = self.history.as_mut() {
@@ -815,15 +896,6 @@ impl NativeResidentDisplaySession {
                     .map_err(|error| format!("CPU sequence commit failed: {error:?}"))?;
             }
         }
-        // Completed retired owners stay charged until the broker observes
-        // them. Reap them before quoting so admission sees the real live set.
-        self.owner.poll_retirement().map_err(|fault| {
-            format!("native retirement poll failed before CPU quote: {fault:?}")
-        })?;
-        let quote = self
-            .owner
-            .quote(&plan)
-            .map_err(|decline| format!("brokered CPU continuation quote declined: {decline:?}"))?;
         let reservation = self
             .owner
             .reserve(quote)
@@ -1106,6 +1178,9 @@ impl NativeResidentDisplaySession {
             .map_err(|fault| format!("native retirement poll failed before quote: {fault:?}"))?;
         let quote = match self.owner.quote(&allocation) {
             Ok(quote) => quote,
+            // ADR-01 section 3.1: an eligibility or budget decline continues
+            // the same preparation on the canonical CPU route. That route
+            // quotes purely first and defers the tick if it cannot fit either.
             Err(reason) => {
                 let cpu = continuation.into_cpu().map_err(|fault| {
                     format!("native quote decline could not enter CPU continuation: {fault:?}")

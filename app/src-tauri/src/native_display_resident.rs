@@ -228,6 +228,7 @@ enum PreparedOutput {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PrepareInterruption {
+    BudgetDeferred,
     Cancelled { retirement_required: bool },
     Revoked { retirement_required: bool },
 }
@@ -235,6 +236,7 @@ enum PrepareInterruption {
 impl PrepareInterruption {
     fn ends_session(self) -> bool {
         match self {
+            Self::BudgetDeferred => false,
             Self::Cancelled { .. } => true,
             Self::Revoked {
                 retirement_required,
@@ -244,6 +246,7 @@ impl PrepareInterruption {
 
     fn reason(self) -> &'static str {
         match self {
+            Self::BudgetDeferred => "Native resident tick budget refused; await a fresh tick",
             Self::Cancelled {
                 retirement_required: false,
             } => "Native resident preparation cancelled before admission",
@@ -312,6 +315,9 @@ fn with_prepared_output<T>(
 ) -> Result<FrameProgress, FrameFault> {
     match prepared {
         Ok(output) => physical(output),
+        Err(video::NativeResidentPrepareError::BudgetDeferred { .. }) => Ok(
+            FrameProgress::Interrupted(PrepareInterruption::BudgetDeferred),
+        ),
         Err(video::NativeResidentPrepareError::Cancelled {
             retirement_required,
         }) => Ok(FrameProgress::Interrupted(PrepareInterruption::Cancelled {
@@ -323,6 +329,22 @@ fn with_prepared_output<T>(
             retirement_required,
         })),
         Err(video::NativeResidentPrepareError::Fault(error)) => Err(FrameFault::Preparation(error)),
+    }
+}
+
+/// Bootstrap has no displayed LastValid yet. One pure admission refusal may
+/// wait for the next tick, capturing a new request, before publishing a worker.
+/// Never retry an executed, cancelled, revoked or physically failed candidate.
+fn prepare_first_after_budget<T>(
+    mut fresh: impl FnMut() -> Result<T, video::NativeResidentPrepareError>,
+    next_tick: impl FnOnce(),
+) -> Result<T, video::NativeResidentPrepareError> {
+    match fresh() {
+        Err(video::NativeResidentPrepareError::BudgetDeferred { .. }) => {
+            next_tick();
+            fresh()
+        }
+        result => result,
     }
 }
 
@@ -814,15 +836,20 @@ pub(crate) fn start(
             video::native_frame_timing::span(video::native_frame_timing::Phase::Prepare);
         #[cfg(feature = "qa-native-frame-timing")]
         let demand_before = native_frame_demand_counters(&resources.renderer);
-        let prepared = prepare(
-            resources,
-            &engine,
-            output_id,
-            extent,
-            &label,
-            unpublished_snapshot.as_ref(),
-            &stop,
-            &mut observed_follow,
+        let prepared = prepare_first_after_budget(
+            || {
+                prepare(
+                    resources,
+                    &engine,
+                    output_id,
+                    extent,
+                    &label,
+                    unpublished_snapshot.as_ref(),
+                    &stop,
+                    &mut observed_follow,
+                )
+            },
+            || std::thread::park_timeout(Duration::from_millis(16)),
         );
         #[cfg(feature = "qa-native-frame-timing")]
         if let (Some(before), Some(after)) = (
@@ -1382,6 +1409,74 @@ fn run(
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    #[test]
+    fn native_display_resident_first_budget_refusal_uses_new_tick_before_handoff() {
+        let attempts = Cell::new(0);
+        let waits = Cell::new(0);
+        let result = prepare_first_after_budget(
+            || {
+                attempts.set(attempts.get() + 1);
+                if attempts.get() == 1 {
+                    Err(video::NativeResidentPrepareError::BudgetDeferred {
+                        live: 500,
+                        requested: 40,
+                        limit: 512,
+                    })
+                } else {
+                    Ok(2)
+                }
+            },
+            || waits.set(waits.get() + 1),
+        )
+        .unwrap();
+        assert_eq!((result, attempts.get(), waits.get()), (2, 2, 1));
+        let cancelled = prepare_first_after_budget::<()>(
+            || {
+                Err(video::NativeResidentPrepareError::Cancelled {
+                    retirement_required: false,
+                })
+            },
+            || panic!("Stop cannot retry"),
+        );
+        assert!(matches!(
+            cancelled,
+            Err(video::NativeResidentPrepareError::Cancelled { .. })
+        ));
+    }
+
+    #[test]
+    fn native_display_resident_budget_refusal_skips_tick_without_closing_or_failing_owner() {
+        let physical = Cell::new(0);
+        let progress = with_prepared_output::<()>(
+            Err(video::NativeResidentPrepareError::BudgetDeferred {
+                live: 500,
+                requested: 40,
+                limit: 512,
+            }),
+            |_| {
+                physical.set(physical.get() + 1);
+                Ok(FrameProgress::Complete)
+            },
+        )
+        .unwrap();
+        let FrameProgress::Interrupted(interruption) = progress else {
+            panic!("budget refusal must skip")
+        };
+        // This is the exact worker decision that guards window close and the
+        // physical failure fence. A deferred tick reaches neither callback.
+        assert!(!interruption.ends_session());
+        assert_eq!(physical.get(), 0);
+        assert_eq!(
+            with_prepared_output(Ok(()), |_| {
+                physical.set(physical.get() + 1);
+                Ok(FrameProgress::Complete)
+            })
+            .unwrap(),
+            FrameProgress::Complete
+        );
+        assert_eq!(physical.get(), 1);
+    }
 
     #[test]
     fn native_display_resident_prepare_revocation_waits_for_a_fresh_tick() {

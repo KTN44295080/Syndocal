@@ -123,6 +123,7 @@ pub(super) struct ResidentHistoryConfiguration {
     project_epoch: u64,
     geometry_generation: u64,
     extent: (u32, u32),
+    input_extents: Vec<(u32, u32)>,
     inputs: Vec<(
         protocol::VideoRenderInputKey,
         protocol::VideoLayerId,
@@ -423,7 +424,7 @@ impl NativeResidentDisplaySession {
     }
 
     fn classify_preparation<P: VideoFrameProvider, A: NativeResidentPresentationAuthority>(
-        &self,
+        &mut self,
         result: Result<NativeResidentDisplayFrame, String>,
         cancellation: &LivePreparationCancellation<'_, A>,
         renderer: &VideoPreviewRenderer<P>,
@@ -442,6 +443,30 @@ impl NativeResidentDisplaySession {
             .retirements
             .iter()
             .any(|retirement| matches!(retirement.reason(), Some(OutputRejection::Fault(_))));
+        // Consumed by every classification: a refusal latched by an earlier
+        // tick can never relabel a later, unrelated failure.
+        let deferred_budget = self.deferred_budget.take();
+        // A pre-execution budget refusal is a skipped tick only when the
+        // session holds no unfinished frame, handover or unrefunded
+        // reservation. Pending non-fault retirements keep draining through
+        // their ordinary poll; they are charged pressure, not a fault.
+        let healthy_idle = owner.is_some_and(|owner| {
+            owner.state() == crate::native_gpu_contract::GpuOwnerState::Active
+                && !owner.has_unfinished_logical_frame()
+        }) && self.unsubmitted.is_empty()
+            && self.recovered_history.is_none()
+            && !matches!(self.history, Some(ResidentHistoryState::Handover(_)))
+            && renderer.native_cpu_bridge.is_none()
+            && renderer.native_cpu_retained_reservations.is_empty();
+        if observed == 0 && !physical_fault && healthy_idle && result.is_err() {
+            if let Some((live, requested, limit)) = deferred_budget {
+                return Err(NativeResidentPrepareError::BudgetDeferred {
+                    live,
+                    requested,
+                    limit,
+                });
+            }
+        }
         if observed == 0 || physical_fault {
             return result.map_err(NativeResidentPrepareError::Fault);
         }
@@ -740,22 +765,6 @@ impl NativeResidentDisplaySession {
             inputs.push(input);
         }
         self.bind_input_keys(&mut inputs, context.project_render_epoch)?;
-        let configuration = ResidentHistoryConfiguration {
-            project_epoch: context.project_render_epoch,
-            geometry_generation: self.geometry_generation,
-            extent,
-            inputs: inputs
-                .iter()
-                .map(|input| (input.key, input.layer_id(), input.request.source.clone()))
-                .collect(),
-        };
-        if self.history_configuration.as_ref() != Some(&configuration) && self.history.is_some() {
-            // The predecessor belongs to the old history session/geometry.
-            self.leave_resident_tick();
-            cancellation.enter_committed_work();
-            self.handover_all_history_to_cpu(renderer, cancellation)?;
-            self.normalize_cpu_queue_keys(renderer);
-        }
         renderer.isf_render_namespace = (context.project_render_epoch, Some(self.output_id), false);
         renderer.set_isf_audio_frame(context.audio_frame);
         renderer.reset_isf_stack_metrics();
@@ -850,18 +859,115 @@ impl NativeResidentDisplaySession {
         }
         #[cfg(feature = "qa-native-frame-timing")]
         drop(demand_trace);
+        let configuration = ResidentHistoryConfiguration {
+            project_epoch: context.project_render_epoch,
+            geometry_generation: self.geometry_generation,
+            extent,
+            input_extents: raw
+                .iter()
+                .map(|frame| (frame.width, frame.height))
+                .collect(),
+            inputs: inputs
+                .iter()
+                .map(|input| (input.key, input.layer_id(), input.request.source.clone()))
+                .collect(),
+        };
+        // Task66 D1b: the PTS-ordered window evicts its lowest PTS first, so
+        // after a loop wrap (or seek) the previous pass's high-PTS tail
+        // survives. When the playhead reaches that range again and the decoder
+        // returns the first frame after the target, the at-or-before selector
+        // picks such a stale entry. Its resident texture was trimmed long ago,
+        // so the tick would need a historical replay (the 12P CPU
+        // continuation) in ordinary looping playback. Probe this tick's exact
+        // prospective selection before preparation; a selection that would
+        // need materialization starts a new history pass instead.
+        let stale_pass = match self.history.as_ref() {
+            Some(ResidentHistoryState::Active(active)) => inputs
+                .iter()
+                .zip(&raw)
+                .zip(&plan.composition.layers)
+                .any(|((input, frame), layer_plan)| {
+                    let Some(index) = active.inputs.iter().position(|key| *key == input.key) else {
+                        return false;
+                    };
+                    let (Some(history), Ok(entry)) = (
+                        active.session.history(index),
+                        active.sequences[index].prospective_next(),
+                    ) else {
+                        return false;
+                    };
+                    let incoming = crate::frame_history_policy::HistoryMeta {
+                        id: entry,
+                        pts_ms: frame.pts_ms,
+                        duration_ms: frame.duration_ms,
+                    };
+                    history
+                        .plan(&[incoming], layer_plan.position_ms)
+                        .and_then(|plan| history.select_materialization_requests(&plan))
+                        .is_ok_and(|selection| selection.cold_materialization_required)
+                }),
+            _ => false,
+        };
+        if (stale_pass || self.history_configuration.as_ref() != Some(&configuration))
+            && self.history.is_some()
+        {
+            // The predecessor belongs to the old history session/geometry.
+            self.leave_resident_tick();
+            if self.history_configuration.as_ref().is_some_and(|old| {
+                old.project_epoch == configuration.project_epoch
+                    && (old.geometry_generation != configuration.geometry_generation
+                        || old.extent != configuration.extent
+                        || (old.inputs == configuration.inputs
+                            && (stale_pass || old.input_extents != configuration.input_extents)))
+            }) {
+                // A physical geometry generation, a new raw extent of the same
+                // inputs or a new playback pass invalidates the output-scoped
+                // history. Stage A already completed all submitted work. Retire
+                // that scope instead of materializing 8 obsolete frames per
+                // layer into the managed CPU envelope (12P at 2560x1600) only
+                // to keep the next ticks off the resident path until they age
+                // out of the queue.
+                self.history = None;
+                self.history_host = None;
+                if let Some(old) = self.history_configuration.as_ref() {
+                    for (key, _, _) in &old.inputs {
+                        if let Some(queue) =
+                            renderer.runtime.queues.iter_mut().find(|q| q.key() == *key)
+                        {
+                            *queue = crate::FrameQueue::new_for_input(
+                                *key,
+                                queue.layer_id(),
+                                queue.capacity(),
+                            );
+                        }
+                    }
+                }
+                // Legacy-keyed queues return to their canonical key until the
+                // new scope binds them again below.
+                self.normalize_cpu_queue_keys(renderer);
+            } else {
+                cancellation.enter_committed_work();
+                self.handover_all_history_to_cpu(renderer, cancellation)?;
+                self.normalize_cpu_queue_keys(renderer);
+            }
+        }
         let host_fits = self.history_host.as_ref().is_none_or(|host| {
-            HistoryHostBudget::planning_limit(inputs.len(), extent)
-                .is_some_and(|required| required <= host.snapshot().limit)
+            HistoryHostBudget::planning_limit(
+                inputs.len(),
+                configuration
+                    .input_extents
+                    .iter()
+                    .fold(extent, |(w, h), &(iw, ih)| (w.max(iw), h.max(ih))),
+            )
+            .is_some_and(|required| required <= host.snapshot().limit)
         });
         let compatible = host_fits
             && renderer.runtime.config.frame_queue_capacity
                 >= crate::frame_history_policy::NATIVE_HISTORY_CAPACITY
-            && raw.iter().all(|frame| {
-                frame.format == crate::VideoPixelFormat::Rgba8
-                    && (frame.width, frame.height) == extent
-            })
-            && inputs.iter().all(|input| {
+            && raw
+                .iter()
+                .all(|frame| frame.format == crate::VideoPixelFormat::Rgba8)
+            && inputs.iter().zip(&raw).all(|(input, raw)| {
                 renderer
                     .runtime
                     .queues
@@ -870,7 +976,7 @@ impl NativeResidentDisplaySession {
                     .is_some_and(|queue| {
                         queue.iter_shared().all(|frame| {
                             frame.format == crate::VideoPixelFormat::Rgba8
-                                && (frame.width, frame.height) == extent
+                                && (frame.width, frame.height) == (raw.width, raw.height)
                         })
                     })
             });
@@ -900,12 +1006,13 @@ impl NativeResidentDisplaySession {
                     source_generation: binding.source_generation,
                 });
             }
-            self.bind_canonical_cpu_history(
+            self.bind_cpu_history_extents(
                 renderer,
                 request.frame.project_epoch,
                 request.frame.request_sequence,
                 extent,
                 history_inputs,
+                &configuration.input_extents,
             )?;
             self.history_configuration = Some(configuration);
         }
@@ -1005,9 +1112,11 @@ impl NativeResidentDisplaySession {
                 }
                 (NativeResidentExecution::Gpu(_), 2) => crate::native_frame_timing::IsfPath::Batch2,
                 (NativeResidentExecution::Gpu(_), _) => crate::native_frame_timing::IsfPath::Batch3,
-                (NativeResidentExecution::Cpu { .. }, _) => {
-                    crate::native_frame_timing::IsfPath::Decline
-                }
+                (
+                    NativeResidentExecution::Cpu { .. }
+                    | NativeResidentExecution::BudgetDeclined(_),
+                    _,
+                ) => crate::native_frame_timing::IsfPath::Decline,
                 (NativeResidentExecution::Retiring(_), _) => {
                     crate::native_frame_timing::IsfPath::Recovery
                 }
@@ -1019,6 +1128,26 @@ impl NativeResidentDisplaySession {
             );
         }
         match execution {
+            NativeResidentExecution::BudgetDeclined(reason) => {
+                // A pre-execution refusal produces no frame. Complete any
+                // already-finished CPU handover, retaining every charged owner.
+                if matches!(self.history, Some(ResidentHistoryState::Handover(_))) {
+                    self.publish_history_to_cpu(renderer)?;
+                    self.normalize_cpu_queue_keys(renderer);
+                }
+                if let NativeGpuDecline::BudgetExceeded {
+                    live,
+                    requested,
+                    limit,
+                } = reason
+                {
+                    self.deferred_budget = Some((live, requested, limit));
+                    return Err(format!("native tick budget refused: {reason:?}"));
+                }
+                Err(format!(
+                    "unexpected non-budget admission deferral: {reason:?}"
+                ))
+            }
             NativeResidentExecution::Cpu { reason, results } => {
                 self.leave_resident_tick();
                 #[cfg(feature = "qa-native-frame-timing")]

@@ -26,6 +26,10 @@ const STAGES: usize = 3;
 #[derive(Default)]
 struct Provider {
     reads: usize,
+    source_extent: Option<(u32, u32)>,
+    /// Real decoders return the first frame at or after the target: PTS on
+    /// this grid, rounded up (the libav sequential-request contract).
+    pts_grid: Option<u64>,
 }
 
 impl VideoFrameProvider for Provider {
@@ -38,13 +42,16 @@ impl VideoFrameProvider for Provider {
         height: u32,
     ) -> Result<VideoFrame, VideoFrameProviderError> {
         self.reads += 1;
+        let (width, height) = self.source_extent.unwrap_or((width, height));
         let shade = (layer.state.position_ms / 16 % 200) as u8;
         Ok(VideoFrame {
             layer_id: layer.id,
             width,
             height,
-            pts_ms: layer.state.position_ms,
-            duration_ms: 16,
+            pts_ms: self.pts_grid.map_or(layer.state.position_ms, |grid| {
+                layer.state.position_ms.div_ceil(grid) * grid
+            }),
+            duration_ms: self.pts_grid.unwrap_or(16),
             format: VideoPixelFormat::Rgba8,
             data: [shade, 34, layer.id as u8 * 40, 255].repeat(width as usize * height as usize),
         })
@@ -95,6 +102,7 @@ fn session_with_compositor(extent: (u32, u32)) -> NativeResidentDisplaySession {
         history_host: None,
         follow_last_valid: None,
         ring: Default::default(),
+        deferred_budget: None,
     };
     session.compositor = Some(
         NativeGpuCompositor::from_shared(&mut session.owner)
@@ -701,28 +709,14 @@ fn native_gpu_output_display_snapshot_ring_resize_discards_old_geometry_and_real
     ring.session.reserved_geometry = None;
     assert_eq!(ring.session.geometry_generation(), generation + 1);
     ring.snapshot = scene(2, resized);
-    let mut path = path_of(ring.prepare(resized));
+    let path = path_of(ring.prepare(resized));
     assert_eq!(
         ring.session.ring.discarded, 1,
         "old-geometry output discarded"
     );
-    // Old-extent canonical history entries keep the next ticks on CPU until
-    // they leave the eight-entry window; the ring stays disarmed meanwhile.
-    let mut ticks = 1;
-    while path != Path::Resident {
-        assert_eq!(
-            path,
-            Path::Cpu,
-            "only canonical CPU output precedes resident"
-        );
-        assert!(!ring.session.ring.armed() && !ring.session.ring.owns_in_flight());
-        path = path_of(ring.prepare(resized));
-        ticks += 1;
-        assert!(
-            ticks <= 12,
-            "resized output never returned to the resident path"
-        );
-    }
+    // Task66: geometry-scoped history is retired, rather than converting
+    // obsolete geometry to eight CPU frames before resident re-admission.
+    assert_eq!(path, Path::Resident);
     // The first resident tick at the new geometry is synchronous.
     for expected in [Path::InFlight, Path::Resident, Path::Resident] {
         let frame = ring.prepare(resized);
@@ -919,4 +913,226 @@ fn native_gpu_output_display_snapshot_ring_abandoned_output_stays_fenced_when_re
     assert!(!frame.prepared_by_previous_tick());
     drop(frame);
     stop_and_reap(&mut ring.session, &mut ring.renderer);
+}
+
+#[test]
+fn native_gpu_output_display_resize_return_stays_resident_and_budget_settles() {
+    for layers in 1..=3 {
+        let mut ring = RingFixture::new(layers, EXTENT);
+        ring.warm(EXTENT);
+        let mut maxima = Vec::new();
+        for extent in [(48, 30), EXTENT, (48, 30), EXTENT] {
+            ring.session.reserve_geometry(extent.0, extent.1).unwrap();
+            ring.session.reserved_geometry = None;
+            ring.snapshot = scene(layers, extent);
+            let mut steady = Vec::new();
+            for tick in 0..24 {
+                let frame = ring.prepare(extent);
+                assert_eq!(
+                    path_of(frame),
+                    if tick == 1 {
+                        Path::InFlight
+                    } else {
+                        Path::Resident
+                    }
+                );
+                let bytes = ring.session.owner.budget_snapshot().managed_bytes();
+                assert!(bytes <= crate::native_gpu_budget::NATIVE_MANAGED_LIMIT);
+                if tick >= 16 {
+                    steady.push(bytes);
+                }
+            }
+            maxima.push(*steady.iter().max().unwrap());
+        }
+        assert_eq!(maxima[0], maxima[2], "small extent accumulated owners");
+        assert_eq!(maxima[1], maxima[3], "return accumulated owners");
+        stop_and_reap(&mut ring.session, &mut ring.renderer);
+    }
+}
+
+#[test]
+fn native_gpu_output_display_source_extent_differs_from_output_stays_resident() {
+    for layers in 1..=3 {
+        let mut ring = RingFixture::new(layers, EXTENT);
+        ring.renderer.frame_provider.source_extent = Some((32, 18));
+        for index in 0..24 {
+            let frame = ring.prepare(EXTENT);
+            assert_eq!(frame.extent, EXTENT);
+            assert_eq!(
+                path_of(frame),
+                if index == 1 {
+                    Path::InFlight
+                } else {
+                    Path::Resident
+                }
+            );
+            let Some(ResidentHistoryState::Active(active)) = ring.session.history.as_ref() else {
+                panic!("resident history absent")
+            };
+            for layer in 0..layers as usize {
+                assert_eq!(
+                    active.session.history(layer).unwrap().scope().extent,
+                    (32, 18)
+                );
+            }
+        }
+        stop_and_reap(&mut ring.session, &mut ring.renderer);
+    }
+}
+
+#[test]
+fn native_gpu_output_display_single_budget_refusal_preserves_history_cache_and_owner() {
+    let mut ring = RingFixture::new(3, EXTENT);
+    // First output is complete and cached; no pipeline output is pending.
+    drop(ring.prepare(EXTENT));
+    let key = ring
+        .session
+        .cache
+        .last_valid_with_owner()
+        .unwrap()
+        .0
+        .clone();
+    let before = ring.session.cache.last_valid(&key).unwrap().data.clone();
+    let sequences = match ring.session.history.as_ref().unwrap() {
+        ResidentHistoryState::Active(active) => active
+            .sequences
+            .iter()
+            .map(|s| s.prospective_next().unwrap())
+            .collect::<Vec<_>>(),
+        _ => unreachable!(),
+    };
+    let frame = NativeFrameId {
+        output_id: OUTPUT,
+        project_epoch: EPOCH,
+        request_sequence: 900,
+        geometry_generation: ring.session.geometry_generation(),
+    };
+    let mut pressure = crate::native_gpu_budget::NativeAllocationPlan::new(frame);
+    let live = ring.session.owner.budget_snapshot().managed_bytes();
+    pressure
+        .add_new(
+            ChargeKind::SerialCpuAdmission,
+            crate::native_gpu_budget::NATIVE_MANAGED_LIMIT - live - 1,
+        )
+        .unwrap();
+    let quote = ring.session.owner.quote(&pressure).unwrap();
+    let reservation = ring.session.owner.reserve(quote).unwrap();
+    for layer in &mut ring.snapshot.layers {
+        layer.state.position_ms += 16;
+    }
+    let error = prepare_with(
+        &mut ring.session,
+        &mut ring.renderer,
+        &ring.snapshot,
+        EXTENT,
+        &Permit,
+    )
+    .err()
+    .expect("budget admission must refuse");
+    assert!(
+        matches!(error, NativeResidentPrepareError::BudgetDeferred { .. }),
+        "{error:?}"
+    );
+    assert_eq!(ring.session.owner.state(), GpuOwnerState::Active);
+    assert!(!ring.session.owner.has_unfinished_logical_frame());
+    assert_eq!(ring.session.cache.last_valid(&key).unwrap().data, before);
+    let ResidentHistoryState::Active(active) = ring.session.history.as_ref().unwrap() else {
+        panic!("history moved to CPU")
+    };
+    assert_eq!(
+        active
+            .sequences
+            .iter()
+            .map(|s| s.prospective_next().unwrap())
+            .collect::<Vec<_>>(),
+        sequences
+    );
+    ring.session
+        .owner
+        .discard_unsubmitted_reservation(reservation)
+        .unwrap();
+    assert_eq!(path_of(ring.prepare(EXTENT)), Path::Resident);
+    stop_and_reap(&mut ring.session, &mut ring.renderer);
+}
+
+#[test]
+fn native_gpu_output_display_raw_extent_changes_rebind_history_at_fixed_output() {
+    for layers in 1..=3 {
+        let mut ring = RingFixture::new(layers, EXTENT);
+        for source in [(32, 18), (80, 50), (32, 18), (80, 50)] {
+            ring.renderer.frame_provider.source_extent = Some(source);
+            for tick in 0..20 {
+                let frame = ring.prepare(EXTENT);
+                assert_eq!(
+                    path_of(frame),
+                    if tick == 1 {
+                        Path::InFlight
+                    } else {
+                        Path::Resident
+                    }
+                );
+            }
+            let host = ring.session.history_host.as_ref().unwrap();
+            assert_eq!(
+                host.snapshot().limit,
+                HistoryHostBudget::planning_limit(
+                    3,
+                    (EXTENT.0.max(source.0), EXTENT.1.max(source.1))
+                )
+                .unwrap()
+            );
+        }
+        stop_and_reap(&mut ring.session, &mut ring.renderer);
+    }
+}
+
+/// Task66 D1b (live: resident 3L Display lost after ~121 presents). After a
+/// loop wrap the PTS-ordered window keeps the previous pass's high-PTS tail.
+/// With a decoder that returns the first frame after the target, the canonical
+/// at-or-before selector later picks such an entry, whose resident texture was
+/// trimmed: before the fix that tick took the 12P CPU continuation. Every
+/// tick of looping playback must stay resident, and the stale pass is retired
+/// only when this exact hazard occurs (no per-tick history churn).
+#[test]
+fn native_gpu_output_display_loop_wrap_stays_resident_without_history_replay() {
+    const LOOP_MS: u64 = 1_200;
+    const STEP_MS: u64 = 85;
+    const TICKS: u64 = 150;
+    for layers in 1..=3 {
+        let mut ring = RingFixture::new(layers, EXTENT);
+        ring.renderer.frame_provider.pts_grid = Some(33);
+        let mut wraps = 0;
+        let mut previous = 0;
+        for tick in 0..TICKS {
+            let position = tick * STEP_MS % LOOP_MS;
+            wraps += u64::from(position < previous);
+            previous = position;
+            for layer in &mut ring.snapshot.layers {
+                layer.state.position_ms = position;
+            }
+            let frame = prepare_with(
+                &mut ring.session,
+                &mut ring.renderer,
+                &ring.snapshot,
+                EXTENT,
+                &Permit,
+            )
+            .unwrap_or_else(|error| panic!("{layers}L tick {tick} at {position}: {error}"));
+            let path = path_of(frame);
+            assert!(
+                matches!(path, Path::Resident | Path::InFlight),
+                "{layers}L tick {tick} at {position} left the resident path: {path:?}"
+            );
+        }
+        assert!(wraps >= 9);
+        let Some(ResidentHistoryState::Active(active)) = ring.session.history.as_ref() else {
+            panic!("{layers}L resident history absent")
+        };
+        let passes = active.session.history(0).unwrap().scope().queue_epoch;
+        assert!(
+            passes > 1 && passes <= 2 * wraps + 1,
+            "{layers}L history passes {passes} for {wraps} wraps"
+        );
+        stop_and_reap(&mut ring.session, &mut ring.renderer);
+    }
 }

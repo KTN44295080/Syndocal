@@ -151,8 +151,7 @@ impl NativeOutputHistorySession {
             return Err(HistoryError::InvalidPixels);
         }
         for (index, scope) in scopes.iter().enumerate() {
-            if scope.extent != extent
-                || scope.frame_scope.output_id != first.frame_scope.output_id
+            if scope.frame_scope.output_id != first.frame_scope.output_id
                 || scope.frame_scope.project_epoch != first.frame_scope.project_epoch
                 || scope.frame_scope.geometry_generation != first.frame_scope.geometry_generation
                 || scope.input.project_render_epoch != scope.frame_scope.project_epoch

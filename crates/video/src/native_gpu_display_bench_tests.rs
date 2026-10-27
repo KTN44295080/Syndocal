@@ -130,6 +130,7 @@ fn session() -> NativeResidentDisplaySession {
         history_host: None,
         follow_last_valid: None,
         ring: Default::default(),
+        deferred_budget: None,
     };
     session.compositor = Some(NativeGpuCompositor::from_shared(&mut session.owner).unwrap());
     session.reserve_geometry(EXTENT.0, EXTENT.1).unwrap();
@@ -235,5 +236,57 @@ fn native_gpu_output_display_c4_fixture_per_phase_bench() {
                 }
             }
         }
+    }
+}
+
+/// Live D1b oracle: three real file decoders at the live 3L tick spacing
+/// (85 ms) through two 12-second wraps. Before task66, tick 277 (11545 ms in
+/// the second pass) selected a previous-pass history entry whose resident was
+/// trimmed and failed the 12P CPU continuation quote at 27P live.
+#[test]
+#[ignore = "QA C4 media and full-size three-layer loop regression"]
+fn native_gpu_output_display_c4_sparse_loop_remains_resident() {
+    let media = std::env::var("SYNDOCAL_QA_C4_MEDIA").expect("C4 media required");
+    let mut snapshot = scene(&media, 3);
+    let mut renderer = renderer();
+    let mut session = session();
+    let clips = protocol::VideoClipRuntimeSnapshot::default();
+    let transitions = VideoLayerTransitionRuntimeSnapshot::default();
+    for tick in 0..300_u64 {
+        let target = tick * 85 % 12000;
+        for layer in &mut snapshot.layers {
+            layer.state.position_ms = target;
+        }
+        let frame = session
+            .prepare_output(
+                &mut renderer,
+                &snapshot,
+                VideoEffectRenderContext {
+                    clip_runtime: &clips,
+                    project_render_epoch: EPOCH,
+                    audio_frame: None,
+                },
+                &transitions,
+                EXTENT,
+                &|| false,
+                &Permit,
+            )
+            .unwrap_or_else(|error| {
+                panic!("sparse loop tick={tick} target={target} error={error}")
+            });
+        assert!(
+            matches!(
+                frame.content,
+                super::present::ResidentDisplayContent::Resident(_)
+                    | super::present::ResidentDisplayContent::InFlight
+            ),
+            "sparse loop tick={tick} target={target} left resident"
+        );
+    }
+    session.begin_stop_with_renderer(&mut renderer).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !session.poll_stop().unwrap() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
     }
 }

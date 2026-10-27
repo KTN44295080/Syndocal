@@ -185,16 +185,18 @@ fn pure_preflight_checks_identity_before_encoding_and_distinguishes_decline() {
     );
     wrong = original;
     wrong.width -= 1;
+    let sampled = plan(
+        &plans,
+        &[wrong],
+        &[SelectedTextureKind::Validated],
+        size,
+        [0; 4],
+    )
+    .unwrap();
+    assert_eq!(sampled.layers_bottom_first[0].identity.width, size.0 - 1);
     assert_eq!(
-        plan(
-            &plans,
-            &[wrong],
-            &[SelectedTextureKind::Validated],
-            size,
-            [0; 4]
-        )
-        .unwrap_err(),
-        CompositionPlanFailure::Declined(NativeGpuDecline::UnsupportedExtent)
+        sampled.layers_bottom_first[0].lookup,
+        crate::axis_aligned_source_lookup(&plans[0].transform, size, (size.0 - 1, size.1))
     );
     for opacity in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         let mut unsupported = plans.clone();
@@ -1332,4 +1334,58 @@ fn real_shared_output_pool_reuses_allocation_ids_but_never_held_ready() {
     fixture.owner.release_resource_pools();
     compositor.release_pooled_outputs();
     stop(&mut fixture.owner);
+}
+
+#[test]
+fn real_adapter_different_source_extents_match_cpu_sampling() {
+    let gpu = headless().expect("source/output extent regression requires a real adapter");
+    let size = (31, 19);
+    let frames = [
+        gradient(1, (13, 9), 3, true),
+        gradient(2, (37, 21), 41, false),
+    ];
+    for transform in [
+        Transform2D::default(),
+        Transform2D {
+            x: 0.07,
+            scale_x: 0.83,
+            crop_left: 0.13,
+            ..Default::default()
+        },
+    ] {
+        let layers = [
+            layer(1, VideoBlendMode::Normal, 1.0, Transform2D::default()),
+            layer(2, VideoBlendMode::Normal, 0.7, transform),
+        ];
+        let native = plan(
+            &layers,
+            &[identity(1, (13, 9)), identity(2, (37, 21))],
+            &[
+                SelectedTextureKind::Validated,
+                SelectedTextureKind::InThisTransaction,
+            ],
+            size,
+            [0; 4],
+        )
+        .unwrap();
+        let actual = render(&gpu, &native, &frames, true);
+        let cpu = crate::composite_frames_rgba8(
+            &CompositionPlan {
+                composition_id: 1,
+                label: "extent oracle".into(),
+                output_ids: vec![],
+                master_opacity: 1.0,
+                blackout: false,
+                layers: layers.to_vec(),
+            },
+            &frames,
+            size.0,
+            size.1,
+        )
+        .unwrap();
+        assert_eq!(actual.len(), cpu.data.len());
+        for (actual, expected) in actual.iter().zip(cpu.data) {
+            assert!(actual.abs_diff(expected) <= 1);
+        }
+    }
 }
