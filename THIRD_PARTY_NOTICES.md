@@ -37,10 +37,21 @@ FFmpeg and its dependencies retain their respective copyrights and licenses;
 their collected license texts and notices are reproduced in
 `licenses/FFmpeg-DEPENDENCIES.txt`, with the exact-binary provenance limitations
 identified there. Syndocal
-makes no modifications to these supplied DLLs. Source and dependency archives,
-patches and applicable notices must accompany the final distribution through
-its corresponding-source download; the locators above are provenance and do
-not claim that this release-publication gate has been completed.
+makes no modifications to these supplied DLLs.
+
+Source offer: the complete corresponding source of this FFmpeg build is
+available at no charge from
+https://github.com/KTN44295080/Syndocal/releases/download/ffmpeg-sdk-lgpl-n8.1.3-r40366564270/ffmpeg-sdk-lgpl-n8.1.3-r40366564270-corresponding-source.tar.xz
+(891,325,408 bytes, SHA-256
+`5322a2327758c1936ce6c55845f2721953bb89b107ee115e998a356f2fe9c48b`). It
+contains the FFmpeg source, the patched build recipe and scripts, and the
+source of every dependency stage built into the seven DLLs and `ffmpeg.exe`,
+with its build-time submodules and vendored rav1e Rust crates. Its component
+manifest (names, revisions, licences and hashes) is
+`ffmpeg-sdk-lgpl-n8.1.3-r40366564270-corresponding-source.manifest.json` on the
+same prerelease. Syndocal keeps this source available there for as long as it
+distributes this FFmpeg build. Toolchain runtime libraries are identified there
+by version only. A byte-identical rebuild has not been demonstrated.
 
 FFmpeg is not part of the Syndocal MIT-licensed source code. Recipients may
 replace the dynamically linked FFmpeg libraries with a compatible build, as

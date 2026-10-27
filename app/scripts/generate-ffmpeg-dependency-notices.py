@@ -14,18 +14,29 @@ RECIPE = "6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b"
 BUILD = "n8.1.3-9-g29e619e767-20260930-syndocal-r40366564270"
 # Syndocal commit whose tools/ffmpeg-sdk patch and workflow built the pinned SDK.
 RECIPE_PATCH = "7d0af757f73231fc0c6006d6c21c72c14cb4a31a:tools/ffmpeg-sdk/0001-lgpl-without-chromaprint-fftw.patch"
+# Complete corresponding source (Task 59), verified by tools/ffmpeg-sdk/verify-corresponding-source.py.
+CORRESPONDING_SOURCE = {
+    "url": "https://github.com/KTN44295080/Syndocal/releases/download/ffmpeg-sdk-lgpl-n8.1.3-r40366564270/ffmpeg-sdk-lgpl-n8.1.3-r40366564270-corresponding-source.tar.xz",
+    "sha256": "5322a2327758c1936ce6c55845f2721953bb89b107ee115e998a356f2fe9c48b",
+    "bytes": 891325408,
+    "manifest_url": "https://github.com/KTN44295080/Syndocal/releases/download/ffmpeg-sdk-lgpl-n8.1.3-r40366564270/ffmpeg-sdk-lgpl-n8.1.3-r40366564270-corresponding-source.manifest.json",
+    "manifest_sha256": "941c39d8d6f3047a4af2ec1a9293125424ecae080f35bb6ac0b4f330ed5ea1c4",
+    "produced_by": "GitHub Actions run 40461305998 (workflow ffmpeg-lgpl-sdk-source.yml)",
+}
 # Recipes deleted by RECIPE_PATCH; their sources are not built or linked.
 DISABLED_RECIPES = ("chromaprint", "fftw3")
 LIMITATIONS = [
     "Publication blocked: source-candidate collection is not exact binary dependency closure.",
     "The Chromaprint and FFTW3 recipes are deleted by the Syndocal recipe patch, and the final configure omits --enable-chromaprint. Their notices are deliberately omitted. A scan of all seven pinned DLLs found zero ASCII or UTF-16LE chromaprint/fftw strings; this does not by itself prove complete binary closure.",
-    "The rav1e recipe now builds with the committed tools/ffmpeg-sdk/rav1e.Cargo.lock (--locked; cc 1.10.0, adds find-msvc-tools 0.1.15 and shlex 2.0.1), and the base images are digest-pinned. Crate candidates below were collected from the original pinned locks and are not regenerated for those lock deltas. Resolved Cargo features, the target-filtered graph and link maps are not retained.",
-    "All 577 registry package versions in the two pinned source Cargo.lock files are conservative candidates, including build/dev/other-platform dependencies. Cargo.lock membership is not proof of linkage. Crate archives are verified against the lockfile SHA-256 checksum.",
+    "The rav1e recipe builds with the committed tools/ffmpeg-sdk/rav1e.Cargo.lock (--locked; cc 1.10.0, adds find-msvc-tools 0.1.15 and shlex 2.0.1), and the base images are digest-pinned. Crate candidates are regenerated from that committed lock plus librsvg's pinned Cargo.lock, so cc 1.2.26 from rav1e's original lock is no longer a candidate. Resolved Cargo features, the target-filtered graph and link maps are not retained.",
+    "All 578 registry package versions in those two Cargo.lock files are conservative candidates, including build/dev/other-platform dependencies. Cargo.lock membership is not proof of linkage. Crate archives are verified against the lockfile SHA-256 checksum.",
+    "libsamplerate (scripts.d/45-libsamplerate.sh) is built and copied into the combined dependency prefix by the generated Dockerfile, so its notices are included as a candidate although FFmpeg's configure line does not name it.",
     "Pinned source candidates include unlinked documentation/tests/build tooling and SDK variants. Source-tree notices are deliberately overinclusive and do not assert that every described license applies to the DLLs.",
     "The original collector has no supported archive endpoint for several pinned repositories; this is a collector limitation, not proof the sources are unavailable. Missing texts are explicit in unresolved_sources. Provenance URLs do not replace notice text.",
     "Several crate archives contain license metadata but no license document. Available exact .cargo_vcs_info.json source revisions are included as supplementary source notices. Others remain explicitly unresolved.",
-    "Source tags openssl-3.6.4, v1.4.363, v4.2.0 and proxy-libintl 0.5 were fetched by name; archive SHA-256 identifies fetched bytes, but historical tag resolution at the DLL build is not proved.",
-    "Recipe commit is preserved, but recipe use by the binary is not independently attested. Docker tags, compiler/libgcc/libstdc++/libgomp/Rust standard-library versions and complete corresponding-source/patch preservation remain unresolved.",
+    "Source tags openssl-3.6.4, v1.4.363 and v4.2.0 were fetched by name. The corresponding-source job resolved them to d3c1b1169b3569ff3069e5b399f47b2b28e03d79, 6802bb4733b63ed5efd3adb308a6c885ef180ea1 and ece41aa84d7879d7e55c59e955a5884b541f7f3b; each matches the abbreviated commit printed by build run 40366564270, which is prefix evidence, not full-hash proof. proxy-libintl 0.5 is fixed by the glib wrap source_hash.",
+    "Complete corresponding source is preserved as one archive with a per-component manifest (see the header). The 82 download stages mounted by the build Dockerfile, the build-time freetype/kvazaar/dav1d sources and the rav1e crates are included. Toolchain runtime sources (GCC 16.2.0 libgcc/libstdc++/libgomp, MinGW toolchain, Rust 1.99.1 standard library) and the digest-pinned base images are identified but not preserved. The binary is not proved byte-reproducible from it.",
+    "Nested repositories inside those stages are covered here only where they may be compiled into linked libraries (glib gvdb, zimg graphengine, TF-PSA-Crypto mldsa-native, freetype dlg, libplacebo Vulkan-Headers, shaderc DEPS). OpenSSL's test/provider/fuzz submodules, mbedtls framework, googletest, kvazaar greatest, dav1d checkasm, libplacebo jinja/markupsafe/nuklear are build/test tooling. Their licences stay in the corresponding-source archive but are not reproduced here.",
     "This aggregate includes named full license/notice documents only. Per-file leading source-code notices are retained in source archives but not exhaustively reproduced here; embedded-code notice closure, including SDK headers, remains unresolved.",
     "OpenH264 is source-built in the recipe. Cisco's binary patent licence does not establish patent permission for this independently built binary; this is a separate policy decision.",
 ]
@@ -39,6 +50,8 @@ notices from pinned source candidates. It does not establish exact binary
 closure or release clearance. Source candidates can include unlinked code.
 Source distribution: licenses/FFmpeg-DEPENDENCIES.json records source
 identities, hashes and unresolved items; it is not a runtime payload resource.
+Corresponding source: {cs_url}
+  SHA-256 {cs_sha}
 
 Collection boundaries and unresolved evidence:
 {limits}
@@ -62,7 +75,7 @@ def decode(data: bytes) -> str:
 
 def build(evidence: pathlib.Path) -> tuple[bytes, bytes]:
     sources = []
-    for name in ("source-receipts.json", "extra-source-receipts.json"):
+    for name in ("source-receipts.json", "extra-source-receipts.json", "task59-nested-source-receipts.json"):
         sources.extend(json.loads((evidence / name).read_text(encoding="utf-8")))
     # Linux-only recipes are explicitly excluded by their ffbuild_enabled guards.
     excluded = [s for s in sources if s["name"] in ("libpciaccess", "libdrm")]
@@ -80,11 +93,11 @@ def build(evidence: pathlib.Path) -> tuple[bytes, bytes]:
         resolved_names = {s["name"] for s in resolved}
         sources = [s for s in sources if s["name"] not in resolved_names] + resolved
     crates = json.loads((evidence / "crate-receipts.json").read_text(encoding="utf-8"))
-    intro = HEADER.format(build=BUILD, recipe=RECIPE, patch=RECIPE_PATCH, limits="\n".join("- " + x for x in LIMITATIONS))
+    intro = HEADER.format(build=BUILD, recipe=RECIPE, patch=RECIPE_PATCH, cs_url=CORRESPONDING_SOURCE["url"], cs_sha=CORRESPONDING_SOURCE["sha256"], limits="\n".join("- " + x for x in LIMITATIONS))
     sections = [intro]
     shared_texts = {}
     manifest = {"schema_version": 1, "build": BUILD, "recipe_commit": RECIPE, "recipe_patch": RECIPE_PATCH,
-                "closure_status": "incomplete-publication-blocked", "limitations": LIMITATIONS,
+                "closure_status": "incomplete-publication-blocked", "corresponding_source": CORRESPONDING_SOURCE, "limitations": LIMITATIONS,
                 "sources": [], "excluded_linux_only_recipes": excluded,
                 "excluded_disabled_recipes": [{k: v for k, v in s.items() if k != "files"} for s in disabled], "registry_crate_candidates": [], "unresolved_sources": [],
                 "crate_archives_without_license_documents": [], "sources_without_license_documents": [], "notice_count": 0}

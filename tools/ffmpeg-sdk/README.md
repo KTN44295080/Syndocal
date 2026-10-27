@@ -48,3 +48,27 @@ resolver, notices, build documentation and CI download now name it. Rebuilds
 are not byte-identical (rerun 40377168832 differs), so never substitute a
 rebuild for the hosted archive. CI keeps a release-packaging guard that rejects
 the old BtbN Chromaprint `avformat-62.dll`.
+
+## Corresponding source
+
+The manual-only `FFmpeg LGPL SDK corresponding source` workflow
+(`ffmpeg-lgpl-sdk-source.yml`) leaves the build job untouched. It re-runs the
+patched recipe's `download.sh`/`generate.sh` for `win64 lgpl-shared 8.1` with
+the digest-pinned download image and requires the regenerated Dockerfile to be
+byte-identical to the `dependency.Dockerfile` hosted for run 40366564270. Every
+download stage that Dockerfile mounts is extracted under `dependencies/<stage>`.
+The sources the build fetched itself are added: freetype's `dlg` and kvazaar's
+`greatest` submodules, dav1d's `checkasm` wrap, and the rav1e crates. The crates
+are vendored with the build image's cargo from the committed lock.
+
+`pack-corresponding-source.sh` records every resolved Git commit and then
+removes `.git`/`.svn`. It checks each commit and submodule printed by the hosted
+build log against the resolved trees. Moving tags are proved only by their
+abbreviated commit prefix. It then writes a sorted, fixed-mtime, root-owned GNU
+tar compressed with `xz -6 -T4 --block-size=64MiB`. A second tar pass must
+reproduce the uncompressed tar SHA-256. `corresponding-source-manifest.py`
+writes the per-component manifest, with refs, resolved commits, build-log
+evidence, licence summary (`component-licenses.json`), licence files and tree
+digest. `verify-corresponding-source.py` re-verifies a downloaded upload set
+independently. Toolchain runtime sources (GCC/MinGW runtime, Rust std) and the
+base images themselves are identified, not preserved.

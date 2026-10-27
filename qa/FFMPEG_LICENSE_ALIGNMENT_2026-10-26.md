@@ -1149,3 +1149,305 @@ Independent stable-source review found no actionable defect, including the
 exact option-array assertions, bounded teardown, error localization, inventory
 anchors, normal/Show-ASIO consumers and corrected notice. This review is source
 evidence and does not establish clean-install or patent-policy acceptance.
+
+<a id="task-59--ffmpeg-corresponding-source--2026-10-27"></a>
+
+## Task 59 - FFmpeg corresponding source - 2026-10-27
+
+Base: `main` at `1a500672`. Commit `dff3aed7` added the manual workflow
+`.github/workflows/ffmpeg-lgpl-sdk-source.yml`, which leaves the existing build
+job and its outputs untouched. The same commit added three files under
+`tools/ffmpeg-sdk/`: `pack-corresponding-source.sh`,
+`corresponding-source-manifest.py` and `component-licenses.json`. A later
+commit added the independent downloader-side checker
+`verify-corresponding-source.py`. Evidence root: `%LOCALAPPDATA%/SyndocalDev/task59/`.
+
+### Method and run
+
+Actions run **40461305998** (`dff3aed7`, ubuntu-24.04, success):
+
+1. Applied the committed patch (SHA-256 `49ae576d...`) and lock (`d031d0ff...`)
+   to BtbN `6c9aec5f`.
+2. Re-ran `download.sh`/`generate.sh win64 lgpl-shared 8.1` with the
+   digest-pinned download image. The regenerated Dockerfile is **byte-identical**
+   to the hosted `dependency.Dockerfile` of run 40366564270 (`8d694efa...`).
+   The stage set, refs, download hashes and configure line are therefore the
+   ones that built the hosted SDK.
+3. Extracted all **82** download stages mounted by that Dockerfile. Five stages
+   are downloaded but never mounted, so they are not built and are excluded:
+   `40-libpsl`, `40-nghttp2`, `40-nghttp3`, `40-ngtcp2` and `45-zstd`.
+4. Added the sources fetched *during* the build, as found in the hosted build log:
+   - freetype `subprojects/dlg` `395ccad2...`, in both freetype stages (BSL-1.0).
+   - kvazaar `greatest` `60e25ce7...` (test only).
+   - dav1d `checkasm`, wrap tag `v1.2.0`, now `0df02535...`. The build log shows
+     only version 1.2.0, so the build-time commit is **unresolved**. It is test
+     only and not linked.
+   - **275** rav1e crates, vendored with the build image's cargo 1.99.1 from the
+     committed lock (`cargo vendor --locked`, lock unchanged). They include
+     cc 1.10.0, find-msvc-tools 0.1.15 and shlex 2.0.1.
+5. Recorded **83** resolved VCS identities (top-level and nested), then removed
+   `.git`/`.svn`. Every commit printed by the hosted build log matches the
+   resolved trees: each `HEAD is now at` abbreviation and each
+   `Submodule path ... checked out` line. Svn revision 6835 also matches.
+   Failures: **0**.
+6. Packed one deterministic archive: sorted GNU tar, mtime `@1790726400`,
+   uid/gid 0, `xz -6 -T4 --block-size=64MiB`. A second tar pass in the job
+   reproduced the uncompressed tar SHA-256.
+
+Moving refs and how they resolve. The abbreviated build-log commit is prefix
+evidence, not full-hash proof:
+
+| Recipe ref | Resolved now | Build-log abbreviation |
+| --- | --- | --- |
+| openssl `openssl-3.6.4` | `d3c1b1169b3569ff3069e5b399f47b2b28e03d79` | `d3c1b11` |
+| Vulkan-Headers `v1.4.363` (vulkan-headers, vulkan-loader) | `6802bb4733b63ed5efd3adb308a6c885ef180ea1` | `6802bb4` |
+| mbedtls `v4.2.0` | `ece41aa84d7879d7e55c59e955a5884b541f7f3b` | `ece41aa` |
+| glib wrap proxy-libintl `0.5` | fixed by wrap `source_hash` `f7a1cbd7...` | download URL logged |
+| dav1d wrap checkasm `v1.2.0` (test only) | `0df02535c7435cf3969ca141c9e3ff7b1c1e6c28` | **unresolved** |
+
+Build images, from run 40366564270's log and `base-images.json`:
+
+- Download/base:
+  `ghcr.io/btbn/ffmpeg-builds/base@sha256:91eaaaf32f3f98464e99faf1062fab8ab99a23d0b499c72b51a02ec9137b06a0`,
+  created 2026-10-17T12:19:15Z.
+- Toolchain/target:
+  `ghcr.io/btbn/ffmpeg-builds/base-win64@sha256:8a3d189e5b615c89e1a9fe2be705fa17173d8f6ea0a955b25c7c28041cde36c7`,
+  created 2026-10-17T13:29:28Z. It provides GCC 16.2.0 (crosstool-NG
+  1.29.0.7_b1a94f6) and rustc/cargo 1.99.1.
+- BuildKit: `moby/buildkit:buildx-stable-1`, tag only. The log does not print a
+  digest, so it is **unresolved**.
+- Local dependency image ID `sha256:22662e29...`, not pushed.
+- Runner image: ubuntu24/20261012.334.
+
+### Upload set (staged, not uploaded)
+
+Per the supervisor instruction, `gh release upload` was not run. The set is in
+`%LOCALAPPDATA%/SyndocalDev/task59/release-upload/` and targets the prerelease
+`ffmpeg-sdk-lgpl-n8.1.3-r40366564270`. All three are new asset names, so no
+existing asset is overwritten.
+
+| Asset | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `ffmpeg-sdk-lgpl-n8.1.3-r40366564270-corresponding-source.tar.xz` | 891,325,408 | `5322a2327758c1936ce6c55845f2721953bb89b107ee115e998a356f2fe9c48b` |
+| `ffmpeg-sdk-lgpl-n8.1.3-r40366564270-corresponding-source.manifest.json` | 171,110 | `941c39d8d6f3047a4af2ec1a9293125424ecae080f35bb6ac0b4f330ed5ea1c4` |
+| `SHA256SUMS-corresponding-source` | 267 | `7ccc4bb0f9d4f749c09e5836468f24bc8f1dc46ce463ad80bed57dc659af2406` |
+
+The uncompressed tar SHA-256 is
+`157dd2f1eb14e4dab17c39965d744965c9f5ac9a9e612ccf285c0de5814b6a75`. The
+dependency trees hold 156,725 files (3,094,826,204 bytes). The archive also
+contains:
+
+- the FFmpeg source tarball (`8e4699bc...`);
+- the patched recipe tree;
+- the Syndocal build controls at `7d0af757` and the pack scripts;
+- the receipts.
+
+`verify-corresponding-source.py` independently verified the downloaded
+artifact on this machine and exited **0**:
+
+- every SHA256SUMS line verified;
+- the archive and uncompressed-tar hashes equal the manifest;
+- the inner `MANIFEST.json` equals the external one;
+- all 82 stages are present and non-empty;
+- all 275 lock crates are vendored;
+- the build-time sources are present;
+- no VCS metadata remains.
+
+### Component table
+
+The licence column is an indicative summary from `component-licenses.json`. The
+authoritative texts are the licence files in each tree, which the manifest lists
+per component with SHA-256. "match" means every commit printed by the hosted
+download log equals a resolved or pinned commit.
+
+| Stage | Pinned ref(s) | Build-log check | Licence (indicative) |
+| --- | --- | --- | --- |
+| 10-glib | `5a124d1e66a6` | match | LGPL-2.1-or-later |
+| 10-mingw | `57b595039040` | match | ZPL-2.1, with parts marked public domain, BSD or LGPL |
+| 10-mingw-std-threads | `c931bac289dd` | match | BSD-2-Clause |
+| 20-cairo | `74755964edef` | match | LGPL-2.1-only OR MPL-1.1 |
+| 20-libiconv | `1df3087ba811`, `eb72eb6f75f5` | match | LGPL-2.1-or-later |
+| 20-zlib | `767c4c947852` | match | Zlib |
+| 25-freetype | `d33343963303` | match | FTL OR GPL-2.0-or-later |
+| 25-fribidi | `4c914a92e94a` | match | LGPL-2.1-or-later |
+| 25-gmp | `763b40df71c0` | match | LGPL-3.0-or-later OR GPL-2.0-or-later |
+| 25-libogg | `06a5e0262cdc` | match | BSD-3-Clause |
+| 25-libpng | `964b41359497` | match | libpng-2.0 |
+| 25-libxml2 | `91586dc6742a` | match | MIT |
+| 25-openssl | `openssl-3.6.4` → `d3c1b1169b35` | prefix match | Apache-2.0 |
+| 25-xz | `3b1efb04d17c` | match | 0BSD |
+| 30-pango | `8e74c27c113c` | match | LGPL-2.0-or-later |
+| 35-fontconfig | `bd8f7b597de9` | match | MIT-style |
+| 40-mbedtls | `v4.2.0` → `ece41aa84d78` | prefix match | Apache-2.0 OR GPL-2.0-or-later |
+| 40-vulkan-headers | `v1.4.363` → `6802bb4733b6` | prefix match | Apache-2.0 OR MIT |
+| 45-brotli | `a3abcbee0d94` | match | MIT |
+| 45-harfbuzz | `b3bab6230701` | match | MIT-style |
+| 45-lcms2 | `a0b0d7a69b13` | match | MIT |
+| 45-libffi | `bc5538673672` | match | MIT |
+| 45-libsamplerate | `0844c208f683` | match | BSD-2-Clause |
+| 45-libudfread | `b0bc6957e7e0` | match | LGPL-2.1-or-later |
+| 45-libunibreak | `28a2756b864c` | match | Zlib |
+| 45-libvorbis | `1b75110b5a27` | match | BSD-3-Clause |
+| 45-opencl | `e6060189f4eb`, `5192c84f8059` | match | Apache-2.0 |
+| 45-pcre2 | `09eb19dc1102` | match | BSD-3-Clause WITH PCRE2-exception |
+| 45-pixman | `96c04d1b8793` | match | MIT |
+| 45-vmaf | `86da14d0306a` | match | BSD-2-Clause-Patent |
+| 45-vulkan-loader | `65b3936528cd`, `v1.4.363` → `6802bb4733b6` | prefix match | MIT |
+| 50-amf | `6277e353fd62` | match | MIT |
+| 50-aom | `b4ce2cd097b0` | match | BSD-2-Clause and Alliance for Open Media Patent License 1.0 |
+| 50-dav1d | `9711965b60bb` | match | BSD-2-Clause |
+| 50-ffnvcodec | `eddcea9e27f6`, `ced4f8eba3ba`, `833faee5f7b8` | match | MIT |
+| 50-freetype | `d33343963303` | match | FTL OR GPL-2.0-or-later |
+| 50-gme | `f68963b1de06` | match | LGPL-2.1-or-later |
+| 50-kvazaar | `2b06691bb584` | match | BSD-3-Clause |
+| 50-lcevcdec | `17804ac54db8` | match | BSD-3-Clause-Clear |
+| 50-libaribb24 | `5e9be272f96e` | match | LGPL-3.0-or-later |
+| 50-libaribcaption | `c64c23b8905b` | match | MIT |
+| 50-libass | `f61db567e659` | match | ISC |
+| 50-libbluray | `a24f4fad4d62` | match | LGPL-2.1-or-later |
+| 50-libjxl | `b87738951c12` | match | BSD-3-Clause |
+| 50-libmp3lame | svn r6835 | match | LGPL-2.0-or-later |
+| 50-libopus | `503d81b138d7` | match | BSD-3-Clause |
+| 50-libplacebo | `e2972fdd09ad` | match | LGPL-2.1-or-later |
+| 50-librist | `4f45ef8f7898` | match | BSD-2-Clause |
+| 50-libssh | `76e0a8639e61` | match | LGPL-2.1-or-later |
+| 50-libtheora | `28fd5ec77f0a` | match | BSD-3-Clause |
+| 50-libva | `6b07f7100512` | match | MIT |
+| 50-libvpx | `5e680f30801d` | match | BSD-3-Clause and VP8/VP9 patent grant |
+| 50-libwebp | `5c168cd23b18` | match | BSD-3-Clause and WebM patent grant |
+| 50-libzmq | `46493370217a` | match | MPL-2.0 |
+| 50-onevpl | `674d015bcb29` | match | MIT |
+| 50-openal | `c89b8cf7bba4` | match | LGPL-2.0-or-later |
+| 50-openapv | `a58ce739be0d` | match | BSD-3-Clause |
+| 50-opencore-amr | `7dba8c322384` | match | Apache-2.0 |
+| 50-openh264 | `8b2d28faade1` | match | BSD-2-Clause |
+| 50-openjpeg | `8314119b067c` | match | BSD-2-Clause |
+| 50-openmpt | `f83cedb0cd54` | match | BSD-3-Clause |
+| 50-rav1e | `31435de9d76f` | match | BSD-2-Clause and Alliance for Open Media Patent License 1.0 |
+| 50-sdl | `b90ac95029d8` | match | Zlib |
+| 50-shaderc | `a8abeb0b8a9d` | match | Apache-2.0 |
+| 50-snappy | `9c28114a3886` | match | BSD-3-Clause |
+| 50-soxr | `945b592b7047` | match | LGPL-2.1-or-later |
+| 50-srt | `ff8ab25c57ae` | match | MPL-2.0 |
+| 50-svtav1 | `5ed9ffbcb508` | match | BSD-3-Clause-Clear and Alliance for Open Media Patent License 1.0 |
+| 50-twolame | `6fced852d4d5` | match | LGPL-2.1-or-later |
+| 50-uavs3d | `0e20d2c29185` | match | BSD-3-Clause |
+| 50-vvenc | `b1cfb2ad495a` | match | BSD-3-Clause-Clear |
+| 50-zimg | `67e0603271c0` | match | WTFPL |
+| 50-zvbi | `d3a5ee9f2b04` | match | LGPL-2.1-or-later for the library, with other per-file terms |
+| 55-spirv-cross | `aa217aeb6c9f` | match | Apache-2.0 |
+| 60-spirv-headers | `2b7475f6d664` | match | MIT-style |
+| 96-lv2 | `3c57dae600a5` | match | ISC |
+| 96-serd | `b6053bb2a453` | match | ISC |
+| 96-zix | `17d632393f5a` | match | ISC |
+| 97-sord | `4b5232bb91e7` | match | ISC |
+| 98-sratom | `9e8ee84eed50` | match | ISC |
+| 99-librsvg | `7612431eb02d` | match | LGPL-2.1-or-later |
+| 99-lilv | `4b8f30055fa5` | match | ISC |
+
+### Notices and inventory
+
+Changes to `generate-ffmpeg-dependency-notices.py`:
+
+- **Crate candidates** are regenerated from the committed rav1e lock plus
+  librsvg's pinned lock: 578, previously 577.
+  - cc 1.10.0 and find-msvc-tools 0.1.15 were fetched. Each crate's SHA-256
+    equals its lock checksum, and both are MIT OR Apache-2.0 with licence files.
+  - shlex 2.0.1 was already a candidate through librsvg.
+  - cc 1.2.26 is dropped; it was only in rav1e's original lock.
+- **libsamplerate** `0844c208` is added. The old collector excluded it, but the
+  generated Dockerfile builds it and copies it into the combined prefix. Its
+  `COPYING` hash equals the one in the archive tree.
+- **Eight nested repositories** that may be compiled into linked libraries now
+  have notices. The documents were copied from the verified archive: glib gvdb,
+  zimg graphengine, TF-PSA-Crypto mldsa-native, freetype dlg, libplacebo
+  Vulkan-Headers, and shaderc abseil-cpp/re2/effcee (overinclusive).
+- Build/test-only submodules stay in the archive only: OpenSSL
+  test/provider/fuzz, mbedtls framework, googletest, greatest, checkasm, jinja,
+  markupsafe and nuklear.
+- The header carries the corresponding-source URL and SHA-256, and the JSON
+  gains a `corresponding_source` field. The limitations now record the tag
+  resolution, the preservation scope and the nested-repository policy.
+- Totals: sources 102 to 111, notices 1,390 to 1,403, unresolved 0.
+
+| File | Old bytes / SHA-256 | New bytes / SHA-256 |
+| --- | --- | --- |
+| `licenses/FFmpeg-DEPENDENCIES.txt` | 2,662,745 / `dc70e08c...` | 2,726,746 / `1a3daf94b43fc3daa000449c71ed6b0e0710d0aeaeae3971626ff22eacbea734` |
+| `THIRD_PARTY_NOTICES.md` | 7,101 / `d39a587a...` | 7,797 / `98d1628f679efa8f91daed0b893dd7bea0cd99f65a56a4efef623686bf058c87` |
+
+`THIRD_PARTY_NOTICES.md` now has a written source offer:
+
+- the asset URL above, with its size and SHA-256;
+- the name of the manifest asset;
+- a commitment to keep the source there for as long as Syndocal distributes
+  this FFmpeg build.
+
+The retention commitment is the owner's to confirm. The offer only becomes
+accurate after the supervisor uploads the staged assets. The inventory JSON and
+the independent anchors in `windows-runtime-inventory.mjs` carry both new
+identities. The SDK ZIP, the seven DLLs and `ffmpeg.exe` are unchanged.
+
+### OpenH264 patent note (recommendation only)
+
+`libopenh264` is compiled from source at `8b2d28fa` (BSD-2-Clause) into the
+DLLs. Cisco's royalty-free H.264 patent coverage applies only to binaries that
+Cisco distributes ([binary conditions](https://www.openh264.org/BINARY_LICENSE.txt)),
+not to this self-built copy. Recording already tries the hardware/OS encoders
+(`h264_nvenc`, `h264_amf`, `h264_qsv`, `h264_mf`) before `libopenh264`.
+FFmpeg's native H.264 decoder does not depend on it.
+
+Recommendation: the owner chooses one of two options. This lane has made no
+policy change.
+
+- **(a)** Accept the residual patent exposure of a source-built encoder for this
+  distribution.
+- **(b)** Rebuild without `--enable-libopenh264`, falling back to the Windows
+  `h264_mf` encoder. This needs a new SDK pin and re-acceptance.
+
+### Checks
+
+| Check | Exit | Observed |
+| --- | ---: | --- |
+| Actions run 40461305998 (pack, manifest cross-check, tar determinism) | 0 | success; 82 components, 0 failures |
+| `verify-corresponding-source.py` on the downloaded artifact | 0 | 82/82 stages, 275/275 crates, hashes match |
+| `python app/scripts/generate-ffmpeg-dependency-notices.py --check` | 0 | 111 sources, 578 crates, 1,403 notices, 0 unresolved |
+| `node app/scripts/test-resolve-pinned-ffmpeg-sdk.mjs` | 0 | 25 checks |
+| `node app/scripts/check-asio-packaging.mjs` | 0 | 183 assertions |
+| `node app/scripts/check-windows-release-artifacts.mjs --self-test` | 0 | 162 assertions |
+| `pnpm --dir app run prepare:runtime-libs` (candidate `FFMPEG_DIR`, MSVC 14.44 Build Tools linker first) | 0 | 7 DLLs and `ffmpeg.exe` staged into the shared `target/release`, which had no `ffmpeg.exe` before |
+| `npm --prefix app run check:release` | 0 | 55 scripts; `release metadata ok: Syndocal 1.2.0-alpha.82` |
+
+`check:release` passed on the third run:
+
+1. The first run failed in the unrelated `check:ai5-sidecar` step:
+   `tools/syndocal-mcp/check-request-capacity.mjs` reported 4 !== 5 discovery
+   status lookups. That script then passed 3/3 standalone runs.
+2. The second run stopped at the documented `MissingStagedWindowsRuntimeError`,
+   because `ffmpeg.exe` was not yet staged.
+3. The third run, after `prepare:runtime-libs`, passed.
+
+No compiler or warning surface changed in this lane.
+
+### Remaining
+
+1. **Upload (supervisor).** Upload the staged set to the prerelease, re-download
+   it into an empty directory, and verify it with
+   `sha256sum -c SHA256SUMS-corresponding-source` or
+   `verify-corresponding-source.py`.
+2. **Owner decisions:**
+   - the source-offer wording and retention commitment;
+   - the OpenH264 patent policy;
+   - whether `gme`'s shipped GPL-2.0 text covers any compiled file (not
+     reviewed).
+3. **Not preserved:**
+   - GCC/MinGW toolchain runtime sources (libgcc, libstdc++, libgomp) and the
+     Rust 1.99.1 standard library, which are identified by version and image
+     digest only;
+   - the base images, which are not reconstructed.
+4. **Unresolved:** the BuildKit image digest and the dav1d checkasm build-time
+   commit.
+5. **Not demonstrated:** byte-reproducibility of the SDK. Rerun 40377168832
+   already differs. The notice aggregate is still not proof of exact binary
+   dependency closure, and per-file source-header notices are not exhaustively
+   reproduced. The "publication blocked" gate in `FFmpeg-DEPENDENCIES.txt`
+   stays until the owner accepts these boundaries.

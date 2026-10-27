@@ -534,7 +534,10 @@ FFmpeg 8.1.2 shared SDK, LLVM, and ASIO SDK paths were explicitly supplied. The
 current normal SDK pin is the Syndocal self-built LGPL
 `n8.1.3-9-g29e619e767-20260930-syndocal-r40366564270` without Chromaprint/FFTW3
 (archive SHA-256 `81587fa070a9fa2da3d8ff3e63beb9654729782bc8e9899ee951baf5fc5d9f1a`,
-hosted as prerelease `ffmpeg-sdk-lgpl-n8.1.3-r40366564270`); see
+hosted as prerelease `ffmpeg-sdk-lgpl-n8.1.3-r40366564270`; its corresponding-source
+archive `ffmpeg-sdk-lgpl-n8.1.3-r40366564270-corresponding-source.tar.xz`, SHA-256
+`5322a2327758c1936ce6c55845f2721953bb89b107ee115e998a356f2fe9c48b`, is described in
+[Task 59](qa/FFMPEG_LICENSE_ALIGNMENT_2026-10-26.md#task-59--ffmpeg-corresponding-source--2026-10-27)); see
 [the current build instructions](qa/WINDOWS_NATIVE_BUILD.md). For the historical build, exact
 Community MSVC `14.44.35207` remained first and absolutely pinned, and
 `pnpm --dir app tauri build --no-bundle` passed in `5m29s`, first-party warnings

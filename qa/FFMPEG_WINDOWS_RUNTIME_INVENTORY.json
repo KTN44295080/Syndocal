@@ -93,8 +93,8 @@
     {
       "source": "../../THIRD_PARTY_NOTICES.md",
       "destination": "THIRD_PARTY_NOTICES.md",
-      "byte_size": 7101,
-      "sha256": "d39a587a9cc3ae55e24567c0d6b338967594d5a591bd4853255cd3b852761bd1"
+      "byte_size": 7797,
+      "sha256": "98d1628f679efa8f91daed0b893dd7bea0cd99f65a56a4efef623686bf058c87"
     },
     {
       "source": "../../licenses/FFmpeg-LGPL-3.0.txt",
@@ -111,8 +111,8 @@
     {
       "source": "../../licenses/FFmpeg-DEPENDENCIES.txt",
       "destination": "licenses/FFmpeg-DEPENDENCIES.txt",
-      "byte_size": 2662745,
-      "sha256": "dc70e08c2a19eb52b3a7e5b6faf6ac1d9ab30bd44e72f7936f28e8d1c8ef8875"
+      "byte_size": 2726746,
+      "sha256": "1a3daf94b43fc3daa000449c71ed6b0e0710d0aeaeae3971626ff22eacbea734"
     },
     {
       "source": "../../licenses/Spout2-BSD-2-Clause.txt",
