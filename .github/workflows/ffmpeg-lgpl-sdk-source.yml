@@ -1,0 +1,62 @@
+name: FFmpeg LGPL SDK corresponding source
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ffmpeg-lgpl-sdk-source
+  cancel-in-progress: false
+
+jobs:
+  corresponding-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: Check out source-pack controls
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Check out exact upstream recipe
+        uses: actions/checkout@v5
+        with:
+          repository: BtbN/FFmpeg-Builds
+          ref: 6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b
+          path: upstream
+          persist-credentials: false
+
+      - name: Apply the committed patch exactly as the build job did
+        run: |
+          set -euo pipefail
+          test "$(git -C upstream rev-parse HEAD)" = 6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b
+          echo '49ae576d6a4fef8b650d9ebb4c54a48131ac50c313d7d54f09614ca676bd2e40  tools/ffmpeg-sdk/0001-lgpl-without-chromaprint-fftw.patch' | sha256sum --check
+          echo 'd031d0ff0d17c3fe603473dcb4d56eec4a41f38ef0120b6633cc90ed227d7168  tools/ffmpeg-sdk/rav1e.Cargo.lock' | sha256sum --check
+          git -C upstream apply --check ../tools/ffmpeg-sdk/0001-lgpl-without-chromaprint-fftw.patch
+          git -C upstream apply ../tools/ffmpeg-sdk/0001-lgpl-without-chromaprint-fftw.patch
+          cp tools/ffmpeg-sdk/rav1e.Cargo.lock upstream/util/rav1e.Cargo.lock
+          git -C upstream diff --check
+          if [[ -d /mnt ]]; then
+            sudo mkdir -p /mnt/csrc
+            sudo chown "$(id -u):$(id -g)" /mnt/csrc
+            echo CSRC_WORK=/mnt/csrc >> "$GITHUB_ENV"
+          fi
+          df -h
+
+      - name: Fetch, verify and pack the corresponding source
+        run: |
+          set -euo pipefail
+          mkdir -p source-out
+          bash tools/ffmpeg-sdk/pack-corresponding-source.sh 2>&1 | tee source-out/source-pack.log
+
+      - name: Retain the corresponding-source upload set for 90 days
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-lgpl-sdk-corresponding-source-${{ github.sha }}-${{ github.run_id }}
+          path: source-out/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
