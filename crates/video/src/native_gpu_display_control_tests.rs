@@ -329,6 +329,54 @@ fn stop(session: &mut NativeResidentDisplaySession, renderer: &mut VideoPreviewR
 }
 
 #[test]
+fn native_gpu_output_display_stop_observes_reaped_by_another_cleanup_consumer() {
+    for decision in [
+        NativeResidentPresentDecision::Permit,
+        NativeResidentPresentDecision::Revoked,
+    ] {
+        let authority = Rc::new(Authority::new(decision));
+        let mut renderer = renderer(authority);
+        let mut session = headless_session();
+        session.begin_stop_with_renderer(&mut renderer).unwrap();
+        // P's retirement poll runs before the facade's own poll in production.
+        // Reproduce that real owner transition without fabricating a receipt.
+        assert!(matches!(
+            session.owner.poll_retirement().unwrap(),
+            RetirementProgress::Reaped
+        ));
+        assert!(session.poll_stop().unwrap());
+        assert!(
+            session.poll_stop().unwrap(),
+            "terminal cleanup stays complete"
+        );
+    }
+}
+
+#[test]
+fn native_gpu_output_display_stop_refunds_renderer_rejected_admission() {
+    let authority = Rc::new(Authority::new(NativeResidentPresentDecision::Permit));
+    let mut renderer = renderer(authority);
+    let mut session = headless_session();
+    let frame = NativeFrameId {
+        output_id: OUTPUT,
+        project_epoch: EPOCH,
+        request_sequence: 1,
+        geometry_generation: session.geometry_generation,
+    };
+    let mut plan = NativeAllocationPlan::new(frame);
+    plan.add_new(ChargeKind::CpuSnapshot, 64).unwrap();
+    let quote = session.owner.quote(&plan).unwrap();
+    let reservation = session.owner.reserve(quote).unwrap();
+    renderer.native_cpu_retained_reservations.push(reservation);
+    assert_eq!(session.owner.budget_snapshot().reservation_count, 1);
+    session.begin_stop_with_renderer(&mut renderer).unwrap();
+    assert!(renderer.native_cpu_retained_reservations.is_empty());
+    assert_eq!(session.unsubmitted.len(), 1);
+    reap_started(&mut session);
+    assert!(session.unsubmitted.is_empty());
+}
+
+#[test]
 fn native_gpu_output_display_prepare_before_prepare_revocation_has_zero_decode_fx_and_healthy_owner(
 ) {
     for follow in [false, true] {

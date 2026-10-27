@@ -12,9 +12,15 @@ mod prepare;
 #[path = "native_gpu_display_present.rs"]
 mod present;
 
+#[cfg(all(test, feature = "qa-native-frame-timing"))]
+#[path = "native_gpu_display_bench_tests.rs"]
+mod bench_tests;
 #[cfg(test)]
 #[path = "native_gpu_display_control_tests.rs"]
 mod control_tests;
+#[cfg(test)]
+#[path = "native_gpu_display_steady_tests.rs"]
+mod steady_tests;
 pub use present::{
     NativeResidentDisplayFrame, NativeResidentPresentBoundary, NativeResidentPresentDecision,
     NativeResidentPresentResult, NativeResidentPresentationAuthority,
@@ -743,6 +749,9 @@ impl NativeResidentDisplaySession {
             cancellation,
         )
         .map_err(|reason| format!("CPU continuation revoked before execution: {reason:?}"))?;
+        // From here the tick admits brokered work. A later revocation lets it
+        // complete on the healthy owner and is classified as zero presents.
+        cancellation.enter_committed_work();
         // A late eligibility/budget decline retains the exact G4 preparation.
         // Complete frozen historical materialization before current CPU FX;
         // canonical publication follows when the renderer borrow is returned.
@@ -788,6 +797,11 @@ impl NativeResidentDisplaySession {
                     .map_err(|error| format!("CPU sequence commit failed: {error:?}"))?;
             }
         }
+        // Completed retired owners stay charged until the broker observes
+        // them. Reap them before quoting so admission sees the real live set.
+        self.owner.poll_retirement().map_err(|fault| {
+            format!("native retirement poll failed before CPU quote: {fault:?}")
+        })?;
         let quote = self
             .owner
             .quote(&plan)
@@ -1024,6 +1038,11 @@ impl NativeResidentDisplaySession {
         allocation
             .merge(composition.allocation_plan())
             .map_err(|reason| format!("native allocation plans cannot merge: {reason:?}"))?;
+        // Reap completed retirements (previous ticks' evicted residents and
+        // superseded composition/snapshot owners) before quoting this tick.
+        self.owner
+            .poll_retirement()
+            .map_err(|fault| format!("native retirement poll failed before quote: {fault:?}"))?;
         let quote = match self.owner.quote(&allocation) {
             Ok(quote) => quote,
             Err(reason) => {
@@ -1089,6 +1108,9 @@ impl NativeResidentDisplaySession {
                 "native submission revoked before execution: {reason:?}"
             ));
         }
+        // Submission follows. Revocation after this point must not retire the
+        // shared owner: the submitted output completes and is discarded.
+        cancellation.enter_committed_work();
         if let Err(error) =
             Self::commit_issued_identities(&mut history.sequences, &history.inputs, &identities)
         {
@@ -1102,6 +1124,9 @@ impl NativeResidentDisplaySession {
             return Err("shared native compositor is unavailable".into());
         };
         let submitted_request = request.clone();
+        #[cfg(feature = "qa-native-frame-timing")]
+        let submit_trace =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::IsfSubmit);
         let pending = admitted.with_runtime(|runtime, batch| {
             PendingSharedNativeOutput::submit_with_history(
                 &mut self.owner,
@@ -1116,6 +1141,8 @@ impl NativeResidentDisplaySession {
                 history_plan,
             )
         });
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(submit_trace);
         let pending = match pending {
             Ok(pending) => pending,
             Err((retiring, _plan)) => return Ok(NativeResidentExecution::Retiring(retiring)),
@@ -1316,6 +1343,11 @@ impl NativeResidentDisplaySession {
         &mut self,
         renderer: &mut VideoPreviewRenderer<P>,
     ) -> Result<(), String> {
+        // Rejected admission tokens still own ledger reservations. Transfer
+        // them before releasing the renderer; Drop cannot refund them, and
+        // outstanding logical work may prevent refund until a later poll.
+        self.unsubmitted
+            .append(&mut renderer.native_cpu_retained_reservations);
         // Drop every CPU alias while its complete accounting owner is alive.
         // Poisoning also prevents the old lazy standalone-runtime constructor
         // from creating a second device during cleanup or a rejected tick.
@@ -1365,7 +1397,12 @@ impl NativeResidentDisplaySession {
                 self.refund_unsubmitted(reservation)?;
             }
         }
-        if matches!(progress, RetirementProgress::Reaped) {
+        // P and each output-retirement aggregate also poll this same owner.
+        // Any one of them can observe the Retiring -> Reaped transition first;
+        // later polls need not return the transition receipt again.
+        if matches!(progress, RetirementProgress::Reaped)
+            || self.owner.state() == crate::native_gpu_contract::GpuOwnerState::Reaped
+        {
             self.retirements.clear();
             self.retired_ready.clear();
             Ok(true)

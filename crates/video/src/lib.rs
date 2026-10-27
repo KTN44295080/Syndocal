@@ -2226,6 +2226,18 @@ pub trait VideoFrameDecoder {
         self.decode_input_frame(input)
             .map(|frame| frame.map(Arc::new))
     }
+    /// Exact-key cancellable acquisition as a shared frame. The default keeps
+    /// each decoder's own cancellable path; a decoder whose live shared path
+    /// keeps frames shared (and decodes ahead) overrides this so a cancellable
+    /// caller neither copies the frame nor loses its look-ahead.
+    fn decode_input_frame_shared_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
+        self.decode_input_frame_with_cancellation(input, cancellation)
+            .map(|frame| frame.map(Arc::new))
+    }
     /// `decode_input_frames` as shared frames. A decoder that overrides
     /// `decode_input_frames` to decode a tick together overrides this too.
     fn decode_input_frames_shared(
@@ -4179,6 +4191,16 @@ impl<D: VideoFrameDecoder> VideoFrameProvider for DecoderBackedFrameProvider<D> 
         self.decode_or_placeholder_for_input_with_cancellation(input, cancellation)
     }
 
+    /// Resident native preparation keeps the decoder's shared frame and its
+    /// look-ahead: no full-frame copy and no synchronous decode per tick.
+    fn frame_for_input_shared_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Arc<VideoFrame>, VideoFrameProviderError> {
+        self.decode_or_placeholder_for_input_shared_with_cancellation(input, cancellation, true)
+    }
+
     fn frames_for_layer(
         &mut self,
         layer: &VideoLayerSummary,
@@ -4400,16 +4422,26 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
         input: &VideoRenderInput,
         cancellation: &dyn VideoRenderCancellation,
     ) -> Result<VideoFrame, VideoFrameProviderError> {
+        self.decode_or_placeholder_for_input_shared_with_cancellation(input, cancellation, false)
+            .map(Arc::unwrap_or_clone)
+    }
+
+    /// One cancellable acquisition. `shared` selects the decoder's shared live
+    /// path (no frame copy, look-ahead started) used by resident native
+    /// preparation; otherwise the decoder's owned cancellable decode is used.
+    fn decode_or_placeholder_for_input_shared_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: &dyn VideoRenderCancellation,
+        shared: bool,
+    ) -> Result<Arc<VideoFrame>, VideoFrameProviderError> {
         if cancellation.is_cancelled() {
             return Err(VideoFrameProviderError::Cancelled);
         }
         let request = &input.request;
         if let VideoSourceKind::Generator(generator) = request.source.kind {
             self.decoder.release_input(input);
-            return self
-                .generators
-                .frame(input, generator, Some(cancellation))
-                .map(Arc::unwrap_or_clone);
+            return self.generators.frame(input, generator, Some(cancellation));
         }
         if matches!(request.source.kind, VideoSourceKind::StillImage) {
             self.decoder.release_input(input);
@@ -4440,7 +4472,7 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
             return if cancellation.is_cancelled() {
                 Err(VideoFrameProviderError::Cancelled)
             } else {
-                Ok(frame)
+                Ok(Arc::new(frame))
             };
         }
 
@@ -4449,10 +4481,14 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
                 drop(decoded);
                 Err(VideoDecodeError::Cancelled)
             }
-            Some(decoded) => decoded.map(|frame| frame.map(Arc::unwrap_or_clone)),
+            Some(decoded) => decoded,
+            None if shared => self
+                .decoder
+                .decode_input_frame_shared_with_cancellation(input, cancellation),
             None => self
                 .decoder
-                .decode_input_frame_with_cancellation(input, cancellation),
+                .decode_input_frame_with_cancellation(input, cancellation)
+                .map(|frame| frame.map(Arc::new)),
         };
         match decoded {
             Ok(Some(frame)) => Ok(frame),
@@ -4460,19 +4496,19 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
                 if cancellation.is_cancelled() {
                     Err(VideoFrameProviderError::Cancelled)
                 } else {
-                    Ok(ndi_no_signal_frame(request))
+                    Ok(Arc::new(ndi_no_signal_frame(request)))
                 }
             }
             Ok(None) if self.placeholder_when_missing => {
                 if cancellation.is_cancelled() {
                     Err(VideoFrameProviderError::Cancelled)
                 } else {
-                    Ok(debug_solid_frame_for_layer(
+                    Ok(Arc::new(debug_solid_frame_for_layer(
                         request.layer_id,
                         request.position_ms,
                         request.width,
                         request.height,
-                    ))
+                    )))
                 }
             }
             Ok(None) => Err(VideoFrameProviderError::Decode {

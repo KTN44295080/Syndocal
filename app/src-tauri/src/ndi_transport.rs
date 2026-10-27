@@ -403,6 +403,28 @@ impl video::VideoFrameDecoder for NdiAwareVideoFrameDecoder {
             Ok(frame)
         }
     }
+
+    /// Resident native preparation: plain files keep the file decoder's
+    /// shared frame and look-ahead; every other source keeps the owned
+    /// cancellable route above.
+    fn decode_input_frame_shared_with_cancellation(
+        &mut self,
+        input: &video::VideoRenderInput,
+        cancellation: &dyn video::VideoRenderCancellation,
+    ) -> Result<Option<Arc<video::VideoFrame>>, video::VideoDecodeError> {
+        if cancellation.is_cancelled() {
+            return Err(video::VideoDecodeError::Cancelled);
+        }
+        if input.request.source.kind == VideoSourceKind::File {
+            return video::VideoFrameDecoder::decode_input_frame_shared_with_cancellation(
+                &mut self.files,
+                input,
+                cancellation,
+            );
+        }
+        video::VideoFrameDecoder::decode_input_frame_with_cancellation(self, input, cancellation)
+            .map(|frame| frame.map(Arc::new))
+    }
 }
 
 #[cfg(feature = "ndi")]

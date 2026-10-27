@@ -238,6 +238,9 @@ impl PreferredVideoFrameDecoder {
         }
         self.diagnostics.libav_requests = self.diagnostics.libav_requests.saturating_add(1);
         let decoded = match cancellation {
+            Some(cancellation) if shared => self
+                .libav
+                .decode_input_frame_shared_with_cancellation(input, cancellation),
             Some(cancellation) => self
                 .libav
                 .decode_input_frame_with_cancellation(input, cancellation)
@@ -410,6 +413,16 @@ impl VideoFrameDecoder for PreferredVideoFrameDecoder {
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
         self.decode_input_frame_with_cancellation_impl(input, Some(cancellation), false)
             .map(|frame| frame.map(Arc::unwrap_or_clone))
+    }
+
+    /// The cancellable live path keeps the decoder's shared frame (no copy)
+    /// and starts its look-ahead exactly like `decode_input_frame_shared`.
+    fn decode_input_frame_shared_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
+        self.decode_input_frame_with_cancellation_impl(input, Some(cancellation), true)
     }
 
     fn decode_input_frames(

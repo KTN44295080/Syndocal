@@ -305,7 +305,9 @@ impl IsfGpuRuntime {
             }
         }
         let plan = (|| {
-            if !(2..=3).contains(&jobs.len()) {
+            // One to three independent layer jobs share the same resident
+            // batch executor; a single-layer Display is the ordinary case.
+            if !(1..=3).contains(&jobs.len()) {
                 return Err(unsupported(UnsupportedNativeFx::UnsupportedJobCount));
             }
             if restrictions.executing_clip_or_transition {

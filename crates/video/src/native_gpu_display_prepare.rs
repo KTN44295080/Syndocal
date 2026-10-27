@@ -14,13 +14,63 @@ use crate::{
 };
 use protocol::{VideoEffectScope, VideoLayerTransitionRuntimeSnapshot, VideoSnapshot};
 
+/// Preparation control for one tick. Before the tick owns brokered GPU work,
+/// presentation revocation cancels it like Stop. Once work is submitted or a
+/// CPU continuation is admitted, only Stop interrupts it: the committed work
+/// completes on the healthy owner, and one final authority probe latches any
+/// revocation so classification discards the result (zero presents).
+/// Retiring the shared owner for a revocation would end the Display session,
+/// which is how an accepted blackout lost its output. Committed GPU waits poll
+/// cancellation in tight loops; probing presentation authority there (an
+/// engine snapshot read per probe) is skipped for the same reason.
 struct LivePreparationCancellation<'a, A> {
     cancellation: &'a dyn VideoRenderCancellation,
     authority: &'a A,
     observed: std::sync::atomic::AtomicU8,
+    committed: std::sync::atomic::AtomicBool,
 }
 
-impl<A> LivePreparationCancellation<'_, A> {
+impl<'a, A: NativeResidentPresentationAuthority> LivePreparationCancellation<'a, A> {
+    fn new(cancellation: &'a dyn VideoRenderCancellation, authority: &'a A) -> Self {
+        Self {
+            cancellation,
+            authority,
+            observed: std::sync::atomic::AtomicU8::new(0),
+            committed: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn committed(&self) -> bool {
+        self.committed.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn stopped(&self) -> bool {
+        if self.cancellation.is_cancelled() {
+            self.record(NativeResidentPresentDecision::Cancelled);
+            return true;
+        }
+        false
+    }
+
+    /// Probe presentation authority and latch a rejection. Stop observed on
+    /// either side of the probe wins over a concurrent revocation.
+    fn probe(&self, boundary: NativeResidentPresentBoundary) -> NativeResidentPresentDecision {
+        if self.stopped() {
+            return NativeResidentPresentDecision::Cancelled;
+        }
+        let decision = self.authority.revalidate(boundary);
+        self.record(decision);
+        if self.stopped() {
+            return NativeResidentPresentDecision::Cancelled;
+        }
+        decision
+    }
+
+    /// The one authority check a completed tick makes after commitment.
+    fn final_probe(&self) {
+        self.probe(NativeResidentPresentBoundary::BeforePrepare);
+    }
+
     fn record(&self, decision: NativeResidentPresentDecision) {
         let value = match decision {
             NativeResidentPresentDecision::Permit => return,
@@ -40,19 +90,16 @@ impl<A: NativeResidentPresentationAuthority> VideoRenderCancellation
     for LivePreparationCancellation<'_, A>
 {
     fn is_cancelled(&self) -> bool {
-        if self.cancellation.is_cancelled() {
-            self.record(NativeResidentPresentDecision::Cancelled);
-            return true;
+        if self.committed() {
+            return self.stopped();
         }
-        let permit = self
-            .authority
-            .revalidate(NativeResidentPresentBoundary::BeforePrepare);
-        self.record(permit);
-        if self.cancellation.is_cancelled() {
-            self.record(NativeResidentPresentDecision::Cancelled);
-            return true;
-        }
-        permit != NativeResidentPresentDecision::Permit
+        self.probe(NativeResidentPresentBoundary::BeforePrepare)
+            != NativeResidentPresentDecision::Permit
+    }
+
+    fn enter_committed_work(&self) {
+        self.committed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -60,9 +107,14 @@ impl<A: NativeResidentPresentationAuthority> NativeResidentPresentationAuthority
     for LivePreparationCancellation<'_, A>
 {
     fn revalidate(&self, boundary: NativeResidentPresentBoundary) -> NativeResidentPresentDecision {
-        let decision = self.authority.revalidate(boundary);
-        self.record(decision);
-        decision
+        if self.committed() {
+            return if self.stopped() {
+                NativeResidentPresentDecision::Cancelled
+            } else {
+                NativeResidentPresentDecision::Permit
+            };
+        }
+        self.probe(boundary)
     }
 }
 
@@ -108,7 +160,7 @@ fn resident_layer_chains(
     transitions: &VideoLayerTransitionRuntimeSnapshot,
     plan: &VideoOutputRenderPlan,
 ) -> Option<Vec<ResolvedVideoEffectChain>> {
-    if !(2..=3).contains(&plan.composition.layers.len()) {
+    if !(1..=3).contains(&plan.composition.layers.len()) {
         return None;
     }
     let composition_id = plan.composition.composition_id;
@@ -380,9 +432,9 @@ impl NativeResidentDisplaySession {
         // genuine error must not be relabeled by a later plan edit: failures
         // use only the control rejection observed while executing that tick.
         if result.is_ok() {
-            cancellation.is_cancelled();
-        } else if cancellation.cancellation.is_cancelled() {
-            cancellation.record(NativeResidentPresentDecision::Cancelled);
+            cancellation.final_probe();
+        } else {
+            cancellation.stopped();
         }
         let observed = cancellation
             .observed
@@ -435,6 +487,11 @@ impl NativeResidentDisplaySession {
         request: NativeOutputRequest,
         cancellation: &dyn VideoRenderCancellation,
     ) -> Result<NativeResidentDisplayFrame, String> {
+        // Canonical CPU output (and any history handover) runs brokered work.
+        cancellation.enter_committed_work();
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _cpu_trace =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::CpuComposition);
         if self.history.is_some() {
             self.handover_all_history_to_cpu(renderer, cancellation)?;
         }
@@ -530,11 +587,7 @@ impl NativeResidentDisplaySession {
         cancellation: &dyn VideoRenderCancellation,
         authority: &A,
     ) -> Result<NativeResidentDisplayFrame, NativeResidentPrepareError> {
-        let live = LivePreparationCancellation {
-            cancellation,
-            authority,
-            observed: std::sync::atomic::AtomicU8::new(0),
-        };
+        let live = LivePreparationCancellation::new(cancellation, authority);
         let result = self.prepare_output_inner(
             renderer,
             snapshot,
@@ -651,6 +704,7 @@ impl NativeResidentDisplaySession {
                 .collect(),
         };
         if self.history_configuration.as_ref() != Some(&configuration) && self.history.is_some() {
+            cancellation.enter_committed_work();
             self.handover_all_history_to_cpu(renderer, cancellation)?;
             self.normalize_cpu_queue_keys(renderer);
         }
@@ -726,6 +780,9 @@ impl NativeResidentDisplaySession {
                 .map(|layer| layer.id)
                 .collect::<Vec<_>>(),
         );
+        #[cfg(feature = "qa-native-frame-timing")]
+        let demand_trace =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::Demand);
         let mut raw = Vec::with_capacity(inputs.len());
         for input in &inputs {
             let frame = renderer
@@ -743,6 +800,8 @@ impl NativeResidentDisplaySession {
                 .ok_or_else(|| "native input content sequence exhausted".to_string())?;
             raw.push(frame);
         }
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(demand_trace);
         let host_fits = self.history_host.as_ref().is_none_or(|host| {
             HistoryHostBudget::planning_limit(inputs.len(), extent)
                 .is_some_and(|required| required <= host.snapshot().limit)
@@ -855,6 +914,8 @@ impl NativeResidentDisplaySession {
             cancellation,
         )
         .map_err(|error| format!("native output preflight revoked: {error:?}"))?;
+        #[cfg(feature = "qa-native-frame-timing")]
+        let isf_trace = crate::native_frame_timing::span(crate::native_frame_timing::Phase::Isf);
         let execution = if compatible {
             self.execute_prepared_layers(
                 renderer,
@@ -886,8 +947,35 @@ impl NativeResidentDisplaySession {
                 cancellation,
             )?
         };
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(isf_trace);
+        #[cfg(feature = "qa-native-frame-timing")]
+        {
+            let path = match (&execution, plan.composition.layers.len()) {
+                (NativeResidentExecution::Gpu(_), 1) => {
+                    crate::native_frame_timing::IsfPath::Ordinary
+                }
+                (NativeResidentExecution::Gpu(_), 2) => crate::native_frame_timing::IsfPath::Batch2,
+                (NativeResidentExecution::Gpu(_), _) => crate::native_frame_timing::IsfPath::Batch3,
+                (NativeResidentExecution::Cpu { .. }, _) => {
+                    crate::native_frame_timing::IsfPath::Decline
+                }
+                (NativeResidentExecution::Retiring(_), _) => {
+                    crate::native_frame_timing::IsfPath::Recovery
+                }
+            };
+            crate::native_frame_timing::set_isf_metadata(
+                path,
+                plan.composition.layers.len() as u32,
+                request.frame.request_sequence,
+            );
+        }
         match execution {
             NativeResidentExecution::Cpu { reason, results } => {
+                #[cfg(feature = "qa-native-frame-timing")]
+                let _cpu_trace = crate::native_frame_timing::span(
+                    crate::native_frame_timing::Phase::CpuComposition,
+                );
                 if self.history.is_some() {
                     self.publish_history_to_cpu(renderer)?;
                 }
@@ -914,7 +1002,14 @@ impl NativeResidentDisplaySession {
                 )
             }
             NativeResidentExecution::Gpu(progress) => {
-                match self.finish_resident_output(renderer, progress, &live, cancellation)? {
+                #[cfg(feature = "qa-native-frame-timing")]
+                let wait_trace =
+                    crate::native_frame_timing::span(crate::native_frame_timing::Phase::IsfMapWait);
+                let completion =
+                    self.finish_resident_output(renderer, progress, &live, cancellation)?;
+                #[cfg(feature = "qa-native-frame-timing")]
+                drop(wait_trace);
+                match completion {
                     ResidentOutputCompletion::Ready(frame) => Ok(frame),
                     ResidentOutputCompletion::Retiring(retirement) => self.finish_recovered_output(
                         renderer,
@@ -962,11 +1057,7 @@ impl NativeResidentDisplaySession {
         cancellation: &dyn VideoRenderCancellation,
         authority: &A,
     ) -> Result<NativeResidentDisplayFrame, NativeResidentPrepareError> {
-        let live = LivePreparationCancellation {
-            cancellation,
-            authority,
-            observed: std::sync::atomic::AtomicU8::new(0),
-        };
+        let live = LivePreparationCancellation::new(cancellation, authority);
         let result = self.prepare_follow_output_inner(
             renderer,
             outgoing,
@@ -1081,6 +1172,8 @@ impl NativeResidentDisplaySession {
                 },
             );
         }
+        // Follow composes on the canonical CPU path with brokered work.
+        cancellation.enter_committed_work();
         if self.history.is_some() {
             self.handover_all_history_to_cpu(renderer, cancellation)?;
         }

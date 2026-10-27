@@ -1458,6 +1458,24 @@ impl VideoFrameDecoder for LibavFrameDecoder {
             .expect("one input decodes to one result")
     }
 
+    /// The cancellable live path: the shared frame and its look-ahead, with
+    /// the caller's cancellation observed at the same boundaries as the owned
+    /// cancellable decode.
+    fn decode_input_frame_shared_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: &dyn super::VideoRenderCancellation,
+    ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
+        if cancellation.is_cancelled() {
+            return Err(VideoDecodeError::Cancelled);
+        }
+        let frame = self.decode_input_frame_shared(input)?;
+        if cancellation.is_cancelled() {
+            return Err(VideoDecodeError::Cancelled);
+        }
+        Ok(frame)
+    }
+
     fn decode_input_frames(
         &mut self,
         inputs: &[VideoRenderInput],

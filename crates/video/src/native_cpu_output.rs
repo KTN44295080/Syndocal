@@ -731,9 +731,9 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         self.isf_frame_inputs.sampled_layers.clear();
         self.runtime.queues.clear();
         self.output_last_valid_frames.clear();
-        // Undiscardable reservations remain owned until this explicit terminal
-        // cleanup boundary, beside the same broker that admitted them.
-        self.native_cpu_retained_reservations.clear();
+        // The session moves undiscardable reservations to its retirement owner
+        // before this hook. Dropping a token would orphan its ledger capacity.
+        debug_assert!(self.native_cpu_retained_reservations.is_empty());
         self.native_cpu_bridge.take().map(|bridge| bridge.owner)
     }
 

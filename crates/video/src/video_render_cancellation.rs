@@ -17,6 +17,12 @@ impl VideoPreviewError {
 /// without detaching the renderer or abandoning decoder ownership.
 pub trait VideoRenderCancellation {
     fn is_cancelled(&self) -> bool;
+
+    /// The render now owns submitted or admitted brokered GPU work. A source
+    /// that distinguishes presentation revocation from Stop keeps cancelling
+    /// for Stop only after this point: the committed work completes and the
+    /// caller discards its result, instead of retiring the shared owner.
+    fn enter_committed_work(&self) {}
 }
 
 impl<F> VideoRenderCancellation for F

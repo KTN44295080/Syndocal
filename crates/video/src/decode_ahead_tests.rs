@@ -284,3 +284,81 @@ fn a_layer_without_effects_queues_the_decoders_own_frame() {
         assert_eq!(Arc::strong_count(frame), 2, "decoder and queue only");
     }
 }
+
+/// Counts which cancellable route the provider takes; the shared route hands
+/// out the decoder's own frame.
+#[derive(Default)]
+struct CancellableRouteDecoder {
+    shared: SharedDecoder,
+    shared_cancellable: usize,
+    owned_cancellable: usize,
+}
+
+impl VideoFrameDecoder for CancellableRouteDecoder {
+    fn retain_layers(&mut self, _layer_ids: &[VideoLayerId]) {}
+
+    fn decode_frame(
+        &mut self,
+        request: &VideoFrameRequest,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        self.shared.decode_frame(request)
+    }
+
+    fn decode_input_frame_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        _cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        self.owned_cancellable += 1;
+        self.shared.decode_frame(&input.request)
+    }
+
+    fn decode_input_frame_shared_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        _cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
+        self.shared_cancellable += 1;
+        self.shared.decode_input_frame_shared(input)
+    }
+}
+
+/// Resident native preparation acquires each layer through the cancellable
+/// shared route: the decoder's own frame (no full-frame copy) via the decoder
+/// method that keeps its live look-ahead. The owned cancellable route used by
+/// canonical CPU callers is unchanged, and Stop still precedes any decode.
+#[test]
+fn resident_cancellable_acquisition_keeps_the_decoders_shared_frame() {
+    let snapshot = two_layer_snapshot();
+    let input = legacy_layer_input(&snapshot.layers[0], 32, 18, None);
+    let mut provider = DecoderBackedFrameProvider::new(CancellableRouteDecoder::default());
+    let first = provider
+        .frame_for_input_shared_with_cancellation(&input, &NeverCancelled)
+        .unwrap();
+    let second = provider
+        .frame_for_input_shared_with_cancellation(&input, &NeverCancelled)
+        .unwrap();
+    let decoder = provider.decoder();
+    assert_eq!(decoder.shared_cancellable, 2);
+    assert_eq!(decoder.owned_cancellable, 0);
+    assert!(
+        Arc::ptr_eq(&first, &decoder.shared.frames[0]),
+        "first acquisition copied"
+    );
+    assert!(Arc::ptr_eq(&second, &first), "repeat acquisition copied");
+
+    let owned = provider
+        .frame_for_input_with_cancellation(&input, &NeverCancelled)
+        .unwrap();
+    assert_eq!(owned.layer_id, first.layer_id);
+    assert_eq!(provider.decoder().owned_cancellable, 1);
+    assert_eq!(provider.decoder().shared_cancellable, 2);
+
+    let cancelled = provider.frame_for_input_shared_with_cancellation(&input, &|| true);
+    assert!(matches!(cancelled, Err(VideoFrameProviderError::Cancelled)));
+    assert_eq!(
+        provider.decoder().shared_cancellable,
+        2,
+        "Stop precedes decode"
+    );
+}

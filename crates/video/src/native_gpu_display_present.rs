@@ -214,6 +214,9 @@ impl NativeResidentDisplaySession {
             .presents()
             .checked_add(1)
             .ok_or_else(|| "native present sequence exhausted".to_string())?;
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _present_trace =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::PresenterPresent);
         match frame.content {
             ResidentDisplayContent::Resident(mut ready) => {
                 let expected = NativePresentContent::Resident(ready.snapshot_identity());
