@@ -99549,6 +99549,7 @@ pub(crate) mod tests {
             "add_external_output_v2",
             "configure_video_output_v2",
             "remove_video_output_v2",
+            "replace_video_authoring_lease_v1",
             "launch_video_clip_output_control_v2",
             "set_network_dmx_routes_v1",
             "set_group_submaster_output_control_v2",
@@ -99564,7 +99565,7 @@ pub(crate) mod tests {
         }
         // The extension and Audio setters and three video authoring routes own
         // their lifecycle authority inside the handler.
-        assert_eq!(runtime_routes.len(), 182);
+        assert_eq!(runtime_routes.len(), 183);
         // Generator routes own renderer-ticketed publication admission. The
         // runtime-only dispatch policy must not classify those project edits.
         const GENERATOR_PROJECT_ROUTES: [&str; 2] =
