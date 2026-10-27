@@ -84,9 +84,9 @@
 }
 
 .fixtureLimitsEditor .fixtureLimitFieldLabel {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-items: baseline;
-  justify-content: space-between;
   gap: 5px;
   min-width: 0;
   color: var(--theme-muted);
@@ -96,7 +96,7 @@
 
 .fixtureLimitsEditor .fixtureLimitFieldLabel > span {
   min-width: 0;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 
 .fixtureLimitsEditor .fixtureLimitFieldLabel small {
@@ -163,12 +163,13 @@
 
 .fixtureLimitsEditor .fixtureLimitToggleRow {
   align-items: stretch;
+  grid-template-columns: repeat(2, minmax(90px, 1fr));
 }
 
 .fixtureLimitsEditor .fixtureLimitToggleRow label {
   min-width: 0;
   padding: 0 5px;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 
 .fixtureLimitsEditor .fixtureLimitToggleRow input {
@@ -190,4 +191,26 @@
   .fixtureLimitsEditor .fixtureLimitsSections {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+@container (max-width: 560px) {
+  .fixtureLimitsEditor .fixtureLimitsSections {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .fixtureLimitsEditor .movementLimitEditor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .fixtureLimitsEditor .fixtureLimitToggleRow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.mappingSetupContextContent > .fixtureLimitsEditor .fixtureLimitsSections {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.mappingSetupContextContent > .fixtureLimitsEditor .movementLimitEditor {
+  grid-template-columns: minmax(180px, 220px) minmax(190px, 1fr);
 }

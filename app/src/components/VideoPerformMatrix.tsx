@@ -418,7 +418,10 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
           <button type="button" class="videoPerformClipTrigger" data-video-perform-layer-id={layer().id} data-video-perform-cell-index={cell.index} data-video-clip-slot-pad-index={cell.index} {...controlMappingTargetData(cell.slot ? { action: "VideoClipSlotTrigger", label: `${layer().label} clip ${cell.index + 1}`, layer_id: layer().id, clip_slot_id: cell.slot.id } : null)} aria-label={`Queue clip ${cell.index + 1}: ${asset()?.label ?? "Empty"}`} aria-pressed={selectedCell()} tabIndex={tabLayerId() === layer().id && cell.index === tabColumn() ? 0 : -1} onFocus={() => setFocusedColumn(cell.index)} onClick={() => queue(layer().id, cell.index)} aria-haspopup="menu" onContextMenu={(event) => openClipMenu(event, layer().id, cell.slot?.id ?? null)}>
             <span class="videoPerformClipImage"><Show when={props.thumbnailsAuthorized && cell.slot && props.bank.thumbnails[cell.slot.media_asset_id]} fallback={<span class="videoPerformClipPlaceholder" aria-hidden="true">{cell.slot ? "▧" : "+"}</span>}>{(thumbnail) => <img src={thumbnail()} alt="" loading="lazy" />}</Show><kbd data-no-localize>{videoPerformClipKeys[cell.index].toUpperCase()}</kbd><Show when={previewing() && state() !== "Preview"}><span class="videoPerformPreviewBadge"><span aria-hidden="true">◉</span><span>Preview</span></span></Show></span>
             <span class="videoPerformClipTitle" title={asset()?.label} data-no-localize>{cell.slot ? asset()?.label ?? `#${cell.slot.id}` : "—"}</span>
-            <span class="videoPerformClipState"><span aria-hidden="true">{state() === "LIVE" ? "▶ " : state() === "Queued" ? "◷ " : state() === "Preview" ? "◉" : missing() || failed() ? "! " : ""}</span><span>{state()}</span></span>
+            <span class="videoPerformClipState" title={state()} aria-label={state()} role="status">
+              <span aria-hidden="true">{state() === "LIVE" ? "▶" : state() === "Queued" ? "◷" : state() === "Preview" ? "◉" : missing() || failed() ? "!" : state() === "Paused" ? "Ⅱ" : state() === "Loaded" ? "●" : "○"}</span>
+              <span class="srOnly">{state()}</span>
+            </span>
           </button>
         </div>;
       }}</For>
@@ -456,7 +459,7 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
             <span data-video-perform-page-range data-no-localize aria-label="Visible clips">{pageStart() + 1}–{pageEnd()}/32</span>
             <button type="button" data-video-perform-page="next" aria-label="Next clip slots" title="Next clip slots" disabled={pageEnd() === 32} onClick={() => changePage(1)}>›</button>
             <button type="button" data-video-perform-inspect disabled={!selectedSlot()} title="Audition selected clip in Preview" onClick={inspectSelected}>Inspect</button>
-            <button type="button" data-video-perform-clip-options aria-label="Options for the selected clip" title="Options for the selected clip" onClick={(event) => clipOptions(event.currentTarget)}>Clip…</button>
+            <button type="button" data-video-perform-clip-options aria-label="Options for the selected clip" title="Options for the selected clip" onClick={(event) => clipOptions(event.currentTarget)}>Clip</button>
           </div>
           <div class="videoPerformMatrixSelection" role="columnheader" aria-colindex={pageStart() + 2} aria-colspan={pageEnd() - pageStart()}>
             <div class="videoPerformSelectedClip"><Show when={selectedSlot()} fallback={<span>No clip selected</span>}>

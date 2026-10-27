@@ -76,6 +76,7 @@ const favoriteMatchTolerance = 512;
 
 export function PositionControlPanel(props: PositionControlPanelProps) {
   const [positionToolTab, setPositionToolTab] = createSignal<PositionToolTab>("position");
+  const [positionDetailMode, setPositionDetailMode] = createSignal<"nudge" | "presets">("nudge");
   const panPercent = () => Math.round((props.controls.panValue / 65_535) * 1000) / 10;
   const tiltPercent = () => Math.round((props.controls.tiltValue / 65_535) * 1000) / 10;
   const limitSpanLabel = () =>
@@ -241,6 +242,11 @@ export function PositionControlPanel(props: PositionControlPanelProps) {
               aria-labelledby="position-tool-tab-position"
               tabIndex={0}
             >
+              <div class="positionDetailTabs" role="tablist" aria-label="Position detail">
+                <button type="button" role="tab" aria-selected={positionDetailMode() === "nudge"} class={positionDetailMode() === "nudge" ? "active" : ""} onClick={() => setPositionDetailMode("nudge")}>Numeric / Nudge</button>
+                <button type="button" role="tab" aria-selected={positionDetailMode() === "presets"} class={positionDetailMode() === "presets" ? "active" : ""} onClick={() => setPositionDetailMode("presets")}>Presets</button>
+              </div>
+              <div hidden={positionDetailMode() !== "nudge"} class="positionDetailSurface">
               <div class="visualNumberGrid positionDirectGrid">
                 <label>
                   Pan %
@@ -288,6 +294,14 @@ export function PositionControlPanel(props: PositionControlPanelProps) {
                   <button onClick={() => props.onNudge(0, -props.nudgeAmount)}>Tilt -</button>
                   <span />
                 </div>
+              </div>
+              <div class="positionTransformRow">
+                <button onClick={() => props.onMirrorAxis("pan")}>Mirror Pan</button>
+                <button onClick={() => props.onMirrorAxis("tilt")}>Mirror Tilt</button>
+                <button onClick={() => props.onMirrorAxis("both")}>Opposite</button>
+              </div>
+              </div>
+              <div hidden={positionDetailMode() !== "presets"} class="positionDetailSurface">
                 <div class="positionTargetGrid" aria-label="Pan tilt target points">
                   <For each={props.targetPoints}>
                     {(point) => (
@@ -308,12 +322,6 @@ export function PositionControlPanel(props: PositionControlPanelProps) {
                     )}
                   </For>
                 </div>
-              </div>
-              <div class="positionTransformRow">
-                <button onClick={() => props.onMirrorAxis("pan")}>Mirror Pan</button>
-                <button onClick={() => props.onMirrorAxis("tilt")}>Mirror Tilt</button>
-                <button onClick={() => props.onMirrorAxis("both")}>Opposite</button>
-              </div>
               <div class="positionFavoritePanel">
                 <div class="swatchHeader">
                   <strong>Position Favorites</strong>
@@ -368,6 +376,7 @@ export function PositionControlPanel(props: PositionControlPanelProps) {
                     )}
                   </For>
                 </div>
+              </div>
               </div>
             </div>
           </Show>

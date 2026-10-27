@@ -143,7 +143,7 @@
 .videoPerformLayout .videoPerformTakeRow .videoClipPreview { position: static; width: 60px; height: 44px; padding: 4px; font-size: 14px; }
 .videoPerformMaster { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; min-width: 0; }
 .videoPerformMaster label { display: grid; grid-template-columns: auto minmax(60px, 1fr) auto; align-items: center; gap: 8px; height: 44px; }
-.videoPerformMaster label > strong { order: 3; min-width: 4ch; text-align: right; font-variant-numeric: tabular-nums; }
+.videoPerformMaster label > strong { order: 3; min-width: 6ch; text-align: right; font-variant-numeric: tabular-nums; }
 .videoPerformMaster label > input { order: 2; grid-column: auto; width: 100%; }
 .videoPerformBlackoutRow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: center; min-width: 0; }
 .videoPerformMaster button { width: 100%; }
@@ -155,7 +155,13 @@
 .videoPerformBlackoutHint.blocked { color: var(--theme-warn); min-width: 0; }
 .videoPerformBlackoutHint.blocked > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 .videoPerformBlackoutShort { display: none; }
+.videoPerformMaster button[data-blackout-blocked] .videoPerformBlackoutShort { display: inline; }
 .videoPerformFieldLabel { white-space: nowrap; }
+@container perform-controls (max-width: 420px) {
+  .videoPerformBlackoutRow { grid-template-columns: minmax(0, 1fr); }
+  .videoPerformBlackoutHint { min-height: 32px; overflow: visible; }
+  .videoPerformBlackoutHint > span { overflow-wrap: anywhere; }
+}
 
 /* Short panes (laptop heights): Master and the guarded Blackout share one row.
  * The caption words stay available to assistive technology and the reminder

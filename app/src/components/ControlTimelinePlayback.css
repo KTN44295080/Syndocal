@@ -55,6 +55,18 @@
   font-size: var(--fs-control);
 }
 
+.controlPlaybackKeyDisclosure > summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  cursor: pointer;
+  color: var(--theme-muted);
+}
+
+.controlPlaybackKeyDisclosure[open] .controlPlaybackKeys {
+  padding-bottom: 4px;
+}
+
 .controlPlaybackRow {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));

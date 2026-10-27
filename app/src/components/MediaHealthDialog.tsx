@@ -80,6 +80,15 @@ export function MediaHealthDialog(props: MediaHealthDialogProps) {
   const [progress, setProgress] = createSignal<{ done: number; total: number } | null>(null);
   const [report, setReport] = createSignal<MediaRelinkApplyResult | null>(null);
   const [rowBusyId, setRowBusyId] = createSignal<MediaAssetId | null>(null);
+  const [stateFilter, setStateFilter] = createSignal<MediaHealthState | "all" | "attention">("all");
+  const filteredGroups = createMemo(() => groups().map((group) => ({
+    ...group,
+    rows: stateFilter() === "all"
+      ? group.rows
+      : stateFilter() === "attention"
+        ? (MEDIA_HEALTH_ATTENTION_STATES.includes(group.state) ? group.rows : [])
+        : group.state === stateFilter() ? group.rows : [],
+  })).filter((group) => group.rows.length > 0));
   // Bumped whenever the dialog closes so a slow Apply cannot repopulate a closed view.
   let session = 0;
   const disabled = () => !props.backendAvailable || props.busy || folderBusy() || rowBusyId() !== null;
@@ -208,6 +217,18 @@ export function MediaHealthDialog(props: MediaHealthDialogProps) {
           disabled={disabled() || rows().length === 0}
           onClick={() => void props.onVerify(rows().map((row) => row.assetId))}
         >Verify All</button>
+        <label class="mediaHealthFilter">
+          <span>Show</span>
+          <select value={stateFilter()} onChange={(event) => setStateFilter(event.currentTarget.value as MediaHealthState | "all" | "attention")}>
+            <option value="all">All</option>
+            <option value="attention">Needs attention</option>
+            <option value="unverified">Not checked</option>
+            <option value="missing">Missing</option>
+            <option value="unreadable">Unreadable</option>
+            <option value="hash_mismatch">Changed</option>
+            <option value="available">Available</option>
+          </select>
+        </label>
         <Show when={props.onScanRelinkFolder && props.onApplyRelinkRequests}>
           <button
             type="button"
@@ -354,7 +375,7 @@ export function MediaHealthDialog(props: MediaHealthDialogProps) {
         </section>
       </Show>
       <Show when={rows().length > 0} fallback={<p class="mediaHealthEmpty" data-media-health-empty>No local media files in this project.</p>}>
-        <For each={groups()}>
+        <For each={filteredGroups()}>
           {(group) => (
             <section class="mediaHealthGroup" data-media-health-group={group.state} aria-labelledby={`media-health-group-${group.state}`}>
               <h3 id={`media-health-group-${group.state}`}>
@@ -386,15 +407,17 @@ export function MediaHealthDialog(props: MediaHealthDialogProps) {
                           aria-label={`Verify ${row.label} on this machine`}
                           onClick={() => void props.onVerify([row.assetId])}
                         >Verify</button>
-                        <button
-                          type="button"
-                          data-media-health-relink={row.assetId}
-                          disabled={disabled()}
-                          aria-busy={rowBusyId() === row.assetId ? "true" : undefined}
-                          aria-label={`Relink ${row.label}`}
-                          title="Choose a replacement file"
-                          onClick={() => void relinkOne(row)}
-                        >Relink…</button>
+                        <Show when={row.state === "missing" || row.state === "unreadable" || row.state === "hash_mismatch"}>
+                          <button
+                            type="button"
+                            data-media-health-relink={row.assetId}
+                            disabled={disabled()}
+                            aria-busy={rowBusyId() === row.assetId ? "true" : undefined}
+                            aria-label={`Relink ${row.label}`}
+                            title="Choose a replacement file"
+                            onClick={() => void relinkOne(row)}
+                          >Relink…</button>
+                        </Show>
                       </div>
                     </li>
                   )}

@@ -143,6 +143,7 @@ const mediaPreviewIdentity = (asset: MediaAssetSummary) =>
 export function VideoControlPanel(props: VideoControlPanelProps) {
   let effectBrowserDialog: HTMLDialogElement | undefined;
   let mediaHealthDialog: HTMLDialogElement | undefined;
+  const [contextSurface, setContextSurface] = createSignal<"outputs" | "layers">("outputs");
   // T6: Audio/AutoVJ/Reactive settings live behind collapsed drawers so the clip
   // bank dominates the pane. Open state persists per drawer in localStorage.
   const [audioInOpen, setAudioInOpen] = createSignal(loadMixerDrawerOpen("audio-in"));
@@ -543,7 +544,13 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
       </section>
       <Show when={!props.libraryOnly}>
       <section class="videoMixerContextPane" aria-label="Layers and outputs">
-        <section class="videoMixerProgramPane" aria-label="Video outputs">
+        <Show when={props.mixer}>
+        <div class="videoMixerContextTabs" role="tablist" aria-label="Video context">
+          <button type="button" role="tab" class={contextSurface() === "outputs" ? "active" : ""} aria-selected={contextSurface() === "outputs"} onClick={() => setContextSurface("outputs")}>Outputs</button>
+          <button type="button" role="tab" class={contextSurface() === "layers" ? "active" : ""} aria-selected={contextSurface() === "layers"} onClick={() => setContextSurface("layers")}>Layers</button>
+        </div>
+        </Show>
+        <section class="videoMixerProgramPane" aria-label="Video outputs" hidden={props.mixer && contextSurface() !== "outputs"}>
           <header class="videoMixerPaneHeader">
             <div>
               <strong>Outputs</strong>
@@ -553,7 +560,7 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
           </header>
           <VideoOutputControlListPanel {...props.outputControls} compact={props.mixer} />
         </section>
-        <section class="videoMixerLayerPane" aria-label="Live video layers">
+        <section class="videoMixerLayerPane" aria-label="Live video layers" hidden={props.mixer && contextSurface() !== "layers"}>
           <header class="videoMixerPaneHeader">
             <div>
               <strong>Layers</strong>

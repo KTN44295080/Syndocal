@@ -369,7 +369,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               </button>
               <button role="menuitem" onClick={() => runProjectMenuAction(props.onSaveUserTemplate)}>
                 <span>Save as Template</span>
-                <small>Includes MIDI / OSC / DMX mappings</small>
+                <small>Includes MIDI / OSC / DMX</small>
               </button>
               <button
                 role="menuitem"
@@ -456,6 +456,8 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
                   <span>Clear Recent</span>
                 </button>
               </Show>
+              <details class="appProjectMenuDisclosure">
+                <summary>Settings</summary>
               <div class="appProjectMenuLabel" role="separator">
                 <span>Interface Scale</span>
               </div>
@@ -525,6 +527,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
                   onClick={() => props.onMonitorQuality(option.id)}
                 >{option.label}</button>}</For>
               </div>
+              </details>
               <div class="appProjectMenuLabel" role="separator">
                 <span>Workspace Layout</span>
               </div>
@@ -537,8 +540,10 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
                 onClick={() => runProjectMenuAction(props.onResetWorkspaceLayout)}
               >
                 <span>Reset Layout</span>
-                <small>Tabs, panes, and desk surfaces auto-save on this device</small>
+                <small>Layout auto-saves on this device</small>
               </button>
+              <details class="appProjectMenuDisclosure">
+                <summary>Diagnostics</summary>
               <button role="menuitem" onClick={() => runProjectMenuAction(props.onLoadSample)}>
                 <span>Sample</span>
               </button>
@@ -548,6 +553,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               <button role="menuitem" onClick={() => runProjectMenuAction(props.onExportDiagnostics)}>
                 <span>Export Diagnostics</span>
               </button>
+              </details>
               <div class="appProjectMenuLabel" role="separator">
                 <span>Application Updates</span>
                 <small>
@@ -953,7 +959,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               )}
             </For>
           </nav>
-          <Show when={activeSetupArea() !== "io"}>
+          <Show when={setupSubTabsForArea(activeSetupArea()).length > 1}>
             <nav class="setupModeTabs" aria-label={`${activeSetupArea()} setup mode`}>
               <For each={setupSubTabsForArea(activeSetupArea())}>
                 {(tab) => (

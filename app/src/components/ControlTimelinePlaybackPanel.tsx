@@ -278,11 +278,14 @@ export function ControlTimelinePlaybackPanel(props: ControlTimelinePlaybackPanel
             </div>
           </section>
           </div>
-          <ul class="controlPlaybackKeys" aria-label="Keyboard shortcuts" data-playback-shortcut-legend>
-            <For each={shortcutLegend}>
-              {([key, label]) => <li><kbd>{key}</kbd> <span>{label}</span></li>}
-            </For>
-          </ul>
+          <details class="controlPlaybackKeyDisclosure">
+            <summary>Keyboard shortcuts</summary>
+            <ul class="controlPlaybackKeys" aria-label="Keyboard shortcuts" data-playback-shortcut-legend>
+              <For each={shortcutLegend}>
+                {([key, label]) => <li><kbd>{key}</kbd> <span>{label}</span></li>}
+              </For>
+            </ul>
+          </details>
         </div>
 
         <section class="controlPlaybackCard controlPlaybackCueList" aria-label="Cue list" data-playback-cue-list>

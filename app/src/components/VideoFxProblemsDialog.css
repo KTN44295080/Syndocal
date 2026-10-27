@@ -11,5 +11,5 @@
 .videoFxProblemWhere { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; color: var(--theme-dim); }
 .videoFxProblemAction span { color: var(--theme-dim); }
 .videoFxProblemList summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; color: var(--theme-dim); }
-.videoFxProblemList pre { margin: 0; padding: 8px; max-height: 200px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--theme-inset); border: 1px solid var(--theme-line); font-size: 14px; }
+.videoFxProblemList pre { margin: 0; padding: 8px; max-height: none; overflow: visible; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--theme-inset); border: 1px solid var(--theme-line); font-size: 14px; }
 .videoFxProblemsEmpty { color: var(--theme-dim); }

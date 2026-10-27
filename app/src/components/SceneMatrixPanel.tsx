@@ -1260,7 +1260,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                     </span>
                                   </Show>
                                   <Show when={(cue.recall_mode ?? "Coexist") === "ReplaceGroup"}>
-                                    <span class="sceneMatrixReplaceBadge">Replace group</span>
+                                    <span class="sceneMatrixReplaceBadge" title="Replace group" aria-label="Replace group">Replace</span>
                                   </Show>
                                   <small data-scene-matrix-time>{displayNumber(cue.fade_ms, 0)}ms</small>
                                 </span>

@@ -50,3 +50,5 @@
 .mediaHealthNdiRow[data-ndi-state="unavailable"] { border-left-color: var(--theme-error); }
 .mediaHealthNdiRow details > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
 @media (max-width: 720px) { .mediaHealthNdiRow { grid-template-columns: minmax(0, 1fr); } }
+.mediaHealthFilter { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+.mediaHealthFilter select { min-height: 44px; min-width: 150px; }

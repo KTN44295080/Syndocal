@@ -72,17 +72,6 @@ export function DvcImportReportPanel(props: DvcImportReportPanelProps) {
 
           <p class="dvcImportSafetyNote textPretty">Imported DMX routes remain disabled. Save As to create a Syndocal Project (.sdc).</p>
 
-          <dl class="dvcImportSummaryGrid">
-            <For each={summary()}>
-              {([label, count]) => (
-                <div>
-                  <dt>{label}</dt>
-                  <dd class="tabularNums" data-no-localize>{count}</dd>
-                </div>
-              )}
-            </For>
-          </dl>
-
           <Show when={props.report.warnings.length > 0}>
             <section class="dvcImportWarnings">
               <h3>Warnings</h3>
@@ -92,14 +81,34 @@ export function DvcImportReportPanel(props: DvcImportReportPanelProps) {
             </section>
           </Show>
 
+          <div class="dvcImportPrimaryCounts" aria-label="Import summary">
+            <span>Fixtures <strong class="tabularNums" data-no-localize>{props.report.summary.fixtures}</strong></span>
+            <span>Cues <strong class="tabularNums" data-no-localize>{props.report.summary.cues}</strong></span>
+            <span>Effects <strong class="tabularNums" data-no-localize>{props.report.summary.effects_converted}</strong></span>
+          </div>
+
+          <details class="dvcImportDetailDisclosure">
+            <summary>Import metrics</summary>
+            <dl class="dvcImportSummaryGrid">
+              <For each={summary()}>
+                {([label, count]) => (
+                  <div>
+                    <dt>{label}</dt>
+                    <dd class="tabularNums" data-no-localize>{count}</dd>
+                  </div>
+                )}
+              </For>
+            </dl>
+          </details>
+
           <div class="dvcImportCategoryList">
             <For each={categories()}>
               {(category) => (
-                <section class={`dvcImportCategory ${category.tone}`}>
-                  <header>
+                <details class={`dvcImportCategory ${category.tone}`} open={category.tone !== "converted" && category.value.count > 0}>
+                  <summary>
                     <h3>{category.label}</h3>
                     <span class="tabularNums" data-no-localize>{category.value.count}</span>
-                  </header>
+                  </summary>
                   <Show
                     when={category.value.details.length > 0}
                     fallback={<p class="dvcImportEmptyCategory">No items</p>}
@@ -115,7 +124,7 @@ export function DvcImportReportPanel(props: DvcImportReportPanelProps) {
                       </For>
                     </ul>
                   </Show>
-                </section>
+                </details>
               )}
             </For>
           </div>

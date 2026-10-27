@@ -13,6 +13,7 @@ import { exerciseRemoteDisclosureScrollReachability } from "./remote-disclosure-
 import { runPatchProfileDensityChecks } from "./patch-profile-density-contract.mjs";
 import { exerciseBatch2DensityInPage, runUiDensityBatch2Checks } from "./ui-density-batch2-contract.mjs";
 import { exerciseBatch3DensityInPage, runUiDensityBatch3Checks } from "./ui-density-batch3-contract.mjs";
+import { runUiDensityBatch4Checks } from "./ui-density-batch4-contract.mjs";
 import {
   exerciseSetupIoOperatorDeck,
   selectSetupIoConnection,
@@ -109,6 +110,7 @@ const patchOnlyMode = process.argv.includes("--patch-only");
 const patchProfileDensityOnlyMode = process.argv.includes("--patch-profile-density-only");
 const uiDensityBatch2OnlyMode = process.argv.includes("--ui-density-batch2-only");
 const uiDensityBatch3OnlyMode = process.argv.includes("--ui-density-batch3-only");
+const uiDensityBatch4OnlyMode = process.argv.includes("--ui-density-batch4-only");
 const fixtureGroupsOnlyMode = process.argv.includes("--fixture-groups-only");
 const patchEmptyStateOnlyMode = process.argv.includes("--patch-empty-state-only");
 const touchOnlyMode = process.argv.includes("--touch-only");
@@ -18677,6 +18679,8 @@ async function readPatchZoningState(client) {
         .filter((row) => row.getAttribute('aria-pressed') === 'true').length,
       draggableProfileRowCount: visibleMatches('[data-patch-profile-row][draggable="true"]').length,
       activeSetupMode: (document.querySelector('.setupModeTabs button.active')?.textContent || '').trim(),
+      setupModeTabCount: document.querySelectorAll('.setupModeTabs button').length,
+      patchLayoutActive: Boolean(document.querySelector('.layoutSetup.setupMode-patch')),
       leftPatchFormCount: visibleMatches('.layoutSetup.setupMode-patch > .setupPanel [data-patch-left-form]').length,
       topPatchFormCount: visibleMatches('.setupPatchAddressDesk [data-patch-minimal-form]').length,
       placementDisclosureInsideLeftForm: Boolean(
@@ -19120,7 +19124,8 @@ async function checkPatchZoning(client) {
       initial.placementDisclosureInsideLeftForm,
     patchBrowserSelectionStaysInPatch:
       patchBrowserSelectionClicked &&
-      patchBrowserSelected.activeSetupMode === 'Patch' &&
+      patchBrowserSelected.patchLayoutActive &&
+      patchBrowserSelected.setupModeTabCount === 0 &&
       patchBrowserSelected.minimalPrimaryCount === 1 &&
       patchBrowserSelected.selectedProfileRowCount === 1,
     disclosuresDefaultCollapsed:
@@ -39664,7 +39669,7 @@ async function main() {
       "--disable-background-timer-throttling",
       "--disable-backgrounding-occluded-windows",
       "--disable-renderer-backgrounding",
-      ...(patchProfileDensityOnlyMode || uiDensityBatch2OnlyMode || uiDensityBatch3OnlyMode ? [] : ["--hide-scrollbars"]),
+      ...(patchProfileDensityOnlyMode || uiDensityBatch2OnlyMode || uiDensityBatch3OnlyMode || uiDensityBatch4OnlyMode ? [] : ["--hide-scrollbars"]),
       "--disable-crash-reporter",
       "--disable-crashpad",
       `--remote-debugging-port=${cdpPort}`,
@@ -39695,6 +39700,11 @@ async function main() {
 
     if (uiDensityBatch3OnlyMode) {
       await runUiDensityBatch3Checks({ CdpClient, cdpPort, appUrl, screenshotDir, waitForApp });
+      return;
+    }
+
+    if (uiDensityBatch4OnlyMode) {
+      await runUiDensityBatch4Checks({ CdpClient, cdpPort, appUrl, screenshotDir, waitForApp });
       return;
     }
 

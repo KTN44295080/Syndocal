@@ -129,7 +129,6 @@ export function ControlBothPanel(props: ControlBothPanelProps) {
               <span class="uiMicroLabel">VIDEO</span>
               <strong>Live outputs</strong>
             </div>
-            <button type="button" onClick={props.onOpenVideo}>Video controls</button>
           </header>
           <div class="controlBothMonitorReadout">
             <div data-both-monitor="preview">
@@ -168,7 +167,10 @@ export function ControlBothPanel(props: ControlBothPanelProps) {
                 <Show when={props.selectedClipLabel} fallback="None">{(label) => <span data-no-localize>{label()}</span>}</Show>
               </strong>
             </div>
-            <div><span>Recording</span><strong>{props.recordingLabel}</strong></div>
+            <details class="controlBothRecordingDetail">
+              <summary>Recording</summary>
+              <strong>{props.recordingLabel}</strong>
+            </details>
           </div>
           <div class="controlBothActionRow controlBothBlackoutRow" aria-label="Video blackout actions">
             <button
@@ -180,9 +182,6 @@ export function ControlBothPanel(props: ControlBothPanelProps) {
             >
               {props.videoBlackout ? "Clear Video BO" : "Video BO"}
             </button>
-            <Show when={props.videoOutputCount > 0}>
-              <span class="controlBothOutputTruth">Video {props.enabledVideoOutputCount}/{props.videoOutputCount}</span>
-            </Show>
           </div>
         </section>
       </div>

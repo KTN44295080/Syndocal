@@ -233,7 +233,7 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
                   aria-describedby="videoPerformBlackoutReason"
                   title={blackoutBlockedReason() ?? (props.masterControls.blackout ? "BLACKOUT ENGAGED" : "Confirmation required")}
                   {...controlMappingTargetData({ action: "VideoBlackout", label: "Video Blackout" })}>
-                  <span class="videoPerformBlackoutLabel">{props.masterControls.blackout ? "Recover video…" : "Blackout…"}</span>
+                  <span class="videoPerformBlackoutLabel">{props.masterControls.blackout ? "Recover" : "Blackout"}</span>
                   <Show when={blackoutBlockedReason()}><span class="videoPerformBlackoutShort">{outputDriveShortLabel(blackoutBlockedReason() ?? "")}</span></Show>
                 </button>
                 <span class={`videoPerformBlackoutHint${blackoutBlockedReason() ? " blocked" : ""}`} id="videoPerformBlackoutReason"

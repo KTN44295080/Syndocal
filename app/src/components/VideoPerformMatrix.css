@@ -241,7 +241,8 @@
 
 .videoPerformMatrix .videoPerformClipTrigger {
   display: grid;
-  grid-template-rows: minmax(48px, 1fr) 20px 20px;
+  grid-template-rows: minmax(48px, 1fr) 24px;
+  grid-template-columns: minmax(0, 1fr) 24px;
   min-height: 92px;
   padding: 0;
   overflow: hidden;
@@ -295,8 +296,7 @@
   top: 3px;
 }
 
-.videoPerformClipTitle,
-.videoPerformClipState {
+.videoPerformClipTitle {
   display: block;
   padding: 0 4px;
   overflow: hidden;
@@ -306,7 +306,18 @@
 }
 
 .videoPerformClipState {
+  display: inline-grid;
+  place-items: center;
+  align-self: center;
+  justify-self: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  overflow: visible;
+  border: 1px solid currentcolor;
+  border-radius: 999px;
   color: var(--theme-muted);
+  line-height: 1;
 }
 
 .live .videoPerformClipState {
@@ -343,8 +354,7 @@
 .videoPerformClipState {
   font-family: var(--theme-font-label);
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .04em;
+  letter-spacing: 0;
 }
 .videoPerformMatrixCorner > strong,
 .videoPerformMatrixColumn {
@@ -449,7 +459,7 @@
 .videoPerformMatrix .videoPerformGroupStrip button, .videoPerformMatrix .videoPerformGroupStrip select, .videoPerformMatrix .videoPerformGroupStrip input { min-height: 44px; min-width: 44px; font-family: var(--theme-font-ui); font-size: 14px; margin: 0; }
 .videoPerformGroupStrip label { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0; }
 .videoPerformGroupStrip label input { width: 100%; min-width: 0; }
-.videoPerformGroupStrip label span { min-width: 4ch; font-variant-numeric: tabular-nums; }
+.videoPerformGroupStrip label span { min-width: 5ch; font-variant-numeric: tabular-nums; }
 .videoPerformGroupName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 .videoPerformGroupStrip button[aria-pressed="true"] { outline: 2px solid var(--theme-selected); outline-offset: -2px; }
 .videoPerformMatrixRow.grouped .videoPerformLayerName { padding-inline-start: 18px; box-shadow: inset 3px 0 var(--theme-line-strong); }

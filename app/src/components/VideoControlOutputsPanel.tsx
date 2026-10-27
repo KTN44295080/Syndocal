@@ -145,7 +145,15 @@ export function VideoOutputControlListPanel(props: VideoOutputControlListPanelPr
                   onClick={() => selectOutputAtIndex(output, index())}
                 >
                   <span class="videoOutputRailLabel" data-no-localize title={output.label}>{output.label}</span>
-                  <span class={`videoOutputRailState state-${state().stateClass}`}>{state().label}</span>
+                  <span
+                    class={`videoOutputRailState state-${state().stateClass}`}
+                    title={state().label}
+                    aria-label={state().label}
+                    role="status"
+                  >
+                    <span aria-hidden="true">{state().stateClass === "live" ? "●" : state().stateClass === "blocked" ? "!" : "○"}</span>
+                    <span class="srOnly">{state().label}</span>
+                  </span>
                 </button>
               );
             }}

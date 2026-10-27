@@ -1,5 +1,5 @@
 import { videoSourceKindLabel } from "../videoHelpers";
-import { For, Show, type ComponentProps } from "solid-js";
+import { For, Show, createSignal, type ComponentProps } from "solid-js";
 import { clampRange } from "../numericHelpers";
 import type { VideoLayerState, VideoLayerSummary, VideoOutputSummary } from "../types";
 import { formatDuration, formatVideoTime } from "../videoHelpers";
@@ -21,6 +21,7 @@ interface TouchVideoPanelProps {
 }
 
 export function TouchVideoPanel(props: TouchVideoPanelProps) {
+  const [surface, setSurface] = createSignal<"clips" | "layers" | "outputs">("clips");
   return (
     <section class="panel touchPanel touchVideoPanel">
       <div class="panelHeader">
@@ -28,7 +29,11 @@ export function TouchVideoPanel(props: TouchVideoPanelProps) {
         <span>{props.layers.length} video layer(s) / {props.outputs.length} video output(s)</span>
       </div>
       <div class="touchVideoClipBankHeader">
-        <span>Clip control</span>
+        <nav class="touchVideoSurfaceTabs" role="tablist" aria-label="Video live control surface">
+          <button type="button" role="tab" aria-selected={surface() === "clips"} class={surface() === "clips" ? "active" : ""} onClick={() => setSurface("clips")}>Clips</button>
+          <button type="button" role="tab" aria-selected={surface() === "layers"} class={surface() === "layers" ? "active" : ""} onClick={() => setSurface("layers")}>Layers</button>
+          <button type="button" role="tab" aria-selected={surface() === "outputs"} class={surface() === "outputs" ? "active" : ""} onClick={() => setSurface("outputs")}>Outputs</button>
+        </nav>
         <button
           type="button"
           class="primary videoClipSlotTake"
@@ -37,8 +42,11 @@ export function TouchVideoPanel(props: TouchVideoPanelProps) {
           onClick={() => void props.clipSlotTake.onTake()}
         >{props.clipSlotTake.label}</button>
       </div>
-      <VideoClipSlotBankPanel {...props.clipSlotBank} />
-      <VideoTransitionBusPanel {...props.transitionBuses} compact />
+      <div class="touchVideoSurface" hidden={surface() !== "clips"} role="tabpanel">
+        <VideoClipSlotBankPanel {...props.clipSlotBank} />
+        <VideoTransitionBusPanel {...props.transitionBuses} compact />
+      </div>
+      <div class="touchVideoSurface" hidden={surface() !== "outputs"} role="tabpanel">
       <Show when={props.outputs.length > 0} fallback={<p class="empty">No configured video outputs. Add a Display output in Setup.</p>}>
         <div class="touchVideoOutputGrid">
           <For each={props.outputs}>
@@ -92,6 +100,8 @@ export function TouchVideoPanel(props: TouchVideoPanelProps) {
           </For>
         </div>
       </Show>
+      </div>
+      <div class="touchVideoSurface" hidden={surface() !== "layers"} role="tabpanel">
       <Show when={props.layers.length > 0} fallback={<p class="empty">No video layers. Add one in Setup &gt; Output.</p>}>
         <div class="touchVideoDeckGrid">
           <For each={props.layers}>
@@ -268,6 +278,7 @@ export function TouchVideoPanel(props: TouchVideoPanelProps) {
           </For>
         </div>
       </Show>
+      </div>
     </section>
   );
 }

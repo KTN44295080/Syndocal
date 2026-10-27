@@ -138,11 +138,11 @@ export function WorkspaceOperationsMenu(props: WorkspaceOperationsMenuProps) {
             </div>
           </section>
 
-          <section>
-            <header>
+          <details class="workspaceOperationsDisclosure">
+            <summary>
               <strong>Pane Windows</strong>
               <small>Position and size save with named workspaces</small>
-            </header>
+            </summary>
             <div class="workspacePaneButtons">
               <For each={paneWindowKinds}>
                 {(pane) => (
@@ -160,13 +160,13 @@ export function WorkspaceOperationsMenu(props: WorkspaceOperationsMenuProps) {
                 )}
               </For>
             </div>
-          </section>
+          </details>
 
-          <section class="operatorPolicySection">
-            <header>
+          <details class="workspaceOperationsDisclosure operatorPolicySection">
+            <summary>
               <strong>Operator Lock</strong>
               <small>Show-operation guard, not operating-system security</small>
-            </header>
+            </summary>
             <Show
               when={props.operatorLockMode === null}
               fallback={
@@ -235,7 +235,7 @@ export function WorkspaceOperationsMenu(props: WorkspaceOperationsMenuProps) {
                 </button>
               </div>
             </Show>
-          </section>
+          </details>
         </div>
       </Show>
     </div>
