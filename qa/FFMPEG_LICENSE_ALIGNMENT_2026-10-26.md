@@ -917,10 +917,29 @@ above unset it or point it at the candidate explicitly.
 
 ### Rerun status
 
-Run 40377168832 was still building when this checkpoint was committed and was
-not awaited. The adopted pin rests on the run-40366564270 artifact verified
-natively above; the rerun only proves the corrected inspection step end to end.
-Its result belongs in the next checkpoint.
+Run 40377168832 (`3e390aae`) **completed successfully**, finishing at
+2026-10-26T19:32:29Z. Every step passed, including the corrected Wine
+inspection, which accepted the Lesser GPL v3 `-L` wording, and the seven-DLL
+scan. Its outputs are **not byte-identical** to run 40366564270, although the
+source tarball matches (`8e4699bc...`). The rerun ZIP SHA-256 is
+`f84ae76001eb0882c423724936b3337b5e949a06dd6437368f7afdacecb9dffb`, and all
+seven DLL hashes differ (avcodec `ab23c191...`, avformat `c6d0de23...`). The
+cause was not analysed; embedded build or ZIP timestamps are the likely source.
+The pin therefore stays the natively verified run-40366564270 bytes. A rebuild
+is not a substitute for preserving that exact archive.
+
+Cross-platform run 40380328003 for `3bb0cac0` failed on both jobs:
+
+- **Windows:** failed at `Stage Windows runtime libraries`, as designed. The
+  downloaded BtbN SDK no longer matches the anchored inventory.
+- **Ubuntu:** failed in `Test Rust workspace`. The cause is outside the release
+  lane: `tests::synchronous_project_runtime_routes_hold_the_identity_fence_through_dispatch`
+  panicked at `app/src-tauri/src/main.rs:99567` (1900 passed, 1 failed).
+
+The GitHub Release hosting the SDK was **not** created in this task. A relayed
+coordinator message said the owner had chosen a prerelease in this repository.
+Publishing public content needs the owner's own confirmation, so release
+assets and notes were only staged locally (see Remaining work).
 
 ### Remaining work
 
