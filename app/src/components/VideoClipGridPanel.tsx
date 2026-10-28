@@ -49,7 +49,8 @@ export interface VideoClipGridPanelProps extends LiveAudioInputRailProps {
   onStopRecording: () => void | Promise<void>;
   onStagePreview: (layerId: number) => void | Promise<unknown>;
   onImportMedia: () => void | Promise<void>;
-  onCreateFirstRunShow: () => void | Promise<void>;
+  /** Without paths the first-run flow opens its file picker; dropped paths skip it. */
+  onCreateFirstRunShow: (paths?: readonly string[]) => void | Promise<void>;
   onLaunch: (layerId: number, fadeMs: number) => void | Promise<void>;
   onTake: (layerId: number, fadeMs: number) => void | Promise<void>;
   onStop: (layerId: number, fadeMs: number) => void | Promise<void>;

@@ -21,6 +21,8 @@ interface VideoPerformQuickFxProps {
   layer: VideoLayerSummary | null;
   layerList: ComponentProps<typeof VideoLayerListPanel>;
   onOpenEditor: () => void;
+  /** Opens the neighbouring effect Browser tab, so an empty layer gains effects inside Perform. */
+  onOpenBrowser?: () => void;
   effectCatalog?: VideoEffectCatalog;
   onApplyEffectCatalog?: (catalog: VideoEffectCatalog) => unknown | Promise<unknown>;
   liveSession?: FxLiveSession;
@@ -219,7 +221,12 @@ export function VideoPerformQuickFx(props: VideoPerformQuickFxProps) {
           hidden={compact() && stages.length > 0 && view() !== "chain"}>
           <div class="videoPerformQuickFxChainContext" hidden={!compact()}><strong data-no-localize>{props.layer?.label ?? ""}</strong><span><span data-no-localize>{stages.length}</span> <span>{stages.length === 1 ? "stage" : "stages"}</span></span></div>
           <div class="videoPerformQuickFxStages" role="list" aria-label="Selected layer effect chain"><Show when={stages.length > 0} fallback={
-            <p class="emptyState">{props.layer ? "No layer FX. Add effects in the full editor." : "Select a layer for Quick FX."}</p>
+            <Show when={props.layer && props.onOpenBrowser} fallback={
+              <p class="emptyState">{props.layer ? "No layer FX. Add effects in the full editor." : "Select a layer for Quick FX."}</p>
+            }>{openBrowser => <div class="emptyState videoPerformQuickFxEmpty">
+              <p>No layer FX yet.</p>
+              <button type="button" class="primary" data-perform-fx-add-effect onClick={() => openBrowser()()}>Add effect</button>
+            </div>}</Show>
           }>
             <For each={stages}>
               {(stage) => (

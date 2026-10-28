@@ -163,9 +163,9 @@
   .videoPerformBlackoutHint > span { overflow-wrap: anywhere; }
 }
 
-/* Short panes (laptop heights): Master and the guarded Blackout share one row.
- * The caption words stay available to assistive technology and the reminder
- * keeps its lock glyph, its text and the button title. */
+/* Short panes (laptop heights): Master and Video BO share one row. The
+ * caption stays available to assistive technology through the button's
+ * description and title. */
 @container perform-output (max-height: 184px) {
   .videoPerformMaster { grid-template-columns: minmax(0, 1fr) 124px; align-items: center; column-gap: 8px; }
   .videoPerformMaster > label { grid-template-columns: minmax(40px, 1fr) auto; }

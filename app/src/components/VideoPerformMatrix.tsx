@@ -9,6 +9,7 @@ import { defaultVideoGroupMix, videoGroupBlends } from "../videoLayerGroups";
 import { VideoLayerListPanel } from "./VideoLayerListPanel";
 import "./VideoPerformMatrix.css";
 import { FX_DRAG_MIME, readFxDragPayload, type FxCatalogEntry } from "../fxCatalogModel";
+import { dragCarriesFiles, droppedFilePaths } from "../videoPerformFirstShow";
 
 export interface VideoPerformMatrixProps {
   groups?: VideoLayerGroupSummary[];
@@ -29,6 +30,18 @@ export interface VideoPerformMatrixProps {
   onStop: (layerId: number) => void | Promise<unknown>;
   keyboardEnabled?: boolean;
   onTake: () => void | Promise<unknown>;
+  /** Empty Perform starts the first show with the existing first-run flow. */
+  firstShow?: VideoPerformFirstShow;
+}
+
+export interface VideoPerformFirstShow {
+  available: boolean;
+  busy: boolean;
+  backendAvailable: boolean;
+  /** Without paths the first-run flow opens its file picker. */
+  onStart: (paths?: readonly string[]) => void | Promise<unknown>;
+  /** Where layers are added when the show is no longer empty (media already imported). */
+  onOpenEditor?: () => void;
 }
 
 export const videoPerformClipKeys = "1234567890qwertyuiopasdfghjklzxc";
@@ -448,10 +461,49 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
     </div>;
   };
 
+  const [fileDragOver, setFileDragOver] = createSignal(false);
+  // The whole empty matrix is the drop target. Native drops reach App's drop
+  // router through the data attribute; a page-level drop carries no paths in
+  // WebView2, so it opens the same picker instead of doing nothing.
+  const EmptyState = () => {
+    const show = () => props.firstShow;
+    const startable = () => Boolean(show()?.available || show()?.busy);
+    const canStart = () => Boolean(show()?.available && show()?.backendAvailable && !show()?.busy);
+    return <div class="videoPerformMatrixEmpty" data-video-perform-empty
+      data-video-perform-first-show-drop={startable() ? "" : undefined}
+      data-file-drag-over={fileDragOver() ? "true" : undefined}
+      onDragOver={event => {
+        if (!canStart() || !dragCarriesFiles(event.dataTransfer)) return;
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+        setFileDragOver(true);
+      }}
+      onDragLeave={event => { if (!(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) setFileDragOver(false); }}
+      onDrop={event => {
+        setFileDragOver(false);
+        if (!canStart() || !dragCarriesFiles(event.dataTransfer)) return;
+        event.preventDefault();
+        const paths = droppedFilePaths(event.dataTransfer);
+        void show()?.onStart(paths.length > 0 ? paths : undefined);
+      }}>
+      <Show when={startable()} fallback={<>
+        <span>{"No video layers. Add one with Import Media in Edit > Video."}</span>
+        <Show when={show()?.onOpenEditor}>{open => <button type="button" data-video-perform-open-editor onClick={() => open()()}>{"Open Edit > Video"}</button>}</Show>
+      </>}>
+        <span>No video layers. Pick a file or drop it here.</span>
+        <button type="button" class="primary" data-video-perform-first-show aria-busy={show()?.busy ? "true" : undefined}
+          disabled={!canStart()} title={show()?.backendAvailable === false ? "Desktop required" : undefined}
+          onClick={() => void show()?.onStart()}>
+          <span role={show()?.busy ? "status" : undefined}>{show()?.busy ? "Setting Up…" : "Pick a file"}</span>
+        </button>
+      </Show>
+    </div>;
+  };
+
   return <section class="videoPerformMatrix" data-video-perform-matrix data-video-perform-region="matrix" aria-label="Clip matrix"
     data-page-start={pageStart()} data-page-size={pageSize()} data-page-end={pageEnd()} data-slot-count="32"
     style={{ "--perform-visible-columns": pageEnd() - pageStart() }}>
-    <Show when={rows.length > 0} fallback={<div class="videoPerformMatrixEmpty"><span>No video layers. Add a file, still, or input above.</span><button type="button" onClick={() => void props.bank.onImport()}>Import</button></div>}>
+    <Show when={rows.length > 0} fallback={<EmptyState />}>
       <div ref={attachScroll} class="videoPerformMatrixScroll" role="grid" aria-label="Video layers and clips" aria-rowcount={rows.length + 1} aria-colcount="33" tabIndex={-1}>
         <div class="videoPerformMatrixHead" role="row">
           <div class="videoPerformMatrixCorner" role="columnheader" aria-colindex={1}>

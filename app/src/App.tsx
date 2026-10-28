@@ -732,6 +732,7 @@ import { fxChainStages } from "./fxAuditionModel";
 import { buildFxCatalog, normalizeFxSource, type FxCatalogEntry, type FxImportRejection } from "./fxCatalogModel";
 import { VideoEffectBrowser } from "./components/VideoEffectBrowser";
 import { videoClipSlotDropTarget, videoClipSlotReorderedIds } from "./videoClipSlotBankModel";
+import { isVideoPerformFirstShowDropTarget } from "./videoPerformFirstShow";
 import {
   inspectMediaAssetAvailability,
   mediaAssetImportReportMessage,
@@ -12726,6 +12727,10 @@ function createAppView() {
         const visualPaths = event.payload.paths.filter(isVisualMediaFilePath);
         if (visualPaths.length > 0) {
           const target = dropTarget;
+          if (isVideoPerformFirstShowDropTarget(target)) {
+            void createFirstRunVjShow(visualPaths);
+            return;
+          }
           const clipTarget = videoClipSlotDropTarget(target);
           if (clipTarget) {
             void importAndAssignVideoClipSlots(visualPaths, clipTarget.layerId, clipTarget.beforeSlotId);
@@ -21503,6 +21508,13 @@ function createAppView() {
     },
     commit: (layerId, effect) => fxLiveSession.run(layerId, () => setVideoLayerIsfEffect(layerId, effect)),
   });
+  // Perform's "Full FX editor" opens Edit > Video with the layer effects shown
+  // for the layer Perform has selected (the inspector reads that selection).
+  const [videoFxEditorOpenRequested, setVideoFxEditorOpenRequested] = createSignal(false);
+  const openVideoFxEditor = () => {
+    setVideoFxEditorOpenRequested(true);
+    selectControlMode("mixer");
+  };
   const selectedVideoClipSlotLayer = createMemo(() => {
     const layerId = selectedVideoClipSlotLayerId();
     return snapshot().video.layers.find((layer) => layer.id === layerId)
@@ -21749,7 +21761,13 @@ function createAppView() {
       if (awaitingLease !== null) setVjFirstRunAwaitingSyncForLease(awaitingLease, false);
     }
   });
-  const createFirstRunVjShow = async () => {
+  // Without paths the picker chooses the files; a drop on the empty Perform
+  // passes its paths and skips the picker. Both share one commit path.
+  const createFirstRunVjShow = async (droppedPaths?: readonly string[]) => {
+    const providedPaths = Array.isArray(droppedPaths)
+      ? droppedPaths.map((path) => path.trim()).filter(Boolean)
+      : null;
+    if (providedPaths !== null && providedPaths.length === 0) return;
     if (vjFirstRunBusy()) return;
     if (!vjFirstRunAvailable()) {
       setMessage("First-run VJ setup is only available for an empty video show.");
@@ -21769,11 +21787,11 @@ function createAppView() {
       const preparedStart = await preflightAndBeginMediaAssetOperation(
         initiatingAuthority,
         prepareMediaAssetOperationStart,
-        () => beginMediaAssetOperation("Set up first VJ show", "picker"),
+        () => beginMediaAssetOperation("Set up first VJ show", providedPaths ? "preparing" : "picker"),
       );
       sideEffectAuthority = preparedStart.authority;
       mediaOperation = preparedStart.operation;
-      const paths = await invoke<string[]>("select_video_source_files", { kind: "File" });
+      const paths = providedPaths ?? await invoke<string[]>("select_video_source_files", { kind: "File" });
       if (!sideEffectsAreCurrent()) return;
       if (paths.length === 0) {
         setMessage("VJ setup canceled. No project changes were made.");
@@ -27494,6 +27512,9 @@ function createAppView() {
     mediaAssetThumbnails,
     mediaAssetAvailabilityById,
     videoLayerListProps,
+    selectedVideoClipSlotLayer,
+    videoFxEditorOpenRequested,
+    setVideoFxEditorOpenRequested,
     videoEffectCatalog,
     snapshot,
     videoTransitionRuntime,
@@ -28397,6 +28418,7 @@ function createAppView() {
     liveVideoMonitors,
     liveVideoProgramLabel,
     selectedVideoClipSlotLayer,
+    openVideoFxEditor,
     videoRecordingStatus,
     setVideoBlackout,
     renderTimelineDeskHeaderTools,

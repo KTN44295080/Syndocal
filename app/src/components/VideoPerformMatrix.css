@@ -355,6 +355,12 @@
   padding: 16px;
 }
 
+/* A file dragged over the empty Perform starts the first show on drop. */
+.videoPerformMatrixEmpty[data-file-drag-over] {
+  outline: 2px dashed var(--theme-accent);
+  outline-offset: -8px;
+}
+
 /* Broadcast labels and tally bars use existing runtime classes and words. */
 .videoPerformClipState {
   font-family: var(--theme-font-label);

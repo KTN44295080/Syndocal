@@ -34,7 +34,10 @@ export interface VideoPerformContext {
   /** A Learn mode is selecting controls. A disabled button never reports a
    * pointer, so Take stays enabled for Learn (Learn swallows its click). */
   controlLearnActive?: boolean;
+  /** Opens Edit > Video. */
   onOpenEditor: () => void;
+  /** Opens the full FX editor in Edit > Video on the selected layer; falls back to onOpenEditor. */
+  onOpenFxEditor?: (layerId: number | null) => void;
   layout?: VideoPerformLayoutState;
   /** The existing Clip Inspector, rendered in-flow for the Inspector's Clip tab. */
   renderClipInspector?: () => JSX.Element;
@@ -67,6 +70,8 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
   let legend!: HTMLDialogElement;
   let blackout!: HTMLButtonElement;
   const blackoutBlockedReason = () => props.masterControls.blackoutBlockedReason ?? null;
+  // Video BO is a direct toggle (no confirmation) and stops video only.
+  const blackoutStateText = () => props.masterControls.blackout ? "Video BO on" : "Stops video only. Lighting keeps running.";
   const keyboardEnabled = () => props.performContext?.keyboardEnabled !== false;
   const shortcut = (event: KeyboardEvent) => {
     if (!keyboardEnabled() || event.repeat || event.isComposing || event.defaultPrevented ||
@@ -163,7 +168,14 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
           availabilityById={props.mediaLibrary.availabilityById} previewLayerId={props.clipGrid.previewLayerId}
           previewSlotId={props.liveMonitors.previewTransport.slot_id ?? null}
           thumbnailsAuthorized={props.clipGrid.thumbnailsAuthorized} keyboardEnabled={keyboardEnabled()}
-          onStop={layerId => props.clipGrid.onStop(layerId, props.clipGrid.fadeMs)} onTake={() => { if (props.clipSlotTake.enabled) return props.clipSlotTake.onTake(); }} />
+          onStop={layerId => props.clipGrid.onStop(layerId, props.clipGrid.fadeMs)} onTake={() => { if (props.clipSlotTake.enabled) return props.clipSlotTake.onTake(); }}
+          firstShow={{
+            get available() { return props.clipGrid.firstRunAvailable; },
+            get busy() { return props.clipGrid.firstRunBusy; },
+            get backendAvailable() { return props.clipGrid.firstRunBackendAvailable; },
+            onStart: paths => props.clipGrid.onCreateFirstRunShow(paths),
+            onOpenEditor: () => props.performContext?.onOpenEditor(),
+          }} />
       </div>
     </section>
     <WorkspaceSplitHandle
@@ -231,15 +243,15 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
                   aria-pressed={props.masterControls.blackout} onClick={() => void props.masterControls.onSetBlackout(!props.masterControls.blackout)}
                   aria-disabled={blackoutBlockedReason() ? "true" : undefined} data-blackout-blocked={blackoutBlockedReason() ? "true" : undefined}
                   aria-describedby="videoPerformBlackoutReason"
-                  title={blackoutBlockedReason() ?? (props.masterControls.blackout ? "BLACKOUT ENGAGED" : "Confirmation required")}
+                  title={blackoutBlockedReason() ?? blackoutStateText()}
                   {...controlMappingTargetData({ action: "VideoBlackout", label: "Video Blackout" })}>
-                  <span class="videoPerformBlackoutLabel">{props.masterControls.blackout ? "Recover" : "Blackout"}</span>
+                  <span class="videoPerformBlackoutLabel">Video BO</span>
                   <Show when={blackoutBlockedReason()}><span class="videoPerformBlackoutShort">{outputDriveShortLabel(blackoutBlockedReason() ?? "")}</span></Show>
                 </button>
                 <span class={`videoPerformBlackoutHint${blackoutBlockedReason() ? " blocked" : ""}`} id="videoPerformBlackoutReason"
                   data-video-perform-blackout-reason role="status">
-                  <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
-                  <span>{blackoutBlockedReason() ?? (props.masterControls.blackout ? "BLACKOUT ENGAGED" : "Confirmation required")}</span>
+                  <Show when={blackoutBlockedReason()}><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg></Show>
+                  <span>{blackoutBlockedReason() ?? blackoutStateText()}</span>
                 </span>
               </div>
             </section>
@@ -300,7 +312,12 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
                 locale={props.performContext?.locale} bpm={props.layerList.bpm}
                 projectEpoch={props.layerList.projectEpoch}
                 effectCatalog={props.effectScopes.catalog} onApplyEffectCatalog={props.effectScopes.onApplyCatalog} liveSession={props.layerList.liveSession} audition={props.layerList.audition}
-                onOpenEditor={() => props.performContext?.onOpenEditor()} />}>{group => <VideoGroupInspector group={group()} effects={props.effectScopes} />}</Show>
+                onOpenEditor={() => {
+                  const context = props.performContext;
+                  if (context?.onOpenFxEditor) context.onOpenFxEditor(props.clipSlotBank.layer?.id ?? null);
+                  else context?.onOpenEditor();
+                }}
+                onOpenBrowser={() => setTab("browser")} />}>{group => <VideoGroupInspector group={group()} effects={props.effectScopes} />}</Show>
             </Match>
             <Match when={tab() === "clip"}>
               <div class="videoPerformInspectorClip" data-video-perform-clip-inspector>
@@ -329,7 +346,7 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
         <dt data-no-localize>Shift + 1–0</dt><dd>Audition clip in Preview</dd>
         <dt>← → ↑ ↓ · Home / End</dt><dd>Move clip and layer selection</dd>
         <dt>Space / Enter</dt><dd>Take the auditioned or queued clip</dd>
-        <dt data-no-localize>Ctrl + Shift + B</dt><dd>Blackout or recover, with confirmation</dd>
+        <dt data-no-localize>Ctrl + Shift + B</dt><dd>Video BO on or off</dd>
         <dt>?</dt><dd>Show keyboard shortcuts</dd></dl>
       <p>Right-click a clip to audition it in Preview or open its options. Inspect auditions the selected clip; Clip… opens its options.</p>
       <p>The P button stages the current layer in Preview; the P key queues column 20.</p>

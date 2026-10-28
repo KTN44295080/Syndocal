@@ -273,6 +273,16 @@
   color: var(--theme-muted);
 }
 
+/* An empty layer offers its first effect from the Browser tab in place. */
+.videoPerformQuickFx .videoPerformQuickFxEmpty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 12px;
+}
+.videoPerformQuickFx .videoPerformQuickFxEmpty > p { margin: 0; }
+
 /* The global pressed/active button treatment is a latched block; the stage rows
  * carry their state in the switch knob, the number and the row outline instead. */
 .app .videoPerformQuickFx .videoPerformQuickFxSelect,

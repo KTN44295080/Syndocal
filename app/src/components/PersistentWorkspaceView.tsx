@@ -71,6 +71,9 @@ export function PersistentWorkspaceView(props: { model: PersistentWorkspaceViewM
     mediaAssetThumbnails,
     mediaAssetAvailabilityById,
     videoLayerListProps,
+    selectedVideoClipSlotLayer,
+    videoFxEditorOpenRequested,
+    setVideoFxEditorOpenRequested,
     videoEffectCatalog,
     snapshot,
     videoTransitionRuntime,
@@ -596,6 +599,9 @@ export function PersistentWorkspaceView(props: { model: PersistentWorkspaceViewM
                 asset={selectedMediaLibraryAsset()}
                 availabilityById={mediaAssetAvailabilityById()}
                 layerFx={videoLayerListProps}
+                selectedLayerId={selectedVideoClipSlotLayer()?.id ?? null}
+                openFxEditor={videoFxEditorOpenRequested()}
+                onFxEditorOpened={() => setVideoFxEditorOpenRequested(false)}
                 groupEffects={{
                   get catalog() { return videoEffectCatalog(); },
                   get compositions() { return snapshot().video.compositions; },

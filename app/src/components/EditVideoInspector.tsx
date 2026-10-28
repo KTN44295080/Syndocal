@@ -1,5 +1,5 @@
 import { videoSourceKindLabel } from "../videoHelpers";
-import { createMemo, createSignal, For, Show, type ComponentProps } from "solid-js";
+import { createEffect, createMemo, createSignal, For, on, onMount, Show, type ComponentProps } from "solid-js";
 import type { MediaAssetAvailability, MediaAssetSummary } from "../types";
 import { VideoIsfEffectPanel } from "./VideoIsfEffectPanel";
 import type { VideoLayerListPanel } from "./VideoLayerListPanel";
@@ -18,14 +18,33 @@ interface EditVideoInspectorProps {
   availabilityById: Record<number, MediaAssetAvailability>;
   layerFx: LayerFxProps;
   groupEffects?: VideoControlPanelProps["effectScopes"];
+  /** The application's selected video layer (the one Perform and the clip bank act on). */
+  selectedLayerId?: number | null;
+  /** Perform's "Full FX editor" asked for the layer effects to be shown open. */
+  openFxEditor?: boolean;
+  onFxEditorOpened?: () => void;
 }
 
 export function EditVideoInspector(props: EditVideoInspectorProps) {
   const [advancedOpen, setAdvancedOpen] = createSignal(false);
+  // A local pick in the FX layer menu lasts until the application selects
+  // another layer; otherwise the editor targets the application's selection.
   const [selectedLayerId, setSelectedLayerId] = createSignal<number | null>(null);
-  const selectedLayer = createMemo(() => props.layerFx.layers.find(
-    (layer) => layer.id === selectedLayerId(),
-  ) ?? props.layerFx.layers[0]);
+  // Memoised so a snapshot refresh that keeps the same layer id keeps the pick.
+  const applicationLayerId = createMemo(() => props.selectedLayerId ?? null);
+  createEffect(on(applicationLayerId, () => setSelectedLayerId(null), { defer: true }));
+  const layerById = (id: number | null | undefined) =>
+    id === null || id === undefined ? undefined : props.layerFx.layers.find((layer) => layer.id === id);
+  const selectedLayer = createMemo(() =>
+    layerById(selectedLayerId()) ?? layerById(applicationLayerId()) ?? props.layerFx.layers[0]);
+  let advanced: HTMLDetailsElement | undefined;
+  onMount(() => {
+    if (!props.openFxEditor || !advanced) return;
+    advanced.open = true;
+    setAdvancedOpen(true);
+    props.onFxEditorOpened?.();
+    queueMicrotask(() => advanced?.querySelector<HTMLElement>("[data-edit-video-layer-fx]")?.scrollIntoView({ block: "nearest" }));
+  });
 
   return (
     <section class="editVideoInspectorPane" data-edit-video-inspector aria-label="Media properties and layer effects">
@@ -41,7 +60,7 @@ export function EditVideoInspector(props: EditVideoInspectorProps) {
           </>}
         </Show>
         <Show when={props.groupEffects}>{effects => <VideoLayerGroupsPanel effects={effects()} layers={props.layerFx.layers} />}</Show>
-        <details class="editVideoAdvancedDisclosure" onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
+        <details ref={advanced} class="editVideoAdvancedDisclosure" onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
           <summary>Advanced Video Controls</summary>
           <Show when={advancedOpen()}>
             <div class="editVideoLayerFx" data-edit-video-layer-fx>
