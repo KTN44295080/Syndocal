@@ -289,7 +289,11 @@ fn stop_and_reap(
     assert_eq!(session.owner.budget_snapshot().reservation_count, 0);
 }
 
-fn run_ordinary_fixture(layers: u64, extent: (u32, u32), ticks: u64) -> (Vec<Path>, Vec<u64>) {
+fn run_ordinary_fixture(
+    layers: u64,
+    extent: (u32, u32),
+    ticks: u64,
+) -> (Vec<Path>, Vec<(u64, InFlightState)>) {
     let mut session = session_with_compositor(extent);
     let mut renderer = VideoPreviewRenderer::with_frame_provider(
         VideoRuntimeConfig::default(),
@@ -304,11 +308,12 @@ fn run_ordinary_fixture(layers: u64, extent: (u32, u32), ticks: u64) -> (Vec<Pat
         }
         paths.push(tick(&mut session, &mut renderer, &snapshot, extent));
         let (bytes, line) = budget_line(&session, extent);
+        let state = ring_slot_state(&session);
         println!(
-            "layers={layers} tick={index} path={:?} {line}",
+            "layers={layers} tick={index} path={:?} {state:?} {line}",
             paths[index as usize]
         );
-        live.push(bytes);
+        live.push((bytes, state));
     }
     assert_eq!(renderer.frame_provider.reads, (ticks * layers) as usize);
     stop_and_reap(&mut session, &mut renderer);
@@ -332,20 +337,33 @@ fn native_gpu_output_display_ordinary_fixture_stays_resident_with_steady_budget(
         );
         // After the eight-entry history window fills, retained charges must be
         // a steady state rather than growing with the number of presents.
-        // Between ticks one ring output is in flight; its transient ISF owners
-        // are reaped whenever its transaction happens to complete, so a sample
-        // may be lower but never higher than the steady in-flight envelope.
+        // Between ticks one ring output is in flight. Whether its transient
+        // ISF owners are still charged depends only on whether the adapter had
+        // completed it at the tick's post-submit poll (`InFlightState`), so
+        // each observed state must be exactly constant, and a drained sample
+        // may be lower but never higher than an executing one.
         let settled = &live[16..];
-        let envelope = *settled.iter().max().unwrap();
-        assert_eq!(
-            live[16..24].iter().max(),
-            live[24..].iter().max(),
-            "{layers}-layer managed bytes grow: {live:?}"
-        );
-        assert!(
-            settled.iter().filter(|bytes| **bytes == envelope).count() * 2 > settled.len(),
-            "{layers}-layer managed bytes are not steady: {live:?}"
-        );
+        let steady = |state: InFlightState| {
+            let bytes = settled
+                .iter()
+                .filter(|(_, observed)| *observed == state)
+                .map(|(bytes, _)| *bytes)
+                .collect::<Vec<_>>();
+            assert!(
+                bytes.windows(2).all(|pair| pair[0] == pair[1]),
+                "{layers}-layer {state:?} managed bytes are not steady: {live:?}"
+            );
+            bytes.first().copied()
+        };
+        if let (Some(drained), Some(executing)) = (
+            steady(InFlightState::Drained),
+            steady(InFlightState::Executing),
+        ) {
+            assert!(
+                drained <= executing,
+                "{layers}-layer drained samples exceed the in-flight envelope: {live:?}"
+            );
+        }
     }
 }
 
@@ -585,14 +603,61 @@ impl RingFixture {
         .unwrap_or_else(|error| panic!("snapshot ring tick failed: {error}"))
     }
 
-    /// Synchronous first frame, pipeline fill, one pipelined tick.
-    fn warm(&mut self, extent: (u32, u32)) {
+    /// Synchronous first frame, pipeline fill, one pipelined tick, leaving
+    /// output N owned by the ring. Returns which of the two legitimate
+    /// in-flight states the adapter produced (see `ring_slot_state`).
+    fn warm(&mut self, extent: (u32, u32)) -> InFlightState {
         for expected in [Path::Resident, Path::InFlight, Path::Resident] {
             let frame = self.prepare(extent);
             assert_eq!(path_of(frame), expected);
         }
         assert!(self.session.ring.owns_in_flight());
-        assert!(self.session.owner.has_unfinished_logical_frame());
+        assert!(self.session.has_pipelined_output());
+        let state = ring_slot_state(&self.session);
+        println!("ring output in flight after warm: {state:?}");
+        state
+    }
+}
+
+/// Output N's state after the tick that submitted it. The tick makes exactly
+/// one nonblocking poll after submission (`poll_phases_with_history`):
+/// - `Executing`: the GPU had not completed N, so G still registers N as the
+///   one logical frame and N's transaction keeps its reservation and its
+///   transient ISF upload/input charges until stage A of the next tick.
+/// - `Drained`: the adapter had already completed N (software adapters such
+///   as llvmpipe/lavapipe routinely complete small work on submit), so that
+///   poll drained N's transaction and committed its history; only the ring's
+///   stage B copy remains and no transient charge or reservation survives.
+///
+/// Which state occurs is adapter timing, so every ring scenario must hold in
+/// both. This proves the observed state is internally consistent instead of
+/// assuming GPU timing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InFlightState {
+    Executing,
+    Drained,
+}
+
+fn ring_slot_state(session: &NativeResidentDisplaySession) -> InFlightState {
+    let snapshot = session.owner.budget_snapshot();
+    let charged = |kind| {
+        let entry = snapshot.for_kind(kind);
+        entry.active_bytes + entry.retired_bytes + entry.reserved_bytes
+    };
+    let transient = charged(ChargeKind::QueueUploadStaging) + charged(ChargeKind::ActiveCpuInput);
+    if session.owner.has_unfinished_logical_frame() {
+        assert!(
+            transient > 0 && snapshot.reservation_count > 0,
+            "an executing ring output must still own its transient ISF charges: {snapshot:?}"
+        );
+        InFlightState::Executing
+    } else {
+        assert_eq!(
+            (transient, snapshot.reservation_count),
+            (0, 0),
+            "a drained ring output must leave no transient charge or reservation"
+        );
+        InFlightState::Drained
     }
 }
 
@@ -731,13 +796,15 @@ fn native_gpu_output_display_snapshot_ring_resize_discards_old_geometry_and_real
 }
 
 /// Device loss with output N in flight fails closed: the next tick reports a
-/// physical fault, N's complete owner moves into the session's retirement
-/// (no ring slot keeps it), the generation is retained and nothing is reaped
-/// or presented as a fallback.
+/// physical fault, no ring slot keeps N, the generation is retained and
+/// nothing is reaped or presented as a fallback. N's owner follows its state:
+/// an executing transaction moves into the session's retirement, while a
+/// drained one (completed before the loss, history committed) is discarded
+/// with zero presents and its charges stay in the retained generation.
 #[test]
 fn native_gpu_output_display_snapshot_ring_device_loss_with_a_slot_in_flight_fails_closed() {
     let mut ring = RingFixture::new(1, EXTENT);
-    ring.warm(EXTENT);
+    let state = ring.warm(EXTENT);
     ring.session.owner.mark_device_lost_for_tests();
     ring.position += 16;
     for layer in &mut ring.snapshot.layers {
@@ -751,14 +818,31 @@ fn native_gpu_output_display_snapshot_ring_device_loss_with_a_slot_in_flight_fai
         &Permit,
     );
     assert!(
-        matches!(result, Err(NativeResidentPrepareError::Fault(_))),
+        matches!(
+            &result,
+            Err(NativeResidentPrepareError::Fault(fault)) if fault.contains("DeviceLost")
+        ),
         "device loss is a fault, not a control interruption: {:?}",
         result.as_ref().err()
     );
     assert_eq!(ring.session.owner.pooled_resource_count(), 0);
     assert!(!ring.session.ring.owns_in_flight());
-    assert_eq!(ring.session.retirements.len(), 1);
-    assert!(ring.session.terminal_fault.is_some());
+    // Only an executing output leaves owners the lost device may still use;
+    // that retained retirement latches the session's terminal fault. A
+    // drained output has no outstanding work, so the loss surfaces at the
+    // tick's retirement poll exactly as on an idle session.
+    assert_eq!(
+        (
+            ring.session.retirements.len(),
+            ring.session.ring.discarded,
+            ring.session.terminal_fault.is_some()
+        ),
+        match state {
+            InFlightState::Executing => (1, 0, true),
+            InFlightState::Drained => (0, 1, false),
+        },
+        "{state:?} ring output after device loss: (retirements, discards, terminal)"
+    );
     assert_eq!(
         ring.session.owner.state(),
         GpuOwnerState::DeviceLostRetained
@@ -920,7 +1004,10 @@ fn native_gpu_output_display_resize_return_stays_resident_and_budget_settles() {
     for layers in 1..=3 {
         let mut ring = RingFixture::new(layers, EXTENT);
         ring.warm(EXTENT);
-        let mut maxima = Vec::new();
+        // Per visit, the steady managed bytes of each observed in-flight state
+        // (see the ordinary fixture): each must be exactly constant, and a
+        // return to an extent must settle to the same bytes in that state.
+        let mut settled = Vec::new();
         for extent in [(48, 30), EXTENT, (48, 30), EXTENT] {
             ring.session.reserve_geometry(extent.0, extent.1).unwrap();
             ring.session.reserved_geometry = None;
@@ -938,14 +1025,39 @@ fn native_gpu_output_display_resize_return_stays_resident_and_budget_settles() {
                 );
                 let bytes = ring.session.owner.budget_snapshot().managed_bytes();
                 assert!(bytes <= crate::native_gpu_budget::NATIVE_MANAGED_LIMIT);
+                let state = ring_slot_state(&ring.session);
                 if tick >= 16 {
-                    steady.push(bytes);
+                    steady.push((bytes, state));
                 }
             }
-            maxima.push(*steady.iter().max().unwrap());
+            let per_state = [InFlightState::Executing, InFlightState::Drained].map(|state| {
+                let bytes = steady
+                    .iter()
+                    .filter(|(_, observed)| *observed == state)
+                    .map(|(bytes, _)| *bytes)
+                    .collect::<Vec<_>>();
+                assert!(
+                    bytes.windows(2).all(|pair| pair[0] == pair[1]),
+                    "{layers} layers at {extent:?}: {state:?} bytes are not steady: {steady:?}"
+                );
+                bytes.first().copied()
+            });
+            settled.push(per_state);
         }
-        assert_eq!(maxima[0], maxima[2], "small extent accumulated owners");
-        assert_eq!(maxima[1], maxima[3], "return accumulated owners");
+        for (first, second, message) in [
+            (0, 2, "small extent accumulated owners"),
+            (1, 3, "return accumulated owners"),
+        ] {
+            let states = [InFlightState::Executing, InFlightState::Drained];
+            for (state, (a, b)) in states
+                .iter()
+                .zip(settled[first].iter().zip(&settled[second]))
+            {
+                if let (Some(a), Some(b)) = (a, b) {
+                    assert_eq!(a, b, "{layers} layers, {state:?}: {message}");
+                }
+            }
+        }
         stop_and_reap(&mut ring.session, &mut ring.renderer);
     }
 }

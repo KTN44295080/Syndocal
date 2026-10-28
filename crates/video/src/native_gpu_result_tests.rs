@@ -1,8 +1,43 @@
 use super::*;
-use crate::isf_native_gpu::tests::{encode, gpu, identity_jobs, request, stop, validated};
+use crate::isf_native_gpu::tests::{encode, gpu, identity_jobs, request, stop, validated, Fixture};
 use crate::isf_native_gpu::{await_transaction, NativeBatchAdmission, NativeBatchRestrictions};
 use crate::native_gpu_budget::{ChargeKind, NativeAllocationPlan};
 use crate::native_gpu_contract::{GpuPhase, MaterializationFailure, NativeGpuFaultKind};
+
+/// G keeps each validated batch's idle ISF bank pooled for the next tick with
+/// the same shape (2607a001): per layer two scratch images plus one uniform
+/// per stage, and the final image the lease also references. Prove that bank's
+/// exact ledger, then release it, so the assertions that follow measure only
+/// lease, read-pin and transaction ownership (the same isolation the snapshot,
+/// shared-output and surface wait helpers apply before exact charge checks).
+fn release_idle_stack_bank(fixture: &mut Fixture, layers: &[ValidatedLayerResult]) {
+    fixture.owner.poll_retirement().unwrap();
+    let pixels: u64 = layers
+        .iter()
+        .map(|layer| u64::from(layer.identity.width) * u64::from(layer.identity.height) * 4)
+        .sum();
+    let stages: u64 = layers
+        .iter()
+        .map(|layer| layer.recipe.job().chain.stages.len() as u64)
+        .sum();
+    let snapshot = fixture.owner.budget_snapshot();
+    let active = |kind| snapshot.for_kind(kind).active_bytes;
+    assert_eq!(fixture.owner.pooled_resource_count(), layers.len() * 2);
+    assert_eq!(active(ChargeKind::IsfScratch), pixels * 2);
+    assert_eq!(active(ChargeKind::ResidentLayer), pixels);
+    let uniforms = active(ChargeKind::CachedEffectResource);
+    assert!(
+        uniforms > 0 && uniforms % stages == 0,
+        "{uniforms} uniform bytes for {stages} stages"
+    );
+    assert_eq!(snapshot.allocated_bytes, pixels * 3 + uniforms);
+    assert_eq!(
+        snapshot.allocation_count,
+        layers.len() * 3 + stages as usize
+    );
+    fixture.owner.release_resource_pools();
+    assert_eq!(fixture.owner.pooled_resource_count(), 0);
+}
 
 #[test]
 fn native_gpu_result_candidate_and_lease_reject_other_device_or_transaction() {
@@ -131,6 +166,7 @@ fn native_gpu_result_validated_layers_retain_only_three_final_allocations() {
     let height = 3;
     let pixels = u64::from(width) * u64::from(height) * 4;
     let (layers, _) = validated(&mut fixture, 1, identity_jobs(width, height));
+    release_idle_stack_bank(&mut fixture, &layers);
     fixture.owner.poll_retirement().unwrap();
     let snapshot = fixture.owner.budget_snapshot();
     assert_eq!(snapshot.reserved_bytes, 0);
@@ -170,6 +206,7 @@ fn native_gpu_result_validated_layers_retain_only_three_final_allocations() {
 fn native_gpu_result_read_pin_keeps_image_after_lease_drop_until_completed_and_released() {
     let mut fixture = gpu();
     let (layers, _) = validated(&mut fixture, 1, identity_jobs(65, 3));
+    release_idle_stack_bank(&mut fixture, &layers);
     let mut retained_lease = None;
     for layer in layers {
         if retained_lease.is_none() {
@@ -616,6 +653,7 @@ fn native_gpu_result_read_view_samples_product_composition_shader_and_matches_cp
 
     let mut fixture = gpu();
     let (layers, _) = validated(&mut fixture, 1, identity_jobs(65, 3));
+    release_idle_stack_bank(&mut fixture, &layers);
     let mut layers = layers.into_iter();
     let first = layers.next().unwrap();
     drop(layers);
