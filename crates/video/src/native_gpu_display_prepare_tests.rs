@@ -30,6 +30,7 @@ fn headless_session() -> NativeResidentDisplaySession {
         geometry_generation: 0,
         reserved_geometry: None,
         history: None,
+        retiring_histories: Vec::new(),
         terminal_fault: None,
         delivery: crate::native_gpu_output::NativeDeliveryCounter::default(),
         retired_ready: Vec::new(),

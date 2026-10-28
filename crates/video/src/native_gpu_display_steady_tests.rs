@@ -89,6 +89,7 @@ fn session_with_compositor(extent: (u32, u32)) -> NativeResidentDisplaySession {
         geometry_generation: 0,
         reserved_geometry: None,
         history: None,
+        retiring_histories: Vec::new(),
         terminal_fault: None,
         delivery: crate::native_gpu_output::NativeDeliveryCounter::default(),
         retired_ready: Vec::new(),
@@ -1302,6 +1303,105 @@ fn native_gpu_output_display_loop_wrap_stays_resident_without_history_replay() {
             "{layers}L loop wraps materialized history: {evidence:?}"
         );
         assert_eq!(evidence.cpu_compositions, 0);
+        stop_and_reap(&mut ring.session, &mut ring.renderer);
+    }
+}
+
+/// C4R10 (live: a 66-85 ms tick at about one loop wrap a minute, over the
+/// 33.3 ms frame budget). A new playback pass of the same inputs, geometry and
+/// extents restarts only the history and the predecessor: the geometry-scoped
+/// pools (ISF stack resources, composition outputs, snapshot readbacks) stay,
+/// so the wrap tick does not reallocate them, and the retired pass's history
+/// is released one entry per input per tick instead of all at once. The pass
+/// itself and the resident path are unchanged (the D1b test above).
+#[test]
+fn native_gpu_output_display_loop_wrap_new_pass_keeps_the_geometry_pools() {
+    const LOOP_MS: u64 = 1_200;
+    const STEP_MS: u64 = 85;
+    const TICKS: u64 = 150;
+    for layers in 1..=3 {
+        let mut ring = RingFixture::new(layers, EXTENT);
+        ring.renderer.frame_provider.pts_grid = Some(33);
+        let mut pool_epoch = None;
+        let mut previous_pass = None;
+        let mut new_passes = 0;
+        let mut ticks_since_pass = usize::MAX / 2;
+        for tick in 0..TICKS {
+            let position = tick * STEP_MS % LOOP_MS;
+            for layer in &mut ring.snapshot.layers {
+                layer.state.position_ms = position;
+            }
+            let frame = prepare_with(
+                &mut ring.session,
+                &mut ring.renderer,
+                &ring.snapshot,
+                EXTENT,
+                &Permit,
+            )
+            .unwrap_or_else(|error| panic!("{layers}L tick {tick} at {position}: {error}"));
+            assert!(
+                matches!(path_of(frame), Path::Resident | Path::InFlight),
+                "{layers}L tick {tick} left the resident path"
+            );
+            let Some(ResidentHistoryState::Active(active)) = ring.session.history.as_ref() else {
+                panic!("{layers}L resident history absent")
+            };
+            let pass = active.session.history(0).unwrap().scope().queue_epoch;
+            let epoch = ring.session.owner.context().resource_pool_epoch();
+            // A retired pass drains one entry per input per tick, and the old
+            // and the new pass together never exceed the history capacity.
+            let retiring = ring
+                .session
+                .retiring_histories
+                .first()
+                .map_or(0, |history| history.metadata().len());
+            let live = active.session.history(0).unwrap().metadata().len();
+            assert!(
+                retiring + live <= crate::frame_history_policy::NATIVE_HISTORY_CAPACITY,
+                "{layers}L tick {tick}: {retiring} retiring + {live} live entries"
+            );
+            if previous_pass.is_some_and(|previous| previous != pass) {
+                new_passes += 1;
+                ticks_since_pass = 0;
+                assert!(
+                    !ring.session.retiring_histories.is_empty(),
+                    "{layers}L tick {tick}: the old pass is released over the next ticks"
+                );
+                assert_eq!(
+                    Some(epoch),
+                    pool_epoch,
+                    "{layers}L tick {tick}: the new pass released the geometry pools"
+                );
+                assert!(
+                    ring.session.owner.pooled_resource_count() > 0,
+                    "{layers}L tick {tick}: pooled ISF resources were dropped"
+                );
+            } else {
+                ticks_since_pass += 1;
+            }
+            if ticks_since_pass >= crate::frame_history_policy::NATIVE_HISTORY_CAPACITY {
+                assert!(
+                    ring.session.retiring_histories.is_empty(),
+                    "{layers}L tick {tick}: the retired pass was not released"
+                );
+            }
+            pool_epoch = Some(epoch);
+            previous_pass = Some(pass);
+        }
+        assert!(
+            new_passes >= 1,
+            "{layers}L: no new playback pass was exercised"
+        );
+        let evidence = ring.session.path_evidence();
+        assert_eq!(
+            (
+                evidence.historical_replays,
+                evidence.layer_readbacks,
+                evidence.cpu_compositions
+            ),
+            (0, 0, 0),
+            "{evidence:?}"
+        );
         stop_and_reap(&mut ring.session, &mut ring.renderer);
     }
 }

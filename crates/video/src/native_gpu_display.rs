@@ -156,6 +156,13 @@ pub struct NativeResidentDisplaySession {
     geometry_generation: u64,
     reserved_geometry: Option<(u32, u32, u64)>,
     history: Option<ResidentHistoryState>,
+    /// Histories of a retired playback pass (a loop wrap's new pass). Their
+    /// GPU residents dropped when the pass retired; their host-side entries
+    /// (recipes, CPU backings and host charges) drop one per input per tick.
+    /// The new pass adds at most one entry per input per tick, so an input
+    /// never holds more than its history capacity across both. Cleared before
+    /// Stop retires the owner and before a re-arm.
+    retiring_histories: Vec<crate::native_gpu_history::adapter::NativeGpuHistory>,
     terminal_fault: Option<String>,
     delivery: super::NativeDeliveryCounter,
     retired_ready: Vec<
@@ -277,6 +284,7 @@ impl NativeResidentDisplaySession {
             geometry_generation: 0,
             reserved_geometry: None,
             history: None,
+            retiring_histories: Vec::new(),
             terminal_fault: None,
             delivery: super::NativeDeliveryCounter::default(),
             retired_ready: Vec::new(),
@@ -1372,6 +1380,7 @@ impl NativeResidentDisplaySession {
                 "shared native history must complete its CPU handover before re-arm".into(),
             );
         }
+        self.retiring_histories.clear();
         if !self.reset_ring_for_rearm() {
             return Err("shared native snapshot ring must retire before re-arm".into());
         }
@@ -1489,6 +1498,7 @@ impl NativeResidentDisplaySession {
         self.retire_ring_for_stop();
         self.recovered_history = None;
         self.history = None;
+        self.retiring_histories.clear();
         self.history_host = None;
         self.history_configuration = None;
         self.input_bindings.clear();

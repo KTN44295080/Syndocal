@@ -564,6 +564,27 @@ impl<R, T: HistoryResident, C> NativeHistory<R, T, C> {
     pub(crate) fn metadata(&self) -> Vec<HistoryMeta> {
         self.entries.iter().map(Entry::meta).collect()
     }
+    /// Drop the oldest entry with its backing, host charges and resident:
+    /// exactly what dropping the whole history releases, one entry at a time.
+    /// Returns the entries left. A retired playback pass of a live output is
+    /// released this way over the following ticks, because dropping all of
+    /// it at once (8 entries per layer, 16 MiB each at 2560x1600) took 24-25
+    /// ms of one render tick (C4R10 live probe).
+    /// Drop every GPU resident now; the CPU backings and recipes stay. A
+    /// retired pass releases its GPU textures at once (its residents leave
+    /// the G ledger exactly when the whole history would have dropped) and
+    /// only its host-side entries over the following ticks.
+    pub(crate) fn release_residents(&mut self) {
+        for entry in &mut self.entries {
+            entry.resident = None;
+        }
+    }
+    pub(crate) fn release_oldest_entry(&mut self) -> usize {
+        if !self.entries.is_empty() {
+            drop(self.entries.remove(0));
+        }
+        self.entries.len()
+    }
     #[cfg(test)]
     pub(crate) fn resident_count(&self) -> usize {
         self.entries.iter().filter(|e| e.resident.is_some()).count()

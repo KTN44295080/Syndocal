@@ -37,6 +37,17 @@ use crate::native_gpu_output::OutputRejection;
 /// composition writes the other.
 const RING_READBACKS: usize = 2;
 const RING_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+/// Wait between two non-blocking GPU completion polls (stages A/B and the
+/// synchronous completion). `park_timeout` rounds up to the process timer
+/// resolution, which Windows does not keep at 1 ms for a throttled or occluded
+/// window (C4R10 live probe: one 1 ms park took 5-17 ms, p50 5.5 ms, and made
+/// 241 of 254 resident ticks over 20 ms). `sleep` uses a high-resolution
+/// waitable timer, so a poll waits what it asks for.
+pub(super) const GPU_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_micros(250);
+
+pub(super) fn wait_between_gpu_polls() {
+    std::thread::sleep(GPU_POLL_INTERVAL);
+}
 
 #[derive(Default)]
 pub(super) struct ResidentSnapshotRing {
@@ -160,7 +171,7 @@ impl NativeResidentDisplaySession {
                     let retirement = pending.retire(&mut self.owner, OutputRejection::Fault(fault));
                     return self.reject_ring_retirement(retirement);
                 }
-                std::thread::park_timeout(std::time::Duration::from_millis(1));
+                wait_between_gpu_polls();
             }
             first = false;
             let Some(runtime) = renderer
@@ -286,7 +297,7 @@ impl NativeResidentDisplaySession {
                     let retirement = pending.retire(&mut self.owner, OutputRejection::Fault(fault));
                     return self.reject_ring_retirement(retirement);
                 }
-                std::thread::park_timeout(std::time::Duration::from_millis(1));
+                wait_between_gpu_polls();
             }
             first = false;
             let Some(runtime) = renderer
@@ -495,5 +506,33 @@ pub(super) fn in_flight_display_frame(
         pts_ms: request.pts_ms,
         output_mapping: request.mapping.clone(),
         pipelined: false,
+    }
+}
+
+#[cfg(test)]
+mod poll_wait_tests {
+    use super::{wait_between_gpu_polls, GPU_POLL_INTERVAL};
+    use std::time::{Duration, Instant};
+
+    /// C4R10: a GPU completion poll wait must last about what it asks for. The
+    /// former 1 ms `park_timeout` rounded up to the process timer resolution
+    /// (15.6 ms by default on Windows when nothing raised it), which made the
+    /// stage A/B polls of a live resident Display take 5-17 ms per wait.
+    #[test]
+    fn native_display_gpu_poll_wait_is_not_rounded_to_the_timer_resolution() {
+        let mut waits = (0..40)
+            .map(|_| {
+                let started = Instant::now();
+                wait_between_gpu_polls();
+                started.elapsed()
+            })
+            .collect::<Vec<_>>();
+        waits.sort_unstable();
+        assert!(waits[0] >= GPU_POLL_INTERVAL, "{:?}", waits[0]);
+        let median = waits[waits.len() / 2];
+        assert!(
+            median < Duration::from_millis(3),
+            "median poll wait {median:?}"
+        );
     }
 }

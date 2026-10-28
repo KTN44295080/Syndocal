@@ -698,6 +698,7 @@ impl NativeResidentDisplaySession {
         // Snapshot ring stage A: the previous tick's output drains and commits
         // its history before this tick plans, quotes or hands history over.
         self.resolve_ring_submitted(renderer, snapshot, committed)?;
+        self.release_retiring_history_entries();
         // Leaving Follow releases its complete cached CPU owner before any
         // ordinary frame admission, including an ordinary preparation failure.
         self.follow_last_valid = None;
@@ -924,7 +925,23 @@ impl NativeResidentDisplaySession {
             && self.history.is_some()
         {
             // The predecessor belongs to the old history session/geometry.
-            self.leave_resident_tick();
+            let new_pass =
+                stale_pass && self.history_configuration.as_ref() == Some(&configuration);
+            if new_pass {
+                // A new playback pass of the same inputs, geometry and
+                // extents (a loop wrap) stays on the resident route: only the
+                // predecessor and the history restart. The geometry-scoped
+                // pools (ISF stack resources, composition outputs, snapshot
+                // readbacks) stay valid; releasing them made this tick
+                // reallocate all of them (C4R10 live probe: 66-85 ms loop-wrap
+                // ticks about once a minute, over the 33.3 ms frame budget).
+                // The next tick still presents synchronously, as after any
+                // ring discard.
+                self.discard_ring_resolved();
+                self.ring.disarm();
+            } else {
+                self.leave_resident_tick();
+            }
             if self.history_configuration.as_ref().is_some_and(|old| {
                 old.project_epoch == configuration.project_epoch
                     && (old.geometry_generation != configuration.geometry_generation
@@ -939,6 +956,15 @@ impl NativeResidentDisplaySession {
                 // layer into the managed CPU envelope (12P at 2560x1600) only
                 // to keep the next ticks off the resident path until they age
                 // out of the queue.
+                if new_pass {
+                    if let Some(ResidentHistoryState::Active(active)) = self.history.take() {
+                        for mut history in active.session.into_histories() {
+                            history.release_residents();
+                            self.retiring_histories.push(history);
+                        }
+                        self.release_retiring_history_entries();
+                    }
+                }
                 self.history = None;
                 self.history_host = None;
                 if let Some(old) = self.history_configuration.as_ref() {
@@ -1266,6 +1292,12 @@ impl NativeResidentDisplaySession {
     /// A tick whose output is not the resident route: the resolved predecessor
     /// is discarded (zero presents) and the ring re-arms only after the next
     /// synchronous resident success.
+    /// One entry of every retiring history per tick (see `retiring_histories`).
+    fn release_retiring_history_entries(&mut self) {
+        self.retiring_histories
+            .retain_mut(|history| history.release_oldest_entry() > 0);
+    }
+
     fn leave_resident_tick(&mut self) {
         self.discard_ring_resolved();
         self.ring.release_idle();
@@ -1720,7 +1752,7 @@ impl NativeResidentDisplaySession {
                             pending.retire(&mut self.owner, OutputRejection::Fault(fault));
                         return Ok(ResidentOutputCompletion::Retiring(retirement));
                     }
-                    std::thread::park_timeout(std::time::Duration::from_millis(1));
+                    super::ring::wait_between_gpu_polls();
                     let runtime = renderer
                         .isf_runtime
                         .as_mut()
