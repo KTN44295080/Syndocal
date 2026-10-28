@@ -290,6 +290,9 @@ export function createControlInputController(options: ControlInputControllerOpti
     };
     options.setMidiMappings((current) => [...current, mapping]);
     options.setMessage(`Added MIDI mapping ${mapping.message} ${mapping.number}`);
+    // A manual mapping is usable at once: with an input selected, Add also
+    // (re)connects it, exactly as the separate connect action would.
+    if (options.selectedMidiInput() !== null) return connectMidiControl();
   };
 
   const removeMidiMapping = (index: number) => options.setMidiMappings((current) => current.filter((_, candidate) => candidate !== index));

@@ -330,3 +330,25 @@ try {
   rejectedFeedback.dispose();
 } finally { globalThis.window = savedWindow; }
 console.log("PASS: reactive MIDI feedback waits for Audio mapping ACK, uses current mappings, and rejects superseded/project-crossing/untrusted continuations");
+
+// Manual mapping: Add connects at once when an input is selected; without one it only adds.
+const manualAccessors={midiMapAction:()=>'LightingMaster',selectedFixture:()=>null,selectedMidiCueId:()=>null,selectedMidiEffectId:()=>null,
+ selectedMidiNodeGraphId:()=>null,selectedMidiLayerId:()=>null,selectedMidiVideoOutputId:()=>null,selectedMidiVideoOutputMappingField:()=>null,
+ selectedMidiVideoOutputMappingPresetLabel:()=>'',midiMapAttribute:()=>'',selectedEffectAttribute:()=>'',midiMapGroupId:()=>'',midiMapChannel:()=>0,
+ midiMapMessage:()=>'ControlChange',midiMapNumber:()=>22,midiMapVideoParam:()=>'Opacity',midiMapCuePointIndex:()=>0,midiMapDurationMs:()=>0,
+ midiMapLow:()=>0,midiMapHigh:()=>1,midiClearFixtureFlagKind:()=>'all'};
+{
+  const added=harness();Object.assign(added.options,manualAccessors);added.options.midiControlConnected=()=>false;
+  const controller=createControlInputController(added.options);
+  await controller.addMidiMapping();
+  assert.equal(added.mappings.at(-1).number,22,'manual Add appends the mapping');
+  const connect=added.calls.filter(c=>c.command==='connect_midi_control');
+  assert.equal(connect.length,1,'manual Add connects the selected input without a second action');
+  assert.deepEqual(connect[0].args.mappings,added.mappings,'the connection carries the new mapping set');
+  assert.ok(added.messages.some(m=>m.startsWith('MIDI control connected with 2 mapping')),'operator sees the connected result');
+  const noInput=harness();Object.assign(noInput.options,manualAccessors,{selectedMidiInput:()=>null});
+  await createControlInputController(noInput.options).addMidiMapping();
+  assert.equal(noInput.mappings.length,2,'without an input Add still records the mapping');
+  assert.equal(noInput.calls.some(c=>c.command==='connect_midi_control'),false,'without an input Add never opens a device');
+}
+console.log("PASS: manual MIDI mapping Add auto-connects the selected input and stays offline without one");
