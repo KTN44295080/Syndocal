@@ -9,9 +9,9 @@ export function TopbarTools(props: { active: boolean; children: JSX.Element }) {
   };
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "Escape" || !root.open || event.defaultPrevented || document.querySelector("dialog[open]")) return;
-    // BPM owns Escape while editing. Closing Tools first would blur the input
-    // and commit the draft instead of letting the input cancel it.
-    if (event.target instanceof HTMLInputElement && event.target.matches(".topbarBpmInput") && root.contains(event.target)) return;
+    // BPM owns Escape while editing, including the header BPM beside an open
+    // Tools menu. Closing Tools first would blur and commit the draft.
+    if (event.target instanceof HTMLInputElement && event.target.matches(".topbarBpmInput")) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     close();

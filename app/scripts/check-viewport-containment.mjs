@@ -3425,8 +3425,8 @@ async function measureTimelinePaneExpansionState(client) {
       ':scope > .topbarProject > strong',
       ':scope > .topbarProject > span',
       ':scope > .status',
-      ':scope > .status > .topbarTools > .topbarToolsPopover > section > .pill',
-      // Output status moved into Tools; BPM now opens an editor, so neither
+      ':scope > .status > .topbarTools > .topbarToolsPopover > section:last-child > .pill',
+      // Output status (the last Tools section) moved into Tools; BPM now opens an editor, so neither
       // its root nor its descendants may initiate a window drag.
     ];
     const missingTopbarDragRegionSelectors = requiredTopbarDragRegionSelectors.filter((selector) => {
@@ -4362,8 +4362,10 @@ async function runLiveDeskHeaderViewport(client, viewport) {
     globalTopbarOwnsMidiOscAndDmxLearnWithoutShrinking:
       matrix.learnButtonCount === 3 &&
       JSON.stringify(matrix.learnButtonMetrics.map((metric) => metric.action)) === JSON.stringify(['midi', 'osc', 'dmx']) &&
-      matrix.learnButtonMetrics.every((metric) => metric.width === 32 && metric.height === 40 && metric.svgCount === 1) &&
-      matrix.learnClusterRect?.height === 40,
+      // Labelled Learn choices (2026-10-28) only grow: icon plus visible name, 40px high.
+      matrix.learnButtonMetrics.every((metric) => metric.width >= 32 && metric.height === 40 && metric.svgCount === 1
+        && /^(MIDI|OSC|DMX) (Learn|学習)$/.test(metric.text)) &&
+      matrix.learnClusterRect?.height >= 40,
     midiLearnArmsEveryVisibleMappingTarget:
       midiLearnOpened &&
       midiArmed.activeLearnMode === 'midi' &&

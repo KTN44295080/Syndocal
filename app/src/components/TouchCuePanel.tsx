@@ -1,34 +1,44 @@
-import { For, Show } from "solid-js";
+import { For, Show, onCleanup } from "solid-js";
 import type { CueSummary, EngineSnapshot } from "../types";
 import { cueIdentityCss } from "../identityColor";
-import { displayNumber } from "../numberDisplay";
+import { authoredCueLiveModifier } from "../cueLiveModifier";
 import { bankAuthorityIssueMessage, type FullBankAuthoritySnapshot } from "../bankAuthority";
+import { touchSceneActive, touchSceneBanks } from "../touchScenePanel";
+import "./TouchCuePanel.css";
 
 type MaybePromise = void | Promise<void>;
-
-export interface TouchCuePad {
-  slot: string;
-  index: number;
-  cue: CueSummary | null;
-}
 
 interface TouchCuePanelProps {
   bankAuthority: FullBankAuthoritySnapshot;
   snapshot: EngineSnapshot;
-  activeCue: CueSummary | null;
-  nextCue: CueSummary | null;
-  cuePads: TouchCuePad[];
-  cuePadRangeLabel: string;
-  cuePadBank: number;
-  cuePadBankCount: number;
-  onPreviousBank: () => void;
-  onNextBank: () => void;
   onTriggerCue: (cueId: number) => MaybePromise;
+  onReleaseCue: (cueId: number) => MaybePromise;
 }
 
+/**
+ * Control > Lighting Scene panel: every Scene grouped by Bank, scrolled inside
+ * the panel. Press fires; pressing an active Scene releases it; Flash Scenes
+ * are momentary, matching the Edit > Lighting Scene matrix.
+ */
 export function TouchCuePanel(props: TouchCuePanelProps) {
+  const heldFlashCues = new Set<number>();
+  const releaseFlash = (cueId: number) => {
+    if (!heldFlashCues.delete(cueId)) return;
+    // Safety-lowering half of an activation already issued; never gated.
+    void props.onReleaseCue(cueId);
+  };
+  const beginFlash = (cueId: number) => {
+    if (heldFlashCues.has(cueId)) return;
+    heldFlashCues.add(cueId);
+    void props.onTriggerCue(cueId);
+  };
+  onCleanup(() => {
+    for (const cueId of [...heldFlashCues]) releaseFlash(cueId);
+  });
+  const banks = () => touchSceneBanks(props.bankAuthority);
+
   return (
-    <section class="panel touchPanel touchCuePanel">
+    <section class="touchScenePanel" aria-label="Scenes" data-touch-scene-panel>
       <Show
         when={props.bankAuthority.issue === null}
         fallback={
@@ -37,73 +47,70 @@ export function TouchCuePanel(props: TouchCuePanelProps) {
           </p>
         }
       >
-      <div class="panelHeader">
-        <h2>Touch Cues</h2>
-        <Show when={props.activeCue} fallback={<span>Standby</span>}>
-          {(cue) => <span data-no-localize>{cue().label}</span>}
+        <Show when={banks().length > 0} fallback={<p class="empty">No scenes. Store one in Edit &gt; Lighting.</p>}>
+          <For each={banks()}>
+            {(entry) => (
+              <section class="touchSceneBank" aria-label={entry.bank.label} data-touch-scene-bank={entry.bank.id}>
+                <h3 data-no-localize>{entry.bank.label}</h3>
+                <div class="touchSceneButtons">
+                  <For each={entry.cues}>
+                    {(cue: CueSummary) => {
+                      const flash = () => authoredCueLiveModifier(cue).flash;
+                      const active = () => touchSceneActive(cue, props.snapshot);
+                      return (
+                        <button
+                          type="button"
+                          class="touchSceneButton"
+                          classList={{ active: active(), flash: flash() }}
+                          aria-pressed={active()}
+                          data-touch-scene={cue.id}
+                          title={cue.label}
+                          style={{
+                            "--identity": cueIdentityCss(
+                              cue.id,
+                              cue.color,
+                              "text",
+                              cue.group_id,
+                              cue.group_id ? props.snapshot.group_colors?.[cue.group_id] : null,
+                            ),
+                          }}
+                          onPointerDown={(event) => {
+                            if (!flash()) return;
+                            event.preventDefault();
+                            event.currentTarget.setPointerCapture(event.pointerId);
+                            beginFlash(cue.id);
+                          }}
+                          onPointerUp={() => releaseFlash(cue.id)}
+                          onPointerCancel={() => releaseFlash(cue.id)}
+                          onKeyDown={(event) => {
+                            if (!flash() || event.repeat || (event.key !== " " && event.key !== "Enter")) return;
+                            event.preventDefault();
+                            beginFlash(cue.id);
+                          }}
+                          onKeyUp={(event) => {
+                            if (!flash() || (event.key !== " " && event.key !== "Enter")) return;
+                            event.preventDefault();
+                            releaseFlash(cue.id);
+                          }}
+                          onClick={(event) => {
+                            if (flash()) {
+                              event.preventDefault();
+                              return;
+                            }
+                            void (active() ? props.onReleaseCue(cue.id) : props.onTriggerCue(cue.id));
+                          }}
+                        >
+                          <span data-no-localize>{cue.cue_number || cue.id}</span>
+                          <strong data-no-localize>{cue.label}</strong>
+                        </button>
+                      );
+                    }}
+                  </For>
+                </div>
+              </section>
+            )}
+          </For>
         </Show>
-      </div>
-      <div class="touchCueStatus">
-        <div>
-          <span>Active</span>
-          <Show when={props.activeCue} fallback={<strong>None</strong>}>
-            {(cue) => <strong data-no-localize>{cue().label}</strong>}
-          </Show>
-        </div>
-        <div>
-          <span>Next</span>
-          <Show when={props.nextCue} fallback={<strong>None</strong>}>
-            {(cue) => <strong data-no-localize>{cue().label}</strong>}
-          </Show>
-        </div>
-      </div>
-      <div class="liveCuePadHeader">
-        <h3>Cue Pads</h3>
-        <span>{props.cuePadRangeLabel}</span>
-        <button onClick={props.onPreviousBank} disabled={props.cuePadBank === 0}>Prev</button>
-        <button onClick={props.onNextBank} disabled={props.cuePadBank >= props.cuePadBankCount - 1}>Next</button>
-      </div>
-      <div class="touchCuePadGrid">
-        <For each={props.cuePads}>
-          {(pad) => (
-            <button
-              class={`liveCuePad ${pad.cue?.id === props.snapshot.active_cue_id ? "active" : ""} ${
-                pad.cue?.id === props.nextCue?.id ? "next" : ""
-              }`}
-              style={pad.cue ? {
-                "--identity": cueIdentityCss(
-                  pad.cue.id,
-                  pad.cue.color,
-                  "text",
-                  pad.cue.group_id,
-                  pad.cue.group_id ? props.snapshot.group_colors?.[pad.cue.group_id] : null,
-                ),
-              } : undefined}
-              disabled={!pad.cue}
-              onClick={() => {
-                if (pad.cue) void props.onTriggerCue(pad.cue.id);
-              }}
-            >
-              <span>{pad.slot}</span>
-              <Show when={pad.cue} fallback={<strong>Empty</strong>}>
-                {(cue) => <strong data-no-localize>{cue().label}</strong>}
-              </Show>
-              <small>{pad.cue ? `${displayNumber(pad.cue.fade_ms, 0)} ms` : "-"}</small>
-            </button>
-          )}
-        </For>
-      </div>
-      <Show when={props.snapshot.cues.length === 0}>
-        <p class="empty">No cues. Create one in Control &gt; Live with Store Cue.</p>
-      </Show>
-      <Show when={props.snapshot.active_fade}>
-        {(fade) => (
-          <div class="liveFadeMeter touchFadeMeter">
-            <span>{Math.round(fade().progress * 100)}%</span>
-            <progress max="1" value={fade().progress} />
-          </div>
-        )}
-      </Show>
       </Show>
     </section>
   );

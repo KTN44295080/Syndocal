@@ -122,7 +122,7 @@ const selectors = {
   inspect: `${root} [data-video-perform-inspect]`,
   clipOptions: `${root} [data-video-perform-clip-options]`,
   blackout: "[data-global-operator-action='video-blackout']",
-  // Shared-header contract (2026-10-22): tempo and sync are disclosed in Tools.
+  // Shared-header contract (2026-10-28): BPM/Tap sit in the header row; sync is disclosed in Tools.
   tap: ".topbarTempoCluster [data-topbar-tap]",
   bpm: ".topbarTempoCluster .topbarBpmControl",
   sync: ".topbarToolsPopover [data-topbar-sync]",
@@ -336,7 +336,7 @@ try {
       await writeFile(join(evidenceDir, `${label}-before.png`), Buffer.from((await cdp.capture( { format: "png", captureBeyondViewport: false, optimizeForSpeed: true }, 30_000)).data, "base64"));
       const inspect = (selector) => cdp.evaluate('('+inspectInPage+')('+JSON.stringify(selector)+')');
       const regions = ['matrix','transition','quick-fx','health','output'].map(name => root+' [data-video-perform-region="'+name+'"]');
-      const disclosedSelectors = [selectors.tap, selectors.bpm, selectors.sync, selectors.beats];
+      const disclosedSelectors = [selectors.sync, selectors.beats];
       const required = [...Object.values(selectors).filter(selector => !disclosedSelectors.includes(selector)), ...regions];
       const geometry = [];
       for (const selector of required) {
@@ -354,7 +354,8 @@ try {
       // Tools starts closed. Exercise its real keyboard disclosure before checking
       // tempo geometry; closed <details> descendants can retain stale rectangles.
       assert.equal(await cdp.evaluate('document.querySelector(".topbarTools").open'), false, label+': Tools starts closed');
-      assert.equal((await inspect(selectors.tap)).failure, 'hidden', label+': Tap is disclosed, not a hidden header target');
+      const headerTap = await inspect(selectors.tap);
+      assert.ok(headerTap.failure === null && headerTap.width >= 40 && headerTap.height >= 40, label+': Tap is a one-click 40px header target '+JSON.stringify(headerTap));
       assert.equal((await inspect('.topbarTools > summary')).failure, null, label+': Tools trigger is reachable');
       await cdp.evaluate('document.querySelector(".topbarTools > summary").focus()');
       await cdp.key('Enter', 'Enter', 13);
@@ -362,14 +363,13 @@ try {
       for (const selector of disclosedSelectors) {
         const measurement = await inspect(selector); geometry.push(measurement);
         assert.equal(measurement.failure, null, label+': disclosed '+JSON.stringify(measurement));
-        if (selector === selectors.tap) assert.ok(measurement.width >= 40 && measurement.height >= 40, label+': preserved 40px Tap target');
       }
-      let tapReached = false;
-      for (let attempt = 0; attempt < 40 && !tapReached; attempt++) {
-        await cdp.key('Tab', 'Tab', 9);
-        tapReached = await cdp.evaluate('document.activeElement?.matches("[data-topbar-tap]")');
-      }
-      assert.equal(tapReached, true, label+': disclosed Tap is reachable by Tab');
+      // Tap precedes the Tools trigger in the header's tab order.
+      await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Tab',code:'Tab',windowsVirtualKeyCode:9,modifiers:8});
+      await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Tab',code:'Tab',windowsVirtualKeyCode:9,modifiers:8});
+      const tapReached = await cdp.evaluate('document.activeElement?.matches("[data-topbar-tap]")');
+      assert.equal(tapReached, true, label+': header Tap is reachable by keyboard');
+      await cdp.evaluate('document.querySelector(".topbarTools > summary").focus()');
       // One tempo cluster: the Perform desk carries no duplicate tempo controls.
       const tempo = await cdp.evaluate('(()=>{const vis=(e)=>{const r=e.getBoundingClientRect();const s=getComputedStyle(e);return e.checkVisibility()&&r.width>0&&r.height>0&&s.visibility==="visible"&&s.display!=="none"};const count=(q)=>[...document.querySelectorAll(q)].filter(vis).length;const rect=(q)=>{const r=document.querySelector(q)?.getBoundingClientRect();return r&&{left:r.left,right:r.right,top:r.top,bottom:r.bottom}};const sync=document.querySelector("[data-topbar-sync]");const dots=[...(sync?.querySelectorAll(".topbarBeats i")??[])];const lit=dots.map((d,i)=>d.classList.contains("lit")?i:-1).filter(i=>i>=0);const top=document.querySelector(".topbar");const fits=(q)=>{const e=document.querySelector(q);if(!e)return false;const range=document.createRange();range.selectNodeContents(e);return range.getBoundingClientRect().width<=e.getBoundingClientRect().width+1&&e.scrollWidth<=e.clientWidth+1};return {tap:count("[data-topbar-tap]"),tapTargets:count("[data-control-map-target*=\\\"TapBpm\\\"]"),bpm:count(".topbarBpmControl"),bpmTargets:count("[data-control-map-target*=\\\"SetBpm\\\"]"),deskTempo:document.querySelectorAll("[data-video-perform-layout] [data-video-perform-tap], [data-video-perform-layout] [data-video-perform-region=tempo], [data-video-perform-layout] .videoPerformTempo, [data-video-perform-layout] input[aria-label*=BPM]").length,tapWords:[...document.querySelectorAll("button")].filter(b=>vis(b)&&/^(Tap|タップ)$/.test(b.textContent.trim())).length,dots:dots.length,lit,beat:Number(sync?.querySelector(".topbarBeats")?.dataset.topbarBeat),source:sync?.querySelector(".topbarSyncSource")?.textContent.trim(),status:sync?.querySelector(".topbarSyncStatus")?.textContent.trim(),title:sync?.title,sourceFits:fits("[data-topbar-sync] .topbarSyncSource"),statusFits:fits("[data-topbar-sync] .topbarSyncStatus")&&fits("[data-topbar-sync] .topbarSyncRow"),cluster:rect(".topbarTempoCluster"),state:rect(".topbarStateCluster"),windowControls:rect("[data-window-controls]"),topbarOverflow:top.scrollWidth-top.clientWidth,viewportWidth:innerWidth}})()');
       assert.deepEqual([tempo.tap, tempo.tapTargets, tempo.tapWords, tempo.bpm, tempo.bpmTargets, tempo.deskTempo], [1, 1, 1, 1, 1, 0], label+': exactly one Tap and one BPM control, none on the Perform desk '+JSON.stringify(tempo));

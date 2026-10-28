@@ -1,0 +1,117 @@
+/* Control > Lighting Scene panel. It occupies the measured last three Touch
+   grid columns (free on the Default Desk) and scrolls internally, so the
+   grid keeps its own tracks and no control or text is reduced. */
+.touchSurfaceToolbar.hasSceneToggle {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+
+.app .touchSceneToggle {
+  min-width: 96px;
+  min-height: 48px;
+  border-radius: 1px;
+  font-size: var(--fs-control);
+  font-weight: 400;
+}
+
+.app .touchSceneToggle[aria-pressed="true"] {
+  border-color: var(--ray-accent-strong);
+  background: #4b2d19;
+  color: var(--theme-text);
+}
+
+.touchSurfacePanel > .touchScenePanel {
+  position: absolute;
+  z-index: 3;
+  top: var(--touch-scene-top, 0px);
+  left: var(--touch-scene-left, 75%);
+  width: var(--touch-scene-width, 25%);
+  height: var(--touch-scene-height, 0px);
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  box-sizing: border-box;
+  border: 1px solid var(--theme-line);
+  background: var(--theme-bg);
+  padding: 4px;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.touchScenePanel > .empty {
+  margin: 0;
+  padding: 8px;
+  color: var(--theme-muted);
+  font-size: var(--fs-text);
+}
+
+.touchSceneBank {
+  display: grid;
+  gap: 4px;
+}
+
+.touchSceneBank > h3 {
+  position: sticky;
+  z-index: 1;
+  top: -4px;
+  margin: 0;
+  background: var(--theme-bg);
+  padding: 2px 4px;
+  overflow: hidden;
+  color: var(--theme-muted);
+  font-size: var(--fs-text);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.touchSceneButtons {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 4px;
+}
+
+.app .touchSceneButton {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 48px;
+  border-radius: 1px;
+  padding: 4px 8px 4px 10px;
+  font-size: var(--fs-control);
+  font-weight: 400;
+  text-align: left;
+}
+
+.touchSceneButton::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 4px;
+  background: var(--identity, transparent);
+  pointer-events: none;
+}
+
+.touchSceneButton > span {
+  color: var(--theme-dim);
+  font-size: var(--fs-text);
+}
+
+.touchSceneButton > strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--identity, inherit);
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app .touchSceneButton.active {
+  border-color: #74d99f;
+  background: color-mix(in srgb, var(--theme-ok) 16%, var(--theme-raised));
+}

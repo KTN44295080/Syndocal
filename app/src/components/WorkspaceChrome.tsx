@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { createEffect, createSignal, For, onCleanup, Show, type JSX } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
 import {
   projectRecoverySourceLabel,
   projectRecoveryTimeLabel,
@@ -27,6 +27,7 @@ import { TopbarBpmControl } from "./TopbarBpmControl";
 import { TopbarTempoSync } from "./TopbarTempoSync";
 import "./WorkspaceChrome.css";
 import { TopbarTools } from "./TopbarTools";
+import { nextTopbarTempoPlacement, type TopbarTempoPlacement } from "../topbarTempoPlacement";
 import {
   controlMappingTargetData,
   type ControlLearnMode,
@@ -248,6 +249,49 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
       </button>
     </div>
   );
+  // One BPM/Tap instance (edit state survives resizing) is attached to the
+  // header row, or to Tools only when the row cannot hold it at full size.
+  const tempoNode = tempoControls() as HTMLElement;
+  let headerElement!: HTMLElement;
+  let projectElement!: HTMLDivElement;
+  let headerTempoHost!: HTMLSpanElement;
+  let toolsTempoHost!: HTMLSpanElement;
+  const [tempoPlacement, setTempoPlacement] = createSignal<TopbarTempoPlacement>("header");
+  let tempoFootprint = 0;
+  createEffect(() => {
+    const host = tempoPlacement() === "header" ? headerTempoHost : toolsTempoHost;
+    if (host && tempoNode.parentNode !== host) host.append(tempoNode);
+  });
+  const measureTempoPlacement = () => {
+    // Never move the BPM input while it is being edited.
+    if (document.activeElement instanceof Element && document.activeElement.matches(".topbarBpmInput")) return;
+    const placement = tempoPlacement();
+    if (placement === "header") {
+      const next = tempoNode.nextElementSibling ?? headerTempoHost.nextElementSibling;
+      const left = tempoNode.getBoundingClientRect().left;
+      tempoFootprint = (next?.getBoundingClientRect().left ?? tempoNode.getBoundingClientRect().right) - left;
+    }
+    const nextPlacement = nextTopbarTempoPlacement({
+      placement,
+      // The grid can grow past its container instead of scrolling itself.
+      headerOverflows: headerElement.scrollWidth > headerElement.clientWidth + 1
+        || headerElement.offsetWidth > (headerElement.parentElement?.clientWidth ?? Infinity) + 1,
+      freeWidth: projectElement.getBoundingClientRect().width,
+      tempoFootprint,
+    });
+    if (nextPlacement !== placement) setTempoPlacement(nextPlacement);
+  };
+  onMount(() => {
+    const observer = new ResizeObserver(measureTempoPlacement);
+    // Any row member can change the free width (lock state, names, locale).
+    for (const element of [headerElement, ...headerElement.children]) observer.observe(element);
+    document.addEventListener("focusout", measureTempoPlacement);
+    measureTempoPlacement();
+    onCleanup(() => {
+      observer.disconnect();
+      document.removeEventListener("focusout", measureTempoPlacement);
+    });
+  });
 
   const closeProjectMenu = () => setProjectMenuOpen(false);
 
@@ -304,7 +348,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
 
   return (
     <div class="workspaceChrome">
-      <header class="topbar topbarOrganized" data-tauri-drag-region>
+      <header class="topbar topbarOrganized" data-tauri-drag-region ref={headerElement}>
         <div class="topbarLeft" data-tauri-drag-region ref={projectMenuRoot}>
           <button
             class={projectMenuOpen() ? "appMenuButton active" : "appMenuButton"}
@@ -631,6 +675,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
         </div>
 
         <div
+          ref={projectElement}
           class={props.projectDirty ? "topbarProject dirty" : "topbarProject"}
           title={props.currentProjectPath ?? "Unsaved project"}
           data-tauri-drag-region
@@ -712,9 +757,10 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             </button>
 
           </div>
+          <span class="topbarTempoHost" ref={headerTempoHost} data-topbar-tempo-placement="header" />
           <TopbarTools active={Boolean(props.controlLearnMode)}>
             <section><strong>Tempo and clock</strong>
-              {tempoControls()}
+              <span class="topbarTempoHost" ref={toolsTempoHost} data-topbar-tempo-placement="tools" />
               <TopbarTempoSync clock={props.clock} uiLocale={props.uiLocale} />
               <span class={`pill topbarShowClockStatus ${showClockShell().tone}`}
                 data-show-clock-shell-state={showClockShell().state}
@@ -789,6 +835,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               <svg viewBox="0 0 20 20" aria-hidden="true">
                 <path d="M3 5h14v10H3zM6 5v6M10 5v6M14 5v6M5 11v4M9 11v4M13 11v4" />
               </svg>
+              <span>MIDI Learn</span>
             </button>
             <button
               type="button"
@@ -806,6 +853,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
                 <circle cx="15" cy="15" r="2" />
                 <path d="M7 9l6-3M7 11l6 3" />
               </svg>
+              <span>OSC Learn</span>
             </button>
             <button
               type="button"
@@ -820,6 +868,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               <svg viewBox="0 0 20 20" aria-hidden="true">
                 <path d="M3 4h14v12H3zM6 7h2v6H6zM9 9h2v4H9zM12 6h2v7h-2z" />
               </svg>
+              <span>DMX Learn</span>
             </button>
           </div>
 

@@ -29,7 +29,6 @@ import { SetupMappingWorkspace } from "./SetupMappingWorkspace";
 import { SetupVideoPanel } from "./SetupVideoPanel";
 import { StagePreview2D } from "./StagePreview2D";
 import { TouchColorPalettePanel } from "./TouchColorPalettePanel";
-import { TouchCuePanel } from "./TouchCuePanel";
 import { TouchDimmerControlPanel } from "./TouchDimmerControlPanel";
 import { TouchFixturePanel } from "./TouchFixturePanel";
 import { TouchGenericAttributeGrid } from "./TouchGenericAttributeGrid";
@@ -291,12 +290,6 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
     setTouchBindingValue,
     setTouchBindingColor,
     setTouchBindingXy,
-    liveCuePads,
-    cuePadRangeLabel,
-    cuePadBank,
-    cuePadBankCount,
-    setCuePadFollowActive,
-    setCuePadBank,
     visualizerFixtures,
     visualizerStageObjects2d,
     stageOrigin2d,
@@ -1377,25 +1370,6 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
           onReleaseCue={releaseCueById}
           onSetCueLiveModifier={setCueLiveModifierLive}
           onClearCueLiveModifier={clearCueLiveModifierLive}
-        />
-        <TouchCuePanel
-          bankAuthority={bankAuthority()}
-          snapshot={snapshot()}
-          activeCue={activeCue()}
-          nextCue={nextCue()}
-          cuePads={liveCuePads()}
-          cuePadRangeLabel={cuePadRangeLabel()}
-          cuePadBank={cuePadBank()}
-          cuePadBankCount={cuePadBankCount()}
-          onPreviousBank={() => {
-            setCuePadFollowActive(false);
-            setCuePadBank(Math.max(0, cuePadBank() - 1));
-          }}
-          onNextBank={() => {
-            setCuePadFollowActive(false);
-            setCuePadBank(Math.min(cuePadBankCount() - 1, cuePadBank() + 1));
-          }}
-          onTriggerCue={triggerCue}
         />
         <section class="panel touchPanel touchStagePanel">
           <div class="panelHeader">

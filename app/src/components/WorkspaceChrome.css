@@ -1,5 +1,6 @@
 /* Navigation and show controls share one row at every supported width.
-   Tools owns the tempo controls and clock details in one stable location. */
+   BPM and Tap stay in that row; Tools owns tempo sync and clock details.
+   Narrow windows make room by eliding, then dropping, the project name. */
 .workspaceChrome:has(> .topbarOrganized) { overflow: visible; }
 .topbar.topbarOrganized {
   grid-template-areas: "navigation project controls window";
@@ -18,6 +19,19 @@
 .topbarOrganized > .status { overflow: visible; }
 .topbarOrganized > .topbarProject { justify-content: flex-start; }
 .topbarOrganized > .status { width: auto; flex-wrap: nowrap; gap: 8px; }
+.topbarTempoHost { display: contents; }
+/* Learn choices carry their names next to the icons (sizes unchanged or larger). */
+.topbarToolsPopover .topbarLearnCluster { flex-wrap: wrap; height: auto; gap: 4px; }
+.topbarOrganized .status .topbarLearnCluster > .topbarLearnButton {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+.topbarLearnButton > svg { flex: 0 0 auto; }
 .topbarOrganized .topbarTempoCluster {
   display: flex;
   flex: 0 0 auto;
@@ -102,6 +116,13 @@
 .topbarOrganized .topbarProject > span { overflow: hidden; text-overflow: ellipsis; }
 
 .topbarOrganized > .topbarProject > span { display: block; }
+.topbarOrganized > .topbarProject { container: topbar-project / inline-size; }
+@container topbar-project (max-width: 150px) {
+  .topbarOrganized > .topbarProject > span { display: none; }
+}
+@container topbar-project (max-width: 56px) {
+  .topbarOrganized > .topbarProject > strong { display: none; }
+}
 .workspaceChrome > .controlLearnPrompt {
   position: static;
   justify-self: end;

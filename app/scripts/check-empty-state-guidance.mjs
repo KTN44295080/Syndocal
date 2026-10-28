@@ -21,7 +21,7 @@ const files = new Map(
 );
 
 const expectedGuidance = [
-  ["../src/components/TouchCuePanel.tsx", "No cues. Create one in Control &gt; Live with Store Cue."],
+  ["../src/components/TouchCuePanel.tsx", "No scenes. Store one in Edit &gt; Lighting."],
   ["../src/components/CueManagementPanel.tsx", "No cues. Choose a scope, then Store Cue."],
   ["../src/components/DmxPatchMapPanel.tsx", "Use Setup &gt; Patch to assign one."],
   ["../src/components/MappingStageObjectPanel.tsx", "Select a stage object on the map, or open object tools to create one."],

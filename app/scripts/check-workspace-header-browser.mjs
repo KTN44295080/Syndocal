@@ -132,7 +132,7 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     });
     const expected=['[data-workspace-option="setup"]','[data-workspace-option="control"]','[data-workspace-option="touch"]',
       '[data-global-operator-action="back"]','[data-global-operator-action="go"]','[data-global-operator-action="dmx-blackout"]',
-      '[data-global-operator-action="video-blackout"]','[data-global-operator-action="all-blackout"]','.topbarTools > summary',
+      '[data-global-operator-action="video-blackout"]','[data-global-operator-action="all-blackout"]','.topbarBpmValue','[data-topbar-tap]','.topbarTools > summary',
       '[data-window-control="minimize"]','[data-window-control="maximize"]','[data-window-control="close"]'];
     const tempo=[...header.querySelectorAll('[data-topbar-tap]')];
     const tempoDisclosed=Boolean(tempo[0]?.closest('.topbarToolsPopover'));
@@ -141,30 +141,41 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     const source=header.querySelector('.topbarSyncSource').getBoundingClientRect(),sync=header.querySelector('.topbarSyncRow').getBoundingClientRect();
     const headerStyle=getComputedStyle(header);
     const rowBoxExtras=['paddingTop','paddingBottom','borderTopWidth','borderBottomWidth'].reduce((sum,key)=>sum+parseFloat(headerStyle[key]),0);
-    return {bounds,items,overlaps,text,missing,sizes,tempoDisclosed,tempoCount:tempo.length,bpmCount:header.querySelectorAll('.topbarBpmValue').length,tempoRowsSeparate:source.bottom<=sync.top+1,
+    const bpmValue=header.querySelector('.topbarBpmValue');
+    const bpmReadable=Boolean(bpmValue)&&visible(bpmValue)&&bpmValue.scrollWidth<=bpmValue.clientWidth+1&&/^[0-9]+$/.test(bpmValue.textContent.trim());
+    const projectName=header.querySelector('.topbarProject > span');
+    return {bounds,items,overlaps,text,missing,sizes,tempoDisclosed,bpmReadable,projectNameVisible:Boolean(projectName)&&visible(projectName),tempoCount:tempo.length,bpmCount:header.querySelectorAll('.topbarBpmValue').length,tempoRowsSeparate:source.bottom<=sync.top+1,
       contained:items.every(r=>r.x>=bounds.x-1&&r.right<=bounds.right+1&&r.y>=bounds.y-1&&r.bottom<=bounds.bottom+1),
-      horizontalOverflow:header.scrollWidth>header.clientWidth+1,nav:rect(nav),status:rect(header.querySelector('.status')),
+      horizontalOverflow:header.scrollWidth>header.clientWidth+1||bounds.right>innerWidth+1,nav:rect(nav),status:rect(header.querySelector('.status')),
       windows:rect(header.querySelector('.windowControls')),project:rect(header.querySelector('.topbarProject')),
       rows:headerStyle.gridTemplateRows.split(' ').map(parseFloat),rowGap:parseFloat(headerStyle.rowGap),rowBoxExtras,
       controlSelected:header.querySelector('[data-workspace-option="touch"]').getAttribute('aria-pressed')==='true'};
   });
-  const assertHeader = (geometry, width, state, scale = 1) => {
+  // BPM/Tap move into Tools only when the row cannot hold them at full size
+  // after the project name is gone (locked header, 110% scale, 960px).
+  const assertHeader = (geometry, width, state, scale = 1, allowTempoDisclosure = false) => {
     const label=`${width}px ${state}`;
-    assert.deepEqual(geometry.missing,[],`${label}: required controls remain visible`);
+    const disclosed=allowTempoDisclosure&&geometry.tempoDisclosed;
+    if(disclosed) assert.equal(geometry.projectNameVisible,false,`${label}: tempo is disclosed only after the project name was dropped`);
+    assert.deepEqual(geometry.missing.filter(selector=>!(disclosed&&['.topbarBpmValue','[data-topbar-tap]'].includes(selector))),[],`${label}: required controls remain visible`);
     assert.deepEqual(geometry.overlaps,[],`${label}: overlapping header items`);
     assert.equal(geometry.contained,true,`${label}: containment: ${JSON.stringify(geometry)}`);
     assert.equal(geometry.horizontalOverflow,false,`${label}: horizontal overflow`);
     assert.ok(geometry.items.every(item=>item.reachable),`${label}: all visible buttons are hit-testable`);
-    assert.equal(geometry.tempoDisclosed,true,`${label}: tempo and clock share Tools at every width`);
+    if(!disclosed) {
+      assert.equal(geometry.tempoDisclosed,false,`${label}: BPM and Tap share the header row`);
+      assert.equal(geometry.bpmReadable,true,`${label}: current BPM is readable in the header`);
+    }
     assert.equal(geometry.tempoCount,1,`${label}: one Tap control`);
     assert.equal(geometry.bpmCount,1,`${label}: one BPM control`);
     assert.ok(geometry.items.every(item=>item.fontSize>=13),`${label}: text size is preserved`);
     for(const [selector,minimumWidth] of [['[data-global-operator-action="back"]',32],['[data-global-operator-action="go"]',48],
       ['[data-global-operator-action="dmx-blackout"]',42],['[data-global-operator-action="video-blackout"]',42],['[data-global-operator-action="all-blackout"]',42],
       ['[data-topbar-tap]',40],['[data-window-control="minimize"]',40],['[data-window-control="maximize"]',40],['[data-window-control="close"]',40]]) {
-      if(selector==='[data-topbar-tap]'&&geometry.tempoDisclosed) continue;
+      if(disclosed&&selector==='[data-topbar-tap]') continue;
       const size=geometry.sizes[selector];assert.ok(size.w>=minimumWidth&&size.h>=40,`${label}: authored button size ${selector}: ${JSON.stringify(size)}`);
     }
+    if(!disclosed) assert.ok(geometry.sizes['.topbarBpmValue'].h>=28,`${label}: BPM readout keeps its 28px edit target`);
     assert.equal(geometry.rows.length,1,`${label}: header always has one row`);
     if(scale===1) {
       assert.deepEqual(geometry.rows,[40],`${label}: one full-size 40px row`);
@@ -201,6 +212,7 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     await page.locator('.workspaceChrome').screenshot({path:resolve(artifactDir,`header-after-${width}.png`)});
     assertHeader(geometry,width,'normal');
     assert.equal(geometry.controlSelected, true, 'actual Control route is touch');
+    if(width>=1366) assert.equal(geometry.projectNameVisible,true,`${width}px: the project name is only dropped when the row needs its space`);
     await page.evaluate(()=>{window.proof.setSafety(true);window.proof.setDirty(true);window.proof.setLock('Partial');window.proof.setLabel('長いプロジェクト名'.repeat(12)+'.sdc *')});
     assert.equal(await page.locator('[data-global-operator-action="safety-blackout-release"]').count(),0, "no independent SAFE control");
     assert.equal(await page.locator('[data-global-operator-action="dmx-blackout"]').getAttribute("aria-pressed"),"true", "runtime blackout uses the DMX control");
@@ -230,7 +242,7 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     assert.equal(tools.contained,true,`${width}px Tools popup containment`);
     assert.equal(tools.buttonsReachable,true,`${width}px Tools hit testing: ${JSON.stringify(tools.buttons)}`);
     assert.ok(tools.texts.length===4&&tools.texts.every(text=>text.fits),`${width}px full clock/source labels in Tools`);
-    if(geometry.tempoDisclosed) assert.ok(tools.tap?.width>=40&&tools.tap?.height>=40,`${width}px disclosed Tap retains its size`);
+    assert.equal(tools.tap,null,`${width}px Tools carries no duplicate Tap`);
     if(width===1280) await page.screenshot({path:resolve(artifactDir,'header-tools-1280.png')});
     const learnStates=[];
     if(width===960||width===1280) {
@@ -262,10 +274,12 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     evidence.viewports.push({width,height,geometry,expanded,tools,learnStates});
   }
   for (const action of ['back','go']) await page.locator(`[data-global-operator-action="${action}"]`).click();
+  assert.equal(await page.locator('.topbarTools').getAttribute('open'),null,'Tools is closed before Tap');
+  await page.locator('[data-topbar-tap]').click();
+  assert.equal(await page.locator('.topbarTools').getAttribute('open'),null,'Tap is one click without opening Tools');
   await page.locator('.topbarTools > summary').click();
   for (const action of ['fade','timeline','clear-flags']) await page.locator(`[data-global-operator-action="${action}"]`).click();
-  await page.locator('[data-topbar-tap]').click();
-  assert.deepEqual(await page.evaluate(()=>window.proof.calls), ['back','go','fade','timeline','clear-flags','tap']);
+  assert.deepEqual(await page.evaluate(()=>window.proof.calls), ['back','go','tap','fade','timeline','clear-flags']);
   await page.locator('[data-global-operator-action="dmx-blackout"]').click();
   assert.equal(await page.locator('[data-global-operator-action="dmx-blackout"]').getAttribute('aria-pressed'),'true');
   await page.locator('[data-global-operator-action="all-blackout"]').click();
@@ -335,8 +349,9 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     assert.equal(await page.locator('html').getAttribute('lang'),'ja','actual localization is active');
     assertHeader(geometry,width,'Japanese, 110% UI scale',1.1);
     await page.evaluate(()=>{window.proof.setLock('Partial');window.proof.setLabel('長いプロジェクト名'.repeat(12)+'.sdc *')});
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
     const expanded=await measure();
-    assertHeader(expanded,width,'Japanese, 110% UI scale, locked',1.1);
+    assertHeader(expanded,width,'Japanese, 110% UI scale, locked',1.1,width===960);
     await openTools();
     const disclosed=await measure();
     assert.ok(disclosed.text.length===4&&disclosed.text.every(item=>item.visible&&item.fits),`${width}px Japanese clock details remain fully readable`);
@@ -346,7 +361,11 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     });
     assert.equal(tempoReachable,true,`${width}px Japanese 110% tempo remains reachable at scaled full size`);
     await page.locator('.topbarTools > summary').press('Escape');
-    evidence.presentation.push({width,locale:'ja',uiScale:110,geometry,expanded,disclosed,tempoReachable});
+    await page.evaluate(()=>{window.proof.setLock(null);window.proof.setLabel('Untitled.sdc')});
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    const restored=await measure();
+    assertHeader(restored,width,'Japanese, 110% UI scale, unlocked again',1.1);
+    evidence.presentation.push({width,locale:'ja',uiScale:110,geometry,expanded,disclosed,tempoReachable,restored});
   }
   assert.deepEqual(errors,[]);
   evidence.interactionsPassed=true;

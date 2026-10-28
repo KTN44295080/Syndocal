@@ -25,6 +25,14 @@ import {
   controlMappingTargetsForTouchBinding,
 } from "../controlMappingLearn";
 import { CueLiveModifierStrip } from "./CueLiveModifierStrip";
+import { TouchCuePanel } from "./TouchCuePanel";
+import {
+  readTouchScenePanelPreference,
+  touchScenePanelColumns,
+  touchScenePanelOpen,
+  writeTouchScenePanelPreference,
+  type TouchScenePanelPreference,
+} from "../touchScenePanel";
 import type { FullBankAuthoritySnapshot } from "../bankAuthority";
 
 type TouchSurfaceMode = "edit" | "live";
@@ -124,7 +132,11 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
   const [cueBindingPending, setCueBindingPending] = createSignal(false);
   const activeFlashCueByControl = new Map<number, number>();
   let gridElement: HTMLDivElement | undefined;
+  let surfaceElement: HTMLElement | undefined;
   let dragState: TouchDragState | null = null;
+  const [scenePanelPreference, setScenePanelPreference] =
+    createSignal<TouchScenePanelPreference>(readTouchScenePanelPreference());
+  const [scenePanelBox, setScenePanelBox] = createSignal<Record<string, string>>({});
 
   const releaseFlashControl = (controlId: number) => {
     const cueId = activeFlashCueByControl.get(controlId);
@@ -170,6 +182,47 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
   const selectedControl = createMemo(() =>
     activePage()?.controls.find((control) => control.id === selectedControlId()),
   );
+  const scenePanelOpen = () => mode() === "live" && touchScenePanelOpen(scenePanelPreference(), activePage());
+  const toggleScenePanel = () => {
+    const next = scenePanelOpen() ? "closed" : "open";
+    setScenePanelPreference(next);
+    writeTouchScenePanelPreference(next);
+  };
+  // The Scene panel covers exactly the last grid columns inside the grid's
+  // scrollport, so the grid keeps its tracks, scrollbar and hit targets.
+  const measureScenePanel = () => {
+    if (!gridElement || !surfaceElement) return;
+    const grid = gridElement.getBoundingClientRect();
+    const host = surfaceElement.getBoundingClientRect();
+    const style = getComputedStyle(gridElement);
+    const tracks = style.gridTemplateColumns.split(" ").map(parseFloat).filter(Number.isFinite);
+    const gap = parseFloat(style.columnGap) || 0;
+    const borderLeft = parseFloat(style.borderLeftWidth) || 0;
+    const borderTop = parseFloat(style.borderTopWidth) || 0;
+    const paddingLeft = parseFloat(style.paddingLeft) || 0;
+    const firstColumn = tracks.length - touchScenePanelColumns;
+    if (firstColumn <= 0) return;
+    // Rects include UI zoom; offsets and computed tracks are unzoomed CSS px.
+    const scale = host.width / Math.max(1, surfaceElement.offsetWidth);
+    const gridLeft = (grid.left - host.left) / scale + borderLeft;
+    const left = gridLeft + paddingLeft
+      + tracks.slice(0, firstColumn).reduce((sum, track) => sum + track, 0) + firstColumn * gap;
+    const right = gridLeft + gridElement.clientWidth;
+    setScenePanelBox({
+      "--touch-scene-top": `${(grid.top - host.top) / scale + borderTop}px`,
+      "--touch-scene-left": `${left}px`,
+      "--touch-scene-width": `${Math.max(0, right - left)}px`,
+      "--touch-scene-height": `${gridElement.clientHeight}px`,
+    });
+  };
+  createEffect(() => {
+    if (!scenePanelOpen() || !gridElement || !surfaceElement) return;
+    const observer = new ResizeObserver(measureScenePanel);
+    observer.observe(gridElement);
+    observer.observe(surfaceElement);
+    measureScenePanel();
+    onCleanup(() => observer.disconnect());
+  });
   const groupIds = createMemo(() => groupIdsFromSnapshot(props.snapshot));
 
   const persistSurface = (next: TouchSurfaceSummary) => {
@@ -642,8 +695,10 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
       data-workspace-pane="upper"
       data-touch-mode={mode()}
       data-touch-default-preset={props.surface?.pages.length ? "false" : "true"}
+      ref={surfaceElement}
+      style={scenePanelOpen() ? scenePanelBox() : undefined}
     >
-      <div class="touchSurfaceToolbar">
+      <div class="touchSurfaceToolbar" classList={{ hasSceneToggle: mode() === "live" }}>
         <div class="touchSurfaceModeToggle" aria-label="Touch surface mode">
           <button
             class={mode() === "edit" ? "active" : ""}
@@ -690,6 +745,18 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
           </button>
         </div>
         <span class="touchSurfaceStatus">{mode() === "edit" ? "Place, resize and assign" : "Direct control"}</span>
+        <Show when={mode() === "live"}>
+          <button
+            type="button"
+            class="touchSceneToggle"
+            aria-pressed={scenePanelOpen()}
+            data-touch-scene-toggle
+            title={scenePanelOpen() ? "Hide scene panel" : "Show scene panel"}
+            onClick={toggleScenePanel}
+          >
+            Scenes
+          </button>
+        </Show>
       </div>
 
       <Show when={mode() === "edit"}>
@@ -960,6 +1027,14 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
             onClearCueLiveModifier={props.onClearCueLiveModifier!}
           />
         )}
+      </Show>
+      <Show when={scenePanelOpen()}>
+        <TouchCuePanel
+          bankAuthority={props.bankAuthority}
+          snapshot={props.snapshot}
+          onTriggerCue={(cueId) => props.onTrigger({ kind: "cue", cue_id: cueId })}
+          onReleaseCue={(cueId) => props.onReleaseCue?.(cueId)}
+        />
       </Show>
     </section>
   );
