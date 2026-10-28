@@ -234,7 +234,7 @@ fn libav_decoder_drop_cancels_and_reaps_queued_session_without_stopping_worker_s
         completed_worker.store(true, Ordering::Release);
         let _ = sender.send(LibavLookaheadDone {
             session,
-            result: Err(VideoDecodeError::Cancelled),
+            result: Some(Err(VideoDecodeError::Cancelled)),
             hardware_frames: 0,
         });
         let _ = task_finished.send(());

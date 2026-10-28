@@ -188,18 +188,21 @@ fn changing_cadence_stays_exact_without_backward_seeks() {
 }
 
 #[test]
-fn sixty_hertz_requests_of_a_30_fps_clip_still_decode_one_frame_ahead() {
-    // At 60 Hz a 30 fps clip's run is the former single next frame: one
-    // look-ahead frame per source frame, never more. (A clip at the tick rate
-    // may hold its next two frames, since the window is 1.5 strides.)
+fn sixty_hertz_requests_of_a_30_fps_clip_decode_ahead_without_waste() {
+    // At 60 Hz a 30 fps clip's run keeps two source frames of slack (C4R7):
+    // the frames after the next decode while the next is served, so a frame
+    // is ready well before it is first requested. Every decoded frame is
+    // still used: at most the last run per owner is unused.
     let path = fixture("sixty", 2);
     let positions = (0..100).map(|tick| tick * 1_000 / 60).collect::<Vec<_>>();
     let (resident, legacy) = assert_cadence_matches_on_demand(&path, &positions, "60 Hz");
     for counters in [resident, legacy] {
         assert!(counters.lookahead_hits >= 3 * 45, "{counters:?}");
+        // Unused: at most the frames still queued ahead when the walk ends.
         assert!(
-            counters.lookahead_decodes <= counters.lookahead_hits + 3 * 2,
-            "60 Hz decodes one frame ahead, not runs: {counters:?}"
+            counters.lookahead_decodes
+                <= counters.lookahead_hits + 3 * LIBAV_LOOKAHEAD_MAX_FRAMES as u64,
+            "60 Hz decodes ahead without waste: {counters:?}"
         );
     }
 }
@@ -299,6 +302,176 @@ fn a_ready_frame_answers_while_the_rest_of_the_run_is_still_decoding() {
         decoder.session_diagnostics().resets,
         oracle.session_diagnostics().resets
     );
+}
+
+/// Loop playback: positions wrap to the clip start like a looping layer's
+/// playhead (C4R7, live 3-layer Display: every 12 s wrap decoded the clip
+/// start on the render tick, one layer after another, 70-90 ms).
+fn looping_positions(clip_ms: u64, stride_ms: u64, ticks: u64) -> Vec<u64> {
+    (0..ticks)
+        .map(|tick| (tick * stride_ms) % clip_ms)
+        .collect()
+}
+
+#[test]
+fn loop_wraps_are_answered_from_the_clip_start_decoded_ahead_exactly() {
+    // 2 s clip at 30 fps, key frames every 10 frames; 60 Hz-like and 85 ms
+    // strides over three loops. Each wrap equals on-demand decoding, keeps
+    // the same rewinds/opens (assert_cadence_matches_on_demand), and is a
+    // look-ahead hit rather than a decode on the caller.
+    let path = fixture("wrap", 2);
+    for (stride, ticks) in [(17_u64, 360_u64), (85, 75)] {
+        let positions = looping_positions(2_000, stride, ticks);
+        let wraps = positions
+            .windows(2)
+            .filter(|pair| pair[1] < pair[0])
+            .count() as u64;
+        assert!(wraps >= 2, "{stride} ms walks past at least two wraps");
+        let label = format!("{stride} ms loop");
+        assert_cadence_matches_on_demand(&path, &positions, &label);
+    }
+    // Wrap by wrap, one owner: the clip start is decoded ahead before the
+    // wrap and answers it without a decode on the caller.
+    let mut decoder = LibavFrameDecoder::software_for_tests();
+    let mut oracle = LibavFrameDecoder::software_for_tests();
+    let positions = looping_positions(2_000, 17, 360);
+    let mut answered = 0;
+    for pair in positions.windows(2) {
+        let wrapped = pair[1] < pair[0];
+        if wrapped {
+            // The run that read to the clip end has decoded the clip start.
+            decoder.join_lookaheads();
+            assert!(
+                decoder
+                    .sessions
+                    .iter()
+                    .all(|session| session.wrap.is_some()),
+                "clip start decoded ahead before the wrap at {}",
+                pair[0]
+            );
+        }
+        let input = keyed(1, &path, pair[1]);
+        let before = decoder.session_diagnostics();
+        assert_eq!(
+            owned(vec![decoder.decode_input_frame_shared(&input)]),
+            vec![oracle.decode_input_frame(&input)],
+            "at {}",
+            pair[1]
+        );
+        if wrapped {
+            let after = decoder.session_diagnostics();
+            assert_eq!(after.resets, before.resets + 1, "a wrap is still a rewind");
+            assert_eq!(
+                after.lookahead_hits,
+                before.lookahead_hits + 1,
+                "the wrap is answered from the clip start decoded ahead"
+            );
+            assert!(decoder
+                .sessions
+                .iter()
+                .all(|session| session.wrap.is_none()));
+            answered += 1;
+        }
+    }
+    assert!(answered >= 2);
+    assert_eq!(
+        decoder.session_diagnostics().opens,
+        oracle.session_diagnostics().opens
+    );
+}
+
+#[test]
+fn a_run_reaching_the_declared_end_decodes_the_clip_start_before_any_request_passes_it() {
+    // 60 Hz requests that stop before the clip's last frame time: no request
+    // ever finds the clip end itself, so only the run's declared-end read can
+    // have decoded the clip start (C4R7: the wrap then never waits for it).
+    let path = fixture("wrap-early", 2);
+    let mut decoder = LibavFrameDecoder::software_for_tests();
+    let mut oracle = LibavFrameDecoder::software_for_tests();
+    for position in (0..=1_890).step_by(17) {
+        let input = keyed(1, &path, position);
+        assert_eq!(
+            owned(vec![decoder.decode_input_frame_shared(&input)]),
+            vec![oracle.decode_input_frame(&input)],
+            "at {position}"
+        );
+    }
+    decoder.join_lookaheads();
+    assert!(
+        decoder
+            .sessions
+            .iter()
+            .all(|session| session.wrap.is_some()),
+        "the run read on to the clip end and decoded the clip start"
+    );
+    // The loop wrap is then answered from it, exactly.
+    let before = decoder.session_diagnostics();
+    let input = keyed(1, &path, 4);
+    assert_eq!(
+        owned(vec![decoder.decode_input_frame_shared(&input)]),
+        vec![oracle.decode_input_frame(&input)]
+    );
+    assert_eq!(
+        decoder.session_diagnostics().lookahead_hits,
+        before.lookahead_hits + 1
+    );
+}
+
+#[test]
+fn a_wrap_past_another_key_frame_is_refused_and_rewinds_on_demand() {
+    // The clip start answers a wrap only when the on-demand rewind would
+    // start from the same key frame: no queued key frame other than the
+    // front at or before the target.
+    let path = fixture("wrap-keys", 2);
+    let input = keyed(1, &path, 0);
+    let mut session = open_libav_session(
+        input.key,
+        &input.request,
+        path.clone(),
+        StillImageSignature::from_path(&path),
+        false,
+    )
+    .unwrap();
+    let frame = |pts_ms| {
+        Arc::new(VideoFrame {
+            layer_id: 1,
+            width: 1,
+            height: 1,
+            pts_ms,
+            duration_ms: 33,
+            format: crate::VideoPixelFormat::Rgba8,
+            data: vec![0; 4],
+        })
+    };
+    let queue = |keys: [bool; 3]| LibavWrapAhead {
+        frames: [0, 33, 67]
+            .into_iter()
+            .zip(keys)
+            .map(|(pts, key)| (frame(pts), key))
+            .collect(),
+        eof_sent: false,
+        decoder_drained: false,
+    };
+    // Front key frame, none after: any covered target is answered with the
+    // first frame at or after it, and the rest stays queued.
+    session.wrap = Some(queue([true, false, false]));
+    let answered = session.take_wrapped(20).unwrap();
+    assert_eq!(answered.pts_ms, 33);
+    assert_eq!(session.next_frames.len(), 1);
+    assert_eq!(session.last_request_ms, Some(20));
+    assert!(session.wrap.is_none() && !session.rewind_pending);
+    // A key frame at or before the target: refused, consumed.
+    session.wrap = Some(queue([true, true, false]));
+    assert!(session.take_wrapped(40).is_none());
+    assert!(session.wrap.is_none());
+    // A key frame after the target does not matter.
+    session.wrap = Some(queue([true, false, true]));
+    assert_eq!(session.take_wrapped(10).unwrap().pts_ms, 33);
+    // Not from a key frame, or past the queue: refused.
+    session.wrap = Some(queue([false, false, false]));
+    assert!(session.take_wrapped(0).is_none());
+    session.wrap = Some(queue([true, false, false]));
+    assert!(session.take_wrapped(68).is_none());
 }
 
 /// QA cadence bench (task67): the real C4/C5 media at the output extent,

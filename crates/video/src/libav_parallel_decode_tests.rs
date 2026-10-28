@@ -667,7 +667,7 @@ fn hold_next_frame(
         );
         let _ = sender.send(LibavLookaheadDone {
             session,
-            result,
+            result: Some(result),
             hardware_frames,
         });
     });
@@ -955,7 +955,9 @@ fn native_frame_timing_links_real_parallel_decoder_and_provider_cache_requests()
         timing::DECODER_SYNC | timing::DECODER_REOPEN,
         timing::DECODER_PREFETCH,
         timing::DECODER_CACHED,
-        timing::DECODER_SYNC,
+        // The run after 16 ms keeps two source frames of slack (C4R7), so
+        // it already decoded the frame at 100 ms.
+        timing::DECODER_PREFETCH,
         timing::DECODER_SYNC | timing::DECODER_RESET,
     ]) {
         assert!(

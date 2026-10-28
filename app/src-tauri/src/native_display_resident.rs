@@ -4,6 +4,11 @@
 
 use super::*;
 
+// The physical-extent reader is owned by this worker only.
+#[path = "native_window_extent.rs"]
+mod native_window_extent;
+use native_window_extent::NativeWindowExtent;
+
 struct StopCancellation<'a>(&'a AtomicBool);
 
 impl video::VideoRenderCancellation for StopCancellation<'_> {
@@ -17,7 +22,7 @@ struct PresentAuthority<'a> {
     captured: &'a NativeDisplayPresentationAuthority,
     follow: Option<NativeTimelineFollowActiveIdentity>,
     stop: &'a AtomicBool,
-    window: Option<&'a tauri::Window>,
+    window: Option<&'a NativeWindowExtent>,
     extent: (u32, u32),
     first_fence: Option<&'a OutputControlFenceV1>,
     first_admission: Option<&'a (dyn Fn() -> Result<(), String> + Send)>,
@@ -51,8 +56,8 @@ impl video::NativeResidentPresentationAuthority for PresentAuthority<'_> {
         ) {
             if self.window.is_some_and(|window| {
                 window
-                    .inner_size()
-                    .map(|size| (size.width, size.height) != self.extent)
+                    .physical_size()
+                    .map(|size| size != self.extent)
                     .unwrap_or(true)
             }) {
                 return Revoked;
@@ -614,7 +619,7 @@ fn present(
     output: PreparedOutput,
     engine: &EngineHandle,
     stop: &Arc<AtomicBool>,
-    window: &tauri::Window,
+    window: &NativeWindowExtent,
     first_fence: Option<&OutputControlFenceV1>,
     first_admission: Option<&(dyn Fn() -> Result<(), String> + Send)>,
     health: &mut live_video_output_health::OutputHealthWriter,
@@ -786,6 +791,9 @@ pub(crate) fn start(
     #[cfg(feature = "qa-native-frame-timing")]
     let _trace_retirement = video::native_frame_timing::ThreadRetirementGuard::new();
     let window = Arc::new(window);
+    // Cold: the render thread reads the physical extent without a main
+    // event-loop round trip (see native_window_extent).
+    let window_extent = NativeWindowExtent::new(&window)?;
     let decoder = ndi_transport::NdiAwareVideoFrameDecoder::from_env()
         .with_stop_signal(Arc::clone(&stop))
         .with_capture_inputs(capture_inputs);
@@ -919,7 +927,7 @@ pub(crate) fn start(
                         captured: &frame.authority,
                         follow: frame.follow_identity,
                         stop: &stop,
-                        window: Some(&window),
+                        window: Some(&window_extent),
                         extent,
                         first_fence: first_frame_fence.as_ref(),
                         first_admission: first_frame_admission.as_deref(),
@@ -945,7 +953,7 @@ pub(crate) fn start(
                     prepared,
                     &engine,
                     &stop,
-                    &window,
+                    &window_extent,
                     first_frame_fence.as_ref(),
                     first_frame_admission.as_deref(),
                     &mut health,
@@ -1107,6 +1115,7 @@ pub(crate) fn start(
             let result = run(
                 &mut lease,
                 &worker_window,
+                &window_extent,
                 &engine,
                 output_id,
                 &metrics,
@@ -1173,6 +1182,7 @@ pub(crate) fn start(
 fn run(
     lease: &mut ResourceLease,
     window: &tauri::Window,
+    window_extent: &NativeWindowExtent,
     engine: &EngineHandle,
     output_id: VideoOutputId,
     metrics: &Arc<Mutex<NativeVideoOutputMetrics>>,
@@ -1194,11 +1204,12 @@ fn run(
     health.restart_cadence();
     let mut pacer =
         video_output_pacer::VideoOutputPacer::new(Duration::from_nanos(1_000_000_000 / 60));
+    let mut present_phase = video_output_pacer::PresentPhase::for_interval(pacer.interval());
     let mut pipelined_evidence = None;
     while !stop.load(Ordering::Acquire) {
         let started = Instant::now();
-        let size = window.inner_size().map_err(|error| error.to_string())?;
-        let extent = (size.width, size.height);
+        let mut paced = Duration::ZERO;
+        let extent = window_extent.physical_size()?;
         let mut validation = None;
         let mut boundary = None;
         let mut observed_follow = None;
@@ -1307,12 +1318,20 @@ fn run(
                 resources.session.abandon_pipelined_output();
             }
             with_prepared_output(prepared, |prepared| {
+                // Every physical present at one offset in its slot; the
+                // authority and surface gates run after this wait.
+                if matches!(&prepared, PreparedOutput::Presentable(frame)
+                    if frame.payload.evidence().freshness
+                        == video::VideoOutputRenderFreshness::Fresh)
+                {
+                    paced = present_phase.wait(pacer.slot_start());
+                }
                 present(
                     resources,
                     prepared,
                     engine,
                     stop,
-                    window,
+                    window_extent,
                     None,
                     None,
                     health,
@@ -1327,11 +1346,13 @@ fn run(
         if let Ok(FrameProgress::Interrupted(interruption)) = &result {
             boundary = Some(interruption.reason().into());
         }
+        // The present-phase wait is pacing, not work: the frame-work sample
+        // stays the time this tick spent preparing and presenting.
         record_metrics(
             metrics,
             lease.resources(),
             extent,
-            started,
+            started + paced,
             result
                 .as_ref()
                 .err()
