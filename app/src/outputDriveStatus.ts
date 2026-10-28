@@ -9,7 +9,7 @@ import type { OutputOwnershipStatus } from "./types";
  * "unknown" never blocks: an unreadable or not-yet-polled state must not take
  * the emergency path away from an operator whose machine does drive outputs.
  */
-export type OutputDriveBlockReason = "standby" | "fenced" | "no_lease";
+export type OutputDriveBlockReason = "standby" | "fenced" | "no_lease" | "not_taken";
 
 export type OutputDriveStatus =
   | { kind: "unknown" }
@@ -19,6 +19,8 @@ export type OutputDriveStatus =
 export const OUTPUT_DRIVE_STANDBY_MESSAGE = "Standby: this machine is not driving outputs";
 export const OUTPUT_DRIVE_FENCED_MESSAGE = "Fenced: outputs are held while the machine output role changes";
 export const OUTPUT_DRIVE_NO_LEASE_MESSAGE = "Output off: no active output lease on this machine";
+/** App start or a project replacement left outputs denied and nothing has taken them yet. */
+export const OUTPUT_DRIVE_NOT_TAKEN_MESSAGE = "Output off: this machine has not taken the outputs yet";
 
 /** Footer status key owned by blackout refusals; cleared when the state changes. */
 export const BLACKOUT_STATUS_KEY = "blackout-unavailable";
@@ -28,6 +30,7 @@ const messageFor = (reason: OutputDriveBlockReason): string => {
     case "standby": return OUTPUT_DRIVE_STANDBY_MESSAGE;
     case "fenced": return OUTPUT_DRIVE_FENCED_MESSAGE;
     case "no_lease": return OUTPUT_DRIVE_NO_LEASE_MESSAGE;
+    case "not_taken": return OUTPUT_DRIVE_NOT_TAKEN_MESSAGE;
   }
 };
 
@@ -37,11 +40,18 @@ const messageFor = (reason: OutputDriveBlockReason): string => {
  * itself enforces). A held lease always means this machine drives outputs.
  */
 export function classifyOutputDrive(
-  ownership: Pick<OutputOwnershipStatus, "state" | "effective_role" | "desired_role">,
+  ownership: Pick<OutputOwnershipStatus, "state" | "effective_role" | "desired_role">
+    & Partial<Pick<OutputOwnershipStatus, "lighting_reason">>,
   bothLeaseActive: boolean,
 ): OutputDriveStatus {
   if (bothLeaseActive) return { kind: "driving" };
-  const reason: OutputDriveBlockReason = ownership.state !== "Ready"
+  // Startup and project replacement deny outputs until they are taken again;
+  // that is neither a role change in progress nor a chosen Standby.
+  const notTaken = ownership.lighting_reason === "StartupDenied"
+    || ownership.lighting_reason === "ProjectSwapDisarmed";
+  const reason: OutputDriveBlockReason = notTaken
+    ? "not_taken"
+    : ownership.state !== "Ready"
     ? "fenced"
     : ownership.effective_role === "Standby" || ownership.desired_role === "Standby"
       ? "standby"

@@ -682,12 +682,20 @@ import {
   type OutputDriveStatus,
 } from "./outputDriveStatus";
 import { queryOutputDriveStatus } from "./outputDriveQuery";
+import { createOutputAutoOwnershipController } from "./outputAutoOwnership";
+import {
+  autoOutputSetting,
+  readAutoOutputGuards,
+  readAutoOutputOwnershipView,
+  setAutoOutputStatus,
+} from "./outputAutoOwnershipRuntime";
 import { createProjectAuthorityReceiptConvergence } from "./projectAuthorityReceiptConvergence";
 import {
   createTimelineFollowAuthorityConvergence,
 } from "./timelineFollowAuthorityConvergence";
 import {
   executeDisplayAddOutputControl,
+  enableOutputUnlessCancelled,
   executeDisplayWindowOutputControl,
   executeGroupSubmasterOutputControl,
   executeLightingMasterOutputControl,
@@ -17918,6 +17926,23 @@ function createAppView() {
     applyOutputDrive(next);
     return next;
   };
+  // A primary machine takes output ownership by itself at start and after a
+  // project replacement (Setup > I/O switch, default on). It uses the same
+  // Enable request as "Enable Output"; the backend lease, fence and role
+  // ordering still decide, and Standby always wins.
+  const autoOutput = createOutputAutoOwnershipController({
+    readOwnership: () => readAutoOutputOwnershipView(invoke),
+    readGuards: () => readAutoOutputGuards(invoke),
+    readSetting: autoOutputSetting,
+    enable: (abortReason) => enableOutputUnlessCancelled(invoke, abortReason),
+    onStatus: setAutoOutputStatus,
+  });
+  const autoOutputActive = () => isTauriRuntime() && !paneWindow;
+  /** Before an operator output action: let a pending automatic take finish first. */
+  const readOutputDriveForAction = async (): Promise<OutputDriveStatus> => {
+    if (autoOutputActive() && untrack(outputDrive).kind !== "driving") await autoOutput.evaluate();
+    return readOutputDrive();
+  };
   createEffect(() => {
     if (paneWindow) return;
     let disposed = false;
@@ -17925,7 +17950,12 @@ function createAppView() {
     const poll = async () => {
       if (disposed || inFlight) return;
       inFlight = true;
-      try { await readOutputDrive(); } finally { inFlight = false; }
+      try {
+        // Decide (and take, when eligible) before reading the drive state, so
+        // the first poll after start or a project open already shows "driving".
+        if (autoOutputActive()) await autoOutput.evaluate();
+        if (!disposed) await readOutputDrive();
+      } finally { inFlight = false; }
     };
     void poll();
     const timer = window.setInterval(() => void poll(), isTauriRuntime() ? 1_500 : 150);
@@ -17941,7 +17971,7 @@ function createAppView() {
     refreshSnapshot,
     setMessage,
     clearMessage: clearStatusByKey,
-    checkOutputDrive: readOutputDrive,
+    checkOutputDrive: readOutputDriveForAction,
     safety: createSafetyBlackoutRuntimeController({ invoke: invokeSafetyBlackoutRuntime }),
     safetyBlackoutEngaged: () => snapshot().safety_blackout_engaged,
   });
@@ -26776,7 +26806,7 @@ function createAppView() {
   const requestPerformVideoBlackout = async (enabled: boolean) => {
     if (workspaceTab() === "touch" && controlMode() === "perform") {
       // Explain a machine that cannot act instead of failing silently.
-      const drive = await readOutputDrive();
+      const drive = await readOutputDriveForAction();
       if (drive.kind === "blocked") {
         setMessage(blackoutNotAppliedMessage(drive), BLACKOUT_STATUS_KEY);
         return;

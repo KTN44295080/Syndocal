@@ -84,3 +84,6 @@ fn project_replacement_denies_enable_through_retirement_and_identity_commit() {
     assert!(state.output_role_ordering.enter(state.output_role_ordering.capture().unwrap()).is_ok(),
         "only a newly captured explicit Arm can enter after replacement");
 }
+
+// Automatic output ownership contracts share this harness scope.
+include!("output_auto_ownership_contract_tests.rs");

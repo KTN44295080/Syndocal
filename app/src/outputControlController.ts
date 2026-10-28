@@ -1457,6 +1457,11 @@ type OutputControlExecutionOptions = {
   expectedProject?: OutputControlExpectedProject;
   /** Set immediately before the first native mutation dispatch. */
   onMutationDispatch?: () => void;
+  /**
+   * Checked after the fence and request id were captured and immediately
+   * before dispatch. A non-null reason aborts with that reason; nothing is sent.
+   */
+  abortBeforeDispatch?: () => string | null;
 };
 
 const executeOutputControlOperation = async (
@@ -1491,6 +1496,8 @@ const executeOutputControlOperation = async (
   });
   let terminal: unknown;
   const command = commandForAction(action);
+  const abortReason = options.abortBeforeDispatch?.() ?? null;
+  if (abortReason !== null) throw new Error(abortReason);
   try {
     options.onMutationDispatch?.();
     terminal = await invoke<unknown>(command, executeArgs);
@@ -1657,6 +1664,20 @@ export async function enableOutput(
   invoke: FrontendTauriInvoke,
 ): Promise<OutputControlReceipt> {
   return executeOutputControl(invoke, { kind: "enable_output" });
+}
+
+/**
+ * Automatic ownership at start / project open: the identical Enable request.
+ * `abortReason` runs after the output fence is captured and right before
+ * dispatch, so an operator Standby chosen meanwhile always wins: either this
+ * request is never sent, or the backend fence/ordering guard refuses it, or it
+ * completed before the Standby boundary that then retires it.
+ */
+export async function enableOutputUnlessCancelled(
+  invoke: FrontendTauriInvoke,
+  abortReason: () => string | null,
+): Promise<OutputControlReceipt> {
+  return executeOutputControlOperation(invoke, { kind: "enable_output" }, { abortBeforeDispatch: abortReason });
 }
 
 /**

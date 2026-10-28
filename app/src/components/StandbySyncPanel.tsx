@@ -17,6 +17,14 @@ import type {
 } from "../outputControlController";
 import type { MachineOutputRole, OutputOwnershipStatus } from "../types";
 import { TakeoverRecordingRow } from "./TakeoverRecordingRow";
+import {
+  AUTO_OUTPUT_SETTING_HINT,
+  AUTO_OUTPUT_SETTING_LABEL,
+  autoOutputStatusMessage,
+  noteOperatorStandbyRequested,
+  noteOperatorTookOutputs,
+} from "../outputAutoOwnership";
+import { autoOutputSetting, autoOutputStatus, setAutoOutputSetting } from "../outputAutoOwnershipRuntime";
 
 type StandbySyncRole = "primary" | "standby";
 
@@ -382,6 +390,8 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
     setBusy(true);
     setActionError(null);
     try {
+      // Following as the backup is Standby: no later automatic take may override it.
+      if (role() === "standby") noteOperatorStandbyRequested();
       window.localStorage.setItem(standbyDirectoryStorageKey, directory());
       window.localStorage.setItem(standbyRoleStorageKey, role());
       setStatus(await props.invokeCommand<StandbySyncStatus>("start_standby_sync", {
@@ -413,6 +423,9 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
   // an output grant or dangerous transfer confirmation. A refusal leaves the
   // backend role in force, so it is never shown as Standby.
   const requestStandby = async (select?: HTMLSelectElement) => {
+    // Standby always wins: an automatic take that has not been sent yet is
+    // cancelled, and none is started again until outputs are explicitly taken.
+    noteOperatorStandbyRequested();
     // A poll that started before this request must not land afterwards and
     // restore the old role.
     pollGeneration += 1;
@@ -448,6 +461,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
         props.invokeCommand,
         { kind: "arm", role, lease },
       );
+      noteOperatorTookOutputs();
       setActionError(null);
       // The terminal receipt is authoritative, but status polling remains the
       // source of the actual effective role after asynchronous route start.
@@ -466,6 +480,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
     try {
       const requestedRole = machineRole();
       if (requestedRole === "Standby") {
+        noteOperatorStandbyRequested();
         pollGeneration += 1;
         const outputStatus = await props.invokeCommand<OutputOwnershipStatus>(
           "arm_output_ownership_role",
@@ -481,6 +496,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
         props.invokeCommand,
         { kind: "arm", role, lease },
       );
+      noteOperatorTookOutputs();
       setActionError(null);
       await pollStatus();
     } catch (error) {
@@ -515,6 +531,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
           lease,
         },
       );
+      noteOperatorTookOutputs();
       setActionError(null);
       takeoverDialog.close();
       await pollStatus();
@@ -562,6 +579,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
         "Output enable",
         OUTPUT_ENABLE_TIMEOUT_MS,
       );
+      noteOperatorTookOutputs();
       if (disposed || generation !== enableGeneration) return;
       enableOutcomeUnknown = false;
       // The terminal receipt is authoritative. Release the primary action
@@ -653,6 +671,24 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
           Enable Output
         </button>
         <small>Enable both lighting and video output in one step.</small>
+      </div>
+      <div class="autoOutputOwnership">
+        <label>
+          <input
+            type="checkbox"
+            data-io-control="auto-output-ownership"
+            checked={autoOutputSetting()}
+            disabled={!props.backendAvailable}
+            onChange={(event) => setAutoOutputSetting(event.currentTarget.checked)}
+          />
+          {" "}{AUTO_OUTPUT_SETTING_LABEL}
+        </label>
+        <small class="textPretty">{AUTO_OUTPUT_SETTING_HINT}</small>
+        <Show when={props.backendAvailable ? autoOutputStatusMessage(autoOutputStatus()) : null}>
+          {(message) => (
+            <p class="textPretty" role="status" aria-live="polite" data-io-control="auto-output-status">{message()}</p>
+          )}
+        </Show>
       </div>
       <Show when={outputEnabled()}>
         <p class="outputEnableSuccess" role="status" aria-live="polite">Output enabled</p>
