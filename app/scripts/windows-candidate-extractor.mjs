@@ -147,7 +147,7 @@ function readReleaseEvidenceIdentity({ releaseEvidencePath, productVersion, work
     typeof evidence !== "object"
     || evidence === null
     || Array.isArray(evidence)
-    || evidence.schemaVersion !== 1
+    || evidence.schemaVersion !== 2
     || evidence.productVersion !== productVersion
     || evidence.tag !== "v" + productVersion
     || typeof evidence.commit !== "string"
@@ -787,13 +787,13 @@ export function extractWindowsCandidateArtifacts({
   const releaseEvidence = readReleaseEvidenceIdentity({ releaseEvidencePath, productVersion, workspace: safeWorkspace });
   const artifacts = {
     nsis: assertExpectedArtifactPath("nsis", nsisPath, productVersion, safeWorkspace, updaterMode),
-    msi: assertExpectedArtifactPath("msi", msiPath, productVersion, safeWorkspace, updaterMode),
+    ...(msiPath === undefined ? {} : { msi: assertExpectedArtifactPath("msi", msiPath, productVersion, safeWorkspace, updaterMode) }),
     updater: assertExpectedArtifactPath("updater", updaterPath, productVersion, safeWorkspace, updaterMode),
   };
   const updaterSignature = adjacentSignatureRecord(artifacts.updater.path, safeWorkspace, "updater candidate");
   const finalOutputRoot = assertOutputRootPath(outputRoot, safeWorkspace);
   const sevenZip = sevenZipPath ?? (platform === "win32" ? resolveSevenZipTool({ environment, platform }) : null);
-  const msiExec = msiexecPath ?? (platform === "win32" ? resolveWindowsMsiExec({ environment, platform }) : null);
+  const msiExec = msiPath === undefined ? null : msiexecPath ?? (platform === "win32" ? resolveWindowsMsiExec({ environment, platform }) : null);
   const finalParent = dirname(finalOutputRoot);
   const parentStats = lstatSync(finalParent, { bigint: true });
   const parentIdentity = stableDirectoryIdentity(parentStats);
@@ -861,7 +861,7 @@ export function extractWindowsCandidateArtifacts({
     };
 
     extractRole("nsis", artifacts.nsis.path, join(extractedParent, "nsis"), join(finalOutputRoot, "extracted", "nsis"), "archive");
-    extractRole("msi", artifacts.msi.path, join(extractedParent, "msi"), join(finalOutputRoot, "extracted", "msi"), "msi");
+    if (artifacts.msi) extractRole("msi", artifacts.msi.path, join(extractedParent, "msi"), join(finalOutputRoot, "extracted", "msi"), "msi");
 
     const updaterExtension = extname(artifacts.updater.path).toLocaleLowerCase("en-US");
     if (updaterExtension === ".zip") {
@@ -883,7 +883,7 @@ export function extractWindowsCandidateArtifacts({
     }
 
     const inventory = {
-      schema_version: 2,
+      schema_version: msiPath === undefined ? 3 : 2,
       product_version: productVersion,
       release_evidence: {
         path: releaseEvidence.path,
@@ -960,6 +960,9 @@ export function extractWindowsCandidateArtifacts({
 
 function parseCli(argv) {
   if (argv.length === 1 && argv[0] === "--self-test") return { selfTest: true };
+  if (argv.length === 8 && argv[0] === "--nsis" && argv[2] === "--updater" && argv[4] === "--product-version" && argv[6] === "--output") {
+    return { nsisPath: argv[1], updaterPath: argv[3], productVersion: argv[5], outputRoot: argv[7] };
+  }
   if (
     argv.length === 10
     && argv[0] === "--nsis"
@@ -1030,7 +1033,7 @@ function selfTest() {
     writeFileSync(join(nsisDir, names.nsis.replace(/\.exe$/u, ".nsis.zip") + ".sig"), Buffer.from("synthetic updater signature", "utf8"), { flag: "wx" });
     writeFileSync(
       join(workspace, "qa", "release", "release-evidence.json"),
-      JSON.stringify({ schemaVersion: 1, productVersion, tag: "v" + productVersion, commit: "a".repeat(40) }) + "\n",
+      JSON.stringify({ schemaVersion: 2, productVersion, tag: "v" + productVersion, commit: "a".repeat(40) }) + "\n",
       { flag: "wx" },
     );
     const createPayload = (destination, seed) => {
@@ -1107,6 +1110,18 @@ function selfTest() {
       observedToolInputs.length > 0 && observedToolInputs.every(({ source }) => !existsSync(dirname(source))),
       "every successful tool input copy is tombstoned and removed before candidate publication",
     );
+
+    writeFileSync(join(nsisDir, names.nsis + ".sig"), "NSIS updater signature fixture", { flag: "wx" });
+    const nsisOnly = extractWindowsCandidateArtifacts({
+      nsisPath: join(nsisDir, names.nsis), updaterPath: join(nsisDir, names.nsis),
+      productVersion, outputRoot: join(workspace, WINDOWS_CANDIDATE_EXTRACTION_ROOT, "nsis-only"),
+      workspace, platform: "win32", updaterConfig: { bundle: { createUpdaterArtifacts: true } },
+      ...fakeTools, msiexecPath: undefined,
+      runMsi: () => { throw new Error("NSIS-only extraction must never invoke MSI tooling"); },
+    });
+    pass(nsisOnly.inventory.schema_version === 3, "NSIS-only extraction uses independent schema version 3");
+    pass(nsisOnly.inventory.extractions.map((entry) => entry.role).join(",") === "nsis,updater", "NSIS-only extraction publishes exactly NSIS and updater roles without invoking MSI");
+    pass(nsisOnly.inventory.extractions.every((entry) => entry.artifact_sha256 === nsisOnly.inventory.extractions[0].artifact_sha256), "direct NSIS updater binds the same final installer SHA-256");
 
     const updaterSignaturePath = join(nsisDir, names.nsis.replace(/\.exe$/u, ".nsis.zip") + ".sig");
     const updaterSignatureBytes = readVerifiedRegularFile(updaterSignaturePath, "self-test updater signature", { allowedRoots: [workspace] }).bytes;

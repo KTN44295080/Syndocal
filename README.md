@@ -8,6 +8,14 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
+## Code signing policy
+
+Windows 1.2.0の公開形式はNSISです。SignPath Foundationへの申請・承認は未完了です。
+未署名の配布ではSmartScreenが警告を表示したり、実行ポリシーが起動を止めたりする場合があります。
+公開元と公開SHA-256を確認してください。更新ファイルの暗号署名検証は維持します。
+詳細は[Code signing policy](qa/CODE_SIGNING_POLICY.md)と
+[未署名版のダウンロード確認方法](qa/RELEASE_NOTES_SIGNING.md)を参照してください。
+
 ## Historical 2026-09-05 alpha.69 recording atomic-publication SOURCE CANDIDATE
 
 Recorded product metadata was `1.2.0-alpha.69`. The bounded source candidate
@@ -490,7 +498,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.82_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.82_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.82_x64-setup.exe` (NSIS)
 - macOS: Apple Silicon向け `.pkg`
 - Linux: `.deb`、AppImage
 

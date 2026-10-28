@@ -1,0 +1,349 @@
+name: Windows release SignPath candidate
+
+# Candidate preparation only. Never publish or create a tag here.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: windows-release-signpath-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    if: github.repository == 'KTN44295080/Syndocal' && github.ref_protected && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: windows-2022
+    environment: release-signpath
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out this workflow source only
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Install Windows video SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip'
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'syndocal-ffmpeg-lgpl-8.1.3'
+          # Syndocal self-built LGPL SDK without Chromaprint/FFTW3 (Actions run 40366564270),
+          # hosted as a build-dependency prerelease; see qa/WINDOWS_NATIVE_BUILD.md.
+          $uri = 'https://github.com/KTN44295080/Syndocal/releases/download/ffmpeg-sdk-lgpl-n8.1.3-r40366564270/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip'
+          Invoke-WebRequest -Uri $uri -OutFile $archive
+          $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+          $expectedHash = '81587FA070A9FA2DA3D8FF3E63BEB9654729782BC8E9899EE951BAF5FC5D9F1A'
+          if (-not [StringComparer]::OrdinalIgnoreCase.Equals($actualHash, $expectedHash)) {
+            throw "Pinned self-built FFmpeg 8.1.3 LGPL shared SDK archive hash mismatch: expected $expectedHash, got $actualHash."
+          }
+          New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
+          Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot -Force
+          $sdk = Join-Path $extractRoot 'ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1'
+          if (-not (Test-Path -LiteralPath $sdk -PathType Container)) {
+            throw "Pinned self-built FFmpeg 8.1.3 LGPL shared SDK archive did not contain the expected root: $sdk"
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $sdk 'bin\avcodec-62.dll') -PathType Leaf)) {
+            throw "Pinned self-built FFmpeg 8.1.3 LGPL shared runtime is incomplete: $sdk"
+          }
+          "FFMPEG_DIR=$sdk" >> $env:GITHUB_ENV
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+          (Join-Path $sdk 'bin') >> $env:GITHUB_PATH
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.9.0
+          run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.22.1
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@59a558e8c538bf4a23bbffa19e5a278b703f2920 # 1.97.1
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+
+      - name: Initialize Windows x64 MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+          toolset: 14.44
+
+      - name: Pin exact Windows MSVC 14.44.35207 linker
+        shell: pwsh
+        env:
+          SYNDOCAL_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # GitHub's official windows-2022 image installs VS2022 Enterprise.
+          # Only the edition root differs from the local Community gate; the
+          # exact MSVC version and Hostx64/x64 linker remain fail-closed.
+          $expectedVcTools = 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\'
+          if ($env:SYNDOCAL_RUNNER_ENVIRONMENT -ne 'github-hosted') {
+            throw "The Visual Studio Enterprise edition-root exception is valid only on a GitHub-hosted runner, not '$env:SYNDOCAL_RUNNER_ENVIRONMENT'."
+          }
+          $actualVcTools = $env:VCToolsInstallDir
+          Write-Host "VCToolsInstallDir=$actualVcTools"
+          if ([string]::IsNullOrWhiteSpace($actualVcTools)) {
+            throw 'VCToolsInstallDir is not set; vcvars64.bat -vcvars_ver=14.44 did not initialize the x64 environment.'
+          }
+          $canonicalActual = [IO.Path]::GetFullPath($actualVcTools).TrimEnd('\')
+          $canonicalExpected = [IO.Path]::GetFullPath($expectedVcTools).TrimEnd('\')
+          $toolsetMatches = [StringComparer]::OrdinalIgnoreCase.Equals($canonicalActual, $canonicalExpected)
+          Write-Host "Exact MSVC 14.44.35207 VCToolsInstallDir matches: $toolsetMatches"
+          if (-not $toolsetMatches) {
+            throw "VCToolsInstallDir '$actualVcTools' does not match the required GitHub-hosted Visual Studio 2022 Enterprise MSVC 14.44.35207 toolset."
+          }
+          $expectedLinker = Join-Path $canonicalActual 'bin\Hostx64\x64\link.exe'
+          $linkerExists = Test-Path -LiteralPath $expectedLinker -PathType Leaf
+          Write-Host "Exact MSVC linker exists: $linkerExists ($expectedLinker)"
+          if (-not $linkerExists) {
+            throw "The required MSVC linker is missing: $expectedLinker"
+          }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$expectedLinker" >> $env:GITHUB_ENV
+          "SYNDOCAL_GITHUB_HOSTED_WINDOWS_MSVC=windows-2022-enterprise" >> $env:GITHUB_ENV
+          Write-Host "Pinned CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER for following steps: $expectedLinker"
+          $resolvedLinkers = @(& where.exe link.exe)
+          if ($LASTEXITCODE -ne 0) { throw "where.exe link.exe failed with exit code $LASTEXITCODE." }
+          Write-Host 'where.exe link.exe resolution order:'
+          foreach ($resolved in $resolvedLinkers) { Write-Host "  $resolved" }
+          if ($resolvedLinkers.Count -eq 0 -or [string]::IsNullOrWhiteSpace($resolvedLinkers[0])) {
+            throw 'where.exe link.exe returned no linker.'
+          }
+          $exactLinkerFirst = [StringComparer]::OrdinalIgnoreCase.Equals(
+            [IO.Path]::GetFullPath($resolvedLinkers[0]),
+            [IO.Path]::GetFullPath($expectedLinker)
+          )
+          Write-Host "Exact required linker resolves first: $exactLinkerFirst"
+          if (-not $exactLinkerFirst) {
+            throw "where.exe link.exe resolves '$($resolvedLinkers[0])' first; refusing Cargo without the exact required linker first."
+          }
+
+      - name: Install locked dependencies and stage pinned runtime
+        run: |
+          pnpm --dir app install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
+          pnpm --dir app run prepare:runtime-libs
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned runtime staging failed' }
+
+      - name: Check release source and signing contracts
+        run: |
+          pnpm --dir app run check:release:static
+          if ($LASTEXITCODE -ne 0) { throw 'Release static checks failed' }
+          node app/scripts/check-release-metadata.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Release metadata failed' }
+          node tools/distribution/signpath/check-workflow.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Release workflow contract failed' }
+
+      - name: Select complete signing and updater configuration
+        id: configuration
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          SIGNPATH_PAYLOAD_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_PAYLOAD_CONFIGURATION_SLUG }}
+          SIGNPATH_INSTALLER_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_INSTALLER_CONFIGURATION_SLUG }}
+          SIGNPATH_CERTIFICATE_THUMBPRINT: ${{ vars.SIGNPATH_CERTIFICATE_THUMBPRINT }}
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          SYNDOCAL_UPDATE_PUBKEY: ${{ vars.SYNDOCAL_UPDATE_PUBKEY }}
+          SYNDOCAL_UPDATE_ENDPOINT: ${{ vars.SYNDOCAL_UPDATE_ENDPOINT }}
+          SYNDOCAL_UPDATE_CHANNEL: ${{ vars.SYNDOCAL_UPDATE_CHANNEL }}
+          SYNDOCAL_UPDATE_PUBLIC_KEY_FINGERPRINT: ${{ vars.SYNDOCAL_UPDATE_PUBLIC_KEY_FINGERPRINT }}
+          SYNDOCAL_UPDATE_DOWNLOAD_BASE: ${{ vars.SYNDOCAL_UPDATE_DOWNLOAD_BASE }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $required = @('SIGNPATH_API_TOKEN','SIGNPATH_ORGANIZATION_ID','SIGNPATH_PROJECT_SLUG','SIGNPATH_SIGNING_POLICY_SLUG','SIGNPATH_PAYLOAD_CONFIGURATION_SLUG','SIGNPATH_INSTALLER_CONFIGURATION_SLUG','SIGNPATH_CERTIFICATE_THUMBPRINT')
+          $complete = @($required | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) }).Count -eq 0
+          "signpath=$($complete.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          node --input-type=module -e "import {updaterConfiguration} from './tools/distribution/signpath/finalize-candidate.mjs'; process.stdout.write(updaterConfiguration() ? 'ready' : 'missing')" > updater-ready.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Invalid production updater configuration' }
+          $updaterReady = (Get-Content updater-ready.txt -Raw) -eq 'ready'
+          "updater=$($updaterReady.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          if ($updaterReady) {
+            foreach ($name in @('SYNDOCAL_UPDATE_PUBKEY','SYNDOCAL_UPDATE_ENDPOINT','SYNDOCAL_UPDATE_CHANNEL','SYNDOCAL_UPDATE_PUBLIC_KEY_FINGERPRINT','SYNDOCAL_UPDATE_DOWNLOAD_BASE')) {
+              "$name=$([Environment]::GetEnvironmentVariable($name))" >> $env:GITHUB_ENV
+            }
+          }
+          if (-not $complete) { 'Authenticode: declared-unsigned (SignPath configuration absent or incomplete)' >> $env:GITHUB_STEP_SUMMARY }
+          if (-not $updaterReady) { 'Updater: missing-production-updater-configuration; candidate is not publishable' >> $env:GITHUB_STEP_SUMMARY }
+
+      - name: Build source and bundle initial NSIS only
+        run: |
+          pnpm --dir app tauri build --ci --no-bundle -- --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Native source build failed' }
+          pnpm --dir app tauri bundle --ci --bundles nsis
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS packaging failed' }
+          git diff --exit-code -- Cargo.lock app/pnpm-lock.yaml
+          if ($LASTEXITCODE -ne 0) { throw 'Build changed a committed dependency lockfile' }
+
+      - name: Capture exact project payload and generated uninstaller
+        id: prepare
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scripts = @(Get-ChildItem target/release/nsis -Filter installer.nsi -Recurse)
+          if ($scripts.Count -ne 1) { throw 'Expected one Tauri rendered NSIS script' }
+          $compilers = @(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'tauri') -Filter makensis.exe -Recurse)
+          if ($compilers.Count -ne 1) { throw 'Expected one Tauri hash-verified NSIS compiler' }
+          $work = Join-Path $env:RUNNER_TEMP 'syndocal-signpath-work'
+          node tools/distribution/signpath/nsis-signing-pipeline.mjs prepare --script $scripts[0].FullName --makensis $compilers[0].FullName --work $work
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS payload capture failed' }
+          $version = (Get-Content app/package.json -Raw | ConvertFrom-Json).version
+          "work=$work" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "filename=Syndocal_$($version)_x64-setup.exe" >> $env:GITHUB_OUTPUT
+          New-Item -ItemType Directory candidate,unsigned-candidate -ErrorAction Stop | Out-Null
+          Copy-Item -LiteralPath (Join-Path $work 'unsigned-installer.exe') -Destination "unsigned-candidate/Syndocal_$($version)_x64-setup.exe"
+          'declared-unsigned; CI build before SignPath; not publication evidence' | Set-Content unsigned-candidate/SIGNING-STATE.txt -Encoding utf8
+
+      - name: Upload unsigned NSIS candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nsis-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: unsigned-candidate/
+          if-no-files-found: error
+
+      - name: Upload unsigned project payload
+        id: payload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signpath-payload-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.prepare.outputs.work }}/payload/
+          if-no-files-found: error
+
+      - name: Request human approval and sign project payload
+        id: sign-payload
+        if: steps.configuration.outputs.signpath == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_PAYLOAD_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.payload.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 1800
+          output-artifact-directory: signed-payload
+          parameters: |
+            version: ${{ toJSON(steps.prepare.outputs.version) }}
+
+      - name: Package exact signed payload without recompilation
+        if: steps.configuration.outputs.signpath == 'true'
+        env:
+          SIGNPATH_WORK: ${{ steps.prepare.outputs.work }}
+          INSTALLER_FILENAME: ${{ steps.prepare.outputs.filename }}
+          SIGNPATH_CERTIFICATE_THUMBPRINT: ${{ vars.SIGNPATH_CERTIFICATE_THUMBPRINT }}
+        run: |
+          node tools/distribution/signpath/nsis-signing-pipeline.mjs package --work $env:SIGNPATH_WORK --signed-payload "$env:GITHUB_WORKSPACE/signed-payload" --output "$env:GITHUB_WORKSPACE/installer-to-sign/$env:INSTALLER_FILENAME" --certificate-thumbprint $env:SIGNPATH_CERTIFICATE_THUMBPRINT
+          if ($LASTEXITCODE -ne 0) { throw 'Signed payload packaging failed' }
+
+      - name: Upload installer containing signed project payload
+        id: installer
+        if: steps.configuration.outputs.signpath == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signpath-installer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: installer-to-sign/
+          if-no-files-found: error
+
+      - name: Request human approval and sign final NSIS
+        id: sign-installer
+        if: steps.configuration.outputs.signpath == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_INSTALLER_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.installer.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 1800
+          output-artifact-directory: candidate
+          parameters: |
+            version: ${{ toJSON(steps.prepare.outputs.version) }}
+
+      - name: Select unsigned final candidate when SignPath is unavailable
+        if: steps.configuration.outputs.signpath != 'true'
+        env:
+          INSTALLER_FILENAME: ${{ steps.prepare.outputs.filename }}
+        run: Copy-Item -LiteralPath "unsigned-candidate/$env:INSTALLER_FILENAME" -Destination "candidate/$env:INSTALLER_FILENAME"
+
+      - name: Verify signed installer still matches the submitted image
+        if: steps.configuration.outputs.signpath == 'true'
+        env:
+          INSTALLER_FILENAME: ${{ steps.prepare.outputs.filename }}
+          SIGNPATH_CERTIFICATE_THUMBPRINT: ${{ vars.SIGNPATH_CERTIFICATE_THUMBPRINT }}
+        run: |
+          node tools/distribution/signpath/verify-ci-origin.mjs installer "candidate/$env:INSTALLER_FILENAME" "installer-to-sign/$env:INSTALLER_FILENAME"
+          if ($LASTEXITCODE -ne 0) { throw 'Returned installer origin verification failed' }
+
+      - name: Inspect installed final bytes and record signing state
+        env:
+          SIGNPATH_READY: ${{ steps.configuration.outputs.signpath }}
+          INSTALLER_FILENAME: ${{ steps.prepare.outputs.filename }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          SIGNPATH_CERTIFICATE_THUMBPRINT: ${{ vars.SIGNPATH_CERTIFICATE_THUMBPRINT }}
+          PAYLOAD_REQUEST_ID: ${{ steps.sign-payload.outputs.signing-request-id }}
+          INSTALLER_REQUEST_ID: ${{ steps.sign-installer.outputs.signing-request-id }}
+          SIGNPATH_WORK: ${{ steps.prepare.outputs.work }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $env:GITHUB_WORKSPACE "candidate/$env:INSTALLER_FILENAME"
+          $installed = Join-Path $env:GITHUB_WORKSPACE 'candidate/installed'
+          # Disposable hosted runner only. Never run an installer on the owner's desktop.
+          $process = Start-Process -FilePath $installer -ArgumentList '/S',"/D=$installed" -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "NSIS installation failed: $($process.ExitCode)" }
+          $expectedPayload = if ($env:SIGNPATH_READY -eq 'true') { 'signed-payload' } else { Join-Path $env:SIGNPATH_WORK 'payload' }
+          node tools/distribution/signpath/verify-ci-origin.mjs payload $installed $expectedPayload
+          if ($LASTEXITCODE -ne 0) { throw 'Installed component origin verification failed' }
+          if ($env:SIGNPATH_READY -eq 'true') {
+            @{organizationId=$env:SIGNPATH_ORGANIZATION_ID;projectSlug=$env:SIGNPATH_PROJECT_SLUG;signingPolicySlug=$env:SIGNPATH_SIGNING_POLICY_SLUG;certificateThumbprint=$env:SIGNPATH_CERTIFICATE_THUMBPRINT;requestIds=@($env:PAYLOAD_REQUEST_ID,$env:INSTALLER_REQUEST_ID)} | ConvertTo-Json -Depth 5 | Set-Content candidate/signpath-provenance.json -Encoding utf8NoBOM
+            node app/scripts/sign-windows-release-state.mjs --installer $installer --payload-root $installed --output candidate/windows-signing.json --state signpath-signed --signpath candidate/signpath-provenance.json
+          } else {
+            node app/scripts/sign-windows-release-state.mjs --installer $installer --payload-root $installed --output candidate/windows-signing.json --state declared-unsigned --unsigned-reason 'SignPath Foundation approval or complete configuration unavailable at build time'
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Final signing state validation failed' }
+
+      - name: Sign final installer with independent production updater key
+        if: steps.configuration.outputs.updater == 'true'
+        env:
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          INSTALLER_FILENAME: ${{ steps.prepare.outputs.filename }}
+        run: |
+          node app/node_modules/@tauri-apps/cli/tauri.js signer sign "candidate/$env:INSTALLER_FILENAME"
+          if ($LASTEXITCODE -ne 0) { throw 'Final updater signing failed' }
+
+      - name: Freeze final hashes and verify updater signature
+        env:
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          node tools/distribution/signpath/finalize-candidate.mjs candidate
+          if ($LASTEXITCODE -ne 0) { throw 'Final candidate consistency failed' }
+          Get-Content candidate/SIGNING-STATE.txt >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Retain final NSIS candidate and exact installed component inventory
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nsis-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 90

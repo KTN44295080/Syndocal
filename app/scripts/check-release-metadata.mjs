@@ -1,3 +1,4 @@
+import { validateWindowsSigningState, verifyWindowsSigningComponent } from "./sign-windows-release-state.mjs";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
@@ -305,8 +306,8 @@ export function readmeProductLine(productVersion) {
 }
 
 export function readmeWindowsInstallerLine(productVersion) {
-  const { nsis, msi } = windowsInstallerNames(productVersion);
-  return `- Windows: \`${nsis}\` (NSIS)、\`${msi}\``;
+  const { nsis } = windowsInstallerNames(productVersion);
+  return `- Windows: \`${nsis}\` (NSIS)`;
 }
 
 export function stripTomlComment(line) {
@@ -492,14 +493,12 @@ function assertReadmeVersionLines(markdown, productVersion) {
   }
   const windowsLine = installerLines[0];
   if (!windowsLine.includes("(NSIS)")) {
-    throw new Error("README lacks the exact Windows installer line for NSIS and MSI artifacts.");
+    throw new Error("README lacks the exact Windows installer line for NSIS artifacts.");
   }
   if (!windowsLine.includes(nsis)) {
     throw new Error(`README Windows installer line does not carry the versioned NSIS name ${nsis}.`);
   }
-  if (!windowsLine.includes(msi)) {
-    throw new Error(`README Windows installer line does not carry the versioned MSI name ${msi}.`);
-  }
+  if (windowsLine.includes(".msi")) throw new Error("README Windows distribution is NSIS-only; MSI is retired.");
   if (windowsLine !== readmeWindowsInstallerLine(productVersion)) {
     throw new Error("README Windows installer line is not the exact canonical versioned line.");
   }
@@ -930,8 +929,10 @@ export function validateCandidateEvidence(manifest, options) {
     previousTagCommit = resolveTag(manifest.previousTag),
     readEvidenceFile = readVerifiedEvidenceFile,
     inspectExecutable = inspectWindowsExecutable,
+    inspectAuthenticode,
   } = options;
 
+  if (manifest.schemaVersion !== 2) throw new Error("Release evidence requires schemaVersion 2 with explicit Windows signing state; version 1 is retired.");
   if (!/^\d+\.\d+\.\d+-rc\.[1-9]\d*$/.test(productVersion)) {
     throw new Error("Release-candidate mode requires a product version ending in -rc.N.");
   }
@@ -1092,6 +1093,18 @@ export function validateCandidateEvidence(manifest, options) {
       channel: manifest.updater.channel,
       label: "Updater payload " + artifact.target,
     });
+  }
+
+  if (verifiedArtifacts.some(({ artifact }) => artifact.target.startsWith("windows-"))) {
+    const declaration = validateWindowsSigningState(manifest.windowsSigning);
+    for (const { artifact, artifactRecord } of verifiedArtifacts) {
+      if (!artifact.target.startsWith("windows-")) continue;
+      if (["installer", "updater-payload"].includes(artifact.role) && !artifact.filename.endsWith("-setup.exe")) throw new Error("Windows release distribution is NSIS-only.");
+      if (artifact.role === "windows-executable") verifyWindowsSigningComponent(declaration, "payload/syndocal.exe", artifactRecord.bytes, inspectAuthenticode);
+      if (artifact.role === "installer" || (artifact.role === "updater-payload" && artifact.filename.endsWith("-setup.exe"))) {
+        verifyWindowsSigningComponent(declaration, "installer/" + artifact.filename, artifactRecord.bytes, inspectAuthenticode);
+      }
+    }
   }
 
   // Phase 2b: only after all evidence and crypto checks pass are verified

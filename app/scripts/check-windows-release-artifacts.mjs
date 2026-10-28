@@ -1,3 +1,4 @@
+import { validateWindowsSigningState, verifyWindowsSigningTree } from "./sign-windows-release-state.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign as signMessage } from "node:crypto";
@@ -519,8 +520,8 @@ function exactKeys(value, keys, label) {
 
 export function validateWindowsCandidateExtractionInventory(value, label = "Windows candidate extraction inventory") {
   exactKeys(value, ["schema_version", "product_version", "release_evidence", "extractions"], label);
-  if (value.schema_version !== 2 || typeof value.product_version !== "string" || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-rc\.[1-9]\d*$/u.test(value.product_version)) {
-    throw new Error(label + " must use schema_version 2 and an RC SemVer product_version.");
+  if (![2, 3].includes(value.schema_version) || typeof value.product_version !== "string" || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-rc\.[1-9]\d*$/u.test(value.product_version)) {
+    throw new Error(label + " must use schema_version 2 (legacy) or 3 (NSIS-only) and an RC SemVer product_version.");
   }
   exactKeys(value.release_evidence, ["path", "sha256", "commit", "tag"], label + " release_evidence");
   assertStrictRelativePath(value.release_evidence.path, label + " release_evidence.path");
@@ -529,10 +530,11 @@ export function validateWindowsCandidateExtractionInventory(value, label = "Wind
     || value.release_evidence.tag !== "v" + value.product_version) {
     throw new Error(label + " release_evidence must bind an exact manifest hash, commit, and tag.");
   }
-  if (!Array.isArray(value.extractions) || value.extractions.length !== 3) {
-    throw new Error(label + " must contain exactly NSIS, MSI, and updater extractions.");
+  const roles = value.schema_version === 3 ? ["nsis", "updater"] : ["nsis", "msi", "updater"];
+  if (!Array.isArray(value.extractions) || value.extractions.length !== roles.length) {
+    throw new Error(label + (value.schema_version === 3 ? " must contain exactly NSIS and updater extractions." : " must contain exactly NSIS, MSI, and updater extractions."));
   }
-  const requiredRoles = new Set(["nsis", "msi", "updater"]);
+  const requiredRoles = new Set(roles);
   const seenRoles = new Set();
   for (const extraction of value.extractions) {
     exactKeys(
@@ -541,7 +543,7 @@ export function validateWindowsCandidateExtractionInventory(value, label = "Wind
       label + " extraction",
     );
     if (!requiredRoles.has(extraction.role) || seenRoles.has(extraction.role)) {
-      throw new Error(label + " roles must be the exact NSIS, MSI, updater set.");
+      throw new Error(label + (value.schema_version === 3 ? " roles must be the exact NSIS, updater set." : " roles must be the exact NSIS, MSI, updater set."));
     }
     seenRoles.add(extraction.role);
     assertStrictRelativePath(extraction.artifact_path, label + " artifact_path");
@@ -599,8 +601,8 @@ function loadCandidateReleaseEvidence({ workspace, productVersion, releaseEviden
   const text = record.bytes.toString("utf8");
   if (!Buffer.from(text, "utf8").equals(record.bytes)) throw new Error("candidate release evidence manifest is not UTF-8.");
   const manifest = parseStrictJson(text, "candidate release evidence manifest");
-  exactKeys(manifest, ["schemaVersion", "productVersion", "tag", "commit", "previousVersion", "previousTag", "updater", "artifacts"], "candidate release evidence manifest");
-  if (manifest.schemaVersion !== 1 || manifest.productVersion !== productVersion || manifest.tag !== "v" + productVersion || !/^[0-9a-f]{40}$/u.test(manifest.commit)) {
+  exactKeys(manifest, ["schemaVersion", "productVersion", "tag", "commit", "previousVersion", "previousTag", "updater", "artifacts", "windowsSigning"], "candidate release evidence manifest");
+  if (manifest.schemaVersion !== 2 || manifest.productVersion !== productVersion || manifest.tag !== "v" + productVersion || !/^[0-9a-f]{40}$/u.test(manifest.commit)) {
     throw new Error("candidate release evidence manifest does not identify the exact product, tag, and commit.");
   }
   const currentHead = headCommit ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: workspace, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -640,13 +642,15 @@ function loadCandidateReleaseEvidence({ workspace, productVersion, releaseEviden
   const executableArtifact = findArtifact("windows-executable");
   const updaterArtifact = findArtifact("updater-payload");
   const installerArtifacts = manifest.artifacts.filter((artifact) => artifact.role === "installer" && artifact.target === "windows-x86_64");
-  if (installerArtifacts.length < 2 || installerArtifacts.some((artifact) => !/^[0-9a-fA-F]{64}$/u.test(artifact.sha256))) {
-    throw new Error("candidate release evidence must contain NSIS and MSI installer identities for windows-x86_64.");
+  if (installerArtifacts.length !== 1 || !installerArtifacts[0].filename.endsWith("-setup.exe") || !/^[0-9a-fA-F]{64}$/u.test(installerArtifacts[0].sha256)) {
+    throw new Error("candidate release evidence must contain exactly one NSIS installer identity for windows-x86_64; MSI is retired.");
   }
+  validateWindowsSigningState(manifest.windowsSigning);
   if (!/^[0-9a-fA-F]{64}$/u.test(executableArtifact.sha256) || !/^[0-9a-fA-F]{64}$/u.test(updaterArtifact.sha256)
     || typeof updaterArtifact.signaturePath !== "string" || !/^[0-9a-fA-F]{64}$/u.test(updaterArtifact.signatureSha256)) {
     throw new Error("candidate release evidence artifact identities are incomplete.");
   }
+  if (updaterArtifact.filename !== installerArtifacts[0].filename || updaterArtifact.sha256.toLowerCase() !== installerArtifacts[0].sha256.toLowerCase()) throw new Error("Windows updater must sign the identical final NSIS installer bytes.");
   const updaterSignatureRecord = readEvidenceChild(updaterArtifact.signaturePath, "candidate updater signature");
   if (hashBytes(updaterSignatureRecord.bytes) !== updaterArtifact.signatureSha256.toLowerCase()) throw new Error("candidate updater signature hash does not match release evidence.");
   return Object.freeze({
@@ -739,9 +743,11 @@ export function assertCandidateArtifactExtractionInventory(
     releaseEvidencePath,
     headCommit,
     executableInspector,
+    authenticodeInspector,
   } = {},
 ) {
   const verifiedCandidate = validateWindowsCandidateExtractionInventory(value);
+  if (verifiedCandidate.schema_version !== 3) throw new Error("Final release acceptance requires NSIS-only extraction schema_version 3; legacy MSI inventory is not a release candidate.");
   const safeWorkspace = assertSafeExternalDirectory(workspace, "Windows candidate extraction workspace");
   const updaterMode = readTauriUpdaterMode(safeWorkspace);
   const evidence = loadCandidateReleaseEvidence({ workspace: safeWorkspace, productVersion: verifiedCandidate.product_version, releaseEvidencePath, headCommit });
@@ -793,7 +799,7 @@ export function assertCandidateArtifactExtractionInventory(
   assertCandidateExtractionOutputShape(outputRoot, "Windows candidate extraction output");
   const extractedRoot = assertSafeExternalDirectory(join(outputRoot, "extracted"), "Windows candidate extraction extracted root");
   const extractedNames = readdirSync(extractedRoot, { withFileTypes: true }).map((entry) => entry.name).sort();
-  assert.deepStrictEqual(extractedNames, ["msi", "nsis", "updater"], "Windows candidate extraction must publish exactly NSIS, MSI, and updater roots.");
+  assert.deepStrictEqual(extractedNames, ["nsis", "updater"], "Windows candidate extraction must publish exactly NSIS and updater roots.");
   const outputRelative = slashRelativePath(safeWorkspace, outputRoot, "Windows candidate extraction output root");
   const seenExtractedRoots = new Set();
   const identities = [];
@@ -854,7 +860,8 @@ export function assertCandidateArtifactExtractionInventory(
     const roleKey = canonicalCandidatePath(roleRoot);
     if (seenExtractedRoots.has(roleKey)) throw new Error("Windows candidate extraction roots must be unique: " + roleRoot);
     seenExtractedRoots.add(roleKey);
-    const extractedSummary = assertExtractedWindowsArtifactContents(roleRoot, "Windows candidate " + role + " extracted artifact", inventory);
+    const allowedExtraFiles = evidence.manifest.windowsSigning.components.filter((component) => /^payload\/uninstall[^/]*\.exe$/iu.test(component.path)).map((component) => component.path.slice(8));
+    const extractedSummary = assertExtractedWindowsArtifactContents(roleRoot, "Windows candidate " + role + " extracted artifact", inventory, { allowedExtraFiles });
     const treeSha256 = computeVerifiedCandidateTreeSha256(roleRoot, "Windows candidate " + role + " extracted tree");
     if (treeSha256 !== extraction.extracted_tree_sha256) {
       throw new Error(
@@ -866,6 +873,10 @@ export function assertCandidateArtifactExtractionInventory(
     if (executableSha256 !== String(evidence.executableArtifact.sha256).toLowerCase()) {
       throw new Error("Windows candidate " + role + " syndocal.exe SHA-256 does not match the authoritative release-evidence executable.");
     }
+    verifyWindowsSigningTree(evidence.manifest.windowsSigning, {
+      installer: join(safeWorkspace, verifiedCandidate.extractions.find((entry) => entry.role === "nsis").artifact_path),
+      payloadRoot: roleRoot, inventory, inspect: authenticodeInspector,
+    });
     const inspected = inspectCandidateExecutable(executableRecord.bytes, executableInspector, evidence.manifest.updater);
     if (inspected?.productVersion !== verifiedCandidate.product_version) throw new Error("Windows candidate " + role + " syndocal.exe ProductVersion does not match the candidate.");
     const runtimeIdentity = inspected?.runtimeIdentity;
@@ -877,7 +888,7 @@ export function assertCandidateArtifactExtractionInventory(
     }
     identities.push({ role, artifactPath: artifactRecord.realPath, extractedRoot: roleRoot, fileCount: extractedSummary.fileCount, executableSha256, productVersion: inspected.productVersion, runtimeIdentity });
   }
-  if (seenExtractedRoots.size !== 3) throw new Error("Windows candidate extraction must publish exactly three unique role roots.");
+  if (seenExtractedRoots.size !== 2) throw new Error("Windows candidate extraction must publish exactly two unique role roots.");
   for (let index = 1; index < identities.length; index += 1) {
     for (const field of ["executableSha256", "productVersion"]) {
       if (identities[index][field] !== identities[0][field]) throw new Error("Windows candidate extracted roots disagree on syndocal.exe " + field + ".");
@@ -1500,7 +1511,7 @@ function selfTest() {
     const candidateExecutableBytes = readVerifiedRegularFile(join(clean, "syndocal.exe"), "candidate fixture executable", { allowedRoots: [clean] }).bytes;
     const candidateExecutableHash = hashBytes(candidateExecutableBytes);
     const candidateManifest = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       productVersion: candidateVersion,
       tag: "v" + candidateVersion,
       commit: candidateCommit,
@@ -1514,10 +1525,17 @@ function selfTest() {
         publicKeyPath: "syndocal.pub",
         publicKeyFingerprint: hashBytes(candidatePublicKey),
       },
+      windowsSigning: {
+        schemaVersion: 1, state: "declared-unsigned", unsignedReason: "SignPath approval pending", signpath: null,
+        components: [
+          { path: "payload/uninstall.exe", sha256: candidateExecutableHash, ownership: "project", authenticode: "not-signed", certificateThumbprint: null },
+          { path: "installer/" + candidateNames.nsis, sha256: hashBytes(candidateArtifactBytes.nsis), ownership: "project", authenticode: "not-signed", certificateThumbprint: null },
+          ...readdirSync(clean).filter((name) => /\.(exe|dll)$/iu.test(name)).map((name) => ({ path: "payload/" + name, sha256: hashBytes(readVerifiedRegularFile(join(clean, name), "sign fixture", { allowedRoots: [clean] }).bytes), ownership: name === "syndocal.exe" ? "project" : "upstream", authenticode: "not-signed", certificateThumbprint: null })),
+        ],
+      },
       artifacts: [
         { role: "windows-executable", target: "windows-x86_64", filename: "syndocal.exe", path: "syndocal.exe", sha256: candidateExecutableHash },
         { role: "installer", target: "windows-x86_64", filename: candidateNames.nsis, path: candidateNames.nsis, sha256: hashBytes(candidateArtifactBytes.nsis) },
-        { role: "installer", target: "windows-x86_64", filename: candidateNames.msi, path: candidateNames.msi, sha256: hashBytes(candidateArtifactBytes.msi) },
         { role: "updater-payload", target: "windows-x86_64", filename: candidateNames.nsis, path: candidateNames.nsis, sha256: hashBytes(candidateArtifactBytes.nsis), signaturePath: candidateNames.nsis + ".sig", signatureSha256: hashBytes(candidateSignature) },
       ],
     };
@@ -1528,9 +1546,10 @@ function selfTest() {
     const candidateExtractedRoot = join(candidateOutputRoot, "extracted");
     mkdirSync(candidateExtractedRoot, { recursive: true });
     const candidateReports = [];
-    for (const role of ["nsis", "msi", "updater"]) {
+    for (const role of ["nsis", "updater"]) {
       const roleRoot = join(candidateExtractedRoot, role);
       cpSync(clean, roleRoot, { recursive: true });
+      writeFileSync(join(roleRoot, "uninstall.exe"), candidateExecutableBytes, { flag: "wx" });
       const artifactBytes = role === "updater" ? candidateArtifactBytes.nsis : candidateArtifactBytes[role];
       candidateReports.push({
         role,
@@ -1544,7 +1563,7 @@ function selfTest() {
       });
     }
     const candidateInventory = {
-      schema_version: 2,
+      schema_version: 3,
       product_version: candidateVersion,
       release_evidence: {
         path: "qa/release/release-evidence.json",
@@ -1558,7 +1577,7 @@ function selfTest() {
     writeFileSync(verifiedCandidateInventoryPath, JSON.stringify(candidateInventory, null, 2) + "\n", { flag: "wx" });
     let candidateInspectorCalls = 0;
     const extractedCandidateExecutablePaths = new Set(
-      ["nsis", "msi", "updater"].map((role) => join(candidateExtractedRoot, role, "syndocal.exe")),
+      ["nsis", "updater"].map((role) => join(candidateExtractedRoot, role, "syndocal.exe")),
     );
     const inspectedMaterializedPaths = [];
     const candidateVerificationOptions = {
@@ -1566,6 +1585,7 @@ function selfTest() {
       inventoryPath: verifiedCandidateInventoryPath,
       inventory: cleanInventory,
       headCommit: candidateCommit,
+      authenticodeInspector: () => ({ status: "NotSigned", thumbprint: null }),
       executableInspector: (materializedPath) => {
         if (extractedCandidateExecutablePaths.has(materializedPath)) {
           throw new Error("candidate inspector received an extracted executable path instead of a verified materialized copy.");
@@ -1595,6 +1615,7 @@ function selfTest() {
       const nsisInstaller = manifest.artifacts.find((artifact) => artifact.role === "installer" && artifact.filename === candidateNames.nsis);
       const updaterPayload = manifest.artifacts.find((artifact) => artifact.role === "updater-payload");
       nsisInstaller.sha256 = hashBytes(payloadBytes);
+      manifest.windowsSigning.components.find((entry) => entry.path.startsWith("installer/")).sha256 = hashBytes(payloadBytes);
       updaterPayload.sha256 = hashBytes(payloadBytes);
       updaterPayload.signatureSha256 = hashBytes(signatureBytes);
       const evidenceBytes = Buffer.from(JSON.stringify(manifest, null, 2) + "\n", "utf8");
@@ -1609,8 +1630,8 @@ function selfTest() {
     const candidateSummary = assertCandidateArtifactExtractionInventory(candidateInventory, candidateVerificationOptions);
     pass(
       candidateSummary.productVersion === candidateVersion
-        && candidateSummary.roles.length === 3
-        && inspectedMaterializedPaths.length === 3,
+        && candidateSummary.roles.length === 2
+        && inspectedMaterializedPaths.length === 2,
       "repository-owned candidate inventory verifies all payload trees and passes its inspector only materialized executable copies",
     );
     for (const unsafeCandidateChildPath of ["", ".", "nested/../payload", "nested\\payload", "payload:alternate-stream"]) {
@@ -1690,7 +1711,7 @@ function selfTest() {
     mkdirSync(join(candidateExtractedRoot, "unexpected-role"));
     rejects(
       () => assertCandidateArtifactExtractionInventory(candidateInventory, candidateVerificationOptions),
-      /exactly NSIS, MSI, and updater roots/,
+      /exactly NSIS and updater roots/,
     );
     rmSync(join(candidateExtractedRoot, "unexpected-role"), { recursive: true, force: true });
     const tamperedTreeInventory = structuredClone(candidateInventory);

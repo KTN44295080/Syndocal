@@ -1,3 +1,4 @@
+import "./sign-windows-release-state.test.mjs";
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign as signMessage } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -143,7 +144,7 @@ writeFileSync(join(evidenceRoot, "tauri-signer-public.key"), tauriSignerFixtureP
 const tauriSignerUpdaterManifest = {
   version,
   platforms: {
-    [target]: {
+    ["linux-x86_64"]: {
       signature: tauriSignerFixtureSignature,
       url: `https://releases.example.invalid/syndocal/beta/${tauriSignerFixtureName}`,
     },
@@ -154,7 +155,7 @@ writeFileSync(join(evidenceRoot, "updater-tauri-signer.json"), tauriSignerUpdate
 
 const manifestPath = join(evidenceRoot, "release-evidence.json");
 const baseManifest = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   productVersion: version,
   tag: `v${version}`,
   commit: head,
@@ -167,6 +168,14 @@ const baseManifest = {
     manifestSha256: hash(updaterManifestBytes),
     publicKeyPath: "syndocal.pub",
     publicKeyFingerprint: hash(Buffer.from(publicKey, "utf8")),
+  },
+  windowsSigning: {
+    schemaVersion: 1, state: "declared-unsigned", unsignedReason: "SignPath approval pending", signpath: null,
+    components: [
+      { path: "payload/syndocal.exe", sha256: hash(executableBytes), ownership: "project", authenticode: "not-signed", certificateThumbprint: null },
+      { path: "payload/uninstall.exe", sha256: hash(executableBytes), ownership: "project", authenticode: "not-signed", certificateThumbprint: null },
+      { path: "installer/" + payloadName, sha256: hash(payloadBytes), ownership: "project", authenticode: "not-signed", certificateThumbprint: null },
+    ],
   },
   artifacts: [
     {
@@ -214,6 +223,7 @@ const options = {
     throw new Error(`unknown tag ${tag}`);
   },
   productTags: ["v1.1.0", "v1.2.0-alpha.1", `v${version}`],
+  inspectAuthenticode: () => ({ status: "NotSigned", thumbprint: null }),
   inspectExecutable: (path, bytes, updater) => {
     inspectedExecutablePath = path;
     inspectedUpdater = updater;
@@ -258,6 +268,12 @@ const git = (args, cwd) => execFileSync("git", args, {
 }).trim();
 
 try {
+  rejects((m) => { m.schemaVersion = 1; }, /version 1 is retired/);
+  rejects((m) => { delete m.windowsSigning; }, /Windows signing declaration must be an object/);
+  rejects((m) => { m.windowsSigning.unsignedReason = null; }, /explicit reason/);
+  rejects((m) => { m.windowsSigning.components[0].authenticode = "valid"; }, /Mixed/);
+  rejects((m) => { m.windowsSigning.components[0].sha256 = "0".repeat(64); }, /final component SHA-256 mismatch/);
+  rejects((m) => { m.artifacts.push({ role: "installer", target, filename: "retired.msi", path: "retired.msi", sha256: hash(payloadBytes) }); }, /Artifact filename does not contain product version/);
   pass(
     tauriSignerFixtureBytes.equals(Buffer.from("Syndocal Tauri signer compatibility fixture v1\n", "utf8")),
     "Tauri signer fixture payload bytes remain the canonical LF-signed bytes",
@@ -390,6 +406,8 @@ try {
   tauriSignerManifest.updater.manifestSha256 = hash(tauriSignerUpdaterManifestBytes);
   tauriSignerManifest.updater.publicKeyPath = "tauri-signer-public.key";
   tauriSignerManifest.updater.publicKeyFingerprint = hash(Buffer.from(tauriSignerFixturePublicKey, "utf8"));
+  // The generic signer compatibility fixture is not a Windows NSIS installer.
+  tauriSignerManifest.artifacts[1].target = "linux-x86_64";
   tauriSignerManifest.artifacts[1].filename = tauriSignerFixtureName;
   tauriSignerManifest.artifacts[1].path = tauriSignerFixtureName;
   tauriSignerManifest.artifacts[1].sha256 = hash(tauriSignerFixtureBytes);
@@ -794,11 +812,10 @@ try {
   );
   staticRejects(
     (files) => {
-      const { msi } = windowsInstallerNames(expectedVersion);
-      files.set("README.md", replaceOnce(files.get("README.md"), msi, msi.replace("_ja-JP.msi", ".msi")));
+      files.set("README.md", replaceOnce(files.get("README.md"), readmeWindowsInstallerLine(expectedVersion), readmeWindowsInstallerLine(expectedVersion) + " `retired.msi`"));
     },
-    /versioned MSI name/,
-    "wrong README MSI name is rejected",
+    /NSIS-only/,
+    "retired README MSI distribution is rejected",
   );
   staticRejects(
     (files) => {
