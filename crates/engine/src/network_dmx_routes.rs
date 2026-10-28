@@ -5,7 +5,7 @@ use protocol::network_dmx_routes::{NetworkDmxRoute, validate_network_dmx_routes}
 #[derive(Clone)]
 pub(super) struct NetworkDmxRoutesRollback {
     // Publication rollback clones its record. Physical senders have one owner.
-    prior: Arc<Mutex<Option<Vec<RuntimeDmxOutput>>>>,
+    prior: Arc<Mutex<Option<(RuntimeDmxOutput, Vec<RuntimeDmxOutput>)>>>,
     generation: u64,
     last_error: Option<String>,
 }
@@ -16,8 +16,11 @@ impl NetworkDmxRoutesRollback {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .take();
-        if let Some(prior) = prior {
-            runtime.additional_dmx_outputs = prior;
+        if let Some((primary, additional)) = prior {
+            runtime.output = primary.config;
+            runtime.dmx_sender = primary.sender;
+            runtime.dmx_sender_recovery = primary.recovery;
+            runtime.additional_dmx_outputs = additional;
             runtime.dmx_route_configuration_generation = self.generation;
             runtime.last_error = self.last_error;
         }
@@ -63,24 +66,19 @@ impl EngineRuntime {
         if current != expected_outputs {
             return Err("DMX routes changed before publication".into());
         }
-        let staged_primary = DmxOutputConfig {
-            enabled: false,
-            ..self.output.clone()
-        };
-        if !self.output.enabled || !show_artnet_loopback_route_is_exact_staged(&staged_primary) {
-            return Err(
-                "Prepare the built-in U0 output before configuring network universes".into(),
-            );
-        }
-        if current.iter().skip(1).any(|r| {
+        if current.iter().any(|r| {
             !matches!(
                 r.protocol,
                 DmxOutputProtocol::ArtNet | DmxOutputProtocol::Sacn
             )
         }) {
             return Err(
-                "Legacy serial output routes cannot be replaced by network route configuration"
-                    .into(),
+                "Legacy serial output must be retired before network route replacement".into(),
+            );
+        }
+        if !self.configured_dmx_legacy_usb_absence_verified() {
+            return Err(
+                "Retire the legacy U0 USB mirror before replacing its network route".into(),
             );
         }
         let ownership = self.output_ownership_gate.status();
@@ -117,7 +115,6 @@ impl EngineRuntime {
             .map_err(|_| "Safety authority poisoned")?;
         if Instant::now() > expires_at
             || shared.has_pending_safety_blackout_enqueue()?
-            || safety.engaged
             || safety.epoch != expected_safety_epoch
             || safety.generation != expected_safety_generation
         {
@@ -127,7 +124,24 @@ impl EngineRuntime {
         }
         let generation = self.dmx_route_configuration_generation;
         let last_error = self.last_error.clone();
-        let prior = std::mem::replace(&mut self.additional_dmx_outputs, candidates);
+        let primary = if candidates.is_empty() {
+            RuntimeDmxOutput::new_with_lighting_allowed(
+                protocol::network_dmx_routes::empty_network_dmx_output(),
+                false,
+                &self.shared_telemetry.open_dmx_safety_write_gate,
+            )
+        } else {
+            candidates.remove(0)
+        };
+        let prior_primary = RuntimeDmxOutput {
+            config: std::mem::replace(&mut self.output, primary.config),
+            sender: std::mem::replace(&mut self.dmx_sender, primary.sender),
+            recovery: std::mem::replace(&mut self.dmx_sender_recovery, primary.recovery),
+        };
+        let prior = (
+            prior_primary,
+            std::mem::replace(&mut self.additional_dmx_outputs, candidates),
+        );
         self.bump_dmx_route_configuration_generation();
         self.last_error = None;
         Ok(NetworkDmxRoutesRollback {

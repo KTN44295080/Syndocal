@@ -16,6 +16,7 @@ import { exerciseBatch3DensityInPage, runUiDensityBatch3Checks } from "./ui-dens
 import { runUiDensityBatch4Checks } from "./ui-density-batch4-contract.mjs";
 import {
   exerciseSetupIoOperatorDeck,
+  readDmxUniverseTableInPage,
   selectSetupIoConnection,
 } from "./setup-io-operator-contract.mjs";
 
@@ -5115,74 +5116,41 @@ function setupIoDisclosurePassed(result) {
 
 async function exerciseDmxRoutePagination(client) {
   return await evaluatePageFunction(client, async () => {
-    const routeList = document.querySelector('[data-io-route-list]');
-    const totalRouteCount = Number(routeList?.getAttribute('data-io-route-total') ?? 0);
-    const pageCount = Number(routeList?.getAttribute('data-io-route-page-count') ?? 0);
-    const visitedRouteIndexes = new Set();
-    const visitedRouteSignatures = new Map();
-    let allVisitedRowsComplete = true;
-
-    const readCurrentPage = () => {
-      const rows = routeList ? [...routeList.querySelectorAll('[data-io-route-row]')] : [];
-      for (const row of rows) {
-        const routeIndex = Number(row.getAttribute('data-route-index'));
-        if (Number.isInteger(routeIndex)) {
-          visitedRouteIndexes.add(routeIndex);
-          visitedRouteSignatures.set(routeIndex, {
-            index: routeIndex,
-            protocol: row.querySelector('strong')?.textContent?.trim() ?? '',
-            target: row.querySelector('[data-io-route-target]')?.textContent?.trim() ?? '',
-            universe: row.querySelector('[data-io-route-universe]')?.textContent?.trim() ?? '',
-          });
-        }
-        allVisitedRowsComplete = allVisitedRowsComplete && Boolean(
-           row.querySelector('.ioStatusDot') &&
-           row.querySelector('strong') &&
-           row.querySelector('[data-io-route-target]') &&
-           row.querySelector('[data-io-route-universe]')
-         );
+    const panel = document.querySelector('.dmxOutputConfigPanel');
+    const table = panel?.querySelector('[data-dmx-universe-table]');
+    const visited = new Map();
+    const settle = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const read = () => {
+      for (const row of table?.querySelectorAll('tbody tr') ?? []) {
+        const networkIndex = row.getAttribute('data-network-dmx-route');
+        const usbUniverse = row.getAttribute('data-usb-dmx-cable');
+        const key = networkIndex === null ? 'usb:' + usbUniverse : 'network:' + networkIndex;
+        visited.set(key, { index: networkIndex === null ? Number(usbUniverse) : Number(networkIndex),
+          protocol: row.querySelector('select')?.value ?? 'Usb',
+          target: row.querySelector('[data-network-dmx-destination]')?.value ?? '',
+          universe: row.querySelector('input[type="number"]')?.value ?? '',
+          complete: Boolean(row.querySelector('.ioConnectionState') && row.querySelector('input[type="checkbox"]')) });
       }
     };
-    const settle = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-
-    readCurrentPage();
-    let forwardClicks = 0;
-    while (forwardClicks < pageCount + 1) {
-      const next = routeList?.querySelector('button[aria-label="Next route page"]');
-      if (!(next instanceof HTMLButtonElement) || next.disabled) break;
-      next.click();
-      forwardClicks += 1;
-      await settle();
-      readCurrentPage();
+    const page = panel?.querySelector('[data-dmx-page]');
+    const pageCount = page ? Number(page.textContent.split('/')[1]) : 1;
+    let forwardClicks = 0, backwardClicks = 0;
+    read();
+    const next = () => panel?.querySelector('[data-dmx-page]')?.nextElementSibling;
+    const previous = () => panel?.querySelector('[data-dmx-page]')?.previousElementSibling;
+    while (next() instanceof HTMLButtonElement && !next().disabled && forwardClicks < pageCount) {
+      next().click(); forwardClicks++; await settle(); read();
     }
-    const nextAtEnd = routeList?.querySelector('button[aria-label="Next route page"]');
-    const reachedLastPage = pageCount === 1 || (nextAtEnd instanceof HTMLButtonElement && nextAtEnd.disabled);
-
-    let backwardClicks = 0;
-    while (backwardClicks < pageCount + 1) {
-      const previous = routeList?.querySelector('button[aria-label="Previous route page"]');
-      if (!(previous instanceof HTMLButtonElement) || previous.disabled) break;
-      previous.click();
-      backwardClicks += 1;
-      await settle();
+    const reachedLastPage = pageCount === 1 || next()?.disabled === true;
+    while (previous() instanceof HTMLButtonElement && !previous().disabled && backwardClicks < pageCount) {
+      previous().click(); backwardClicks++; await settle();
     }
-    const firstPageRestored = routeList?.querySelector('[data-io-route-row]')?.getAttribute('data-route-index') === '0';
-    const visitedIndexes = [...visitedRouteIndexes].sort((left, right) => left - right);
-
-    return {
-      routeListFound: Boolean(routeList),
-      totalRouteCount,
-      pageCount,
-      visitedRouteCount: visitedIndexes.length,
-      firstVisitedRouteIndex: visitedIndexes[0] ?? -1,
-      lastVisitedRouteIndex: visitedIndexes.at(-1) ?? -1,
-      forwardClicks,
-      backwardClicks,
-      reachedLastPage,
-      firstPageRestored,
-      allVisitedRowsComplete,
-      routeSignatures: [...visitedRouteSignatures.values()].sort((left, right) => left.index - right.index),
-    };
+    const rows = [...visited.values()];
+    return { routeListFound: Boolean(table), totalRouteCount: rows.length, pageCount,
+      visitedRouteCount: rows.length, firstVisitedRouteIndex: rows[0]?.index ?? -1,
+      lastVisitedRouteIndex: rows.at(-1)?.index ?? -1, forwardClicks, backwardClicks,
+      reachedLastPage, firstPageRestored: pageCount === 1 || previous()?.disabled === true,
+      allVisitedRowsComplete: rows.length > 0 && rows.every(row => row.complete), routeSignatures: rows };
   });
 }
 
@@ -5318,62 +5286,23 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
   await sleep(100);
   measurements.io = await measure(client, `setup-io-${viewport.width}x${viewport.height}`);
   const routePagination = await exerciseDmxRoutePagination(client);
-  const logicalRoute = routePagination.routeSignatures[0] ?? null;
-  // The one-shot Art-Net action is intentionally not part of the default
-  // operator surface. Open its diagnostic disclosure only for this reachability
-  // probe, then close it again before the remaining disclosure checks.
-  await client.evaluate(`(() => {
-    const disclosure = document.querySelector('[data-io-disclosure="dmx-individual-diagnostics"]');
-    if (disclosure && !disclosure.open) disclosure.querySelector(':scope > summary')?.click();
-  })()`);
-  await waitForClientCondition(
-    client,
-    `document.querySelector('[data-io-disclosure="dmx-individual-diagnostics"]')?.open === true && Boolean(document.querySelector('[data-io-control="dmx-enable-staged-show-artnet-loopback-route"]'))`,
-    "DMX individual diagnostics disclosure",
-  );
-  const showRouteControl = await evaluatePageFunction(client, () => {
-    const panel = document.querySelector('.dmxOutputConfigPanel');
-    const control = panel?.querySelector('[data-io-control="dmx-enable-staged-show-artnet-loopback-route"]');
-    if (!(control instanceof HTMLButtonElement)) return null;
-    const rect = control.getBoundingClientRect();
-    const style = getComputedStyle(control);
-    return {
-      visible: rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden',
-      disabled: control.disabled,
-      routeState: panel?.querySelector('.ioConnectionState')?.textContent?.trim() ?? '',
-      mismatchAlertPresent: Boolean(panel?.querySelector('[role="alert"]')),
-    };
-  });
-  measurements.ioAfterShowRoute = await measure(
-    client,
-    `setup-io-show-artnet-loopback-${viewport.width}x${viewport.height}`,
-  );
-  await client.evaluate(`(() => {
-    const disclosure = document.querySelector('[data-io-disclosure="dmx-individual-diagnostics"]');
-    if (disclosure?.open) disclosure.querySelector(':scope > summary')?.click();
-  })()`);
+  const universeTable = await evaluatePageFunction(client, readDmxUniverseTableInPage);
+  measurements.ioAfterShowRoute = measurements.io;
+  // The hydrated browser snapshot supplies enabled 127.0.0.1 U0 as an editable row.
+  // Disabled legacy loopback preservation is covered by the focused table fixture.
+  // No fixed row, Prepare, manual start or secondary network Apply remains.
   flows.dmx = {
-    logicalRouteExact:
-      measurements.io.ioRouteTotalCount === 2 &&
-      routePagination.totalRouteCount === 2 &&
-      routePagination.pageCount === 1 &&
-      routePagination.visitedRouteCount === 2 &&
-      routePagination.firstVisitedRouteIndex === 0 &&
-      routePagination.lastVisitedRouteIndex === 1 &&
-      routePagination.reachedLastPage &&
-      routePagination.firstPageRestored &&
-      routePagination.forwardClicks === routePagination.backwardClicks &&
-      routePagination.allVisitedRowsComplete &&
-      logicalRoute?.protocol === 'Art-Net · ArtDmx' &&
-      logicalRoute?.target === '127.0.0.1:6454' &&
-      logicalRoute?.universe === 'Wire U0 · 512ch · 40–44fps',
-    showArtNetLoopbackControlReachable:
-      showRouteControl?.visible === true &&
-      showRouteControl.disabled === false &&
-      showRouteControl.routeState === 'Staged disabled' &&
-      showRouteControl.mismatchAlertPresent === false &&
-      measurements.ioAfterShowRoute.ioDocumentAndAppScrollZero &&
-      isContained(measurements.ioAfterShowRoute),
+    independentRoutesEditable:
+      universeTable.tableCount === 1 && universeTable.rows.length === 1 &&
+      universeTable.rows[0].universe === '0' && universeTable.rows[0].protocol === 'ArtNet' &&
+      universeTable.rows[0].destination === '127.0.0.1' && universeTable.rows[0].enabled === true &&
+      universeTable.rows[0].editable && routePagination.allVisitedRowsComplete &&
+      routePagination.reachedLastPage && routePagination.firstPageRestored,
+    singleApplyReachable:
+      universeTable.applyCount === 1 && universeTable.applyVisible &&
+      universeTable.applyDisabled === true && universeTable.retiredControls === 0 &&
+      measurements.io.ioDocumentAndAppScrollZero && isContained(measurements.io),
+    universeTable,
   };
   disclosures.dmx = [
     await exerciseSetupIoDisclosure(client, 'dmx-input', '[data-io-control="dmx-input-protocol"]'),
@@ -5624,16 +5553,10 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     };
   }
 
-  // The operator surface keeps the primary DMX controls while the route,
-  // identity, manual, and protocol details stay collapsed until explicitly
-  // requested. Nested details count toward the structural disclosure contract
-  // but must not count as default-visible controls.
-  // One DMX universes table: Show DMX (select + Prepare), the one Add row
-  // (universe, transport, Add, Rescan), Apply and Reload, plus the four
-  // disclosure summaries. USB cable and network rows add controls only when
-  // present.
-  const expectedDmxControlCount = 12;
-  const expectedDmxDisclosureCount = 7;
+  // One editable hydrated legacy network row (6 controls), Add builder (3),
+  // combined Apply/Reload/Refresh (3), and the three DMX disclosures.
+  const expectedDmxControlCount = 15;
+  const expectedDmxDisclosureCount = 3;
   const legacyStoredTabs = await exerciseLegacySetupIoStoredTabs(client);
   const checks = {
     ioSubTabBarRemoved:
@@ -5682,8 +5605,8 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     documentAndAppScrollZero: measurements.io.ioDocumentAndAppScrollZero,
     unifiedSurfaceContract: hasExpectedSetupSurface(measurements.io),
     disclosuresOpenAndExposeControls: Object.values(disclosures).flat().every(setupIoDisclosurePassed),
-    dmxLogicalRouteExact: flows.dmx.logicalRouteExact,
-    showArtNetLoopbackControlReachable: flows.dmx.showArtNetLoopbackControlReachable,
+    independentDmxRoutesEditable: flows.dmx.independentRoutesEditable,
+    singleDmxApplyReachable: flows.dmx.singleApplyReachable,
     midiConnectFlows: dmxOnly || Object.values(flows.midi).every(Boolean),
     oscListenFlow: dmxOnly || Object.values(flows.osc).every(Boolean),
     remoteStartFlow: dmxOnly || flows.remote.passed,
@@ -9743,8 +9666,8 @@ async function measure(client, label) {
       zone.getAttribute('data-io-zone') ?? '',
       [...zone.querySelectorAll('[data-io-disclosure]')].filter((disclosure) => disclosure.open).length,
     ]));
-    const ioRouteList = setupIoPanel?.querySelector('[data-io-route-list]') ?? null;
-    const ioRouteRows = setupIoPanel ? [...setupIoPanel.querySelectorAll('[data-io-route-row]')] : [];
+    const ioRouteList = setupIoPanel?.querySelector('[data-dmx-universe-table]') ?? null;
+    const ioRouteRows = setupIoPanel ? [...setupIoPanel.querySelectorAll('[data-dmx-universe-table] tbody tr')] : [];
     const dmxOutputConfigPanel = document.querySelector('.setupMode-io .dmxOutputConfigPanel');
     const dmxOutputConfigPanelRect = dmxOutputConfigPanel?.getBoundingClientRect() ?? null;
     const outputDiagnosticsDesk = document.querySelector('.setupMode-io .outputDiagnosticsDesk');
@@ -10882,14 +10805,13 @@ async function measure(client, label) {
           app.scrollLeft === 0 && app.scrollTop === 0 &&
           app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight
         )),
-      ioRouteTotalCount: Number(ioRouteList?.getAttribute('data-io-route-total') ?? 0),
-      ioRoutePageCount: Number(ioRouteList?.getAttribute('data-io-route-page-count') ?? 0),
+      ioRouteTotalCount: ioRouteRows.length,
+      ioRoutePageCount: Number(setupIoPanel?.querySelector('[data-dmx-page]')?.textContent?.split('/')[1] ?? 1),
       ioRouteRowCount: ioRouteRows.length,
       ioCompleteRouteRowCount: ioRouteRows.filter((row) =>
-        row.querySelector('.ioStatusDot') &&
-        row.querySelector('strong') &&
-        row.querySelector('[data-io-route-target]') &&
-        row.querySelector('[data-io-route-universe]')
+        row.querySelector('.ioConnectionState') &&
+        row.querySelector('input[type="checkbox"]') &&
+        row.querySelector('input[type="number"]')
       ).length,
       ioShowArtNetLoopbackControlReachable: visibleInteractiveElements(setupIoPanel).includes(
         setupIoPanel?.querySelector('[data-io-control="dmx-enable-staged-show-artnet-loopback-route"]'),
@@ -13451,17 +13373,17 @@ function hasExpectedSetupSurface(result) {
       result.ioVisibleZoneCount === 1 &&
       JSON.stringify(result.ioVisibleZoneNames) === JSON.stringify(["dmx"]) &&
       result.ioAllZoneRectsPositive &&
-      result.ioActiveZoneVisibleControlCount === 12 &&
+      result.ioActiveZoneVisibleControlCount === 15 &&
       result.ioNetworkRoutesPanelCount === 1 &&
       result.visibleDmxEnableStagedShowArtNetLoopbackRouteCount === 0 &&
       !result.ioShowArtNetLoopbackControlReachable &&
-      JSON.stringify(result.ioZoneDisclosureCounts) === JSON.stringify({ dmx: 7 }) &&
+      JSON.stringify(result.ioZoneDisclosureCounts) === JSON.stringify({ dmx: 3 }) &&
       JSON.stringify(result.ioZoneOpenDisclosureCounts) === JSON.stringify({ dmx: 0 }) &&
-      result.ioDisclosureCount === 7 &&
+      result.ioDisclosureCount === 3 &&
       result.ioOpenDisclosureCount === 0 &&
-      result.ioRouteTotalCount === 2 &&
+      result.ioRouteTotalCount === 1 &&
       result.ioRoutePageCount === 1 &&
-      result.ioRouteRowCount === 2 &&
+      result.ioRouteRowCount === 1 &&
       result.ioCompleteRouteRowCount === result.ioRouteRowCount &&
       result.visibleDmxOutputConfigPanelCount === 1 &&
       result.visibleArtRdmPanelCount === 0 &&
@@ -40261,8 +40183,8 @@ async function main() {
               `${Object.values(result.disclosures).flat().length} ` +
             `scroll=${Number(result.measurements.io.ioDocumentAndAppScrollZero)} ` +
             `legacy=${result.legacyStoredTabs.states.filter((state) => state.storedSetupSubTab === 'io').length}/4 ` +
-            `showArtNet=${Number(result.flows.dmx.showArtNetLoopbackControlReachable)} ` +
-            `logicalRoute=${Number(result.flows.dmx.logicalRouteExact)} ` +
+            `showArtNet=${Number(result.flows.dmx.singleApplyReachable)} ` +
+            `logicalRoute=${Number(result.flows.dmx.independentRoutesEditable)} ` +
             `routePages=${result.routePagination.visitedRouteCount}/` +
               `${result.routePagination.totalRouteCount}:${result.routePagination.pageCount} ` +
             `midi=${result.flows.midi ? `${Number(result.flows.midi.clockConnected)}/${Number(result.flows.midi.controlConnected)}` : "-"} ` +

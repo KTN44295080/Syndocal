@@ -1278,8 +1278,8 @@ where
             )?;
             Ok(result)
         }),
-        OutputControlActionV2::SetNetworkDmxRoutes { routes, .. } => {
-            super::network_dmx_routes::set_with_output_control_fence(state, routes, &request.expected_fence, &lease_request)
+        OutputControlActionV2::SetNetworkDmxRoutes { routes, replace_primary, .. } => {
+            super::network_dmx_routes::set_with_output_control_fence(state, routes, *replace_primary, &request.expected_fence, &lease_request)
         }
         OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. } => {
             super::enable_show_artnet_loopback_route_with_output_control_fence(
@@ -1859,7 +1859,7 @@ fn validate_output_action_current(
 ) -> Result<(), String> {
     match action {
         OutputControlActionV2::EnableOutput => Ok(()),
-        OutputControlActionV2::SetNetworkDmxRoutes { routes, .. } => super::network_dmx_routes::validate_current(state, routes).map(|_| ()),
+        OutputControlActionV2::SetNetworkDmxRoutes { routes, replace_primary, .. } => super::network_dmx_routes::validate_current(state, routes, *replace_primary).map(|_| ()),
         OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. } => {
             super::validate_current_staged_show_artnet_loopback_route(state).map(|_| ())
         }

@@ -5,6 +5,7 @@ use protocol::network_dmx_routes::{NetworkDmxRoute, validate_network_dmx_routes}
 pub(super) fn validate_current(
     state: &AppState,
     routes: &[NetworkDmxRoute],
+    replace_primary: bool,
 ) -> Result<Vec<DmxOutputConfig>, String> {
     validate_network_dmx_routes(routes)?;
     let (outputs, primary) = state.engine.dmx_outputs_and_output_snapshot();
@@ -12,13 +13,14 @@ pub(super) fn validate_current(
         enabled: false,
         ..primary.clone()
     };
-    if !primary.enabled
-        || !is_exact_staged_show_artnet_loopback_route(&staged)
-        || outputs.first() != Some(&primary)
+    if !replace_primary
+        && (!primary.enabled
+            || !is_exact_staged_show_artnet_loopback_route(&staged)
+            || outputs.first() != Some(&primary))
     {
         return Err("Prepare U0 output before applying network universes".into());
     }
-    if outputs.iter().skip(1).any(|r| {
+    if outputs.iter().any(|r| {
         !matches!(
             r.protocol,
             DmxOutputProtocol::ArtNet | DmxOutputProtocol::Sacn
@@ -26,16 +28,20 @@ pub(super) fn validate_current(
     }) {
         return Err("Network routes cannot replace a legacy serial device route".into());
     }
-    let next = std::iter::once(primary)
-        .chain(routes.iter().map(NetworkDmxRoute::config))
+    let next = complete_routes(&outputs, routes, replace_primary)
+        .iter()
+        .map(NetworkDmxRoute::config)
         .collect::<Vec<_>>();
-    validate_dmx_output_routes(&next)?;
+    if !next.is_empty() {
+        validate_dmx_output_routes(&next)?;
+    }
     Ok(outputs)
 }
 
 pub(super) fn set_with_output_control_fence(
     state: &AppState,
     routes: &[NetworkDmxRoute],
+    replace_primary: bool,
     expected_fence: &OutputControlFenceV1,
     lease_request: &OutputLeaseRequest,
 ) -> Result<
@@ -68,13 +74,12 @@ pub(super) fn set_with_output_control_fence(
             return Err("Network DMX configuration requires active Both output authority".into());
         }
         let safety = state.engine.safety_blackout_authority();
-        if safety.engaged
-            || safety.epoch != expected_fence.safety_blackout_epoch
+        if safety.epoch != expected_fence.safety_blackout_epoch
             || safety.generation != expected_fence.safety_blackout_generation
         {
             return Err("Safety authority changed before network DMX configuration".into());
         }
-        validate_current(state, routes)
+        validate_current(state, routes, replace_primary)
     };
     with_revalidated_output_transition(
         || lock_output_ownership_transition(state),
@@ -99,15 +104,21 @@ pub(super) fn set_with_output_control_fence(
                 if revalidate()? != prior {
                     return Err("DMX routes changed before final publication".into());
                 }
-                let next = std::iter::once(prior[0].clone())
-                    .chain(routes.iter().map(NetworkDmxRoute::config))
-                    .collect::<Vec<_>>();
+                let complete = complete_routes(&prior, routes, replace_primary);
+                let next = if complete.is_empty() {
+                    vec![protocol::network_dmx_routes::empty_network_dmx_output()]
+                } else {
+                    complete
+                        .iter()
+                        .map(NetworkDmxRoute::config)
+                        .collect::<Vec<_>>()
+                };
                 if next == prior {
                     return Ok(false);
                 }
                 state.engine.set_network_dmx_routes_published(
                     prior.clone(),
-                    routes.to_vec(),
+                    complete,
                     expected_fence.safety_blackout_epoch,
                     expected_fence.safety_blackout_generation,
                     Instant::now() + Duration::from_secs(2),
@@ -158,4 +169,66 @@ pub(super) fn set_with_output_control_fence(
             Ok((applied, after, receipt))
         },
     )
+}
+
+/// Normalize the explicitly retained external v1 append scope once; the engine
+/// has one complete-list implementation for both payload versions.
+fn complete_routes(
+    prior: &[DmxOutputConfig],
+    routes: &[NetworkDmxRoute],
+    replace_primary: bool,
+) -> Vec<NetworkDmxRoute> {
+    if replace_primary {
+        return routes.to_vec();
+    }
+    prior
+        .first()
+        .into_iter()
+        .filter(|primary| !protocol::network_dmx_routes::is_empty_network_dmx_output(primary))
+        .map(|primary| NetworkDmxRoute {
+            enabled: primary.enabled,
+            protocol: if primary.protocol == DmxOutputProtocol::Sacn {
+                protocol::network_dmx_routes::NetworkDmxProtocol::Sacn
+            } else {
+                protocol::network_dmx_routes::NetworkDmxProtocol::ArtNet
+            },
+            target_ip: primary.target_ip.clone(),
+            port: primary.port,
+            universe: primary.universe,
+        })
+        .chain(routes.iter().cloned())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn complete_scope_replaces_first_row_and_v1_retains_its_original_endpoint() {
+        let old = DmxOutputConfig {
+            enabled: true,
+            ..DmxOutputConfig::default()
+        };
+        let route = NetworkDmxRoute {
+            enabled: true,
+            protocol: protocol::network_dmx_routes::NetworkDmxProtocol::ArtNet,
+            target_ip: "192.0.2.9".into(),
+            port: 6454,
+            universe: 7,
+        };
+        let old_scope = complete_routes(
+            std::slice::from_ref(&old),
+            std::slice::from_ref(&route),
+            false,
+        );
+        assert_eq!(old_scope.len(), 2);
+        assert_eq!(old_scope[0].config(), old);
+        let new_scope = complete_routes(
+            std::slice::from_ref(&old),
+            std::slice::from_ref(&route),
+            true,
+        );
+        assert_eq!(new_scope, vec![route]);
+        assert!(complete_routes(&[old], &[], true).is_empty());
+    }
 }

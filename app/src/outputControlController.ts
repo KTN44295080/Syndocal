@@ -43,8 +43,8 @@ export const OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID =
   "syndocal.output.usb_dmx_universe_route.enable.v1";
 export const OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID =
   "syndocal.output.usb_dmx_universe_route.stop.v1";
-/** Universes an independent USB-DMX cable may output (Universe 0 is Show DMX). */
-export const USB_DMX_CABLE_MIN_UNIVERSE = 1;
+/** Universes an independent USB-DMX cable may output. */
+export const USB_DMX_CABLE_MIN_UNIVERSE = 0;
 export const USB_DMX_CABLE_MAX_UNIVERSE = 32_767;
 export const OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID =
   "syndocal.output.dsf2026_artnet_acceptance_probe.send.v1";
@@ -247,7 +247,7 @@ export type OutputShowSpoutOutputsResetAction = {
 };
 
 export type OutputControlAction =
-  | { kind: "set_network_dmx_routes"; routes: NetworkDmxRoute[]; lease: OutputLeaseAuthority }
+  | { kind: "set_network_dmx_routes"; routes: NetworkDmxRoute[]; lease: OutputLeaseAuthority; replace_primary?: boolean }
   | OutputEnableAction
   | OutputShowArtNetLoopbackRouteEnableAction
   | OutputShowSerialDmxSafetyBlackoutRouteEnableAction
@@ -935,7 +935,8 @@ const assertAction = (action: OutputControlOperationAction): void => {
     return;
   }
   if (action.kind === "set_network_dmx_routes") {
-    if (!hasExactKeys(record, ["kind", "routes", "lease"])) throw new Error("Network DMX route action was invalid; nothing was applied.");
+    if (!hasExactKeys(record, record.replace_primary === undefined ? ["kind", "routes", "lease"] : ["kind", "routes", "lease", "replace_primary"])
+      || record.replace_primary !== undefined && typeof record.replace_primary !== "boolean") throw new Error("Network DMX route action was invalid; nothing was applied.");
     assertLeaseAuthority(action.lease, "Network DMX lease authority was invalid; nothing was applied.");
     validateNetworkDmxRoutes(action.routes);
     return;
@@ -1520,15 +1521,16 @@ const executeOutputControlOperation = async (
 
 /** Apply only to the project whose network route editor prepared this intent. */
 export async function executeNetworkDmxRoutes(invoke: FrontendTauriInvoke, routes: NetworkDmxRoute[], lease: OutputLeaseAuthority, expectedProject: OutputControlExpectedProject): Promise<OutputControlReceipt> {
-  return executeOutputControlOperation(invoke, { kind: "set_network_dmx_routes", routes, lease }, { expectedProject });
+  return executeOutputControlOperation(invoke, { kind: "set_network_dmx_routes", routes, lease, replace_primary: true }, { expectedProject });
 }
 
 /** Execute an ordinary action with a caller-selected exact active lease. */
 export async function executeOutputControl(
   invoke: FrontendTauriInvoke,
   action: OutputControlAction,
+  options: Pick<OutputControlExecutionOptions, "expectedProject"> = {},
 ): Promise<OutputControlReceipt> {
-  return executeOutputControlOperation(invoke, action);
+  return executeOutputControlOperation(invoke, action, options);
 }
 
 const milliunitsForLightingControl = (value: number): number => {
@@ -1662,8 +1664,9 @@ export async function executeDisplayWindowOutputControl(
 /** Normal one-step output path; no lease selection or six-digit code is shown. */
 export async function enableOutput(
   invoke: FrontendTauriInvoke,
+  expectedProject?: OutputControlExpectedProject,
 ): Promise<OutputControlReceipt> {
-  return executeOutputControl(invoke, { kind: "enable_output" });
+  return executeOutputControl(invoke, { kind: "enable_output" }, { expectedProject });
 }
 
 /**

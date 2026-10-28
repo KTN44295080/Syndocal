@@ -1,6 +1,6 @@
-// The DMX universes table: one table for Show DMX (U0), the USB-DMX cables
-// and the Art-Net / sACN universes. Row states come from the same native
-// status the actions are gated on.
+// The DMX universes table: one table of independent routes (USB-DMX, Art-Net,
+// sACN), one Apply. Row states come from the same native status the actions
+// are gated on. There is no mandatory U0 loopback and no USB mirror state.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
@@ -10,41 +10,16 @@ const transpiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
   fileName: "dmxUniverseState.ts",
 });
-const { showDmxUniverseState, networkDmxRouteState, sameNetworkDmxRoute } = await import(
+const dmxUniverseState = await import(
   `data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString("base64")}`
 );
+const { networkDmxRouteState, sameNetworkDmxRoute } = dmxUniverseState;
+assert.equal("showDmxUniverseState" in dmxUniverseState, false,
+  "the retired U0 loopback/USB-mirror state (Not prepared, Armed · S0) must not return");
 
 const route = (protocol, universe, enabled = true, target_ip = "10.0.0.5", port = 6454) => ({
   enabled, protocol, target_ip, port, universe, serial_port: "", serial_baud_rate: 57600,
 });
-const identity = (port_name) => ({
-  port_name, port_type: "usb", usb_vid: 1027, usb_pid: 24577, serial_number: `SN-${port_name}`,
-  manufacturer: "FTDI", product: "FT232R",
-});
-const worker = (overrides) => ({
-  routeStatusRevision: "1", active: true, zeroFrameQueued: false, zeroFramePhysicalWriteCompleted: true,
-  liveFrameQueued: true, workerShutdownCompleted: true, faulted: false, artnetMirrorLive: true,
-  artnetMirrorDetail: "", detail: "", ...overrides,
-});
-const show = {
-  route: route("ArtNet", 0, true, "127.0.0.1"),
-  binding: { state: "selected_and_present", selected: identity("COM3"), detail: "", routeStatusRevision: "1" },
-  worker: null,
-  safetyBlackoutEngaged: false,
-};
-
-// Universe 0 before Prepare, Art-Net only, live, armed under S0 and faulted.
-assert.deepEqual(showDmxUniverseState({ ...show, route: route("ArtNet", 0, false, "127.0.0.1") }),
-  { label: "Not prepared", tone: "idle" });
-assert.deepEqual(showDmxUniverseState(show), { label: "Art-Net only · USB stopped", tone: "idle" });
-assert.deepEqual(showDmxUniverseState({ ...show, binding: null }), { label: "Art-Net only", tone: "idle" });
-assert.deepEqual(showDmxUniverseState({ ...show, worker: worker({}) }), { label: "Sending", tone: "ready" });
-assert.deepEqual(showDmxUniverseState({ ...show, worker: worker({ liveFrameQueued: false }) }),
-  { label: "Started", tone: "ready" });
-assert.deepEqual(showDmxUniverseState({ ...show, worker: worker({}), safetyBlackoutEngaged: true }),
-  { label: "Armed · S0", tone: "ready" });
-assert.deepEqual(showDmxUniverseState({ ...show, worker: worker({ faulted: true }) }),
-  { label: "Fault · S0 latched", tone: "error" });
 
 // Network universes and their last send result.
 const telemetry = (overrides) => ({
@@ -72,26 +47,33 @@ for (const changed of [
 }
 assert.equal(sameNetworkDmxRoute(undefined, route("ArtNet", 2)), false);
 
-// One panel owns every DMX output universe; the former separate editors are
-// row groups of its table.
+// One panel owns every DMX output universe as row groups of one table.
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
 const setupIoView = await readFile(new URL("../src/components/SetupIoWorkspaceView.tsx", import.meta.url), "utf8");
 const panel = await readFile(new URL("../src/components/DmxOutputConfigPanel.tsx", import.meta.url), "utf8");
-const usbRows = await readFile(new URL("../src/components/UsbDmxCablesPanel.tsx", import.meta.url), "utf8");
-const networkRows = await readFile(new URL("../src/components/NetworkDmxRoutesPanel.tsx", import.meta.url), "utf8");
-// The DMX zone is mounted by SetupIoWorkspaceView (extracted from App); neither may mount the former sections.
 for (const [name, mount] of [["App", app], ["SetupIoWorkspaceView", setupIoView]]) {
   assert.doesNotMatch(mount, /<UsbDmxCablesPanel|<NetworkDmxRoutesPanel|<DmxUniverseOverview/,
     `${name}: the DMX zone must not mount separate cable, network or overview sections`);
 }
 assert.equal([...app.matchAll(/<DmxOutputConfigPanel\b/g)].length, 0, "App must not mount a second DMX output panel");
 assert.equal([...setupIoView.matchAll(/<DmxOutputConfigPanel\b/g)].length, 1);
-assert.match(setupIoView, /<DmxOutputConfigPanel[\s\S]*?onApplyNetworkRoutes=\{applyDmxOutputRoutes\}[\s\S]*?onStopUsbDmxUniverse=\{stopUsbDmxUniverse\}/);
-assert.match(usbRows, /<tbody class="dmxUniverseGroup" data-usb-dmx-cables>/);
-assert.match(networkRows, /<tbody class="dmxUniverseGroup" data-network-dmx-routes>/);
-assert.match(panel, /<tfoot>[\s\S]*data-dmx-universe-add[\s\S]*<option value="Usb" disabled=\{!props\.usb\.canAddCable\(\)\}>USB-DMX<\/option>/,
-  "the one Add row must offer USB-DMX only while another cable may be added");
-assert.match(panel, /data-network-dmx-save\s+disabled=\{!network\.canApply\(\)\}/,
-  "Apply must stay disabled without edits, while busy, on a conflict or before U0 is prepared");
-assert.match(networkRows, /const canApply = \(\) => dirty\(\) && !busy\(\) && !conflict\(\) && showRoutePrepared\(\);/);
-console.log("DMX universes table: PASS (U0, network row states, draft vs applied, one panel, one Add row, gated Apply)");
+assert.match(setupIoView, /<DmxOutputConfigPanel[\s\S]*?onApplyUniverseTable=\{applyDmxOutputRoutes\}/);
+assert.doesNotMatch(setupIoView, /<DmxOutputConfigPanel[^>]*onPrepareShowDmx|onApplyNetworkRoutes=|onStartUsbDmxUniverse=/,
+  "the separate Prepare / network Apply / per-cable start steps are not part of the operator table");
+assert.equal([...panel.matchAll(/<table\b/g)].length, 1, "one table");
+assert.match(panel, /<tbody\s+data-usb-dmx-cables>/);
+assert.match(panel, /<tbody\s+data-network-dmx-routes>/);
+assert.match(panel, /<tfoot>[\s\S]*data-dmx-universe-add[\s\S]*<option\s+value="Usb">USB-DMX/,
+  "the one Add row offers USB-DMX as an ordinary route kind");
+assert.equal([...panel.matchAll(/data-dmx-universe-apply/g)].length, 1, "exactly one commit control");
+assert.match(panel, /data-dmx-universe-apply\s+disabled=\{!dirty\(\) \|\| busy\(\) \|\| conflict\(\) \|\| Boolean\(validation\(\)\)\}/,
+  "Apply stays disabled without edits, while busy, on a conflict or while the plan is invalid");
+assert.match(panel, /when=\{props\.usbDmxUniverses\?\.legacyRouteActive\}>[\s\S]*?data-dmx-legacy-usb-active[\s\S]*?disabled=\{busy\(\) \|\| !props\.safetyBlackoutEngaged\}[\s\S]*?onStopLegacyUsbDmx\(\)/,
+  "a pre-table USB-DMX worker started elsewhere has one recovery stop, only under safety blackout");
+assert.match(setupIoView, /onStopLegacyUsbDmx=\{async \(\) => \{\s*await stopShowSerialDmxSafetyBlackoutRoute\(\);\s*await refreshUsbDmxUniverses\(\);/);
+assert.doesNotMatch(panel, /Prepare|S0 engaged|output role|Armed · S0|Not prepared/,
+  "developer wording and the Prepare step stay out of the operator table");
+console.log("DMX universes table: PASS (independent route rows, draft vs applied, one panel, one Add row, one gated Apply)");
+
+await import("./check-dmx-universe-table.mjs");
+await import("./check-dmx-universe-apply.mjs");

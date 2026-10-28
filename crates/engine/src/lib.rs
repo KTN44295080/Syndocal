@@ -4263,6 +4263,8 @@ define_engine_command! {
     /// an independent cable that needs no Art-Net route.
     EnableShowSerialDmxSafetyBlackoutRoute {
         universe: u16,
+        independent: bool,
+        legacy_u0_invariants: bool,
         expected_device: io::serial_dmx::VerifiedUsbSerialPortIdentity,
         expected_safety_epoch: u64,
         expected_safety_generation: u64,
@@ -4273,6 +4275,7 @@ define_engine_command! {
     /// disabled through this command and no project state is changed.
     StopShowSerialDmxSafetyBlackoutRoute {
         universe: u16,
+        independent: bool,
         expected_safety_epoch: u64,
         expected_safety_generation: u64,
         expires_at: Instant,
@@ -7814,7 +7817,9 @@ impl EngineHandle {
         expected_safety_generation: u64,
         expires_at: Instant,
     ) -> Result<(), String> {
-        self.enable_usb_dmx_universe_route(
+        self.enable_usb_dmx_route_internal(
+            false,
+            false,
             SHOW_SERIAL_DMX_UNIVERSE,
             expected_device,
             expected_safety_epoch,
@@ -7823,12 +7828,51 @@ impl EngineHandle {
         )
     }
 
-    /// Start the USB-DMX cable of one universe from an exact-captured local
-    /// device identity: Universe 0 is the Unity-mirror cable, any other
-    /// universe an independent cable. The acknowledgement means the device
-    /// opened and its initial all-zero transaction completed.
+    /// Start an independent cable, including U0, without a mirror precondition.
     pub fn enable_usb_dmx_universe_route(
         &self,
+        universe: u16,
+        expected_device: io::serial_dmx::VerifiedUsbSerialPortIdentity,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expires_at: Instant,
+    ) -> Result<(), String> {
+        self.enable_independent_usb_dmx_route_with_legacy_u0_policy(
+            universe,
+            expected_device,
+            expected_safety_epoch,
+            expected_safety_generation,
+            expires_at,
+            false,
+        )
+    }
+
+    /// Migration-only policy: retain the old U0 channel-500 invariant without
+    /// imposing it on newly authored independent U0 cables.
+    pub fn enable_independent_usb_dmx_route_with_legacy_u0_policy(
+        &self,
+        universe: u16,
+        expected_device: io::serial_dmx::VerifiedUsbSerialPortIdentity,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expires_at: Instant,
+        legacy_u0_invariants: bool,
+    ) -> Result<(), String> {
+        self.enable_usb_dmx_route_internal(
+            true,
+            legacy_u0_invariants,
+            universe,
+            expected_device,
+            expected_safety_epoch,
+            expected_safety_generation,
+            expires_at,
+        )
+    }
+
+    fn enable_usb_dmx_route_internal(
+        &self,
+        independent: bool,
+        legacy_u0_invariants: bool,
         universe: u16,
         expected_device: io::serial_dmx::VerifiedUsbSerialPortIdentity,
         expected_safety_epoch: u64,
@@ -7838,18 +7882,18 @@ impl EngineHandle {
         let (ack, receiver) = mpsc::sync_channel(1);
         self.send(EngineCommand::EnableShowSerialDmxSafetyBlackoutRoute {
             universe,
+            independent,
+            legacy_u0_invariants,
             expected_device,
             expected_safety_epoch,
             expected_safety_generation,
             expires_at,
             ack,
         })
-        .map_err(|error| format!("Show serial DMX worker activation could not enqueue: {error}"))?;
+        .map_err(|error| format!("USB-DMX worker activation could not enqueue: {error}"))?;
         receiver
             .recv_timeout(Duration::from_secs(3))
-            .map_err(|error| {
-                format!("Show serial DMX worker activation acknowledgement failed: {error}")
-            })?
+            .map_err(|error| format!("USB-DMX worker activation acknowledgement failed: {error}"))?
     }
 
     /// Stop only the fixed runtime-only Open DMX worker.
@@ -7859,7 +7903,8 @@ impl EngineHandle {
         expected_safety_generation: u64,
         expires_at: Instant,
     ) -> Result<(), String> {
-        self.stop_usb_dmx_universe_route(
+        self.stop_usb_dmx_route_internal(
+            false,
             SHOW_SERIAL_DMX_UNIVERSE,
             expected_safety_epoch,
             expected_safety_generation,
@@ -7875,9 +7920,27 @@ impl EngineHandle {
         expected_safety_generation: u64,
         expires_at: Instant,
     ) -> Result<(), String> {
+        self.stop_usb_dmx_route_internal(
+            true,
+            universe,
+            expected_safety_epoch,
+            expected_safety_generation,
+            expires_at,
+        )
+    }
+
+    fn stop_usb_dmx_route_internal(
+        &self,
+        independent: bool,
+        universe: u16,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expires_at: Instant,
+    ) -> Result<(), String> {
         let (ack, receiver) = mpsc::sync_channel(1);
         self.send(EngineCommand::StopShowSerialDmxSafetyBlackoutRoute {
             universe,
+            independent,
             expected_safety_epoch,
             expected_safety_generation,
             expires_at,
@@ -7890,7 +7953,6 @@ impl EngineHandle {
                 format!("Show serial DMX worker stop acknowledgement failed: {error}")
             })?
     }
-
     /// Begin the one managed show-DMX fail-stop transaction.  The caller
     /// provides only authority observations captured from this engine; route,
     /// Art-Net endpoint, payload, USB identity, retry, and recovery are never
@@ -24981,6 +25043,8 @@ impl EngineRuntime {
             }
             EngineCommand::EnableShowSerialDmxSafetyBlackoutRoute {
                 universe,
+                independent,
+                legacy_u0_invariants,
                 expected_device,
                 expected_safety_epoch,
                 expected_safety_generation,
@@ -24992,14 +25056,15 @@ impl EngineRuntime {
                         "Show serial DMX worker activation expired before engine execution"
                             .to_string(),
                     )
-                } else if universe == SHOW_SERIAL_DMX_UNIVERSE {
+                } else if !independent && universe == SHOW_SERIAL_DMX_UNIVERSE {
                     self.apply_show_serial_dmx_safety_blackout_route_enable(
                         &expected_device,
                         expected_safety_epoch,
                         expected_safety_generation,
                     )
                 } else {
-                    self.apply_independent_usb_dmx_route_enable(
+                    self.apply_independent_usb_dmx_route_enable_with_legacy_u0_policy(
+                        legacy_u0_invariants,
                         universe,
                         &expected_device,
                         expected_safety_epoch,
@@ -25013,6 +25078,7 @@ impl EngineRuntime {
             }
             EngineCommand::StopShowSerialDmxSafetyBlackoutRoute {
                 universe,
+                independent,
                 expected_safety_epoch,
                 expected_safety_generation,
                 expires_at,
@@ -25020,7 +25086,7 @@ impl EngineRuntime {
             } => {
                 let result = if Instant::now() > expires_at {
                     Err("Show serial DMX worker stop expired before engine execution".to_string())
-                } else if universe == SHOW_SERIAL_DMX_UNIVERSE {
+                } else if !independent && universe == SHOW_SERIAL_DMX_UNIVERSE {
                     self.apply_show_serial_dmx_safety_blackout_route_stop(
                         expected_safety_epoch,
                         expected_safety_generation,
@@ -52019,6 +52085,9 @@ impl EngineRuntime {
                 "Show serial DMX worker requires one exact machine-local USB/PnP identity"
                     .to_string(),
             );
+        }
+        if self.retained_independent_usb_dmx_cable_count() >= MAX_INDEPENDENT_USB_DMX_ROUTES {
+            return Err("USB-DMX supports at most four retained cables in total".into());
         }
         if self.independent_usb_dmx_route_uses_device(expected_device) {
             return Err(

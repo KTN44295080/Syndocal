@@ -301,28 +301,19 @@ export function SetupIoWorkspaceView(props: { model: SetupIoWorkspaceViewModel; 
           <DmxOutputConfigPanel
             output={output()}
             serialPorts={serialPorts()}
-            serialDmxMachineBindingStatus={serialDmxMachineBindingStatus()}
-            showSerialDmxSafetyBlackoutRouteStatus={showSerialDmxSafetyBlackoutRouteStatus()}
             safetyBlackoutEngaged={snapshot().safety_blackout_engaged}
-            showDmxPreparationBusy={showDmxPreparationBusy()}
-            showDmxPreparationStage={showDmxPreparationStage()}
-            onPrepareShowDmx={prepareShowDmx}
-            onEnableStagedShowArtNetLoopbackRoute={enableStagedShowArtNetLoopbackRoute}
-            onConfirmSerialDmxMachineBinding={confirmSerialDmxMachineBinding}
-            onEnableShowSerialDmxSafetyBlackoutRoute={enableShowSerialDmxSafetyBlackoutRoute}
-            onStopShowSerialDmxSafetyBlackoutRoute={stopShowSerialDmxSafetyBlackoutRoute}
             routes={snapshot().dmx_outputs.length > 0 ? snapshot().dmx_outputs : [snapshot().output]}
             routeTelemetry={snapshot().telemetry.last_dmx_route_results}
             projectEpoch={projectMappingsAuthority().project_epoch}
-            onApplyNetworkRoutes={applyDmxOutputRoutes}
+            onApplyUniverseTable={applyDmxOutputRoutes}
             usbDmxUniverses={usbDmxUniverses()}
             usbDmxUniversesStale={usbDmxUniversesStale()}
             onRefreshUsbDmxUniverses={refreshUsbDmxUniverses}
             onRescanSerialPorts={refreshSerialPorts}
-            onBindUsbDmxUniverse={bindUsbDmxUniverse}
-            onClearUsbDmxUniverse={clearUsbDmxUniverse}
-            onStartUsbDmxUniverse={startUsbDmxUniverse}
-            onStopUsbDmxUniverse={stopUsbDmxUniverse}
+            onStopLegacyUsbDmx={async () => {
+              await stopShowSerialDmxSafetyBlackoutRoute();
+              await refreshUsbDmxUniverses();
+            }}
           />
           <div class="ioDisclosureStack">
           <IoDisclosure

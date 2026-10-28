@@ -474,7 +474,7 @@ assert.equal(videoLaunchReceipt.operation_id, runtime.OUTPUT_VIDEO_CLIP_LAUNCH_O
 assert.equal(videoLaunchHarness.executeArgs[0].request.action.layer_id, 42);
 assert.equal(videoLaunchHarness.executeArgs[0].request.action.fade_ms, 1500);
 
-const networkRoutesAction = { kind: "set_network_dmx_routes", lease: lease(), routes: [
+const networkRoutesAction = { kind: "set_network_dmx_routes", replace_primary: true, lease: lease(), routes: [
   {enabled: true, protocol: "ArtNet", target_ip: "127.0.0.1", port: 16454, universe: 0},
   {enabled: true, protocol: "ArtNet", target_ip: "127.0.0.1", port: 16454, universe: 1},
 ] };
@@ -1075,7 +1075,6 @@ const [
   engineShowSerialDmxTestsSource,
   registrySource,
   usbDmxIdentitySource,
-  usbDmxCablesPanelSource,
 ] = await Promise.all([
   read("src/tauriInvokeCommands.ts"),
   read("src/tauri-invoke-manifest.json"),
@@ -1096,7 +1095,6 @@ const [
   read("../crates/engine/src/show_serial_dmx_tests.rs"),
   read("../crates/protocol/src/control_plane_registry_v2.rs"),
   read("src/usbDmxIdentity.ts"),
-  read("src/components/UsbDmxCablesPanel.tsx"),
 ]);
 const outputDiagnosticsPanelSource = await read("src/components/OutputDiagnosticsPanel.tsx");
 const serialDmxStatusPollerRuntime = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(
@@ -1605,13 +1603,13 @@ assert.doesNotMatch(
 );
 assert.match(
   appSource,
-  /<DmxOutputConfigPanel[\s\S]*output=\{output\(\)\}[\s\S]*onEnableStagedShowArtNetLoopbackRoute=\{enableStagedShowArtNetLoopbackRoute\}/,
-  "the DMX workbench must pass its actual route to the fixed Art-Net show-route surface",
+  /<DmxOutputConfigPanel[\s\S]*output=\{output\(\)\}[\s\S]*onApplyUniverseTable=\{applyDmxOutputRoutes\}/,
+  "the DMX workbench must commit its complete draft through one fenced Apply",
 );
 assert.match(
   appSource,
-  /<DmxOutputConfigPanel[\s\S]*showSerialDmxSafetyBlackoutRouteStatus=\{showSerialDmxSafetyBlackoutRouteStatus\(\)\}[\s\S]*onEnableShowSerialDmxSafetyBlackoutRoute=\{enableShowSerialDmxSafetyBlackoutRoute\}[\s\S]*onStopShowSerialDmxSafetyBlackoutRoute=\{stopShowSerialDmxSafetyBlackoutRoute\}/,
-  "the DMX workbench must render the live USB-DMX worker status and fixed actions",
+  /<DmxOutputConfigPanel[\s\S]*usbDmxUniverses=\{usbDmxUniverses\(\)\}[\s\S]*usbDmxUniversesStale=\{usbDmxUniversesStale\(\)\}/,
+  "the DMX workbench must show independently observed USB worker status, including stale truth",
 );
 assert.match(
   appSource,
@@ -1628,71 +1626,20 @@ assert.match(
   /window\.clearInterval\(serialDmxRuntimeStatusTimer\);[\s\S]*disposeSerialDmxRuntimeStatuses\(\);/,
   "unmount must stop the dedicated USB-DMX poll and invalidate late results",
 );
-assert.match(dmxOutputPanelSource, /output\.protocol === "ArtNet"/);
-assert.match(dmxOutputPanelSource, /output\.target_ip === "127\.0\.0\.1"/);
-assert.match(dmxOutputPanelSource, /output\.port === 6454/);
-assert.match(dmxOutputPanelSource, /output\.serial_port === ""/);
-assert.match(dmxOutputPanelSource, /output\.universe === 0/);
-assert.match(dmxOutputPanelSource, /data-io-control="dmx-enable-staged-show-artnet-loopback-route"/);
-assert.match(dmxOutputPanelSource, /data-io-usb-dmx-route/);
-assert.match(dmxOutputPanelSource, /<strong>Enttec Open DMX<\/strong>/,
-  "the routine route list must use the concise USB-DMX label");
-assert.match(dmxOutputPanelSource, /Worker unavailable · S0 required/,
-  "unknown USB-DMX worker state must remain visible without a prose block");
-assert.match(
-  usbDmxIdentitySource,
-  /export const hasExactMachineLocalOpenDmxIdentity[\s\S]*port\.usb_vid > 0[\s\S]*port\.usb_pid > 0[\s\S]*serial_number[\s\S]*serialDmxDeviceInstance/,
-  "a USB-DMX Confirm candidate must require a complete nonzero USB/PnP identity",
-);
-assert.match(
-  dmxOutputPanelSource,
-  /import \{ hasExactMachineLocalOpenDmxIdentity \} from "\.\.\/usbDmxIdentity";/,
-  "the Show DMX panel must use the shared identity predicate",
-);
-assert.match(
-  usbDmxCablesPanelSource,
-  /hasExactMachineLocalOpenDmxIdentity\(port\)[\s\S]*sameUsbDmxCable\(props\.showDmxCable, port\)/,
-  "a USB-DMX cable candidate needs a complete identity and must not be the Universe 0 cable",
-);
-assert.match(
-  usbDmxCablesPanelSource,
-  /const canStop = \(row: CableRow\) => props\.safetyBlackoutEngaged/,
-  "stopping a USB-DMX cable must require the engaged safety blackout",
-);
-assert.match(
-  usbDmxCablesPanelSource,
-  /data-usb-dmx-cable-stop\s+disabled=\{busy\(\) \|\| !canStop\(row\(\)\)\}/,
-  "the Stop button must use the S0-gated predicate",
-);
-assert.match(
-  dmxOutputPanelSource,
-  /disabled=\{!hasExactMachineLocalOpenDmxIdentity\(port\)\}/,
-  "enumerated rows with missing or zero VID/PID must remain diagnostic-only and disabled",
-);
-assert.match(
-  dmxOutputPanelSource,
-  /disabled=\{!hasExactMachineLocalOpenDmxIdentity\(selectedSerialPort\(\)\) \|\| !serialBindingMutationAdmissible\(\)\}/,
-  "Confirm must use the same complete nonzero identity predicate and conservative route-admission gate as its option",
-);
-assert.match(
-  dmxOutputPanelSource,
-  /disabled=\{!serialWorkerArmAdmissible\(\) \|\| !serialWorkerStatusKnown\(\) \|\| !bindingReady\(\) \|\| !artNetUnityMirrorEnabled\(\)\}/,
-  "USB-DMX start must fail closed while worker truth, bounded shutdown, or the exact enabled Art-Net mirror is unavailable",
-);
-assert.match(
-  dmxOutputPanelSource,
-  /disabled=\{!serialWorkerActive\(\) \|\| !serialWorkerStatusKnown\(\) \|\| !props\.safetyBlackoutEngaged\}/,
-  "USB-DMX stop must not claim a stale worker can be controlled after status loss",
-);
-assert.match(dmxOutputPanelSource, /<dl class="dmxProtocolFacts">[\s\S]*wire U0 · 512ch · 40–44fps[\s\S]*logical U0 · ≈32\.5fps/,
-  "the USB-DMX UI must keep the concise Art-Net and USB route facts distinct");
-assert.match(dmxOutputPanelSource, /Detailed diagnostics are written to the application log\./,
-  "verbose USB-DMX diagnostics must be directed to the application log");
-assert.doesNotMatch(
-  dmxOutputPanelSource,
-  /generic FTDI VID\/PID is not auto-selected|queue acceptance from the bounded physical zero transaction|latest-frame mirror[\s\S]*does not promise physical delivery/,
-  "the routine UI must not expose implementation prose for USB-DMX internals",
-);
+// Task74: the fixed-loopback/mirror UI contract is retired. Whole-table drafts
+// retain exact-device validation; executable USB stop/bind/start fencing lives
+// in check-dmx-universe-apply.mjs and the native/engine tests.
+assert.match(dmxOutputPanelSource, /data-dmx-universe-table/);
+assert.match(dmxOutputPanelSource, /data-dmx-universe-apply/);
+assert.doesNotMatch(dmxOutputPanelSource, /onPrepareShowDmx|artNetUnityMirrorEnabled|serialWorkerArmAdmissible/);
+assert.match(dmxOutputPanelSource, /hasExactMachineLocalOpenDmxIdentity/);
+assert.match(dmxOutputPanelSource, /sameUsbDmxCable/);
+assert.match(dmxOutputPanelSource, /Status unavailable/);
+const tableApplySource = await read("src/applyDmxUniverseTable.ts");
+assert.match(tableApplySource, /context\.safetyBlackoutEngaged/);
+assert.match(tableApplySource, /context\.isCurrent\(\)/);
+assert.match(tableApplySource, /context\.stopUsb/);
+assert.match(usbDmxIdentitySource, /export const hasExactMachineLocalOpenDmxIdentity[\s\S]*port\.usb_vid > 0[\s\S]*port\.usb_pid > 0[\s\S]*serial_number[\s\S]*serialDmxDeviceInstance/);
 assert.match(outputDiagnosticsPanelSource, /data-io-dmx-protocol-diagnostics[\s\S]*data-io-control="dmx-send-dsf2026-artnet-acceptance-probe"/);
 assert.match(outputDiagnosticsPanelSource, /probeStatus\(\)\?\.status !== "available"/,
   "a successful or unknown durable one-shot status must keep the probe disabled");
@@ -1700,17 +1647,8 @@ assert.match(outputDiagnosticsPanelSource, /probeStatus\(\)\?\.status !== "in_do
   "only a durable InDoubt outcome may enable the no-send reconciliation action");
 assert.match(outputDiagnosticsPanelSource, /Consumed · no repeat/,
   "the fixed probe UI must show the terminal no-repeat state concisely");
-assert.match(
-  dmxOutputPanelSource,
-  /disabled=\{!exactRoute\(\) \|\| props\.output\.enabled\}/,
-  "the show-route enable action must fail closed for a logical-route mismatch",
-);
-assert.match(dmxOutputPanelSource, /role="alert"[\s\S]*127\.0\.0\.1:6454/);
-assert.doesNotMatch(
-  dmxOutputPanelSource,
-  /onAddDmxRoute|onRemoveDmxRoute|onApplyDmxRoute|setOutputProtocol/,
-  "the show DMX panel must not reintroduce a generic route editor",
-);
+assert.doesNotMatch(dmxOutputPanelSource, /dmx-enable-staged-show-artnet-loopback-route/,
+  "normal setup has no separate fixed-loopback enable commit");
 assert.match(ioConnectionDeckSource, /id: "dmx"[\s\S]*summary: "Output \+ input"/);
 assert.doesNotMatch(
   ioConnectionDeckSource,
@@ -1819,16 +1757,10 @@ assert.match(
   /route_status_revision: String,[\s\S]*worker_shutdown_completed: bool[\s\S]*try_show_serial_dmx_safety_blackout_route_status_snapshot/,
   "both strict USB-DMX IPC status endpoints must carry the same revisioned worker shutdown truth",
 );
-assert.match(
-  dmxOutputPanelSource,
-  /serialBindingMutationAdmissible[\s\S]*workerShutdownCompleted[\s\S]*zeroFrameQueued[\s\S]*status\.faulted && !props\.safetyBlackoutEngaged/,
-  "the UI must conservatively disable machine-local replacement during live, incomplete-zero, detached, or unlatchable states",
-);
-assert.match(
-  dmxOutputPanelSource,
-  /serialWorkerArmAdmissible[\s\S]*status\.active \|\| status\.liveFrameQueued[\s\S]*workerShutdownCompleted[\s\S]*status\.faulted && !props\.safetyBlackoutEngaged[\s\S]*disabled=\{!serialWorkerArmAdmissible\(\)/,
-  "the UI must prevent Arm from creating a replacement worker while shutdown is detached, while retaining only S0-latched joined-fault recovery",
-);
+assert.match(tableApplySource, /workerShutdownCompleted[\s\S]*liveFrameQueued[\s\S]*zeroFrameQueued/,
+  "new table Apply preflight preserves physical-worker shutdown and zero-write fences");
+assert.match(tableApplySource, /cable\.faulted && !context\.safetyBlackoutEngaged/,
+  "faulted USB recovery remains safety-blackout-only");
 assert.match(
   engineShowSerialDmxStatusSource,
   /fn require_show_serial_dmx_enable_admission[\s\S]*status\.active \|\| status\.live_frame_queued[\s\S]*!status\.worker_shutdown_completed[\s\S]*status\.zero_frame_queued[\s\S]*!status\.faulted[\s\S]*status\.faulted && \(!safety_authority_engaged \|\| !physical_s0_latched\)/,

@@ -1,136 +1,65 @@
-import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
-import { mkdir, writeFile, unlink } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import { homedir } from 'node:os';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { createServer as createTcpServer } from 'node:net';
-import { createServer } from 'vite';
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
+import { writeFile, unlink, mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { createServer } from "vite";
+import { createServer as createTcpServer } from "node:net";
 
-// Browser plugin unavailable; actual Solid component in headless Playwright.
-// All output callbacks are stand-ins: this test never invokes Tauri or hardware.
+// The network universes are row groups of the one DMX universes table
+// (DmxOutputConfigPanel). Every callback is a stand-in: no Tauri, no hardware.
 const require = createRequire(import.meta.url);
 let chromium;
-try { ({chromium} = require('playwright')); } catch {
-  ({chromium} = require(resolve(homedir(), '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright')));
-}
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const artifactDir = resolve(root, '../target/qa/usb-dmx-alpha71');
-const fixtureName = `.usb-dmx-proof-${process.pid}.tsx`;
-const fixturePath = resolve(root, fixtureName);
-let server, browser;
+try { ({chromium} = require("playwright")); }
+catch { ({chromium} = require(resolve(homedir(), ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright"))); }
+const root = resolve(import.meta.dirname, ".."), name = ".network-routes-proof-" + process.pid + ".tsx", fixture = resolve(root, name);
+const artifactDir = process.env.SYNDOCAL_DMX_UI_EVIDENCE ?? resolve(root, "../../ui-evidence");
+let browser, server;
 try {
-  await mkdir(artifactDir, {recursive:true});
-  await writeFile(fixturePath, `
-import {render} from 'solid-js/web';
-import {createSignal} from 'solid-js';
+  await mkdir(artifactDir,{recursive:true});
+  await writeFile(fixture, `
+import {render} from 'solid-js/web';import {createSignal} from 'solid-js';
 import {DmxOutputConfigPanel} from './src/components/DmxOutputConfigPanel';
 import {serialDmxConfirmationRequest} from './src/serialDmxDeviceInstance';
 import './src/theme.css';import './src/styles.css';
-const [ports,setPorts]=createSignal([]), [binding,setBinding]=createSignal(null);
-const [cables,setCables]=createSignal({bindings:[],cables:[],persistenceError:null});
-const proof={requests:[], cableBinds:[], platform: v=>{
- const valid={name:v==='mac'?'/dev/cu.usbserial-A':v==='macusb'?'usb-ftdi://000000010000abcd':'COM4',port_type:'USB',usb_vid:1027,usb_pid:24577,
- serial_number:'A',manufacturer:'FTDI',product:'FT232R USB UART',
- ...(v!=='windows'?{macos_device_instance_id:'ioreg:000000010000abcd'}:{windows_device_instance_id:'FTDIBUS-A'})};
- setPorts([valid,{...valid,name:'incomplete',windows_device_instance_id:null,macos_device_instance_id:null}]);setBinding(null);
-}, missing:()=>{setPorts([]);setBinding(null);}, cables:status=>setCables(status)};
-window.proof=proof;
-const confirm=port=>{proof.requests.push(serialDmxConfirmationRequest(port));setBinding({state:'selected_and_present',selected:{...port,port_name:port.name}});};
-render(()=><main class="app" style="padding:24px;overflow:auto"><DmxOutputConfigPanel
- output={{protocol:'ArtNet',target_ip:'127.0.0.1',port:6454,universe:0,serial_port:'',enabled:true}}
- serialPorts={ports()} serialDmxMachineBindingStatus={binding()}
- showSerialDmxSafetyBlackoutRouteStatus={{active:false,faulted:false,workerShutdownCompleted:true}}
- safetyBlackoutEngaged={true} showDmxPreparationBusy={false} showDmxPreparationStage={null}
- onPrepareShowDmx={port=>proof.requests.push(serialDmxConfirmationRequest(port))}
- onConfirmSerialDmxMachineBinding={confirm} onEnableStagedShowArtNetLoopbackRoute={()=>{}}
- onEnableShowSerialDmxSafetyBlackoutRoute={()=>{}} onStopShowSerialDmxSafetyBlackoutRoute={()=>{}}
- routes={[{protocol:'ArtNet',target_ip:'127.0.0.1',port:6454,universe:0,serial_port:'',serial_baud_rate:57600,enabled:true}]}
- routeTelemetry={[]} projectEpoch={1} onApplyNetworkRoutes={async()=>{}}
- usbDmxUniverses={cables()} usbDmxUniversesStale={false}
- onRefreshUsbDmxUniverses={()=>{}} onRescanSerialPorts={()=>{}} onBindUsbDmxUniverse={(universe,port)=>proof.cableBinds.push([universe,port.name])}
- onClearUsbDmxUniverse={()=>{}} onStartUsbDmxUniverse={()=>{}} onStopUsbDmxUniverse={()=>{}}
-/></main>,document.body);
-proof.platform('mac');
+const sentinel={enabled:false,protocol:'ArtNet',target_ip:'0.0.0.0',port:0,universe:0,serial_port:'',serial_baud_rate:57600};
+const [ports,setPorts]=createSignal([]),[epoch,setEpoch]=createSignal(1),[usb,setUsb]=createSignal({bindings:[],cables:[],persistenceError:null}),[blackout,setBlackout]=createSignal(true),[stale,setStale]=createSignal(false);
+window.__usbProof={calls:[],requests:[],blackout:setBlackout,stale:setStale,fault(){setUsb({...usb(),cables:usb().cables.map(row=>({...row,faulted:true}))});},platform(value){const valid={name:value==='mac'?'/dev/cu.usbserial-A':value==='macusb'?'usb-ftdi://000000010000abcd':'COM4',port_type:'USB',usb_vid:1027,usb_pid:24577,serial_number:'A',manufacturer:'FTDI',product:'FT232R USB UART',...(value==='windows'?{windows_device_instance_id:'FTDIBUS-A'}:{macos_device_instance_id:'ioreg:000000010000abcd'})};setPorts([valid,{...valid,name:'incomplete',windows_device_instance_id:null,macos_device_instance_id:null}]);setUsb({bindings:[],cables:[],persistenceError:null});setEpoch(epoch()+1);},missing(){setPorts([]);setUsb({bindings:[],cables:[],persistenceError:null});setEpoch(epoch()+1);}};
+render(()=><main class="app" style="padding:24px;overflow:auto"><DmxOutputConfigPanel output={sentinel} routes={[]} routeTelemetry={[]} projectEpoch={epoch()} serialPorts={ports()} usbDmxUniverses={usb()} usbDmxUniversesStale={stale()} safetyBlackoutEngaged={blackout()} onRefreshUsbDmxUniverses={()=>{}} onRescanSerialPorts={()=>{}} onApplyUniverseTable={async plan=>{window.__usbProof.calls.push(structuredClone(plan));window.__usbProof.requests.push(serialDmxConfirmationRequest(plan.usb[0].port));const identity={...plan.usb[0].port,port_name:plan.usb[0].port.name};setUsb({bindings:[{universe:0,state:'selected_and_present',identity,detail:''}],cables:[{universe:0,active:true,faulted:false,workerShutdownCompleted:false,liveFrameQueued:true}],persistenceError:null});}}/></main>,document.body);
 `);
-  const reservation=createTcpServer();
-  await new Promise(r=>reservation.listen(0,'127.0.0.1',r));
-  const port=reservation.address().port;
-  await new Promise((r,j)=>reservation.close(e=>e?j(e):r()));
-  server=await createServer({root,server:{host:'127.0.0.1',port,strictPort:true},logLevel:'error',
-    plugins:[{name:'usb-dmx-proof',configureServer(s){s.middlewares.use((req,res,next)=>{
-      if(!req.url?.startsWith('/usb-dmx-proof'))return next();
-      res.setHeader('Content-Type','text/html');
-      res.end(`<html><head><title>USB-DMX proof</title><link rel="icon" href="data:,"></head><body><script type="module" src="/${fixtureName}"></script></body></html>`);
-    });}}]});
+  const reservation=createTcpServer();await new Promise(resolve=>reservation.listen(0,"127.0.0.1",resolve));const fixturePort=reservation.address().port;await new Promise((resolve,reject)=>reservation.close(error=>error?reject(error):resolve()));
+  server = await createServer({root, cacheDir: resolve(root, ".vite-task74-usb"), server: {host: "127.0.0.1", port: fixturePort, strictPort: true}, plugins:[{name:"network-route-fixture",configureServer(vite){vite.middlewares.use((request,response,next)=>{if(request.url?.split("?")[0]!=="/network-routes-proof")return next();response.setHeader("Content-Type","text/html");response.end('<html><head><link rel="icon" href="data:,"></head><body><script type="module" src="/'+name+'"></script></body></html>');});}}]});
   await server.listen();
-  const executablePath=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].filter(Boolean).find(existsSync);
-  browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
-  const page=await browser.newPage(), errors=[];
-  page.on('pageerror',e=>errors.push(String(e)));
-  page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
-  const results=[];
-  for(const width of [1920,1280])for(const platform of ['mac','macusb','windows']) {
-    await page.setViewportSize({width,height:900});
-    await page.goto(`http://127.0.0.1:${port}/usb-dmx-proof`);
-    assert.equal(await page.title(),'USB-DMX proof');
-    await page.evaluate(p=>window.proof.platform(p),platform);
-    const select=page.locator('#show-usb-dmx-device');
-    await select.waitFor();
-    assert.match(await select.inputValue(),platform==='mac'?/^\/dev\/cu\.usbserial-A/:platform==='macusb'?/^usb-ftdi:\/\/000000010000abcd/:/^COM4/);
-    assert.equal(await select.locator('option').nth(2).evaluate(option=>option.disabled),true, await select.innerHTML());
-    await page.locator('[data-io-control="dmx-prepare-show-dmx"]').click();
-    const request=await page.evaluate(()=>window.proof.requests.at(-1));
-    assert.equal(request.macosDeviceInstanceId,platform!=='windows'?'ioreg:000000010000abcd':null);
-    assert.equal(request.windowsDeviceInstanceId,platform==='windows'?'FTDIBUS-A':null);
-    await page.locator('[data-io-disclosure="dmx-individual-diagnostics"] > summary').click();
-    await page.locator('[data-io-disclosure="dmx-usb-manual-controls"] > summary').click();
-    await page.locator('[data-io-control="dmx-confirm-serial-machine-binding"]').click();
-    assert.equal(await page.locator('[data-io-control="dmx-enable-show-serial-dmx-safety-blackout-route"]').isEnabled(),true);
-    await page.screenshot({path:resolve(artifactDir,`${platform}-${width}.png`),fullPage:true});
-    assert.equal(await page.locator('vite-error-overlay').count(),0);
-    await page.evaluate(()=>window.proof.missing());
-    assert.equal(await select.inputValue(),'');
-    assert.equal(await page.locator('[data-io-control="dmx-confirm-serial-machine-binding"]').isDisabled(),true);
-    assert.equal(await page.locator('[data-io-control="dmx-enable-show-serial-dmx-safety-blackout-route"]').isDisabled(),true);
-    results.push({platform,width,request,missingDeviceBlocked:true});
+  const url = "http://127.0.0.1:" + server.httpServer.address().port;
+  // Prefer Playwright's bundled browser; fall back to an installed Chrome/Edge.
+  const executablePath = process.env.SYNDOCAL_UI_TEST_BROWSER ?? [
+    "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+  ].find(existsSync);
+  try { browser = await chromium.launch({headless: true}); }
+  catch (error) {
+    if (!executablePath) throw error;
+    browser = await chromium.launch({headless: true, executablePath});
   }
-  // The universes table's USB-DMX path: one Add row, then a cable row whose
-  // Stop needs S0 (engaged in this fixture) while Start and Remove stay off.
-  await page.setViewportSize({width:1280,height:900});
-  await page.goto(`http://127.0.0.1:${port}/usb-dmx-proof`);
-  await page.evaluate(()=>window.proof.platform('windows'));
-  await page.locator('[data-dmx-universe-add-transport]').selectOption('Usb');
-  assert.match(await page.locator('[data-usb-dmx-cable-device]').inputValue(),/^COM4/);
-  await page.locator('[data-dmx-universe-add-button]').click();
-  await page.waitForFunction(()=>window.proof.cableBinds.length===1);
-  assert.deepEqual(await page.evaluate(()=>window.proof.cableBinds[0]),[1,'COM4']);
-  const cableIdentity=(name,serial)=>({port_name:name,port_type:'USB',usb_vid:1027,usb_pid:24577,serial_number:serial,manufacturer:'FTDI',product:'FT232R USB UART'});
-  const armed={bindings:[{universe:1,state:'selected_and_present',identity:cableIdentity('COM5','B'),detail:''}],
-    cables:[{slot:1,universe:1,routeStatusRevision:'1',active:true,zeroFrameQueued:false,zeroFramePhysicalWriteCompleted:true,liveFrameQueued:false,workerShutdownCompleted:true,faulted:false,detail:''}],
-    persistenceError:null};
-  await page.evaluate(status=>window.proof.cables(status),armed);
-  const cableRow=page.locator('[data-usb-dmx-cable="1"]');
-  await cableRow.waitFor();
-  assert.equal(await cableRow.locator('[data-usb-dmx-cable-state]').getAttribute('data-usb-dmx-cable-state'),'armed');
-  assert.equal(await cableRow.locator('[data-usb-dmx-cable-stop]').isEnabled(),true);
-  assert.equal(await cableRow.locator('[data-usb-dmx-cable-start]').isDisabled(),true);
-  assert.equal(await cableRow.locator('[data-usb-dmx-cable-remove]').isDisabled(),true);
-  // A status poll builds new objects; the row is keyed by universe and survives.
-  const stop=await cableRow.locator('[data-usb-dmx-cable-stop]').elementHandle();
-  await page.evaluate(status=>window.proof.cables(structuredClone(status)),armed);
-  assert.equal(await stop.evaluate(element=>element.isConnected),true,'a status poll must not rebuild the cable row');
-  // At three cables the USB-DMX transport is withdrawn and the Add row falls back to Art-Net.
-  await page.locator('[data-dmx-universe-add-transport]').selectOption('Usb');
-  await page.evaluate(()=>window.proof.cables({bindings:[1,2,3].map(universe=>({universe,state:'selected_and_present',
-    identity:{port_name:`COM${10+universe}`,port_type:'USB',usb_vid:1027,usb_pid:24577,serial_number:`S${universe}`,manufacturer:'FTDI',product:'FT232R USB UART'},detail:''})),cables:[],persistenceError:null}));
-  await page.waitForFunction(()=>document.querySelector('[data-dmx-universe-add-transport]').value==='ArtNet');
-  assert.equal(await page.locator('[data-dmx-universe-add-transport] option[value="Usb"]').isDisabled(),true);
-  assert.equal(await page.locator('[data-usb-dmx-cable-rescan]').isVisible(),true,'Rescan stays reachable for Show DMX');
-  assert.deepEqual(errors,[]);
-  await writeFile(resolve(artifactDir,'browser-report.json'),JSON.stringify({browserPlugin:'unavailable',softwareOnly:true,results,errors},null,2)+'\n');
-  console.log('USB-DMX platform browser: PASS (Mac VCP/native USB/Windows selection, exact confirmation payload, missing-device rejection, 1920/1280px; universes-table cable add, S0-gated Stop, keyed rows, three-cable fallback)');
-} finally {
-  await browser?.close();await server?.close();await unlink(fixturePath).catch(()=>{});
-}
+  const page=await browser.newPage(),errors=[],results=[];
+  page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(message.type()==='error')errors.push(message.text());});
+  for(const viewport of [{width:1920,height:1080},{width:960,height:640}])for(const platform of ['windows','mac','macusb']){
+    await page.setViewportSize(viewport);await page.goto(url+'/network-routes-proof');await page.evaluate(platform=>window.__usbProof.platform(platform),platform);
+    await page.locator('[data-dmx-universe-add-transport]').selectOption('Usb');
+    const select=page.locator('[data-usb-dmx-cable-device]');
+    assert.equal(await select.locator('option').count(),2,'only eligible device plus prompt');
+    assert.match(await select.inputValue(),platform==='windows'?/^COM4/:platform==='mac'?/^\/dev\/cu.usbserial-A/:/^usb-ftdi:\/\//);
+    await page.locator('[data-dmx-universe-add-button]').click();assert.equal(await page.evaluate(()=>window.__usbProof.calls.length),0,'Add creates a draft only');
+    await page.locator('[data-dmx-universe-apply]').click();await page.waitForFunction(()=>window.__usbProof.calls.length===1);
+    const proof=await page.evaluate(()=>({plan:window.__usbProof.calls[0],request:window.__usbProof.requests[0]}));assert.equal(proof.plan.usb[0].universe,0);assert.deepEqual(proof.plan.network,[]);assert.equal(proof.request.windowsDeviceInstanceId,platform==='windows'?'FTDIBUS-A':null);assert.equal(proof.request.macosDeviceInstanceId,platform==='windows'?null:'ioreg:000000010000abcd');
+    assert.match(await page.locator('[data-usb-dmx-cable-state]').innerText(),/Sending/);
+    const screenshot=resolve(artifactDir,`usb-${platform}-${viewport.width}x${viewport.height}.png`);await page.screenshot({path:screenshot,fullPage:true});
+    await page.evaluate(()=>window.__usbProof.blackout(false));await page.locator('[data-usb-dmx-cable] input[type=checkbox]').uncheck();assert(await page.locator('[data-dmx-universe-apply]').isDisabled());await page.getByText('Engage safety blackout before disabling, removing or changing an active USB-DMX device.').waitFor();assert.equal(await page.evaluate(()=>window.__usbProof.calls.length),1,'disabled draft never stops live output');
+    await page.locator('[data-dmx-universe-reload]').click();await page.evaluate(()=>window.__usbProof.fault());await page.waitForFunction(()=>document.querySelector('[data-usb-dmx-cable-state]').textContent==='Fault');assert(await page.locator('[data-usb-dmx-cable] input[type=checkbox]').isChecked(),'fault must retain active enabled truth');
+    await page.evaluate(()=>window.__usbProof.stale(true));await page.getByText('Status unavailable',{exact:true}).waitFor();assert(await page.locator('[data-usb-dmx-cable] input[type=checkbox]').isChecked(),'stale last-known active must not become stopped');
+    await page.evaluate(()=>window.__usbProof.missing());await page.locator('[data-dmx-universe-add-transport]').selectOption('Usb');assert(await page.locator('[data-dmx-universe-add-button]').isDisabled());assert(await page.locator('[data-dmx-universe-apply]').isDisabled());
+    results.push({platform,viewport,universe:0,clicks:3,identity:proof.request,screenshot,missingDeviceBlocked:true});
+  }
+  assert.deepEqual(errors,[]);await writeFile(resolve(artifactDir,'usb-platform-results.json'),JSON.stringify({passed:true,results,errors,scope:'Browser fixtures only; no native or physical DMX output'},null,2));console.log(`USB-DMX unified table platform browser: PASS (${results.length} Windows/macOS identity + USB0 draft/single Apply fixtures; no hardware).`);
+}finally{await browser?.close();await server?.close();await unlink(fixture).catch(()=>{});}

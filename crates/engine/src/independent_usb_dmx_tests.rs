@@ -162,9 +162,11 @@ fn independent_cables_start_zero_first_and_each_send_their_own_universe() {
         .unwrap();
     let stopped = slot_status(&shared, 2);
     assert!(!stopped.active && stopped.zero_frame_physical_write_completed && !stopped.faulted);
-    assert!(payloads(&cable_b).last().unwrap()[1..]
-        .iter()
-        .all(|value| *value == 0));
+    assert!(
+        payloads(&cable_b).last().unwrap()[1..]
+            .iter()
+            .all(|value| *value == 0)
+    );
     runtime
         .apply_independent_usb_dmx_route_stop(1, s0.epoch, s0.generation)
         .unwrap();
@@ -238,7 +240,7 @@ fn a_cable_fault_engages_s0_for_every_cable_and_blocks_release_until_it_is_stopp
 }
 
 #[test]
-fn independent_cables_reject_universe_zero_a_busy_universe_and_a_cable_already_in_use() {
+fn independent_cables_reject_invalid_universe_a_busy_universe_and_a_cable_already_in_use() {
     let shared = Arc::new(EngineSharedTelemetry::new());
     let mut runtime = runtime_with_fixtures_on_u1_u2(&shared);
     shared.engage_safety_blackout().unwrap();
@@ -252,14 +254,14 @@ fn independent_cables_reject_universe_zero_a_busy_universe_and_a_cable_already_i
     let safety = shared.safety_blackout_authority();
     let zero = runtime
         .apply_independent_usb_dmx_route_enable_with_sender_factory(
-            0,
+            32768,
             &cable_a,
             safety.epoch,
             safety.generation,
             never,
         )
         .unwrap_err();
-    assert!(zero.contains("Universe 0 is the Unity-mirror cable"));
+    assert!(zero.contains("must be 0..=32767"));
 
     let (port_a, _) = io::serial_dmx::OpenDmxTestSerialPort::new();
     start_cable(&mut runtime, 1, &cable_a, port_a).unwrap();
@@ -304,9 +306,11 @@ fn ownership_loss_faults_independent_cables_through_the_bounded_path() {
         status.zero_frame_physical_write_completed,
         "the fault path wrote one bounded zero"
     );
-    assert!(payloads(&cable_a).last().unwrap()[1..]
-        .iter()
-        .all(|value| *value == 0));
+    assert!(
+        payloads(&cable_a).last().unwrap()[1..]
+            .iter()
+            .all(|value| *value == 0)
+    );
     assert!(shared.safety_blackout_authority().engaged);
 }
 
@@ -337,9 +341,11 @@ fn configured_network_retirement_stops_independent_cables_with_a_physical_zero()
     let status = slot_status(&shared, 1);
     assert!(!status.active && !status.faulted);
     assert!(status.zero_frame_physical_write_completed && status.worker_shutdown_completed);
-    assert!(payloads(&cable_a).last().unwrap()[1..]
-        .iter()
-        .all(|value| *value == 0));
+    assert!(
+        payloads(&cable_a).last().unwrap()[1..]
+            .iter()
+            .all(|value| *value == 0)
+    );
     assert!(shared.safety_blackout_authority().engaged);
 }
 
@@ -442,10 +448,12 @@ fn starting_a_second_cable_never_zeros_a_live_first_cable() {
         255,
         "A stays live through B's zero-first start"
     );
-    assert!(payloads(&cable_a)
-        .iter()
-        .skip(1)
-        .all(|frame| frame[1] == 255));
+    assert!(
+        payloads(&cable_a)
+            .iter()
+            .skip(1)
+            .all(|frame| frame[1] == 255)
+    );
     let (_, s0) = shared.engage_safety_blackout().unwrap();
     runtime.safety_blackout_engaged = true;
     for universe in [1, 2] {
@@ -528,5 +536,392 @@ fn one_cable_never_serves_universe_zero_and_another_universe() {
     assert!(error.contains("already drives another universe"), "{error}");
     runtime
         .apply_independent_usb_dmx_route_stop(1, s0.epoch, s0.generation)
+        .unwrap();
+}
+
+fn patch_u0(runtime: &mut EngineRuntime) {
+    let mut request = sample_patch_request("Migrated U0 fixture", 1);
+    request.universe = 0;
+    runtime.apply_command(EngineCommand::PatchFixture {
+        fixture_id: 10,
+        request,
+        profile: sample_profile(),
+    });
+    runtime.apply_command(EngineCommand::SetAttribute {
+        fixture_id: 10,
+        attribute: "Dimmer".into(),
+        value: 173 * 257,
+    });
+    let mut request = sample_patch_request("Legacy reserved channel fixture", 500);
+    request.universe = 0;
+    runtime.apply_command(EngineCommand::PatchFixture {
+        fixture_id: 11,
+        request,
+        profile: sample_profile(),
+    });
+    runtime.apply_command(EngineCommand::SetAttribute {
+        fixture_id: 11,
+        attribute: "Dimmer".into(),
+        value: 211 * 257,
+    });
+}
+
+#[test]
+fn independent_u0_is_zero_first_live_without_loopback_and_generically_retired() {
+    let shared = Arc::new(EngineSharedTelemetry::new());
+    let mut runtime = runtime_with_fixtures_on_u1_u2(&shared);
+    runtime.output = protocol::network_dmx_routes::empty_network_dmx_output();
+    patch_u0(&mut runtime);
+    let (_, armed) = shared.engage_safety_blackout().unwrap();
+    runtime.safety_blackout_engaged = true;
+    let (port, observation) = io::serial_dmx::OpenDmxTestSerialPort::new();
+    start_cable(
+        &mut runtime,
+        0,
+        &usb_identity("COM8", "U0-INDEPENDENT"),
+        port,
+    )
+    .unwrap();
+    assert!(
+        payloads(&observation)[0][1..]
+            .iter()
+            .all(|value| *value == 0)
+    );
+    let snapshot = Arc::new(RwLock::new(runtime.build_snapshot(0)));
+    let (_, _, released) = shared
+        .release_safety_blackout(armed.epoch, armed.generation)
+        .unwrap();
+    runtime.safety_blackout_engaged = released.engaged;
+    let live = last_payload_after(&mut runtime, &snapshot, &observation, 2);
+    assert_eq!(live[1], 173);
+    assert_eq!(
+        live[500], 211,
+        "new independent U0 carries all 512 channels"
+    );
+    assert!(runtime.dmx_sender.is_none());
+    let (_, safety) = shared.engage_safety_blackout().unwrap();
+    runtime.safety_blackout_engaged = true;
+    let _lease = runtime
+        .output_ownership_gate
+        .begin_failure_fence("U0 independent retirement");
+    let operation = ManagedShowDmxFailStopOperationInner::new();
+    assert!(operation.admit());
+    runtime
+        .apply_managed_dmx_retirement_for_scope(
+            ManagedDmxRetirementScope::ConfiguredNetwork,
+            safety.epoch,
+            safety.generation,
+            runtime.output_ownership_gate.status().epoch,
+            &operation,
+        )
+        .unwrap();
+    assert!(runtime.independent_usb_dmx_terminal_absent());
+    assert!(
+        payloads(&observation).last().unwrap()[1..]
+            .iter()
+            .all(|value| *value == 0)
+    );
+    assert!(slot_status(&shared, 0).worker_shutdown_completed);
+}
+
+#[test]
+fn legacy_explicit_loopback_and_usb_u0_migrate_with_identical_frames_and_endpoint() {
+    let identity = usb_identity("COM8", "MIGRATED-U0");
+    let mut live_frames = Vec::new();
+    let mut network_configs = Vec::new();
+    for legacy in [true, false] {
+        let shared = Arc::new(EngineSharedTelemetry::new());
+        let mut runtime = EngineRuntime::new_with_shared_telemetry(
+            staged_show_artnet_loopback_output(),
+            Arc::clone(&shared),
+        );
+        runtime.output.enabled = true;
+        runtime.dmx_sender = Some(DmxSender::TestExactArtNetRoute);
+        patch_u0(&mut runtime);
+        // Fixture serialization is the actual old project shape. Loading it
+        // must retain the explicit network row, including its endpoint.
+        let saved = runtime.build_persistence_snapshot();
+        let prepared = prepare_project_snapshot_persistence(saved).unwrap();
+        network_configs.push(prepared.dmx_outputs.clone());
+        let (_, armed) = shared.engage_safety_blackout().unwrap();
+        runtime.safety_blackout_engaged = true;
+        let (port, observation) = io::serial_dmx::OpenDmxTestSerialPort::new();
+        if legacy {
+            runtime
+                .apply_show_serial_dmx_safety_blackout_route_enable_with_sender_factory(
+                    &identity,
+                    armed.epoch,
+                    armed.generation,
+                    move |_, gate| {
+                        EnttecOpenDmxSender::from_test_serial_port(port, gate.clone(), || {})
+                            .map(DmxSender::EnttecOpenDmx)
+                            .map_err(|error| error.to_string())
+                    },
+                )
+                .unwrap();
+        } else {
+            runtime
+                .apply_independent_usb_dmx_route_enable_with_sender_factory_and_policy(
+                    true,
+                    0,
+                    &identity,
+                    armed.epoch,
+                    armed.generation,
+                    move |_, gate| {
+                        EnttecOpenDmxSender::from_test_serial_port(port, gate.clone(), || {})
+                            .map(DmxSender::EnttecOpenDmx)
+                            .map_err(|error| error.to_string())
+                    },
+                )
+                .unwrap();
+        }
+        let snapshot = Arc::new(RwLock::new(runtime.build_snapshot(0)));
+        let (_, _, released) = shared
+            .release_safety_blackout(armed.epoch, armed.generation)
+            .unwrap();
+        runtime.safety_blackout_engaged = released.engaged;
+        live_frames.push(last_payload_after(&mut runtime, &snapshot, &observation, 2));
+        let (_, stop) = shared.engage_safety_blackout().unwrap();
+        runtime.safety_blackout_engaged = true;
+        if legacy {
+            runtime
+                .apply_show_serial_dmx_safety_blackout_route_stop(stop.epoch, stop.generation)
+                .unwrap();
+            assert!(runtime.configured_dmx_legacy_usb_absence_verified());
+        } else {
+            runtime
+                .apply_independent_usb_dmx_route_stop(0, stop.epoch, stop.generation)
+                .unwrap();
+        }
+    }
+    assert_eq!(network_configs[0], network_configs[1]);
+    assert_eq!(network_configs[0][0].target_ip, "127.0.0.1");
+    assert_eq!(
+        (network_configs[0][0].port, network_configs[0][0].universe),
+        (6454, 0)
+    );
+    assert_eq!(live_frames[0], live_frames[1]);
+    assert_eq!(live_frames[0][1], 173);
+    assert_eq!(
+        live_frames[0][500], 0,
+        "migration preserves old reserved-channel zero"
+    );
+}
+
+#[test]
+fn independent_usb_and_legacy_worker_share_four_cable_total_limit() {
+    let shared = Arc::new(EngineSharedTelemetry::new());
+    let mut runtime = runtime_with_fixtures_on_u1_u2(&shared);
+    let (_, safety) = shared.engage_safety_blackout().unwrap();
+    runtime.safety_blackout_engaged = true;
+    for universe in 0..4 {
+        let (port, _) = io::serial_dmx::OpenDmxTestSerialPort::new();
+        start_cable(
+            &mut runtime,
+            universe,
+            &usb_identity(
+                &format!("COM{}", universe + 5),
+                &format!("CABLE-{universe}"),
+            ),
+            port,
+        )
+        .unwrap();
+    }
+    let never = |_: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
+                 _: &OpenDmxSafetyWriteGate|
+     -> Result<DmxSender, String> { panic!("fifth worker must not open") };
+    assert!(
+        runtime
+            .apply_independent_usb_dmx_route_enable_with_sender_factory(
+                4,
+                &usb_identity("COM9", "FIFTH"),
+                safety.epoch,
+                safety.generation,
+                never
+            )
+            .unwrap_err()
+            .contains("at most")
+    );
+    assert!(
+        runtime
+            .apply_show_serial_dmx_safety_blackout_route_enable_with_sender_factory(
+                &usb_identity("COM9", "FIFTH"),
+                safety.epoch,
+                safety.generation,
+                never
+            )
+            .unwrap_err()
+            .contains("at most")
+    );
+    for universe in 0..4 {
+        runtime
+            .apply_independent_usb_dmx_route_stop(universe, safety.epoch, safety.generation)
+            .unwrap();
+    }
+}
+
+#[test]
+fn independent_u0_usb_and_nonzero_network_route_send_distinct_universes() {
+    use protocol::network_dmx_routes::{NetworkDmxProtocol, NetworkDmxRoute};
+    let shared = Arc::new(EngineSharedTelemetry::new());
+    let mut runtime = runtime_with_fixtures_on_u1_u2(&shared);
+    patch_u0(&mut runtime);
+    let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+    receiver
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    let safety = shared.safety_blackout_authority();
+    runtime
+        .apply_network_dmx_routes(
+            &runtime.dmx_output_snapshot(),
+            &[NetworkDmxRoute {
+                enabled: true,
+                protocol: NetworkDmxProtocol::ArtNet,
+                target_ip: "127.0.0.1".into(),
+                port: receiver.local_addr().unwrap().port(),
+                universe: 1,
+            }],
+            safety.epoch,
+            safety.generation,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .unwrap();
+    let (_, armed) = shared.engage_safety_blackout().unwrap();
+    runtime.safety_blackout_engaged = true;
+    let (port, observation) = io::serial_dmx::OpenDmxTestSerialPort::new();
+    start_cable(&mut runtime, 0, &usb_identity("COM8", "MIXED-U0"), port).unwrap();
+    let snapshot = Arc::new(RwLock::new(runtime.build_snapshot(0)));
+    let (_, _, released) = shared
+        .release_safety_blackout(armed.epoch, armed.generation)
+        .unwrap();
+    runtime.safety_blackout_engaged = released.engaged;
+    assert_eq!(
+        last_payload_after(&mut runtime, &snapshot, &observation, 2)[1],
+        173
+    );
+    let mut packet = [0; 530];
+    assert_eq!(receiver.recv(&mut packet).unwrap(), 530);
+    assert_eq!(u16::from_le_bytes([packet[14], packet[15]]), 1);
+    assert_eq!(packet[18], 255);
+    let (_, stop) = shared.engage_safety_blackout().unwrap();
+    runtime.safety_blackout_engaged = true;
+    let _lease = runtime
+        .output_ownership_gate
+        .begin_failure_fence("mixed route retirement");
+    let operation = ManagedShowDmxFailStopOperationInner::new();
+    assert!(operation.admit());
+    runtime
+        .apply_managed_dmx_retirement_for_scope(
+            ManagedDmxRetirementScope::ConfiguredNetwork,
+            stop.epoch,
+            stop.generation,
+            runtime.output_ownership_gate.status().epoch,
+            &operation,
+        )
+        .unwrap();
+    assert!(runtime.managed_show_dmx_terminal_absent());
+    assert!(
+        payloads(&observation).last().unwrap()[1..]
+            .iter()
+            .all(|value| *value == 0)
+    );
+}
+
+#[test]
+fn unresolved_legacy_worker_history_never_opens_an_independent_cable() {
+    for kind in 0..3 {
+        let shared = Arc::new(EngineSharedTelemetry::new());
+        let mut runtime = runtime_with_fixtures_on_u1_u2(&shared);
+        match kind {
+            0 => shared.set_show_serial_dmx_route_status(ShowSerialDmxRouteStatus {
+                worker_shutdown_completed: false,
+                ..Default::default()
+            }),
+            1 => shared.set_show_serial_dmx_route_status(ShowSerialDmxRouteStatus {
+                faulted: true,
+                ..Default::default()
+            }),
+            _ => {
+                let for_poison = Arc::clone(&shared);
+                let _ = std::panic::catch_unwind(move || {
+                    let _guard = for_poison.show_serial_dmx_route_status.test_hold_current();
+                    panic!("deterministic unreadable legacy history");
+                });
+            }
+        }
+        let mut opened = 0;
+        let safety = shared.safety_blackout_authority();
+        let result = runtime.apply_independent_usb_dmx_route_enable_with_sender_factory(
+            0,
+            &usb_identity("COM8", "MIGRATION-BLOCKED"),
+            safety.epoch,
+            safety.generation,
+            |_, _| {
+                opened += 1;
+                Err("must not open".into())
+            },
+        );
+        assert!(result.unwrap_err().contains("retirement is unverified"));
+        assert_eq!(opened, 0);
+        assert!(runtime.independent_usb_dmx_routes_absent());
+    }
+}
+
+#[test]
+fn migrated_policy_is_rejected_for_nonzero_universes_before_device_open() {
+    let shared = Arc::new(EngineSharedTelemetry::new());
+    let mut runtime = runtime_with_fixtures_on_u1_u2(&shared);
+    let safety = shared.safety_blackout_authority();
+    let mut opened = 0;
+    let result = runtime.apply_independent_usb_dmx_route_enable_with_sender_factory_and_policy(
+        true,
+        1,
+        &usb_identity("COM8", "BAD-POLICY"),
+        safety.epoch,
+        safety.generation,
+        |_, _| {
+            opened += 1;
+            Err("must not open".into())
+        },
+    );
+    assert!(result.unwrap_err().contains("only for Universe 0"));
+    assert_eq!(opened, 0);
+}
+
+#[test]
+fn new_independent_u0_does_not_inherit_explicit_loopback_channel_policy() {
+    let shared = Arc::new(EngineSharedTelemetry::new());
+    let mut runtime = EngineRuntime::new_with_shared_telemetry(
+        staged_show_artnet_loopback_output(),
+        Arc::clone(&shared),
+    );
+    runtime.output.enabled = true;
+    runtime.dmx_sender = Some(DmxSender::TestExactArtNetRoute);
+    patch_u0(&mut runtime);
+    let (_, armed) = shared.engage_safety_blackout().unwrap();
+    runtime.safety_blackout_engaged = true;
+    let (port, observation) = io::serial_dmx::OpenDmxTestSerialPort::new();
+    start_cable(
+        &mut runtime,
+        0,
+        &usb_identity("COM8", "NEW-U0-WITH-LOOPBACK"),
+        port,
+    )
+    .unwrap();
+    let snapshot = Arc::new(RwLock::new(runtime.build_snapshot(0)));
+    let (_, _, released) = shared
+        .release_safety_blackout(armed.epoch, armed.generation)
+        .unwrap();
+    runtime.safety_blackout_engaged = released.engaged;
+    let live = last_payload_after(&mut runtime, &snapshot, &observation, 2);
+    assert_eq!(live[1], 173);
+    assert_eq!(
+        live[500], 211,
+        "the network's route-local clamp must not alter the shared universe buffer"
+    );
+    let (_, stop) = shared.engage_safety_blackout().unwrap();
+    runtime.safety_blackout_engaged = true;
+    runtime
+        .apply_independent_usb_dmx_route_stop(0, stop.epoch, stop.generation)
         .unwrap();
 }

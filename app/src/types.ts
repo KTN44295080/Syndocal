@@ -341,6 +341,8 @@ export interface SerialDmxMachineBindingStatus {
 
 /** A universe's machine-local USB-DMX cable binding (Universe 1 and up). */
 export interface UsbDmxUniverseBindingStatus {
+  /** Migrated old U0 keeps its original channel-500 safety policy. */
+  legacyU0Invariants?: boolean;
   universe: number;
   state: SerialDmxMachineBindingState;
   identity: SerialDmxMachineBindingIdentity;
@@ -362,6 +364,8 @@ export interface UsbDmxCableStatus {
 }
 
 export interface UsbDmxUniversesStatus {
+  bindingStoreVersion?: number;
+  legacyRouteActive?: boolean;
   bindings: UsbDmxUniverseBindingStatus[];
   cables: UsbDmxCableStatus[];
   /** Set when the machine-local binding file cannot be read; cables stay off. */

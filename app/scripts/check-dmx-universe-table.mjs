@@ -1,0 +1,27 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {createRequire} from 'node:module';
+import {resolve} from 'node:path';
+import ts from 'typescript';
+const require=createRequire(import.meta.url),cache=new Map();
+function load(file){const path=resolve(import.meta.dirname,'../src',file+'.ts');if(cache.has(path))return cache.get(path);const module={exports:{}};cache.set(path,module.exports);const js=ts.transpileModule(readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;new Function('require','module','exports',js)((name)=>name.startsWith('./')?load(name.slice(2)):require(name),module,module.exports);return module.exports;}
+const {isNoNetworkDmxSentinel,usbTableRows,universeTableSignature,validateUniverseTablePlan}=load('dmxUniverseTable');
+const row={enabled:false,protocol:'ArtNet',target_ip:'0.0.0.0',port:0,universe:0,serial_port:'',serial_baud_rate:57600};
+assert(isNoNetworkDmxSentinel(row));for(const patch of [{target_ip:'127.0.0.1'},{serial_baud_rate:9600},{enabled:true},{port:6454},{universe:1}])assert(!isNoNetworkDmxSentinel({...row,...patch}));
+const legacy={...row,target_ip:'127.0.0.1',port:6454};validateUniverseTablePlan({network:[legacy],usb:[]},null,false,false);
+validateUniverseTablePlan({network:[],usb:[]},null,true,false);
+validateUniverseTablePlan({network:Array.from({length:256},(_,i)=>({...legacy,universe:i})),usb:[]},null,false,false);
+assert.throws(()=>validateUniverseTablePlan({network:Array.from({length:257},(_,i)=>({...legacy,universe:i})),usb:[]},null,false,false),/256/);
+const port={name:'COM7',port_type:'USB',usb_vid:1027,usb_pid:24577,serial_number:'one',manufacturer:'FTDI',product:'Open DMX',windows_device_instance_id:'USB-one'};
+const binding={universe:0,state:'selected_and_present',identity:{...port,port_name:port.name},detail:''};
+const cable={universe:0,active:true,faulted:true,workerShutdownCompleted:false,liveFrameQueued:false,detail:'driver fault'};
+const status={bindings:[binding],cables:[cable],persistenceError:null};
+assert.deepEqual(usbTableRows(status),[{universe:0,enabled:true}]);
+validateUniverseTablePlan({network:[legacy],usb:[{universe:0,enabled:true}]},status,true,false);
+assert.throws(()=>validateUniverseTablePlan({network:[],usb:[]},status,false,false),/blackout/);
+validateUniverseTablePlan({network:[],usb:[]},status,false,true);
+assert.throws(()=>validateUniverseTablePlan({network:[],usb:[{universe:0,enabled:false}]},status,true,true),/Refresh/);
+assert.throws(()=>validateUniverseTablePlan({network:[],usb:[{universe:0,enabled:true,port},{universe:1,enabled:true,port}]},{bindings:[],cables:[],persistenceError:null},false,true),/own device/);
+assert.throws(()=>validateUniverseTablePlan({network:[],usb:[{universe:2,enabled:true}]},{bindings:[],cables:[],persistenceError:null},false,true),/Select a device/);
+assert.equal(universeTableSignature([],status),universeTableSignature([],{...status,cables:[{...cable,detail:'new detail',liveFrameQueued:true,routeStatusRevision:'40'}]}));
+console.log('DMX table plan: exact sentinel, explicit legacy U0, empty/256 network routes, active fault truth, blackout/stale/device identity fences passed.');

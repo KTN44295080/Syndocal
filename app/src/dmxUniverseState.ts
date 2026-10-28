@@ -1,8 +1,6 @@
 import type {
   DmxOutputConfig,
   DmxOutputRouteTelemetry,
-  SerialDmxMachineBindingStatus,
-  ShowSerialDmxSafetyBlackoutRouteStatus,
 } from "./types";
 
 export type DmxUniverseTone = "ready" | "idle" | "error";
@@ -11,31 +9,6 @@ export type DmxUniverseTone = "ready" | "idle" | "error";
 export interface DmxUniverseState {
   label: string;
   tone: DmxUniverseTone;
-}
-
-export interface ShowDmxUniverseStateInput {
-  /** `dmx_outputs[0]`, the Universe 0 Art-Net loopback route. */
-  route: DmxOutputConfig | undefined;
-  binding: SerialDmxMachineBindingStatus | null;
-  worker: ShowSerialDmxSafetyBlackoutRouteStatus | null;
-  safetyBlackoutEngaged: boolean;
-}
-
-/** Universe 0 (Show DMX): the Art-Net loopback and its optional USB-DMX cable. */
-export function showDmxUniverseState(input: ShowDmxUniverseStateInput): DmxUniverseState {
-  const worker = input.worker;
-  if (!input.route?.enabled) return { label: "Not prepared", tone: "idle" };
-  if (worker?.faulted) return { label: "Fault · S0 latched", tone: "error" };
-  if (worker?.active) {
-    return {
-      label: input.safetyBlackoutEngaged ? "Armed · S0" : worker.liveFrameQueued ? "Sending" : "Started",
-      tone: "ready",
-    };
-  }
-  return {
-    label: input.binding?.state === "selected_and_present" ? "Art-Net only · USB stopped" : "Art-Net only",
-    tone: "idle",
-  };
 }
 
 /** An applied Art-Net / sACN route and its last send result. */

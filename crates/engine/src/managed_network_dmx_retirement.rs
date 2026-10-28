@@ -8,6 +8,25 @@ pub enum ManagedDmxRetirementScope {
 }
 
 impl EngineRuntime {
+    /// Retained legacy workers use their exact-show retirement. A stopped
+    /// legacy cable is safe to migrate only after confirmed zero and join;
+    /// faulted or unreadable history must never become pristine by migration.
+    pub(super) fn configured_dmx_legacy_usb_absence_verified(&self) -> bool {
+        self.show_serial_dmx_route.is_none()
+            && self
+                .shared_telemetry
+                .try_show_serial_dmx_route_status_snapshot()
+                .is_ok_and(|snapshot| {
+                    let status = snapshot.status;
+                    !status.active
+                        && !status.live_frame_queued
+                        && !status.faulted
+                        && status.worker_shutdown_completed
+                        && (status.zero_frame_physical_write_completed
+                            || self.managed_show_dmx_has_pristine_absent_usb())
+                })
+    }
+
     pub(super) fn apply_managed_dmx_retirement_for_scope(
         &mut self,
         scope: ManagedDmxRetirementScope,
@@ -24,8 +43,14 @@ impl EngineRuntime {
                 operation,
             );
         }
-        if !self.managed_show_dmx_has_pristine_absent_usb() {
-            return self.apply_managed_show_dmx_fail_stop_for_scope(scope, safety_epoch, safety_generation, failure_epoch, operation);
+        if !self.configured_dmx_legacy_usb_absence_verified() {
+            return self.apply_managed_show_dmx_fail_stop_for_scope(
+                scope,
+                safety_epoch,
+                safety_generation,
+                failure_epoch,
+                operation,
+            );
         }
         self.apply_managed_network_dmx_retirement(
             safety_epoch,
@@ -80,7 +105,7 @@ impl EngineRuntime {
         ) {
             ManagedShowDmxFailStopAuthorityCheck::Exact => {}
             ManagedShowDmxFailStopAuthorityCheck::RejectedBeforeCommit(error) => {
-                return Err(ManagedShowDmxFailStopError::rejected(error))
+                return Err(ManagedShowDmxFailStopError::rejected(error));
             }
             ManagedShowDmxFailStopAuthorityCheck::InDoubtAfterCommit(error) => {
                 if !operation.begin_commit() {
@@ -112,7 +137,9 @@ impl EngineRuntime {
                 .iter()
                 .all(|route| is_network(&route.config))
         {
-            return Err(ManagedShowDmxFailStopError::in_doubt("Managed configured retirement requires network routes or the dedicated exact show USB path"));
+            return Err(ManagedShowDmxFailStopError::in_doubt(
+                "Managed configured retirement requires network routes or the dedicated exact show USB path",
+            ));
         }
         let mut errors = Vec::new();
         retire_network_sender(&mut self.dmx_sender, &self.output, &mut errors);
@@ -130,7 +157,7 @@ impl EngineRuntime {
             return Err(ManagedShowDmxFailStopError::in_doubt(errors.join("; ")));
         }
         if !self.managed_show_dmx_terminal_absent()
-            || !self.managed_show_dmx_has_pristine_absent_usb()
+            || !self.configured_dmx_legacy_usb_absence_verified()
             || !matches!(
                 self.managed_show_dmx_fail_stop_authority_preflight(
                     safety_epoch,
@@ -140,7 +167,9 @@ impl EngineRuntime {
                 ManagedShowDmxFailStopAuthorityCheck::Exact
             )
         {
-            return Err(ManagedShowDmxFailStopError::in_doubt("Managed network retirement lost its terminal sender-absent or exact S0/failure proof"));
+            return Err(ManagedShowDmxFailStopError::in_doubt(
+                "Managed network retirement lost its terminal sender-absent or exact S0/failure proof",
+            ));
         }
         let serial = telemetry
             .try_show_serial_dmx_route_status_snapshot()

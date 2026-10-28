@@ -500,3 +500,28 @@ export async function exerciseSetupIoOperatorDeck(client, helpers) {
     draftContinuity,
   };
 }
+
+// Task 74: the former fixed U0/Prepare/manual route contract is retired.
+// The authored disabled loopback remains a normal editable route; one Apply
+// commits the combined draft. This read performs no output operation.
+export function readDmxUniverseTableInPage() {
+  const panel = document.querySelector('.dmxOutputConfigPanel');
+  const table = panel?.querySelector('[data-dmx-universe-table]');
+  const apply = panel?.querySelector('[data-dmx-universe-apply]');
+  const bounds = apply?.getBoundingClientRect();
+  return {
+    tableCount: panel?.querySelectorAll('[data-dmx-universe-table]').length ?? 0,
+    applyCount: panel?.querySelectorAll('[data-dmx-universe-apply]').length ?? 0,
+    applyVisible: Boolean(bounds && bounds.width > 0 && bounds.height > 0),
+    applyDisabled: apply instanceof HTMLButtonElement ? apply.disabled : null,
+    retiredControls: panel?.querySelectorAll('[data-io-control="dmx-prepare-show-dmx"], [data-io-control="dmx-enable-staged-show-artnet-loopback-route"], [data-io-control="dmx-enable-show-serial-dmx-safety-blackout-route"]').length ?? 0,
+    rows: [...(table?.querySelectorAll('[data-network-dmx-route]') ?? [])].map(row => ({
+      universe: row.querySelector('[data-network-dmx-universe]')?.value,
+      protocol: row.querySelector('select')?.value,
+      destination: row.querySelector('[data-network-dmx-destination]')?.value,
+      enabled: row.querySelector('input[type="checkbox"]')?.checked,
+      editable: [...row.querySelectorAll('input, select')].every(input => !input.disabled),
+      state: row.querySelector('.ioConnectionState')?.textContent?.trim(),
+    })),
+  };
+}

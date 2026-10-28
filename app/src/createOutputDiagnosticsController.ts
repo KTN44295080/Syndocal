@@ -1,3 +1,5 @@
+import { applyDmxUniverseTable } from "./applyDmxUniverseTable";
+import { usbTableRows, type DmxUniverseTablePlan } from "./dmxUniverseTable";
 import { networkDmxRoutePayload } from "./networkDmxRoutes";
 import { serialDmxConfirmationRequest, serialDmxDeviceInstance } from "./serialDmxDeviceInstance";
 import { createSignal, type Accessor, type Setter } from "solid-js";
@@ -325,8 +327,13 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
    * here would make the quick setup impossible to start. Once Enable returns,
    * re-query the authoritative active Both lease before any route action.
    */
-  const ensureBothOutputLease = async () => {
+  const ensureBothOutputLease = async (expectedProject = options.captureProjectAuthorityIdentity()) => {
+    const requireCurrent = () => {
+      if (!options.isProjectAuthorityIdentityCurrent(expectedProject)) throw new Error("The project changed before output authority was enabled. Reload output settings.");
+    };
+    requireCurrent();
     const query = await queryOutputLeaseAuthority(options.invoke);
+    requireCurrent();
     const decision = decideBothOutputLeasePreparation(query);
     if (decision.action === "reuse") {
       const ownership = await options.invoke<OutputOwnershipStatus>("get_output_ownership_status");
@@ -337,7 +344,8 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
       }
       return decision;
     }
-    await enableOutput(options.invoke);
+    await enableOutput(options.invoke, expectedProject);
+    requireCurrent();
     const ownership = await options.invoke<OutputOwnershipStatus>("get_output_ownership_status");
     if (!isBothOutputOwnershipReady(ownership)) {
       throw new Error(
@@ -797,23 +805,87 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     ? `${outputProtocolLabel(route.protocol)} ${route.serial_port || "(no port)"}`
     : `${outputProtocolLabel(route.protocol)} ${route.target_ip}:${route.port} U${route.universe}`;
 
-  const applyDmxOutputRoutes = async (routes: DmxOutputConfig[]) => {
+  /** One operator commit; each native action retains its own lease/fence and receipt. */
+  const applyDmxOutputRoutes = async (input: DmxOutputConfig[] | DmxUniverseTablePlan) => {
     if (activeShowOutputPreparation) throw new Error("Another output operation is in progress. Wait for it to finish before applying routes.");
-    return runShowOutputAction("network-dmx", async () => {
-    let authority = options.captureProjectAuthorityIdentity();
-    try {
-      const payload = networkDmxRoutePayload(routes.slice(1));
-      const lease = selectOnlyActiveOutputLease(await queryOutputLeaseAuthority(options.invoke), ["lighting", "video"]);
-      const receipt = await executeNetworkDmxRoutes(options.invoke, payload, lease, authority);
-      await options.refreshProjectAuthority(receipt, "Network DMX routes");
-      authority = options.captureProjectAuthorityIdentity();
-      await options.refreshSnapshot();
-      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
-      options.setMessage("Network DMX routes saved.");
-    } catch (error) {
-      if (options.isProjectAuthorityIdentityCurrent(authority)) options.setMessage(String(error));
-      throw error;
-    }
+    const plan = structuredClone(input);
+    return runShowOutputAction("dmx-universe-table", async () => {
+      let authority = options.captureProjectAuthorityIdentity();
+      const originalEpoch = authority.project_epoch;
+      const isCurrent = () => options.isProjectAuthorityIdentityCurrent(authority);
+      const requireCurrent = () => {
+        if (!isCurrent()) throw new Error("The project changed. Reload output settings before applying.");
+      };
+      const refresh = async () => {
+        requireCurrent();
+        await refreshUsbDmxUniverses();
+        requireCurrent();
+        await options.refreshSnapshot();
+        requireCurrent();
+      };
+      try {
+        requireCurrent();
+        const freshUsb = await options.invoke<UsbDmxUniversesStatus>("get_usb_dmx_universes_v1");
+        requireCurrent();
+        if (freshUsb.bindingStoreVersion !== 2 || typeof freshUsb.legacyRouteActive !== "boolean") {
+          throw new Error("USB-DMX settings could not be verified. Update the application and refresh status.");
+        }
+        applyUsbDmxUniverses(freshUsb);
+        const snapshot = await options.refreshSnapshot();
+        requireCurrent();
+        if (!snapshot) throw new Error("Output settings are unavailable. Refresh before applying.");
+        const desired = Array.isArray(plan) ? { network: plan, usb: usbTableRows(freshUsb) } : plan;
+        const usbAction = async (kind: "enable_usb_dmx_universe_route" | "stop_usb_dmx_universe_route", universe: number) => {
+          requireCurrent();
+          const lease = await selectFreshBothOutputLease();
+          requireCurrent();
+          await executeOutputControl(options.invoke, { kind, universe, lease }, { expectedProject: authority });
+          requireCurrent();
+        };
+        await applyDmxUniverseTable(desired, {
+          network: snapshot.dmx_outputs.length ? snapshot.dmx_outputs : [snapshot.output],
+          usbStatus: freshUsb, usbStatusStale: false,
+          safetyBlackoutEngaged: options.safetyBlackout(),
+          legacyRouteActive: freshUsb.legacyRouteActive,
+          isCurrent,
+          ensureAuthority: async () => { requireCurrent(); await ensureBothOutputLease(authority); requireCurrent(); },
+          stopUsb: universe => usbAction("stop_usb_dmx_universe_route", universe),
+          bindUsb: async (universe, port) => {
+            requireCurrent();
+            const request = { universe, ...serialDmxConfirmationRequest(port), expectedProject: authority };
+            const result = await options.invoke<UsbDmxUniversesStatus>("select_usb_dmx_universe_binding_v1", { request });
+            requireCurrent();
+            applyUsbDmxUniverses(result);
+          },
+          applyNetwork: async routes => {
+            requireCurrent();
+            const lease = await selectFreshBothOutputLease();
+            requireCurrent();
+            const receipt = await executeNetworkDmxRoutes(options.invoke, networkDmxRoutePayload(routes), lease, authority);
+            requireCurrent();
+            await options.refreshProjectAuthority(receipt, "DMX universes");
+            const next = options.captureProjectAuthorityIdentity();
+            if (next.project_epoch !== originalEpoch || next.project_revision !== receipt.fence_after.project_revision
+              || next.checkpoint_hash !== receipt.fence_after.project_checkpoint_hash) {
+              throw new Error("The project changed after applying network outputs. Reload output settings.");
+            }
+            authority = next;
+          },
+          startUsb: universe => usbAction("enable_usb_dmx_universe_route", universe),
+          clearUsb: async universe => {
+            requireCurrent();
+            const result = await options.invoke<UsbDmxUniversesStatus>("clear_usb_dmx_universe_binding_v1", { request: { universe, expectedProject: authority } });
+            requireCurrent();
+            applyUsbDmxUniverses(result);
+          },
+          refresh,
+        });
+        requireCurrent();
+        options.setMessage("DMX output settings applied.");
+      } catch (error) {
+        if (isCurrent()) options.setMessage(String(error));
+        throw error;
+      }
     });
   };
 

@@ -1,4 +1,4 @@
-//! Machine-local Open DMX cables for universes other than the U0 Unity mirror.
+//! Independent machine-local Open DMX cables, including Universe 0.
 //!
 //! Each cable outputs one universe from its own worker behind its own device
 //! gate. The S0 latch is shared with the U0 cable: S0, and every USB fault
@@ -8,8 +8,8 @@
 
 use super::*;
 
-/// At most this many USB-DMX cables besides the U0 Unity-mirror cable.
-pub const MAX_INDEPENDENT_USB_DMX_ROUTES: usize = 3;
+/// Total cable limit, including any retained legacy U0 mirror.
+pub const MAX_INDEPENDENT_USB_DMX_ROUTES: usize = 4;
 
 /// Highest universe a USB-DMX cable may output (the Art-Net range).
 const MAX_INDEPENDENT_USB_DMX_UNIVERSE: u16 = 32_767;
@@ -50,6 +50,7 @@ impl IndependentUsbDmxSlotTelemetry {
 pub(super) struct RuntimeIndependentUsbDmxRoute {
     universe: u16,
     device: io::serial_dmx::VerifiedUsbSerialPortIdentity,
+    legacy_u0_invariants: bool,
     sender: Option<DmxSender>,
     /// The queue state last published (`Some(live)`), so the show-cadence
     /// tick publishes, and allocates, only on a change.
@@ -151,6 +152,19 @@ impl EngineRuntime {
         })
     }
 
+    /// Count retained or unresolved device owners, including detached workers.
+    pub(super) fn retained_independent_usb_dmx_cable_count(&self) -> usize {
+        (0..MAX_INDEPENDENT_USB_DMX_ROUTES)
+            .filter(|slot| {
+                self.independent_usb_dmx_routes[*slot].is_some()
+                    || !self.shared_telemetry.independent_usb_dmx[*slot]
+                        .status
+                        .try_snapshot()
+                        .is_ok_and(|snapshot| slot_status_is_clean(&snapshot.status))
+            })
+            .count()
+    }
+
     /// A slot already bound to `universe` (keeping its fault history), else a
     /// never-used or cleanly stopped slot.
     fn independent_usb_dmx_slot_for_enable(&self, universe: u16) -> Result<usize, String> {
@@ -167,19 +181,21 @@ impl EngineRuntime {
             })
             .ok_or_else(|| {
                 format!(
-                    "USB-DMX supports at most {MAX_INDEPENDENT_USB_DMX_ROUTES} cables besides Universe 0; stop one first (a faulted cable stays reserved until it is re-armed or stopped)"
+                    "USB-DMX supports at most {MAX_INDEPENDENT_USB_DMX_ROUTES} cables in total; stop one first (a faulted cable stays reserved until it is re-armed or stopped)"
                 )
             })
     }
 
-    pub(super) fn apply_independent_usb_dmx_route_enable(
+    pub(super) fn apply_independent_usb_dmx_route_enable_with_legacy_u0_policy(
         &mut self,
+        legacy_u0_invariants: bool,
         universe: u16,
         expected_device: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
         expected_safety_epoch: u64,
         expected_safety_generation: u64,
     ) -> Result<(), String> {
-        self.apply_independent_usb_dmx_route_enable_with_sender_factory(
+        self.apply_independent_usb_dmx_route_enable_with_sender_factory_and_policy(
+            legacy_u0_invariants,
             universe,
             expected_device,
             expected_safety_epoch,
@@ -188,6 +204,7 @@ impl EngineRuntime {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn apply_independent_usb_dmx_route_enable_with_sender_factory<F>(
         &mut self,
         universe: u16,
@@ -202,10 +219,43 @@ impl EngineRuntime {
             &OpenDmxSafetyWriteGate,
         ) -> Result<DmxSender, String>,
     {
-        if universe == SHOW_SERIAL_DMX_UNIVERSE || universe > MAX_INDEPENDENT_USB_DMX_UNIVERSE {
+        self.apply_independent_usb_dmx_route_enable_with_sender_factory_and_policy(
+            false,
+            universe,
+            expected_device,
+            expected_safety_epoch,
+            expected_safety_generation,
+            create_sender,
+        )
+    }
+
+    pub(super) fn apply_independent_usb_dmx_route_enable_with_sender_factory_and_policy<F>(
+        &mut self,
+        legacy_u0_invariants: bool,
+        universe: u16,
+        expected_device: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        create_sender: F,
+    ) -> Result<(), String>
+    where
+        F: FnOnce(
+            &io::serial_dmx::VerifiedUsbSerialPortIdentity,
+            &OpenDmxSafetyWriteGate,
+        ) -> Result<DmxSender, String>,
+    {
+        if legacy_u0_invariants && universe != 0 {
+            return Err("Legacy U0 policy is valid only for Universe 0".into());
+        }
+        if universe > MAX_INDEPENDENT_USB_DMX_UNIVERSE {
             return Err(format!(
-                "USB-DMX Universe {universe} is not available here: Universe 0 is the Unity-mirror cable, and others must be 1–{MAX_INDEPENDENT_USB_DMX_UNIVERSE}"
+                "USB-DMX Universe {universe} must be 0..={MAX_INDEPENDENT_USB_DMX_UNIVERSE}"
             ));
+        }
+        if self.show_serial_dmx_route.is_none()
+            && !self.configured_dmx_legacy_usb_absence_verified()
+        {
+            return Err("Legacy U0 worker retirement is unverified; recover or retire it before opening an independent cable".into());
         }
         if !show_serial_dmx_device_identity_is_exact(expected_device) {
             return Err(
@@ -235,6 +285,18 @@ impl EngineRuntime {
             );
         }
         let slot = self.independent_usb_dmx_slot_for_enable(universe)?;
+        let reserved = self.independent_usb_dmx_routes[slot].is_some()
+            || !self.shared_telemetry.independent_usb_dmx[slot]
+                .status
+                .try_snapshot()
+                .is_ok_and(|snapshot| slot_status_is_clean(&snapshot.status));
+        if self.retained_independent_usb_dmx_cable_count()
+            + usize::from(self.show_serial_dmx_route.is_some())
+            + usize::from(!reserved)
+            > MAX_INDEPENDENT_USB_DMX_ROUTES
+        {
+            return Err("USB-DMX supports at most four retained cables in total".into());
+        }
         let shared_telemetry = Arc::clone(&self.shared_telemetry);
         let slot_telemetry = &shared_telemetry.independent_usb_dmx[slot];
         slot_telemetry.assign(universe);
@@ -371,6 +433,7 @@ impl EngineRuntime {
         self.independent_usb_dmx_routes[slot] = Some(RuntimeIndependentUsbDmxRoute {
             universe,
             device: expected_device.clone(),
+            legacy_u0_invariants,
             sender: Some(sender),
             published_live: None,
         });
@@ -626,7 +689,9 @@ impl EngineRuntime {
                             .gate
                             .reserve_zero_write_bounded(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT)
                             .map_err(|error| {
-                                format!("USB-DMX fault could not reserve bounded S0 zero write: {error}")
+                                format!(
+                                    "USB-DMX fault could not reserve bounded S0 zero write: {error}"
+                                )
                             })?;
                         let receipt = sender.open_dmx_zero_write_receipt()?;
                         sender.send_dmx_frame(route.universe, &[0u8; 512])?;
@@ -752,6 +817,9 @@ impl EngineRuntime {
                     .get(&route.universe)
                     .copied()
                     .unwrap_or_else(|| self.render_dmx_frame_for_universe(route.universe, now));
+                if route.legacy_u0_invariants && route.universe == 0 {
+                    enforce_show_serial_dmx_u0_invariants(&mut captured[slot]);
+                }
             }
         }
         captured

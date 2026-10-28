@@ -1994,7 +1994,7 @@ pub const OUTPUT_USB_DMX_UNIVERSE_ROUTE_ENABLE_OPERATION_ID: &str =
 pub const OUTPUT_USB_DMX_UNIVERSE_ROUTE_STOP_OPERATION_ID: &str =
     "syndocal.output.usb_dmx_universe_route.stop.v1";
 /// Universes a USB-DMX cable other than the Universe 0 cable may output.
-pub const USB_DMX_CABLE_UNIVERSES: std::ops::RangeInclusive<u16> = 1..=32_767;
+pub const USB_DMX_CABLE_UNIVERSES: std::ops::RangeInclusive<u16> = 0..=32_767;
 /// The only show-specific same-machine video mutation.  Its action carries
 /// only an active lease; sender names, dimensions and routing are fixed by
 /// native code and are never caller-controlled.
@@ -2847,6 +2847,8 @@ impl<'de> Deserialize<'de> for OutputLeaseAuthorityV1 {
 pub enum OutputControlActionV2 {
     EnableOutput,
     SetNetworkDmxRoutes {
+        /// False preserves the original additional-route payload contract.
+        replace_primary: bool,
         routes: Vec<NetworkDmxRoute>,
         lease: OutputLeaseAuthorityV1,
     },
@@ -2975,6 +2977,9 @@ pub enum OutputControlActionV2 {
 enum OutputControlActionV2Wire {
     EnableOutput {},
     SetNetworkDmxRoutes {
+        /// False preserves the original additional-route payload contract.
+        #[serde(default, skip_serializing_if = "is_false")]
+        replace_primary: bool,
         routes: Vec<NetworkDmxRoute>,
         lease: OutputLeaseAuthorityV1,
     },
@@ -3174,7 +3179,7 @@ impl OutputControlActionV2 {
             lease.validate()?;
         }
         match self {
-            Self::SetNetworkDmxRoutes { routes, lease } => {
+            Self::SetNetworkDmxRoutes { routes, lease, .. } => {
                 lease.validate()?;
                 validate_network_dmx_routes(routes).map_err(|_| OutputControlValidationErrorV1::InvalidNetworkDmxRoutes)?;
             }
@@ -3312,7 +3317,15 @@ impl OutputControlActionV2 {
     fn wire(&self) -> OutputControlActionV2Wire {
         match self {
             Self::EnableOutput => OutputControlActionV2Wire::EnableOutput {},
-            Self::SetNetworkDmxRoutes { routes, lease } => OutputControlActionV2Wire::SetNetworkDmxRoutes { routes: routes.clone(), lease: lease.clone() },
+            Self::SetNetworkDmxRoutes {
+                routes,
+                lease,
+                replace_primary,
+            } => OutputControlActionV2Wire::SetNetworkDmxRoutes {
+                routes: routes.clone(),
+                lease: lease.clone(),
+                replace_primary: *replace_primary,
+            },
             Self::EnableShowArtNetLoopbackRoute { lease } => {
                 OutputControlActionV2Wire::EnableShowArtNetLoopbackRoute {
                     lease: lease.clone(),
@@ -3498,9 +3511,14 @@ impl OutputControlActionV2 {
     ) -> Result<(), OutputControlValidationErrorV1> {
         self.validate()?;
         match self {
-            Self::SetNetworkDmxRoutes { routes, lease } => {
-                // 0..=25 are frozen. The new operation has its own bounded payload.
-                output.push(26);
+            Self::SetNetworkDmxRoutes {
+                routes,
+                lease,
+                replace_primary,
+            } => {
+                // Preserve the v1 additional-route canonical bytes. Complete-table
+                // intent has a distinct discriminator and cannot replay as an append.
+                output.push(if *replace_primary { 33 } else { 26 });
                 append_u64(output, routes.len() as u64);
                 for route in routes {
                     output.push(u8::from(route.enabled));
@@ -3815,7 +3833,15 @@ impl<'de> Deserialize<'de> for OutputControlActionV2 {
         let wire = OutputControlActionV2Wire::deserialize(deserializer)?;
         let value = match wire {
             OutputControlActionV2Wire::EnableOutput {} => Self::EnableOutput,
-            OutputControlActionV2Wire::SetNetworkDmxRoutes { routes, lease } => Self::SetNetworkDmxRoutes { routes, lease },
+            OutputControlActionV2Wire::SetNetworkDmxRoutes {
+                routes,
+                lease,
+                replace_primary,
+            } => Self::SetNetworkDmxRoutes {
+                routes,
+                lease,
+                replace_primary,
+            },
             OutputControlActionV2Wire::EnableShowArtNetLoopbackRoute { lease } => {
                 Self::EnableShowArtNetLoopbackRoute { lease }
             }
@@ -6952,7 +6978,7 @@ mod tests {
                 &serde_json::from_value::<OutputControlActionV2>(json.clone()).unwrap(),
                 action
             );
-            for universe in [0, 32_768] {
+            for universe in [32_768, 65_535] {
                 let mut out_of_range = json.clone();
                 out_of_range["universe"] = serde_json::json!(universe);
                 // Rejected either at parse time or by validation.
@@ -7527,6 +7553,7 @@ mod network_dmx_action_tests {
     #[test]
     fn network_dmx_action_shape_binds_every_destination_and_universe() {
         let mut action = OutputControlActionV2::SetNetworkDmxRoutes {
+            replace_primary: false,
             lease: OutputLeaseAuthorityV1 { lease_id: "lease-0000000000000001".into(), generation: 1 },
             routes: vec![NetworkDmxRoute { enabled: true, protocol: NetworkDmxProtocol::ArtNet, target_ip: "127.0.0.1".into(), port: 16454, universe: 1 }],
         };
@@ -7542,5 +7569,55 @@ mod network_dmx_action_tests {
         assert!(serde_json::from_value::<OutputControlActionV2>(invalid).is_err());
         let mut invalid = value; invalid["routes"][0]["port"] = serde_json::json!(0);
         assert!(serde_json::from_value::<OutputControlActionV2>(invalid).is_err());
+    }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[cfg(test)]
+mod dmx_table_scope_tests {
+    use super::*;
+    #[test]
+    fn full_table_scope_preserves_legacy_wire_and_has_separate_replay_identity() {
+        let legacy = OutputControlActionV2::SetNetworkDmxRoutes {
+            replace_primary: false,
+            routes: Vec::new(),
+            lease: OutputLeaseAuthorityV1 {
+                lease_id: "lease-0000000000000001".into(),
+                generation: 1,
+            },
+        };
+        let legacy_wire = serde_json::to_value(&legacy).unwrap();
+        assert!(legacy_wire.get("replace_primary").is_none());
+        let mut full_wire = legacy_wire.clone();
+        full_wire["replace_primary"] = serde_json::json!(true);
+        let full: OutputControlActionV2 = serde_json::from_value(full_wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&full).unwrap(), full_wire);
+        let mut old_shape = Vec::new();
+        let mut new_shape = Vec::new();
+        legacy.append_canonical_bytes(&mut old_shape).unwrap();
+        full.append_canonical_bytes(&mut new_shape).unwrap();
+        assert_eq!(old_shape[0], 26);
+        assert_eq!(new_shape[0], 33);
+        assert_eq!(&old_shape[1..], &new_shape[1..]);
+        full_wire["replace_primary"] = serde_json::json!("all");
+        assert!(serde_json::from_value::<OutputControlActionV2>(full_wire).is_err());
+    }
+    #[test]
+    fn independent_usb_zero_is_valid_but_out_of_range_is_rejected() {
+        let mut action = OutputControlActionV2::EnableUsbDmxUniverseRoute {
+            universe: 0,
+            lease: OutputLeaseAuthorityV1 {
+                lease_id: "lease-0000000000000001".into(),
+                generation: 1,
+            },
+        };
+        assert!(action.validate().is_ok());
+        if let OutputControlActionV2::EnableUsbDmxUniverseRoute { universe, .. } = &mut action {
+            *universe = 32768;
+        }
+        assert!(action.validate().is_err());
     }
 }

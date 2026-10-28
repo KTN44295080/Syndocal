@@ -57,88 +57,25 @@ const preparationEnd = controller.indexOf("const stopShowSerialDmxSafetyBlackout
 assert.ok(preparationStart >= 0 && preparationEnd > preparationStart, "quick setup controller must have a bounded preparation function");
 const preparation = controller.slice(preparationStart, preparationEnd);
 
-assert.match(panel, /data-io-show-dmx-setup/);
-assert.match(panel, /data-io-control="dmx-prepare-show-dmx"/);
-assert.match(panel, /onPrepareShowDmx\(selectedSerialPort\(\)\)/);
-assert.match(panel, /showDmxPreparationBusy/);
-assert.match(panel, /showDmxPreparationStage/);
-const diagnosticsDisclosure = panel.indexOf('data-io-disclosure="dmx-individual-diagnostics"');
-const quickSetupControlStart = panel.indexOf("const showDmxPreparationCanStart =");
-const quickSetupControlEnd = panel.indexOf("const showDmxPreparationStatus =", quickSetupControlStart);
-assert.ok(quickSetupControlStart >= 0 && quickSetupControlEnd > quickSetupControlStart && quickSetupControlEnd < diagnosticsDisclosure,
-  "quick setup eligibility must remain a local bounded control");
-const quickSetupControl = panel.slice(quickSetupControlStart, quickSetupControlEnd);
-assert.doesNotMatch(quickSetupControl, /fixture|patch/i,
-  "quick setup eligibility must not depend on fixtures or patch state");
-assert.doesNotMatch(quickSetupControl, /hasExactMachineLocalOpenDmxIdentity/,
-  "quick setup eligibility must not require a USB-DMX identity");
-assert.match(quickSetupControl, /&& !serialWorkerActive\(\)/,
-  "quick setup must still reject a duplicate active Open DMX worker");
-
-const oldLoopbackControl = panel.indexOf('data-io-control="dmx-enable-staged-show-artnet-loopback-route"');
-const oldUsbControl = panel.indexOf('data-io-control="dmx-enable-show-serial-dmx-safety-blackout-route"');
-assert.ok(diagnosticsDisclosure >= 0 && diagnosticsDisclosure < oldLoopbackControl, "individual loopback diagnostics must remain behind the disclosure");
-assert.ok(oldLoopbackControl < oldUsbControl, "individual Art-Net diagnostics must remain before USB diagnostics");
-assert.match(panel, /<details class="ioDisclosure dmxIndividualDiagnostics"[^>]*>/);
-assert.match(panel, /<summary>Advanced<\/summary>/,
-  "manual setup controls must be grouped under one Advanced disclosure");
-assert.match(panel, /data-io-disclosure="dmx-usb-manual-controls"[\s\S]*<summary>Manual controls<\/summary>/,
-  "manual route controls must remain behind a nested disclosure");
-assert.doesNotMatch(panel, /data-io-control="dmx-send-dsf2026-artnet-acceptance-probe"|data-io-control="dmx-acknowledge-dsf2026-artnet-acceptance-probe-in-doubt"/,
-  "fixed probe actions must not remain in the everyday DMX setup panel");
-assert.doesNotMatch(panel, /<details class="ioDisclosure dmxIndividualDiagnostics"[^>]*\bopen\b/,
-  "individual diagnostics must default collapsed behind the quick setup");
-assert.match(panel, /disabled=\{!showDmxPreparationCanStart\(\)\}/);
-assert.match(panel, /const serialWorkerArmAdmissible = \(\) =>/,
-  "the explicit USB arm control must retain its strict worker admissibility gate");
-assert.doesNotMatch(panel, /Prepare show DMX \(S0-safe\)/,
-  "the complete sequence must not claim S0 safety before loopback staging");
-
-const protocolDetails = panel.indexOf('data-io-disclosure="dmx-protocol-details"');
-assert.ok(protocolDetails >= 0 && protocolDetails > oldUsbControl,
-  "protocol and safety prose must remain below the compact route controls");
-assert.match(panel, /<details class="ioDisclosure dmxProtocolDetails[^"]*"[^>]*>/,
-  "protocol and safety prose must use a disclosure");
-assert.doesNotMatch(panel, /<details class="ioDisclosure dmxProtocolDetails[^"]*"[^>]*\bopen\b>/,
-  "protocol and safety prose must default collapsed");
-assert.match(panel, /<summary>Route facts<\/summary>/,
-  "the collapsed route disclosure needs an operator-facing label");
-assert.match(panel, /<dl class="dmxProtocolFacts">/,
-  "route details must use a compact fact table rather than prose");
-assert.match(panel, /Detailed diagnostics are written to the application log\./,
-  "verbose diagnostics must be directed to the application log");
-assert.doesNotMatch(panel, /Same-PC only: completed DMX Universe 1|Confirmation retains the native lease|generic FTDI VID\/PID/,
-  "long protocol and safety explanations must not remain in the operator UI");
-assert.match(panel, /<strong>Show DMX<\/strong>/,
-  "the default quick setup surface must use concise route copy");
-assert.match(panel, /class="dmxShowSetupControls"[\s\S]*id="show-usb-dmx-device"[\s\S]*data-io-control="dmx-prepare-show-dmx"/,
-  "the default surface must keep device selection and Prepare together");
-assert.match(panel, /<summary>Device identity<\/summary>/,
-  "raw machine identity details must be kept behind a nested disclosure");
-assert.doesNotMatch(panel.slice(0, protocolDetails), /Same-PC only: completed DMX Universe 1/,
-  "wire-format prose must not consume the default DMX surface");
-assert.match(panel, /<table class="dmxUniverseTable" data-dmx-universe-table>[\s\S]*<tr class="dmxShowSetup" data-io-show-dmx-setup[\s\S]*<UsbDmxCableRows model=\{usb\} \/>[\s\S]*<NetworkDmxRouteRows draft=\{network\}[\s\S]*<DmxUniverseAddRow usb=\{usb\} network=\{network\} \/>[\s\S]*<\/table>/,
-  "Show DMX (U0), the USB-DMX cables, the network universes and one Add row must share one table");
-assert.ok(panel.indexOf("</table>") < diagnosticsDisclosure,
-  "the universes table must stay above the collapsed diagnostics");
-assert.match(styles, /\.dmxUniverseTable\s*\{[\s\S]*?width:\s*100%;[\s\S]*?table-layout:\s*fixed;/,
-  "the universes table must use fixed columns within the panel width");
-assert.doesNotMatch(panel, /dmxUniverseTableScroll/,
-  "the universes table must not add a second scroll owner inside the I/O workbench");
-assert.match(styles, /\.dmxShowSetupCopy\s*\{[\s\S]*?display:\s*grid;/,
-  "the show route label must remain compact without wrapping into a prose block");
-assert.match(styles, /\.dmxShowSetupControls\s*\{[\s\S]*?display:\s*grid;/,
-  "the default setup controls must have a bounded responsive layout");
-assert.match(outputDiagnosticsPanel, /data-io-dmx-protocol-diagnostics[\s\S]*data-io-control="dmx-send-dsf2026-artnet-acceptance-probe"[\s\S]*data-io-control="dmx-acknowledge-dsf2026-artnet-acceptance-probe-in-doubt"/,
-  "fixed probe actions must live with DMX diagnostics");
-assert.match(styles, /\.dmxProtocolDiagnostics\s*\{[\s\S]*?display:\s*grid;/,
-  "the protocol diagnostic actions must use the existing compact layout language");
-
+// Task 74 replaces fixed U0 + Prepare/manual controls with independent drafts
+// committed by one Apply. Legacy diagnostics/controller authority tests below
+// remain required; their retained paths are not the everyday operator surface.
+assert.match(panel, /data-dmx-universe-table/);
+assert.match(panel, /data-usb-dmx-cables/);
+assert.match(panel, /data-network-dmx-routes/);
+assert.match(panel, /data-dmx-universe-apply/);
+assert.match(panel, /onApplyUniverseTable\(plan\(\)\)/);
+assert.match(panel, /validateUniverseTablePlan/);
+assert.match(panel, /conflict\(\)/);
+assert.doesNotMatch(panel, /onPrepareShowDmx|dmx-prepare-show-dmx|dmxShowSetup|Manual controls|S0 engaged/);
+assert.match(setupIoView, /onApplyUniverseTable=\{applyDmxOutputRoutes\}/);
+assert.doesNotMatch(setupIoView, /onPrepareShowDmx=/);
+assert.match(outputDiagnosticsPanel, /data-io-dmx-protocol-diagnostics[\s\S]*data-io-control="dmx-send-dsf2026-artnet-acceptance-probe"[\s\S]*data-io-control="dmx-acknowledge-dsf2026-artnet-acceptance-probe-in-doubt"/);
 assert.doesNotMatch(controller, /safetyBlackoutRuntime\.engage|executeBlackoutRelease/,
   "ordinary USB preparation must preserve the operator's global safety state");
 assert.match(controller, /import[\s\S]*enableOutput/,
   "quick setup must use the canonical normal output enable path");
-assert.match(controller, /const ensureBothOutputLease = async \(\) =>/);
+assert.match(controller, /const ensureBothOutputLease = async \(expectedProject = options\.captureProjectAuthorityIdentity\(\)\) =>/);
 assert.match(controller, /export const decideBothOutputLeasePreparation =/,
   "stage-1 lease handling must expose a deterministic active-vs-enable decision");
 assert.match(controller, /const decision = decideBothOutputLeasePreparation\(query\)/,
@@ -149,7 +86,7 @@ assert.match(controller, /invoke<OutputOwnershipStatus>\("get_output_ownership_s
   "stage 1 must correlate the active Both lease with current output ownership");
 assert.match(controller, /if \(!isBothOutputOwnershipReady\(ownership\)\) \{[\s\S]*?throw new Error/,
   "active-but-unarmed ownership must stop before device or route mutation");
-assert.match(controller, /await enableOutput\(options\.invoke\)/,
+assert.match(controller, /await enableOutput\(options\.invoke, expectedProject\)/,
   "fresh no-lease setup must acquire Both through enable_output");
 assert.match(controller, /lease: await selectBothOutputLease\(\)/,
   "fresh enable must be followed by an exact Both re-query");
@@ -228,17 +165,6 @@ assert.match(preparation, /if \(!options\.safetyBlackout\(\)\)/,
   "clear safety admits the retained USB worker without a global blackout mutation");
 assert.doesNotMatch(preparation, /enableShowSpoutOutputs|resetShowSpoutOutputs/,
   "quick setup must not alter the independent Spout route");
-
-assert.match(setupIoView, /showDmxPreparationBusy=\{showDmxPreparationBusy\(\)\}/);
-assert.match(setupIoView, /showDmxPreparationStage=\{showDmxPreparationStage\(\)\}/);
-assert.match(setupIoView, /onPrepareShowDmx=\{prepareShowDmx\}/);
-
-assert.match(panel, /const explicitKey = selectedSerialPortKey\(\)/);
-assert.match(panel, /persistedBindingKey/);
-assert.match(panel, /const eligible = props\.serialPorts\.filter\(\(port\) => hasExactMachineLocalOpenDmxIdentity\(port\)\)/);
-assert.match(panel, /eligible\.length === 1 \? eligible\[0\] : undefined/);
-assert.match(panel, /data-io-usb-dmx-selection-state/);
-assert.match(panel, /value=\{selectedSerialPort\(\) \? serialPortKey\(selectedSerialPort\(\)!\) : ""\}/);
 
 const activeBothAuthority = { lease_id: "lease-0123456789abcdef", generation: 31 };
 assert.deepEqual(
@@ -331,6 +257,8 @@ const platformIdentityExports = {};
 new Function("exports", ts.transpileModule(read("src/serialDmxDeviceInstance.ts"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText)(platformIdentityExports);
+const tablePolicy = await import(await typescriptFixtureModuleUrl(new URL("../src/dmxUniverseTable.ts", import.meta.url)));
+const applyPolicy = await import(await typescriptFixtureModuleUrl(new URL("../src/applyDmxUniverseTable.ts", import.meta.url)));
 const stageLabelExports = {};
 new Function("exports", ts.transpileModule(read("src/showDmxStageLabels.ts"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -368,15 +296,18 @@ function leaseFixture(initial = "unavailable", config = {}) {
   };
   const imports = {
     "./networkDmxRoutes": networkPolicy,
+    "./applyDmxUniverseTable": applyPolicy,
+    "./dmxUniverseTable": tablePolicy,
     "./serialDmxDeviceInstance": platformIdentityExports,
     "./showDmxStageLabels": stageLabelExports,
     "solid-js": require("solid-js"),
     "./outputControlController": {
       queryDsf2026ArtNetAcceptanceProbeStatus: async () => null,
-      queryOutputLeaseAuthority: async () => { events.push("lease-query"); return structuredClone({statuses}); },
+      queryOutputLeaseAuthority: async () => { events.push("lease-query"); if(config.staleDuringLeaseQuery) authorityCurrent=false; return structuredClone({statuses}); },
       selectOnlyActiveOutputLease: select,
       executeBlackoutRelease: async () => { events.push("release-blackout"); return {}; },
-      enableOutput: async () => {
+      enableOutput: async (_invoke, expectedProject) => {
+        assert.deepEqual(expectedProject,{project_epoch:0,project_revision:1,checkpoint_hash:"fixture-checkpoint"},"managed authority enable retains the captured project identity");
         events.push("enable-output");
         await config.enableGate;
         if (config.staleDuringEnable) authorityCurrent = false;
@@ -429,6 +360,13 @@ for (const method of routeMethods) {
     assert.equal(stale.actions.length, 0, `${method} must discard a stale result after managed lease preparation`);
     assert.ok(!stale.messages.some(message => /enable rejected|enabled|rejected/.test(message)),
       `${method} must suppress stale errors and success messages`);
+  }
+  for (const state of ["unavailable", "held_active"]) {
+    const stale = leaseFixture(state, {staleDuringLeaseQuery:true});
+    await stale.instance[method]();
+    assert.equal(stale.actions.length,0,`${method} must stop when project changes during public lease query`);
+    assert.ok(!stale.events.includes("enable-output"),"a stale public query must not enable ownership for a different project");
+    assert.ok(!stale.messages.some(message=>/enabled|rejected/.test(message)),"stale actions must not publish success or device errors");
   }
   const unready=leaseFixture("held_active",{ownership:{...readyBothOwnership,video_allowed:false}});
   await unready.instance[method]();
@@ -499,4 +437,4 @@ for (const first of routeMethods) {
   assert.equal(f.actions.length,1,"the shared lock is released after DMX preparation failure");
   assert.equal(f.events.filter(event=>event==="enable-output").length,1);
 }
-console.log("DMX show setup UI contract: PASS (canonical standalone acquire/recover/reuse, fresh authority, fail-closed preparation, same-action singleflight, cross-action busy rejection, loopback-before-S0 boundary)");
+console.log("DMX single-Apply UI and retained diagnostics controller contract: PASS (canonical standalone acquire/recover/reuse, fresh authority, fail-closed preparation, same-action singleflight, cross-action busy rejection, loopback-before-S0 boundary)");

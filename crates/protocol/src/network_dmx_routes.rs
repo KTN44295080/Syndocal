@@ -55,8 +55,8 @@ impl NetworkDmxRoute {
     }
 }
 pub fn validate_network_dmx_routes(routes: &[NetworkDmxRoute]) -> Result<(), String> {
-    if routes.len() > 255 {
-        return Err("At most 255 additional network routes are supported".into());
+    if routes.len() > 256 {
+        return Err("At most 256 network routes are supported".into());
     }
     let mut keys = std::collections::HashSet::new();
     for route in routes {
@@ -69,13 +69,6 @@ pub fn validate_network_dmx_routes(routes: &[NetworkDmxRoute]) -> Result<(), Str
                 .parse::<std::net::Ipv4Addr>()
                 .map_err(|e| e.to_string())?
         };
-        if route.protocol == NetworkDmxProtocol::ArtNet
-            && ip.is_loopback()
-            && route.port == 6454
-            && route.universe == 0
-        {
-            return Err("The built-in U0 loopback route is managed separately".into());
-        }
         if route.enabled && !keys.insert((route.protocol as u8, ip, route.port, route.universe)) {
             return Err("Duplicate enabled DMX destination and universe".into());
         }
@@ -146,7 +139,7 @@ mod tests {
         assert!(r.validate().is_err());
         r.port = 6454;
         r.universe = 0;
-        assert!(validate_network_dmx_routes(&[r.clone()]).is_err());
+        assert!(validate_network_dmx_routes(&[r.clone()]).is_ok());
         r.protocol = NetworkDmxProtocol::Sacn;
         assert!(r.validate().is_err());
         r.universe = 64000;
@@ -156,5 +149,52 @@ mod tests {
         assert!(r.validate().is_err());
         assert!(validate_network_dmx_routes(&vec![route(1); 256]).is_err());
         assert!(serde_json::from_str::<NetworkDmxRoute>(r#"{"enabled":true,"protocol":"EnttecOpenDmx","target_ip":"127.0.0.1","port":6454,"universe":0}"#).is_err());
+    }
+}
+
+/// Compatibility primary for an empty complete network list. Not an authored
+/// route: unspecified IP and port zero are rejected by route validation.
+/// Ordinary disabled legacy U0 loopback routes never match this sentinel.
+pub fn empty_network_dmx_output() -> DmxOutputConfig {
+    DmxOutputConfig {
+        enabled: false,
+        protocol: DmxOutputProtocol::ArtNet,
+        target_ip: "0.0.0.0".into(),
+        port: 0,
+        universe: 0,
+        serial_port: String::new(),
+        serial_baud_rate: 57600,
+    }
+}
+pub fn is_empty_network_dmx_output(config: &DmxOutputConfig) -> bool {
+    config == &empty_network_dmx_output()
+}
+
+#[cfg(test)]
+mod complete_table_tests {
+    use super::*;
+    #[test]
+    fn complete_table_supports_256_routes_and_explicit_loopback() {
+        let routes = (0..256)
+            .map(|universe| NetworkDmxRoute {
+                enabled: true,
+                protocol: NetworkDmxProtocol::ArtNet,
+                target_ip: "127.0.0.1".into(),
+                port: 6454,
+                universe,
+            })
+            .collect::<Vec<_>>();
+        assert!(validate_network_dmx_routes(&routes).is_ok());
+        let mut overflow = routes;
+        overflow.push(NetworkDmxRoute {
+            universe: 256,
+            ..overflow[0].clone()
+        });
+        assert!(validate_network_dmx_routes(&overflow).is_err());
+        assert!(is_empty_network_dmx_output(&empty_network_dmx_output()));
+        assert!(!is_empty_network_dmx_output(&DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        }));
     }
 }

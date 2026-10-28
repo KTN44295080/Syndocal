@@ -1,0 +1,22 @@
+/* The route table keeps the established control sizes and one scroll owner. */
+.dmxOutputConfigPanel .dmxUniverseTableViewport { min-width: 0; width: 100%; }
+.dmxOutputConfigPanel .dmxUniverseTable { width: 100%; table-layout: fixed; }
+.dmxOutputConfigPanel .dmxUniverseTable th:nth-child(1) { width: 90px; }
+.dmxOutputConfigPanel .dmxUniverseTable th:nth-child(2) { width: 128px; }
+.dmxOutputConfigPanel .dmxUniverseTable th:nth-child(4) { width: 156px; }
+.dmxOutputConfigPanel .dmxUniverseTable th:nth-child(5) { width: 230px; }
+.dmxOutputConfigPanel .dmxUniverseTable input:not([type="checkbox"]),
+.dmxOutputConfigPanel .dmxUniverseTable select { width: 100%; min-width: 0; max-width: 100%; }
+.dmxOutputConfigPanel .dmxUniverseDestination { display: grid; grid-template-columns: minmax(100px,1fr) 100px; gap: 8px; }
+.dmxOutputConfigPanel .dmxRouteBuilder { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.dmxOutputConfigPanel .dmxUniverseEnabled { display: inline-flex; align-items: center; gap: 8px; }
+.dmxOutputConfigPanel [data-dmx-draft-pending],
+.dmxOutputConfigPanel .fieldError { overflow-wrap: anywhere; }
+@media (max-width: 1100px) {
+ .dmxOutputConfigPanel .dmxUniverseTable th:nth-child(1) { width: 82px; }
+ .dmxOutputConfigPanel .dmxUniverseTable th:nth-child(2) { width: 112px; }
+ .dmxOutputConfigPanel .dmxUniverseTable th:nth-child(4) { width: 126px; }
+ .dmxOutputConfigPanel .dmxUniverseTable th:nth-child(5) { width: 160px; }
+ .dmxOutputConfigPanel .dmxUniverseDestination { grid-template-columns: minmax(0,1fr); }
+ .dmxOutputConfigPanel .dmxUniverseActions { flex-wrap: wrap; }
+}
