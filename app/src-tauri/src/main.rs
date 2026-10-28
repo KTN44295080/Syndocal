@@ -352,6 +352,7 @@ mod video_authoring_lease;
 use video_authoring_lease::query_video_authoring_lease_authority_v1;
 mod output_lease_keepalive_integration;
 mod output_lease_keepalive_runtime;
+mod output_role_ordering;
 mod renderer_ticketed_admission;
 mod scene_creation;
 mod serial_dmx_machine;
@@ -3327,6 +3328,7 @@ struct AppState {
     snapshot_sync: Mutex<SnapshotSyncState>,
     standby_sync: Mutex<StandbySyncRuntime>,
     standby_sync_lifecycle: Arc<Mutex<()>>,
+    output_role_ordering: output_role_ordering::OutputRoleOrdering,
     output_ownership_transition: Arc<Mutex<()>>,
     native_video_output_metrics:
         Mutex<HashMap<VideoOutputId, Arc<Mutex<NativeVideoOutputMetrics>>>>,
@@ -53081,7 +53083,8 @@ fn clear_operator_policy_for_window_label(
     Ok(())
 }
 
-#[tauri::command]
+// This lifecycle boundary can drain Enable and join native outputs.
+#[tauri::command(async)]
 fn load_user_template(
     window: WebviewWindow,
     state: State<'_, AppState>,
@@ -61205,7 +61208,7 @@ fn navigate_project_history(
     expected_checkpoint_hash: Option<String>,
 ) -> Result<ProjectHistoryNavigationResult, String> {
     project_transaction_owner_binding_for_window(state, window_label, owner_id)?;
-    execute_managed_project_replacement_boundary(
+    let _output_deny = execute_managed_project_replacement_boundary(
         state,
         "Managed output lease project history replacement",
     )?;
@@ -61485,7 +61488,8 @@ fn rewrite_navigated_project_history_entry(
     entry
 }
 
-#[tauri::command]
+// This lifecycle boundary can drain Enable and join native outputs.
+#[tauri::command(async)]
 fn undo_project_transaction(
     window: WebviewWindow,
     state: State<'_, AppState>,
@@ -61505,7 +61509,8 @@ fn undo_project_transaction(
     )
 }
 
-#[tauri::command]
+// This lifecycle boundary can drain Enable and join native outputs.
+#[tauri::command(async)]
 fn redo_project_transaction(
     window: WebviewWindow,
     state: State<'_, AppState>,
@@ -64435,7 +64440,8 @@ fn list_project_backups(app: tauri::AppHandle) -> Result<Vec<ProjectBackupSummar
     list_project_backups_in(&directory)
 }
 
-#[tauri::command]
+// This lifecycle boundary can drain Enable and join native outputs.
+#[tauri::command(async)]
 fn load_project_backup(
     app: tauri::AppHandle,
     window: WebviewWindow,
@@ -65153,7 +65159,8 @@ fn select_standby_sync_directory(window: WebviewWindow) -> Option<String> {
         .map(|path| path.to_string_lossy().to_string())
 }
 
-#[tauri::command]
+// This lifecycle boundary can drain Enable and join native outputs.
+#[tauri::command(async)]
 fn start_standby_sync(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -65161,6 +65168,11 @@ fn start_standby_sync(
     role: StandbySyncRole,
 ) -> Result<StandbySyncStatus, String> {
     let directory = validate_standby_sync_directory(&directory)?;
+    let output_deny = if role == StandbySyncRole::Standby {
+        Some(state.output_role_ordering.deny().map_err(|error| error.to_string())?)
+    } else {
+        None
+    };
     if role == StandbySyncRole::Standby {
         // Capture the managed run before taking the standby lifecycle lock;
         // fail-stop may join its worker and perform DMX/native I/O.
@@ -65244,7 +65256,9 @@ fn start_standby_sync(
             }
         }
         let warm_standby_result =
-            sanitize_current_project_runtime_under_authority(&state).map(|_| ());
+            sanitize_current_project_runtime_under_authority(
+                &state, output_deny.as_ref().expect("Standby owns output denial"),
+            ).map(|_| ());
         if let Err(error) = warm_standby_result {
             update_standby_status(&status, |status| {
                 status.running = false;
@@ -65666,7 +65680,7 @@ fn take_over_standby_core_with_optional_lease(
     ),
     String,
 > {
-    execute_managed_project_replacement_boundary(state, "Managed output lease Standby Take Over")?;
+    let _output_deny = execute_managed_project_replacement_boundary(state, "Managed output lease Standby Take Over")?;
     let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
         let error = "Standby synchronization lifecycle lock was poisoned".to_string();
         state
@@ -66209,7 +66223,8 @@ fn finish_diagnostic_export_v1(
     exports.finish(window.label(), &capture_id, &sha256, approved)
 }
 
-#[tauri::command]
+// This lifecycle boundary can drain Enable and join native outputs.
+#[tauri::command(async)]
 fn load_project(
     window: WebviewWindow,
     state: State<'_, AppState>,
@@ -66242,7 +66257,8 @@ fn load_project(
     .map(Some)
 }
 
-#[tauri::command]
+// This lifecycle boundary can drain Enable and join native outputs.
+#[tauri::command(async)]
 fn import_daslight_project(
     window: WebviewWindow,
     state: State<'_, AppState>,
@@ -66284,7 +66300,8 @@ fn import_daslight_project(
 
 /// Current frontend callers use this paired reply. The legacy report-only
 /// command remains above for compatibility with older clients.
-#[tauri::command]
+// This lifecycle boundary can drain Enable and join native outputs.
+#[tauri::command(async)]
 fn import_daslight_project_with_result(
     window: WebviewWindow,
     state: State<'_, AppState>,
@@ -66363,7 +66380,8 @@ fn project_control_mappings_from_daslight_import_report(
     }
 }
 
-#[tauri::command]
+// This lifecycle boundary can drain Enable and join native outputs.
+#[tauri::command(async)]
 fn load_project_path(
     window: WebviewWindow,
     state: State<'_, AppState>,
@@ -66394,7 +66412,8 @@ fn load_project_path(
     )
 }
 
-#[tauri::command]
+// This lifecycle boundary can drain Enable and join native outputs.
+#[tauri::command(async)]
 fn load_startup_project(
     window: WebviewWindow,
     state: State<'_, AppState>,
@@ -66425,7 +66444,8 @@ fn load_startup_project(
     .map(Some)
 }
 
-#[tauri::command]
+// This lifecycle boundary can drain Enable and join native outputs.
+#[tauri::command(async)]
 fn load_phase1_sample_project(state: State<'_, AppState>) -> Result<ProjectLoadResult, String> {
     load_project_from_json_and_disposition(
         &state,
@@ -66448,7 +66468,8 @@ fn phase1_smoke_first_8(snapshot: &EngineSnapshot) -> Vec<u8> {
     first_8
 }
 
-#[tauri::command]
+// This lifecycle boundary can drain Enable and join native outputs.
+#[tauri::command(async)]
 fn run_phase1_smoke(state: State<'_, AppState>) -> Result<Phase1SmokeReport, String> {
     let result = load_project_from_json_and_disposition(
         &state,
@@ -66630,7 +66651,8 @@ fn load_project_from_json_and_disposition(
     .map_err(input_diagnostic::bounded_diagnostic)
 }
 
-#[tauri::command]
+// This lifecycle boundary can drain Enable and join native outputs.
+#[tauri::command(async)]
 fn load_project_checkpoint(
     state: State<'_, AppState>,
     project: Value,
@@ -67367,11 +67389,8 @@ fn load_project_from_file_with_control_mappings_in_scope_and_disposition(
 /// overwritten without an identity swap.
 fn sanitize_current_project_runtime_under_authority(
     state: &State<'_, AppState>,
+    _output_deny: &output_role_ordering::DenyReservation<'_>,
 ) -> Result<ProjectLoadResult, String> {
-    execute_managed_project_replacement_boundary(
-        state,
-        "Managed output lease standby sanitization",
-    )?;
     let _external_admission = lock_project_external_command_admission(state)?;
     let mut coordinator = lock_project_coordinator(state)?;
     ensure_no_pending_project_transaction(&coordinator)?;
@@ -67559,14 +67578,15 @@ fn project_swap_app_handle(state: &AppState) -> Result<tauri::AppHandle, String>
 /// authority from the prior project. Detect Idle without requiring an app
 /// handle so pure headless seams remain valid; a non-idle run must complete
 /// the physical all-deny boundary before any project/lifecycle lock is retained.
-fn execute_managed_project_replacement_boundary(
-    state: &AppState,
+fn execute_managed_project_replacement_boundary<'a>(
+    state: &'a AppState,
     detail: &str,
-) -> Result<(), String> {
+) -> Result<output_role_ordering::DenyReservation<'a>, String> {
+    let reservation = state.output_role_ordering.deny().map_err(|error| error.to_string())?;
     if state.output_lease_keepalive.snapshot_state()?
         == output_lease::output_lease_keepalive::OutputLeaseKeepaliveState::Idle
     {
-        return Ok(());
+        return Ok(reservation);
     }
     let app = project_swap_app_handle(state)?;
     output_lease_keepalive_integration::execute_current_boundary(
@@ -67574,7 +67594,8 @@ fn execute_managed_project_replacement_boundary(
         state,
         output_lease::output_lease_keepalive::OutputLeaseKeepaliveBoundary::ProjectIdentityChanged,
         detail,
-    )
+    )?;
+    Ok(reservation)
 }
 
 /// Acquire every legacy mirror before an engine publication.  The coordinator
@@ -67686,7 +67707,7 @@ fn replace_prepared_project_snapshot(
         // This preflight releases its locks before the physical boundary;
         // lifecycle admission and publication still repeat the exact CAS.
         preflight_project_replacement_invocation(state)?;
-        execute_managed_project_replacement_boundary(
+        let _output_deny = execute_managed_project_replacement_boundary(
             state,
             "Managed output lease external project replacement",
         )?;
@@ -67731,7 +67752,7 @@ fn replace_prepared_project_snapshot_with_platform<Platform: ProjectReplacementP
 ) -> Result<ProjectLoadResult, String> {
     if scope == ProjectSnapshotReplacementScope::ExternalCaller {
         preflight_project_replacement_invocation(state)?;
-        execute_managed_project_replacement_boundary(
+        let _output_deny = execute_managed_project_replacement_boundary(
             state,
             "Managed output lease external project replacement",
         )?;
@@ -77740,6 +77761,7 @@ fn apply_output_ownership_role_with_output_control_fence(
     app: &tauri::AppHandle,
     state: &AppState,
     role: MachineOutputRole,
+    publication: &output_role_ordering::RolePublication<'_>,
     expected_fence: &OutputControlFenceV1,
     lease_request: &OutputLeaseRequest,
     _lease_now_ms: u64,
@@ -77806,6 +77828,7 @@ fn apply_output_ownership_role_with_output_control_fence(
                 final_lease_now_ms,
                 "ordinary Arm",
                 || {
+                    publication.validate().map_err(|error| error.to_string())?;
                     let current = state.engine.output_ownership_status();
                     if current.state == protocol::OutputOwnershipState::Ready
                         && current.effective_role == role
@@ -78161,6 +78184,7 @@ fn launch_video_clip_with_output_control_fence(
 pub(crate) fn enable_output_with_output_control_fence(
     app: &tauri::AppHandle,
     state: &AppState,
+    publication: &output_role_ordering::RolePublication<'_>,
     expected_fence: &OutputControlFenceV1,
     lease_request: &OutputLeaseRequest,
     lease_now_ms: u64,
@@ -78176,6 +78200,7 @@ pub(crate) fn enable_output_with_output_control_fence(
         app,
         state,
         MachineOutputRole::Both,
+        publication,
         expected_fence,
         lease_request,
         lease_now_ms,
@@ -80304,9 +80329,11 @@ fn arm_show_clock_output(
 /// release cannot complete (its authority stays Faulted and retained) the
 /// Standby role is still applied and the failure is reported next to it.
 fn apply_standby_role_after_managed_boundary<T>(
+    ordering: &output_role_ordering::OutputRoleOrdering,
     retire_managed_output: impl FnOnce() -> Result<(), String>,
     apply_role: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
+    let _output_deny = ordering.deny().map_err(|error| error.to_string())?;
     let managed = retire_managed_output();
     let applied = apply_role()?;
     match managed {
@@ -80323,6 +80350,7 @@ fn apply_standby_output_ownership_role_command(
     role: MachineOutputRole,
 ) -> Result<OutputOwnershipStatus, String> {
     apply_standby_role_after_managed_boundary(
+        &state.output_role_ordering,
         || {
             output_lease_keepalive_integration::execute_current_boundary(
                 app,
@@ -94198,7 +94226,8 @@ pub(crate) mod tests {
                 snapshot_sync: Mutex::new(SnapshotSyncState::default()),
                 standby_sync: Mutex::new(StandbySyncRuntime::default()),
                 standby_sync_lifecycle: Arc::new(Mutex::new(())),
-                output_ownership_transition: Arc::new(Mutex::new(())),
+                output_role_ordering: output_role_ordering::OutputRoleOrdering::default(),
+            output_ownership_transition: Arc::new(Mutex::new(())),
                 native_video_output_metrics: Mutex::new(HashMap::new()),
                 native_video_output_workers: Mutex::new(HashMap::new()),
             });
@@ -98535,6 +98564,7 @@ pub(crate) mod tests {
         use std::cell::RefCell;
         let order = RefCell::new(Vec::new());
         let applied = apply_standby_role_after_managed_boundary(
+            &output_role_ordering::OutputRoleOrdering::default(),
             || {
                 order.borrow_mut().push("managed boundary");
                 Ok(())
@@ -98552,6 +98582,7 @@ pub(crate) mod tests {
         // applied and the operator sees the release failure.
         let applied_after_failure = RefCell::new(false);
         let reported = apply_standby_role_after_managed_boundary(
+            &output_role_ordering::OutputRoleOrdering::default(),
             || Err("Managed output authority is already Faulted and remains retained".to_string()),
             || {
                 *applied_after_failure.borrow_mut() = true;
@@ -98565,6 +98596,7 @@ pub(crate) mod tests {
 
         // A Standby that cannot be applied is reported as that failure.
         let apply_failed: Result<(), String> = apply_standby_role_after_managed_boundary(
+            &output_role_ordering::OutputRoleOrdering::default(),
             || Ok(()),
             || Err("Output ownership transition lock was poisoned".to_string()),
         );
@@ -137006,6 +137038,7 @@ fn main() {
             snapshot_sync: Mutex::new(SnapshotSyncState::default()),
             standby_sync: Mutex::new(StandbySyncRuntime::default()),
             standby_sync_lifecycle: Arc::new(Mutex::new(())),
+            output_role_ordering: output_role_ordering::OutputRoleOrdering::default(),
             output_ownership_transition: Arc::new(Mutex::new(())),
             native_video_output_metrics: Mutex::new(HashMap::new()),
             native_video_output_workers: Mutex::new(HashMap::new()),
@@ -137016,13 +137049,15 @@ fn main() {
         .manage(main_window_close_shutdown::MainWindowCloseShutdown::default())
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
-                retire_destroyed_window_authority(window);
-                // A confirmed main-window close stops outputs and ends the
-                // process even while Display windows remain open.
-                main_window_close_shutdown::begin_after_window_destroyed(
-                    window.app_handle(),
-                    window.label(),
-                );
+                if window.label() == main_window_close_shutdown::MAIN_WINDOW_LABEL {
+                    // Seal first; drain and retire main authority off the event
+                    // loop after any admitted Enable installs its managed run.
+                    main_window_close_shutdown::begin_after_window_destroyed(
+                        window.app_handle(), window.label(),
+                    );
+                } else {
+                    retire_destroyed_window_authority(window);
+                }
             }
         })
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -137669,6 +137704,7 @@ fn main() {
                 if app_handle
                     .state::<main_window_close_shutdown::MainWindowCloseShutdown>()
                     .hold_exit()
+                    || main_window_close_shutdown::begin_for_exit(app_handle)
                 {
                     // Outputs are still entering Standby after the main
                     // window closed; that worker requests exit when done.

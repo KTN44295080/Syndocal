@@ -68,6 +68,205 @@ impl super::super::output_lease::output_lease_keepalive::OutputLeaseKeepaliveFai
 }
 use super::{durable_enable_identity, require_exact_durable_terminal, DurableEnableIdentityInput};
 
+#[test]
+fn standby_idle_boundary_cannot_leave_a_concurrent_enable_armed() {
+    use super::super::output_lease::output_lease_keepalive::{
+        OutputLeaseKeepaliveBoundary, OutputLeaseKeepaliveState,
+    };
+    use super::super::output_lease_keepalive_runtime::OutputLeaseKeepaliveRuntimeCurrentBoundary;
+    use std::sync::{Barrier, Mutex};
+
+    let runtime = OutputLeaseKeepaliveRuntime::default();
+    let ordering = super::super::output_role_ordering::OutputRoleOrdering::default();
+    let ticket = ordering.capture().unwrap();
+    let role = Mutex::new(super::super::MachineOutputRole::Standby);
+    let captured = Barrier::new(2);
+    let enabled = Barrier::new(2);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            captured.wait();
+            // This Enable started before Standby but reaches commit admission
+            // after Standby captured Idle. It must receive a typed rejection.
+            match ordering.enter(ticket) {
+                Err(error) => {
+                    assert_eq!(
+                        error.code(),
+                        protocol::control_plane_command::OutputControlErrorCodeV2::StaleFence
+                    );
+                    enabled.wait();
+                    return;
+                }
+                Ok(_publication) => {
+                    // Kept as the real unsafe consequence if admission regresses.
+                    let (registry, request, receipt) = exact_both_enable_fixture();
+
+                    let identity = durable_enable_identity(
+                        &DurableEnableIdentityInput {
+                            principal: "operator-a",
+                            window_label: "main",
+                            owner_incarnation: 7,
+                            project_epoch: 11,
+                        },
+                        &request,
+                        &receipt,
+                    )
+                    .unwrap();
+                    *role.lock().unwrap() = super::super::MachineOutputRole::Both;
+                    runtime
+                        .admit_verified_durable_enable_with(11, || {
+                            registry
+                                .issue_managed_exact_both_durable_enable_evidence(
+                                    &receipt, identity,
+                                )
+                                .map_err(|error| format!("{error:?}"))
+                        })
+                        .unwrap();
+                    enabled.wait();
+                }
+            }
+        });
+        super::super::apply_standby_role_after_managed_boundary(
+            &ordering,
+            || {
+                assert!(matches!(
+                    runtime.begin_current_boundary(OutputLeaseKeepaliveBoundary::Standby)?,
+                    OutputLeaseKeepaliveRuntimeCurrentBoundary::Idle
+                ));
+                captured.wait();
+                enabled.wait();
+                Ok(())
+            },
+            || {
+                *role.lock().unwrap() = super::super::MachineOutputRole::Standby;
+                Ok(())
+            },
+        )
+        .unwrap();
+    });
+    assert_eq!(
+        *role.lock().unwrap(),
+        super::super::MachineOutputRole::Standby
+    );
+    assert_eq!(
+        runtime.snapshot_state().unwrap(),
+        OutputLeaseKeepaliveState::Idle,
+        "Standby must not leave a managed Both lease armed after applying Standby"
+    );
+}
+
+#[test]
+fn standby_drains_role_commit_through_managed_installation_before_exact_release() {
+    use super::super::output_lease::output_lease_keepalive::{
+        OutputLeaseKeepaliveBoundary, OutputLeaseKeepaliveFailStopCompletion,
+        OutputLeaseKeepaliveRelinquishCompletion, OutputLeaseKeepaliveState,
+    };
+    use super::super::output_lease_keepalive_runtime::OutputLeaseKeepaliveRuntimeCurrentBoundary;
+    use super::super::output_role_ordering::{OrderingError, OutputRoleOrdering};
+    use std::sync::Mutex;
+
+    let ordering = OutputRoleOrdering::default();
+    let active = ordering.enter(ordering.capture().unwrap()).unwrap();
+    let runtime = OutputLeaseKeepaliveRuntime::default();
+    let (registry, request, receipt) = exact_both_enable_fixture();
+    let registry = Mutex::new(registry);
+    let role = Mutex::new(super::super::MachineOutputRole::Both);
+    std::thread::scope(|scope| {
+        let standby = scope.spawn(|| {
+            super::super::apply_standby_role_after_managed_boundary(
+                &ordering,
+                || {
+                    let plan = match runtime
+                        .begin_current_boundary(OutputLeaseKeepaliveBoundary::Standby)?
+                    {
+                        OutputLeaseKeepaliveRuntimeCurrentBoundary::Captured(plan) => plan,
+                        other => panic!("Standby must capture the fully installed run: {other:?}"),
+                    };
+                    assert_eq!(*role.lock().unwrap(), super::super::MachineOutputRole::Both);
+                    let run = plan.run_id();
+                    let identity = plan.identity().clone();
+                    let mut ports = CanonicalPorts::default();
+                    assert!(matches!(
+                        runtime.execute_fail_stop(&mut ports, plan)?,
+                        OutputLeaseKeepaliveFailStopCompletion::Completed
+                    ));
+                    assert!(matches!(
+                        runtime.relinquish_after_successful_boundary(run, &identity, |permit| {
+                            Ok(registry
+                                .lock()
+                                .unwrap()
+                                .relinquish_managed_exact_both(permit, 12))
+                        })?,
+                        Some(OutputLeaseKeepaliveRelinquishCompletion::Completed)
+                    ));
+                    Ok(())
+                },
+                || {
+                    *role.lock().unwrap() = super::super::MachineOutputRole::Standby;
+                    Ok(())
+                },
+            )
+        });
+        ordering.wait_until_denial_pending();
+        assert_eq!(active.validate(), Err(OrderingError::Superseded));
+        // Role/registry have committed; install their manager while Standby is
+        // pending. The denying boundary cannot observe the old Idle state.
+        let identity = durable_enable_identity(
+            &DurableEnableIdentityInput {
+                principal: "operator-a",
+                window_label: "main",
+                owner_incarnation: 7,
+                project_epoch: 11,
+            },
+            &request,
+            &receipt,
+        )
+        .unwrap();
+        assert!(matches!(
+            runtime
+                .admit_verified_durable_enable_with(11, || {
+                    registry
+                        .lock()
+                        .unwrap()
+                        .issue_managed_exact_both_durable_enable_evidence(&receipt, identity)
+                        .map_err(|error| format!("{error:?}"))
+                })
+                .unwrap(),
+            OutputLeaseKeepaliveRuntimeAdmission::SpawnWorker(_)
+        ));
+        drop(active);
+        standby.join().unwrap().unwrap();
+    });
+    assert_eq!(
+        *role.lock().unwrap(),
+        super::super::MachineOutputRole::Standby
+    );
+    assert_eq!(
+        runtime.snapshot_state().unwrap(),
+        OutputLeaseKeepaliveState::Idle
+    );
+    assert!(
+        registry
+            .lock()
+            .unwrap()
+            .issue_managed_exact_both_durable_enable_evidence(
+                &receipt,
+                durable_enable_identity(
+                    &DurableEnableIdentityInput {
+                        principal: "operator-a",
+                        window_label: "main",
+                        owner_incarnation: 7,
+                        project_epoch: 11,
+                    },
+                    &request,
+                    &receipt
+                )
+                .unwrap(),
+            )
+            .is_err(),
+        "retired lease cannot issue fresh manager authority"
+    );
+}
+
 fn exact_both_enable_fixture() -> (
     OutputLeaseRegistry,
     OutputLeaseRequest,

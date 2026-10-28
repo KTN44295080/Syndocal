@@ -66,7 +66,7 @@ assert.match(runtimeSource, /OutputControlActionV2::AssignVideoOutputComposition
 assert.match(runtimeSource, /OutputControlActionV2::AssignVideoOutputComposition[\s\S]*output_action_requires_native_danger_confirmation/s);
 assert.match(controlPlaneSource, /"assign_video_output_composition_v2"\s*=>\s*\{[\s\S]*AssignVideoOutputComposition/s);
 const retiredRoute = ["set", "video", "output", "routing"].join("_");
-const registeredTauriRoutes = [...mainSource.matchAll(/#\[tauri::command\]\r?\n(?:async )?fn ([a-z0-9_]+)\(/g)]
+const registeredTauriRoutes = [...mainSource.matchAll(/#\[tauri::command(?:\(async\))?\]\r?\n(?:async )?fn ([a-z0-9_]+)\(/g)]
   .map((match) => match[1]);
 assert.equal(registeredTauriRoutes.includes(retiredRoute), false, "retired direct route must not be Tauri registered");
 assert.equal(JSON.parse(manifestSource).includes(retiredRoute), false, "retired direct route must not be frontend manifest-visible");

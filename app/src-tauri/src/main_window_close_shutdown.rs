@@ -9,7 +9,8 @@
 //!
 //! When the main window is destroyed while any output is armed or any Display
 //! window/worker exists, this module runs the canonical Standby boundary on a
-//! dedicated thread (it waits for native windows, which needs the event loop).
+//! dedicated thread (it drains admitted Enable and waits for native windows,
+//! which need the event loop). Main authority retires only after this drain.
 //! Every `ExitRequested` raised meanwhile is held: the last Display window can
 //! close before its renderer and GPU retirement are joined. Afterwards exit is
 //! requested once no window remains, or when an exit was held. The existing
@@ -28,8 +29,8 @@ use std::{
 use tauri::{AppHandle, Manager};
 
 use super::{
-    apply_standby_output_ownership_role_command, native_video_output_retirement_labels, AppState,
-    MachineOutputRole,
+    apply_standby_output_ownership_role_command, handle_destroyed_window_authority_retirement,
+    native_video_output_retirement_labels, AppState, ControlPlaneQueryState, MachineOutputRole,
 };
 
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
@@ -79,9 +80,12 @@ pub(crate) fn main_close_requires_output_shutdown(
     label: &str,
     output_windows_or_workers_open: bool,
     effective_role: MachineOutputRole,
+    managed_authority_retained: bool,
 ) -> bool {
     label == MAIN_WINDOW_LABEL
-        && (output_windows_or_workers_open || effective_role != MachineOutputRole::Standby)
+        && (output_windows_or_workers_open
+            || effective_role != MachineOutputRole::Standby
+            || managed_authority_retained)
 }
 
 /// Stop outputs, then request exit if no window remains or an exit was held.
@@ -100,26 +104,52 @@ pub(crate) fn run_main_close_shutdown<T>(
     result
 }
 
-/// Global `WindowEvent::Destroyed` hook, called after the destroyed window's
-/// authority retirement. Tauri dispatches it before it raises the
+/// Global main `WindowEvent::Destroyed` hook, called before authority retirement.
+/// Tauri dispatches it before it raises the
 /// last-window `ExitRequested`, so the hold is in place before that request.
 pub(crate) fn begin_after_window_destroyed(app: &AppHandle, label: &str) {
     if label != MAIN_WINDOW_LABEL {
         return;
     }
+    begin_shutdown(app, true);
+}
+
+/// Explicit app.exit() uses the same off-event-loop drain before the final
+/// managed exit boundary. Return true when this exit must be held.
+pub(crate) fn begin_for_exit(app: &AppHandle) -> bool {
+    begin_shutdown(app, false)
+}
+
+fn begin_shutdown(app: &AppHandle, retire_main_authority: bool) -> bool {
+    let shutdown = app.state::<MainWindowCloseShutdown>();
+    if !shutdown.begin() {
+        return shutdown.hold_exit();
+    }
+    if !retire_main_authority {
+        shutdown.hold_exit();
+    }
     let state = app.state::<AppState>();
+    // Seal before inspecting role/windows: an idle engine can still have an
+    // Enable preparing. No queued or future role may arm after main closes.
+    let publication_inflight = state.output_role_ordering.seal().unwrap_or(true);
     let outputs_open =
         native_video_output_retirement_labels(app, &state.native_video_output_workers)
             .map(|labels| !labels.is_empty())
             .unwrap_or(true);
     let effective_role = state.engine.output_ownership_status().effective_role;
-    if !main_close_requires_output_shutdown(label, outputs_open, effective_role) {
-        return;
-    }
-    let shutdown = app.state::<MainWindowCloseShutdown>();
-    if !shutdown.begin() {
-        return;
-    }
+    let managed_authority_retained = state
+        .output_lease_keepalive
+        .snapshot_state()
+        .map(|state| {
+            state != super::output_lease::output_lease_keepalive::OutputLeaseKeepaliveState::Idle
+        })
+        .unwrap_or(true);
+    let needs_standby = main_close_requires_output_shutdown(
+        MAIN_WINDOW_LABEL,
+        outputs_open || publication_inflight,
+        effective_role,
+        managed_authority_retained,
+    );
     let worker_app = app.clone();
     let spawned = std::thread::Builder::new()
         .name("syndocal-main-close-shutdown".to_string())
@@ -131,11 +161,28 @@ pub(crate) fn begin_after_window_destroyed(app: &AppHandle, label: &str) {
             let result = run_main_close_shutdown(
                 &shutdown,
                 || {
-                    apply_standby_output_ownership_role_command(
-                        &app,
-                        &state,
-                        MachineOutputRole::Standby,
-                    )
+                    let status = if needs_standby {
+                        apply_standby_output_ownership_role_command(
+                            &app,
+                            &state,
+                            MachineOutputRole::Standby,
+                        )?
+                    } else {
+                        // Still drain the logical boundary for an idle close.
+                        let _deny = state
+                            .output_role_ordering
+                            .deny()
+                            .map_err(|error| error.to_string())?;
+                        state.engine.output_ownership_status()
+                    };
+                    if retire_main_authority {
+                        handle_destroyed_window_authority_retirement(
+                            &state,
+                            &app.state::<ControlPlaneQueryState>(),
+                            MAIN_WINDOW_LABEL,
+                        )?;
+                    }
+                    Ok(status)
                 },
                 || app.windows().is_empty(),
                 || app.exit(0),
@@ -158,6 +205,7 @@ pub(crate) fn begin_after_window_destroyed(app: &AppHandle, label: &str) {
         app.state::<MainWindowCloseShutdown>().finish();
         eprintln!("Main window closed: output shutdown worker could not start: {error}");
     }
+    true
 }
 
 #[cfg(test)]
@@ -170,28 +218,36 @@ mod tests {
         assert!(!main_close_requires_output_shutdown(
             MAIN_WINDOW_LABEL,
             false,
-            MachineOutputRole::Standby
+            MachineOutputRole::Standby,
+            false
         ));
         assert!(main_close_requires_output_shutdown(
             MAIN_WINDOW_LABEL,
             true,
-            MachineOutputRole::Standby
+            MachineOutputRole::Standby,
+            false
         ));
         assert!(main_close_requires_output_shutdown(
             MAIN_WINDOW_LABEL,
             false,
-            MachineOutputRole::Video
+            MachineOutputRole::Video,
+            false
         ));
         assert!(!main_close_requires_output_shutdown(
             "video-output-1",
             true,
-            MachineOutputRole::Video
+            MachineOutputRole::Video,
+            false
         ));
         assert!(!main_close_requires_output_shutdown(
             "pane-timeline",
             true,
-            MachineOutputRole::Video
+            MachineOutputRole::Video,
+            false
         ));
+        assert!(main_close_requires_output_shutdown(
+            MAIN_WINDOW_LABEL, false, MachineOutputRole::Standby, true,
+        ), "a retained Faulted managed lease must reach the canonical boundary before generic retirement");
     }
 
     #[test]
@@ -307,8 +363,8 @@ mod tests {
             .find("main_window_close_shutdown::begin_after_window_destroyed(")
             .expect("main-close shutdown hook");
         assert!(
-            retire < begin,
-            "authority retirement runs before the shutdown worker starts"
+            begin < retire,
+            "main close seals/drains before authority retirement; other windows use the direct branch"
         );
         assert!(source
             .contains(".manage(main_window_close_shutdown::MainWindowCloseShutdown::default())"));
@@ -327,5 +383,59 @@ mod tests {
             hold < boundary,
             "a held exit must not run the managed exit boundary early"
         );
+        assert!(exit_body[..boundary]
+            .contains("main_window_close_shutdown::begin_for_exit(app_handle)"));
+    }
+
+    #[test]
+    fn close_during_enable_drains_then_stops_and_releases_held_exit() {
+        use crate::output_role_ordering::{OrderingError, OutputRoleOrdering};
+        let ordering = OutputRoleOrdering::default();
+        let queued = ordering.capture().unwrap();
+        let active = ordering.enter(queued).unwrap();
+        let shutdown = MainWindowCloseShutdown::default();
+        assert!(shutdown.begin());
+        assert!(
+            ordering.seal().unwrap(),
+            "in-flight Enable cannot be skipped as idle"
+        );
+        assert!(shutdown.hold_exit());
+        let stopped = AtomicBool::new(false);
+        let exited = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                run_main_close_shutdown(
+                    &shutdown,
+                    || {
+                        crate::apply_standby_role_after_managed_boundary(
+                            &ordering,
+                            || {
+                                stopped.store(true, Ordering::Release);
+                                Ok(())
+                            },
+                            || Ok(()),
+                        )
+                    },
+                    || true,
+                    || {
+                        assert!(stopped.load(Ordering::Acquire));
+                        exited.store(true, Ordering::Release);
+                    },
+                )
+            });
+            ordering.wait_until_denial_pending();
+            assert!(!stopped.load(Ordering::Acquire));
+            assert!(!exited.load(Ordering::Acquire));
+            assert_eq!(active.validate(), Err(OrderingError::Superseded));
+            drop(active); // Represents durable manager installation completing.
+            worker.join().unwrap().unwrap();
+        });
+        assert!(exited.load(Ordering::Acquire));
+        assert!(!shutdown.hold_exit());
+        assert!(matches!(
+            ordering.enter(queued),
+            Err(OrderingError::Superseded)
+        ));
+        assert!(matches!(ordering.capture(), Err(OrderingError::Superseded)));
     }
 }

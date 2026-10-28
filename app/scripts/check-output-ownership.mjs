@@ -58,7 +58,7 @@ const assertOrderedMarkers = (source, markers, message) => {
 };
 
 const tauriCommandSegments = (source) => {
-  const matches = [...source.matchAll(/#\[tauri::command\]\s*(?:async\s+)?fn\s+([A-Za-z0-9_]+)\s*\(/g)];
+  const matches = [...source.matchAll(/#\[tauri::command(?:\(async\))?\]\s*(?:async\s+)?fn\s+([A-Za-z0-9_]+)\s*\(/g)];
   return matches.map((match) => {
     // rustfmt leaves a top-level function close at column zero. Limiting the
     // segment there avoids attributing helper code between adjacent Tauri
@@ -1502,6 +1502,17 @@ assert.throws(
   "removing an ingress from the explicit inventory must fail",
 );
 const unknownNativeCommand = `${appBackend}\n\n#[tauri::command]\nfn future_video_output_sink(state: State<'_, AppState>) -> Result<(), String> {\n    state.engine.send(EngineCommand::SetVideoOutputEnabled { output_id: 1, enabled: true }).map_err(|error| error.to_string())\n}\n`;
+assert.throws(
+  () => assertNativeSinkInventory(unknownNativeCommand.replace(
+    "#[tauri::command]\nfn future_video_output_sink", "#[tauri::command(async)]\nfn future_video_output_sink",
+  ), {
+    legacyRoutes: legacyTauriOutputRoutes,
+    canonicalRoutes: canonicalR4TauriOutputRoutes,
+    protectedAdapterRoutes: externalAdapterRoutes,
+  }),
+  /future_video_output_sink|outside the exact legacy\/R4 ingress inventory/,
+  "threadpool dispatch must not hide a new unclassified native sink",
+);
 assert.throws(
   () => assertNativeSinkInventory(unknownNativeCommand, {
     legacyRoutes: legacyTauriOutputRoutes,

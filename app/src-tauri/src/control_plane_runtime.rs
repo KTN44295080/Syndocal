@@ -741,6 +741,12 @@ fn execute_output_control_authorized<F>(
 where
     F: Fn(&OutputControlActionV2) -> bool,
 {
+    // Capture before confirmation/lock waits, but acquire publication only
+    // after dropping domain locks. Denying lifecycle boundaries invalidate
+    // queued Arm/Enable, including durable replay, without waiting on a dialog.
+    let role_ticket = matches!(&request.action,
+        OutputControlActionV2::EnableOutput | OutputControlActionV2::Arm { .. })
+        .then(|| state.output_role_ordering.capture());
     if let Err(code) = authorize() {
         return output_control_rejection(&request, code);
     }
@@ -1209,6 +1215,18 @@ where
     drop(coordinator);
     drop(external_admission);
 
+    let role_publication = match role_ticket.map(|ticket| {
+        ticket.and_then(|ticket| state.output_role_ordering.enter(ticket))
+    }).transpose() {
+        Ok(publication) => publication,
+        Err(error) => {
+            state.runtime_control_plane.finish_output_control_inflight(&inflight);
+            return retain_output_control_rejection(
+                state, key, shape_sha256, output_control_rejection(&request, error.code()),
+            );
+        }
+    };
+
     let final_authorization_error = std::cell::Cell::new(None);
     let final_authorize = || authorize().map_err(|code| {
         final_authorization_error.set(Some(code));
@@ -1236,6 +1254,7 @@ where
         OutputControlActionV2::EnableOutput => super::enable_output_with_output_control_fence(
             app,
             state,
+            role_publication.as_ref().expect("Enable owns publication admission"),
             &request.expected_fence,
             &lease_request,
             lease_now_ms,
@@ -1386,6 +1405,7 @@ where
                 app,
                 state,
                 target,
+                role_publication.as_ref().expect("Arm owns publication admission"),
                 &request.expected_fence,
                 &lease_request,
                 lease_now_ms,
@@ -1565,6 +1585,16 @@ where
         }
     };
 
+    // Keep publication admitted through durable manager installation/cleanup.
+    // A pending Standby drains that work before capturing its exact run, then
+    // retires it. Never return successful Enable for an invalidated generation.
+    if let Some(error) = operation_result.as_ref().ok().and_then(|_| role_publication.as_ref())
+        .and_then(|publication| publication.validate().err()) {
+        state.runtime_control_plane.finish_output_control_inflight(&inflight);
+        return retain_output_control_rejection(
+            state, key, shape_sha256, output_control_rejection(&request, error.code()),
+        );
+    }
     let (applied, fence_after, lease_receipt) = match operation_result {
         Ok(result) => result,
         Err(error) => {
@@ -2066,6 +2096,7 @@ fn classify_output_control_operation_error(error: &str) -> OutputControlErrorCod
         return code;
     }
     if error.contains("Output control fence changed before")
+        || error.contains("Output role reservation was superseded by")
         || error.contains("route changed before final publication")
         || error.contains("superseded by an emergency blackout authority change")
         || error.contains("superseded by an S0 safety blackout authority change")
