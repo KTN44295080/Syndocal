@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
+import { mainCloseHasUnsavedWork, mainProtectedCloseRequest } from "../src/protectedClosePolicy.ts";
 
 const config = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
 const nativeAcceptanceConfig = JSON.parse(
@@ -28,6 +29,11 @@ const workspaceChrome = await readFile(
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 const main = await readFile(new URL("../src/main.tsx", import.meta.url), "utf8");
 const app = (await readFile(new URL("../src/App.tsx", import.meta.url), "utf8")).replaceAll("\r\n", "\n");
+const protectedClosePolicy = (await readFile(new URL("../src/protectedClosePolicy.ts", import.meta.url), "utf8"))
+  .replaceAll("\r\n", "\n");
+// The protected-close and project-discard dialogs render in the split workspace view.
+const appWorkspaceView = (await readFile(new URL("../src/components/AppWorkspaceView.tsx", import.meta.url), "utf8"))
+  .replaceAll("\r\n", "\n");
 const uiLocalization = await readFile(new URL("../src/uiLocalization.ts", import.meta.url), "utf8");
 const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
@@ -83,12 +89,30 @@ for (const helper of projectReadInitializationHelpers) {
     `${helper} must be initialized before every App call to prevent a native-startup TDZ`,
   );
 }
+// Owner close policy (2026-10-28): only unsaved work asks.
+for (const runtimeActive of [true, false, null]) {
+  assert.equal(
+    mainProtectedCloseRequest(false, false, runtimeActive),
+    null,
+    `a close with nothing unsaved must proceed without a dialog (runtimeActive=${runtimeActive})`,
+  );
+}
+assert.equal(mainCloseHasUnsavedWork(false, false), false);
+assert.deepEqual(mainProtectedCloseRequest(true, false, true), {
+  pane: "main", reason: "dirty-and-runtime", projectDirty: true, timelineDirty: false, runtimeActive: true,
+}, "unsaved project changes with live output must ask and name both consequences");
+assert.deepEqual(mainProtectedCloseRequest(false, true, false), {
+  pane: "main", reason: "dirty-only", projectDirty: false, timelineDirty: true, runtimeActive: false,
+}, "unsaved Timeline edits must ask");
+assert.deepEqual(mainProtectedCloseRequest(true, true, null), {
+  pane: "main", reason: "output-state-unknown", projectDirty: true, timelineDirty: true, runtimeActive: null,
+}, "unsaved work with an unverifiable output state must ask with the unknown-output wording");
 const mainRuntimeActiveStart = app.indexOf("  const mainRuntimeActive = (current: EngineSnapshot) => {");
 const protectedCloseRequestStart = app.indexOf(
   "  const protectedCloseRequestForCurrentState = (current: EngineSnapshot = latestEngineSnapshot): ProtectedCloseRequest | null => {",
 );
 const protectedCloseUnknownRequestStart = app.indexOf(
-  "  const protectedCloseUnknownRequest = (): MainProtectedCloseRequest => ({",
+  "  const protectedCloseUnknownRequest = (): MainProtectedCloseRequest | null =>",
 );
 const closeProtectionRequiredStart = app.indexOf("  const closeProtectionRequired = () =>");
 const protectedCloseMainDetailStart = app.indexOf(
@@ -299,11 +323,21 @@ const assertCorrelatedTimelineCloseControlFlow = (candidate, label) => {
     && blockReturnsImmediately(statement.thenStatement));
   const timelineIndex = statements.findIndex((statement) => isIfCondition(statement, isTimelinePaneCondition));
   const duplicateIndex = statements.findIndex((statement) => isIfCondition(statement, isCloseRefreshDuplicateCondition));
+  const cleanCloseIndex = statements.findIndex((statement) => isIfCondition(
+    statement,
+    (expression) => ts.isPrefixUnaryExpression(expression)
+      && expression.operator === ts.SyntaxKind.ExclamationToken
+      && isCallNamed(unwrapExpression(expression.operand), "closeProtectionRequired"),
+  ) && blockReturnsImmediately(statement.thenStatement));
   const preventBeforeRefreshIndex = statements.findIndex((statement) => isPreventDefaultStatement(statement));
   const refreshIndex = statements.findIndex((statement) => getVariableAwaitingCall(statement, "freshSnapshot", "refreshSnapshotForProtectedClose"));
   assert.ok(approvalIndex === 0, `${label}: an approved close must bypass every remaining CloseRequested branch first`);
   assert.ok(timelineIndex > approvalIndex, `${label}: timeline close handling must follow the approval bypass`);
   assert.ok(duplicateIndex > timelineIndex, `${label}: main duplicate suppression must follow the timeline branch`);
+  assert.ok(
+    cleanCloseIndex > duplicateIndex && preventBeforeRefreshIndex > cleanCloseIndex,
+    `${label}: a main close with nothing unsaved must return before preventDefault so it proceeds without a dialog`,
+  );
   assert.ok(preventBeforeRefreshIndex > duplicateIndex && refreshIndex > preventBeforeRefreshIndex, `${label}: main close must prevent before its bounded refresh`);
 
   const timelineStatements = blockStatements(statements[timelineIndex].thenStatement);
@@ -470,6 +504,24 @@ assert.throws(
   () => assertCorrelatedTimelineCloseControlFlow(earlyFakePublishMisplacedReal, "early fake publish with misplaced authoritative publish"),
   /exactly one authoritative/,
   "an earlier duplicate fake publish must not satisfy the authoritative publish ordering while the real publish stays misplaced after the bare return",
+);
+const cleanCloseGuard = "        if (!closeProtectionRequired()) return;\n";
+const noCleanCloseGuard = replaceCloseRequestedOnce(app, cleanCloseGuard, "", "removed clean-close guard");
+assert.throws(
+  () => assertCorrelatedTimelineCloseControlFlow(noCleanCloseGuard, "removed clean-close guard"),
+  /proceeds without a dialog/,
+  "a main close that always prevents (asks for playback/output alone) must fail the owner close policy",
+);
+const lateCleanCloseGuard = replaceCloseRequestedOnce(
+  app,
+  `${cleanCloseGuard}        event.preventDefault();\n`,
+  `        event.preventDefault();\n${cleanCloseGuard}`,
+  "clean-close guard after preventDefault",
+);
+assert.throws(
+  () => assertCorrelatedTimelineCloseControlFlow(lateCleanCloseGuard, "clean-close guard after preventDefault"),
+  /proceeds without a dialog/,
+  "a clean-close return placed after preventDefault would cancel the close and must fail",
 );
 
 const replaceAppOnce = (expected, replacement, label) => {
@@ -840,7 +892,7 @@ assert.ok(controller.includes('window.addEventListener("resize"'), "native windo
 assert.ok(controller.includes('window.removeEventListener("keydown"'), "the global shortcut listener must be cleaned up");
 assert.ok(controller.includes('aria-live="polite"'), "window-mode feedback must be announced accessibly");
 assert.ok(
-  app.includes("data-protected-close-dialog") &&
+  appWorkspaceView.includes("data-protected-close-dialog") &&
     app.includes("event.preventDefault()") &&
     app.includes("approveNativeCloseOnce()") &&
     app.includes("await getCurrentWindow().close()") &&
@@ -878,8 +930,10 @@ assert.ok(
 assert.ok(
   closeRequestedSource.includes("protectedCloseRequestForCurrentState(freshSnapshot)") &&
     !closeRequestedSource.includes("protectedCloseRequestForCurrentState(latestEngineSnapshot)") &&
-    closeRequestedSource.includes("setProtectedCloseRequest(protectedCloseUnknownRequest())"),
-  "main CloseRequested must capture from the fresh snapshot and fail closed with an unknown-output request",
+    closeRequestedSource.includes(": protectedCloseUnknownRequest();") &&
+    closeRequestedSource.includes("setProtectedCloseRequest(closeRequest);") &&
+    closeRequestedSource.includes("scheduleApprovedNativeClose();"),
+  "main CloseRequested must capture from the fresh snapshot, keep the unknown-output wording for unsaved work, and close when nothing is unsaved",
 );
 assert.ok(
   closeRequestedSource.includes("scheduleApprovedNativeClose()") &&
@@ -943,21 +997,21 @@ assert.ok(
 assert.ok(
   app.includes("type ProtectedCloseRequest =") &&
     app.includes('reason: "timeline-dirty"') &&
-    app.includes('reason: "dirty-only" | "runtime-only" | "dirty-and-runtime" | "output-state-unknown"') &&
-    app.includes("projectDirty: boolean") &&
-    app.includes("timelineDirty: boolean") &&
-    app.includes("runtimeActive: boolean | null") &&
-    protectedCloseRequestSource.includes("const projectIsDirty = projectDirty()") &&
-    protectedCloseRequestSource.includes("const timelineIsDirty = timelineEditorDirty()") &&
-    protectedCloseRequestSource.includes("const runtimeIsActive = mainRuntimeActive(current)") &&
+    app.includes("| MainProtectedCloseRequest;") &&
+    protectedClosePolicy.includes('export type MainProtectedCloseReason = "dirty-only" | "dirty-and-runtime" | "output-state-unknown";') &&
+    protectedClosePolicy.includes("projectDirty: boolean;") &&
+    protectedClosePolicy.includes("timelineDirty: boolean;") &&
+    protectedClosePolicy.includes("runtimeActive: boolean | null;") &&
+    !protectedClosePolicy.includes("runtime-only") &&
+    !app.includes('"runtime-only"') &&
+    protectedCloseRequestSource.includes(
+      "return mainProtectedCloseRequest(projectDirty(), timelineEditorDirty(), mainRuntimeActive(current));",
+    ) &&
     app.includes("setProtectedCloseRequest(closeRequest)"),
-  "protected close must capture a discriminated dirty/runtime reason object from the latest snapshot",
+  "protected close must capture a discriminated dirty/runtime reason object from the latest snapshot, with no runtime-only reason",
 );
 assert.ok(
-  protectedCloseUnknownRequestSource.includes('reason: "output-state-unknown"') &&
-    protectedCloseUnknownRequestSource.includes("projectDirty: projectDirty()") &&
-    protectedCloseUnknownRequestSource.includes("timelineDirty: timelineEditorDirty()") &&
-    protectedCloseUnknownRequestSource.includes("runtimeActive: null"),
+  protectedCloseUnknownRequestSource.includes("mainProtectedCloseRequest(projectDirty(), timelineEditorDirty(), null)"),
   "refresh failure must capture dirty flags without pretending that runtime is inactive",
 );
 assert.match(
@@ -976,11 +1030,7 @@ assert.ok(
 );
 for (const copy of [
   "OUTPUT STATE UNKNOWN",
-  "Close Anyway",
   "Discard and Close Anyway",
-  "LIVE OUTPUT ACTIVE",
-  "Playback/live output is active. Stop and close?",
-  "Stop and Close",
   "UNSAVED CHANGES",
   "Discard and Close",
   "UNSAVED CHANGES + LIVE OUTPUT",
@@ -991,70 +1041,72 @@ for (const copy of [
   "Project changes will be discarded. Playback/live output will stop.",
   "Timeline edits will be discarded. Playback/live output will stop.",
   "Project changes and Timeline edits will be discarded. Playback/live output will stop.",
-  "Playback/live output state could not be verified before closing. Keep Syndocal open to avoid an unsafe shutdown.",
   "Project changes will be discarded. Playback/live output state could not be verified before closing.",
   "Timeline edits will be discarded. Playback/live output state could not be verified before closing.",
   "Project changes and Timeline edits will be discarded. Playback/live output state could not be verified before closing.",
 ]) {
   assert.ok(protectedCloseSource.includes(`\"${copy}\"`), `protected-close copy must cover ${copy}`);
 }
+// Owner policy 2026-10-28: playback/live output alone never asks, so its
+// standalone confirmation copy is retired from App and localization.
+for (const retired of [
+  "LIVE OUTPUT ACTIVE",
+  "Playback/live output is active. Stop and close?",
+  "Stop and Close",
+  "Close Anyway",
+  "Playback/live output state could not be verified before closing. Keep Syndocal open to avoid an unsafe shutdown.",
+]) {
+  assert.ok(!app.includes(`"${retired}"`), `retired runtime-only close copy must not remain in App: ${retired}`);
+  assert.ok(!uiLocalization.includes(`"${retired}"`), `retired runtime-only close copy must not remain localized: ${retired}`);
+}
 assert.ok(
   protectedCloseCopySource.includes('if (request.reason === "output-state-unknown")') &&
     protectedCloseCopySource.includes('eyebrow: translateUiText("OUTPUT STATE UNKNOWN"') &&
-    protectedCloseCopySource.includes('translateUiText("Close Anyway"') &&
-    protectedCloseCopySource.includes('translateUiText("Discard and Close Anyway"') &&
-    protectedCloseCopySource.includes('if (request.reason === "runtime-only")') &&
-    protectedCloseCopySource.includes('eyebrow: translateUiText("LIVE OUTPUT ACTIVE"') &&
-    protectedCloseCopySource.includes('confirm: translateUiText("Stop and Close"') &&
+    protectedCloseCopySource.includes('confirm: translateUiText("Discard and Close Anyway"') &&
+    !protectedCloseCopySource.includes('request.reason === "runtime-only"') &&
     protectedCloseCopySource.includes('if (request.reason === "dirty-and-runtime")') &&
     protectedCloseCopySource.includes('eyebrow: translateUiText("UNSAVED CHANGES + LIVE OUTPUT"') &&
     protectedCloseCopySource.includes('confirm: translateUiText("Discard, Stop and Close"') &&
     protectedCloseCopySource.includes('eyebrow: translateUiText("UNSAVED CHANGES"') &&
     protectedCloseCopySource.includes('confirm: translateUiText("Discard and Close"'),
-  "protected-close copy must expose distinct runtime-only, dirty-only, and combined eyebrow/action cases",
+  "protected-close copy must expose distinct unknown-output, dirty-only, and combined eyebrow/action cases",
 );
 assert.ok(
   protectedCloseMainDetailSource.includes("Playback/live output state could not be verified before closing.") &&
-    protectedCloseMainDetailSource.includes("Keep Syndocal open to avoid an unsafe shutdown.") &&
-  protectedCloseMainDetailSource.includes("Playback/live output is active. Stop and close?") &&
+    !protectedCloseMainDetailSource.includes("Keep Syndocal open to avoid an unsafe shutdown.") &&
+    !protectedCloseMainDetailSource.includes("Stop and close?") &&
     protectedCloseMainDetailSource.includes("Playback/live output will stop.") &&
     protectedCloseMainDetailSource.includes("request.projectDirty") &&
     protectedCloseMainDetailSource.includes("request.timelineDirty") &&
     protectedCloseMainDetailSource.includes("request.runtimeActive") &&
     !protectedCloseMainDetailSource.includes("Live DMX output"),
-  "protected-close detail must capture unknown, runtime-only, dirty-only, and combined consequences with generic playback/live wording",
+  "protected-close detail must capture unknown, dirty-only, and combined consequences with generic playback/live wording",
 );
 const unknownCopyStart = protectedCloseCopySource.indexOf('if (request.reason === "output-state-unknown")');
-const runtimeOnlyCopyStart = protectedCloseCopySource.indexOf('if (request.reason === "runtime-only")');
 const dirtyAndRuntimeCopyStart = protectedCloseCopySource.indexOf('if (request.reason === "dirty-and-runtime")');
 const dirtyOnlyCopyStart = protectedCloseCopySource.search(
   /return\s*\{\s*eyebrow:\s*translateUiText\("UNSAVED CHANGES"/,
 );
-assert.ok(unknownCopyStart >= 0 && runtimeOnlyCopyStart > unknownCopyStart && dirtyAndRuntimeCopyStart > runtimeOnlyCopyStart && dirtyOnlyCopyStart > dirtyAndRuntimeCopyStart);
-const unknownCopySource = protectedCloseCopySource.slice(unknownCopyStart, runtimeOnlyCopyStart);
-const runtimeOnlyCopySource = protectedCloseCopySource.slice(runtimeOnlyCopyStart, dirtyAndRuntimeCopyStart);
-const dirtyOnlyCopySource = protectedCloseCopySource.slice(dirtyOnlyCopyStart);
+assert.ok(unknownCopyStart >= 0 && dirtyAndRuntimeCopyStart > unknownCopyStart && dirtyOnlyCopyStart > dirtyAndRuntimeCopyStart);
+const unknownCopySource = protectedCloseCopySource.slice(unknownCopyStart, dirtyAndRuntimeCopyStart);
+const dirtyOnlyCopySource = protectedCloseCopySource.slice(
+  dirtyOnlyCopyStart,
+  protectedCloseCopySource.indexOf("  const cancelProtectedClose = async () => {", dirtyOnlyCopyStart),
+);
 assert.ok(
   !unknownCopySource.includes("UNSAVED SESSION") &&
     !unknownCopySource.includes("UNSAVED CHANGES") &&
-  !runtimeOnlyCopySource.includes("UNSAVED SESSION") &&
-    !runtimeOnlyCopySource.includes("Close Without Saving") &&
     !dirtyOnlyCopySource.toLowerCase().includes("output"),
-  "runtime-only copy must not claim unsaved-session state, and dirty-only copy must not mention output",
+  "unknown-output copy must not claim unsaved-session state, and dirty-only copy must not mention output",
 );
 for (const [english, japanese] of [
   ["OUTPUT STATE UNKNOWN", "出力状態不明"],
-  ["Close Anyway", "確認せずに閉じる"],
   ["Discard and Close Anyway", "破棄して確認せずに閉じる"],
-  ["LIVE OUTPUT ACTIVE", "ライブ出力中"],
-  ["Stop and Close", "停止して閉じる"],
   ["Discard and Close", "破棄して閉じる"],
   ["Discard, Stop and Close", "破棄して停止して閉じる"],
   ["UNSAVED CHANGES", "未保存の変更"],
   ["UNSAVED CHANGES + LIVE OUTPUT", "未保存の変更 + ライブ出力中"],
-  ["Playback/live output is active. Stop and close?", "再生／ライブ出力が有効です。停止して閉じますか？"],
   ["Playback/live output will stop.", "再生／ライブ出力は停止します。"],
-  ["Playback/live output state could not be verified before closing. Keep Syndocal open to avoid an unsafe shutdown.", "閉じる前に再生／ライブ出力の状態を確認できませんでした。安全のためSyndocalを開いたままにしてください。"],
   ["Project changes will be discarded. Playback/live output state could not be verified before closing.", "プロジェクトの変更は破棄されます。閉じる前に再生／ライブ出力の状態を確認できませんでした。"],
   ["Timeline edits will be discarded. Playback/live output state could not be verified before closing.", "タイムライン編集は破棄されます。閉じる前に再生／ライブ出力の状態を確認できませんでした。"],
   ["Project changes and Timeline edits will be discarded. Playback/live output state could not be verified before closing.", "プロジェクトの変更とタイムライン編集は破棄されます。閉じる前に再生／ライブ出力の状態を確認できませんでした。"],
@@ -1073,14 +1125,14 @@ assert.ok(
       app.indexOf('const confirmDiscardProjectChanges = (actionLabel: string): Promise<boolean> => {'),
       app.indexOf('  const applyEngineSnapshot ='),
     ).includes("window.confirm") &&
-    app.includes("data-project-discard-dialog") &&
-    app.includes('role="alertdialog"') &&
-    app.includes("data-project-discard-cancel") &&
-    app.includes("data-project-discard-confirm") &&
-    app.includes('class="protectedCloseDialog"') &&
-    app.includes('class="protectedCloseFrame"') &&
-    app.includes('class="protectedCloseMark"') &&
-    app.includes('class="protectedCloseActions"') &&
+    appWorkspaceView.includes("data-project-discard-dialog") &&
+    appWorkspaceView.includes('role="alertdialog"') &&
+    appWorkspaceView.includes("data-project-discard-cancel") &&
+    appWorkspaceView.includes("data-project-discard-confirm") &&
+    appWorkspaceView.includes('class="protectedCloseDialog"') &&
+    appWorkspaceView.includes('class="protectedCloseFrame"') &&
+    appWorkspaceView.includes('class="protectedCloseMark"') &&
+    appWorkspaceView.includes('class="protectedCloseActions"') &&
     app.includes('if (!await confirmDiscardProjectChanges("create a new project"))'),
   "project replacement must use the in-app protected-close alertdialog instead of a browser confirmation",
 );

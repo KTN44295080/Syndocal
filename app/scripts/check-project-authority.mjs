@@ -16,6 +16,7 @@ import {
   projectAuthorityDispositionTransition,
   projectAuthorityGenerationIsValid,
   projectAuthorityRecoveryTombstonePreflight,
+  projectAuthoritySavedBaselineMatches,
   projectAuthorityHasDirtyMappings,
   projectAuthorityMappingCommitRetiredInputs,
   projectAuthorityPollPreservesDirtyMappings,
@@ -371,6 +372,48 @@ disposition = projectAuthorityDispositionTransition(
   },
 );
 assert.equal(disposition.dirty, true, "Undo to a non-saved C must not claim clean");
+
+// Open from the command line / File > Open / Recent (task70). The backend
+// publishes the engine's canonical checkpoint with the CleanAtPath identity,
+// so the reply, its event and every later poll carry that same token and the
+// project stays clean; only a genuinely new revision is dirty.
+{
+  const opened = {
+    project_epoch: 40,
+    project_revision: 0,
+    checkpoint_hash: "engine-canonical-O",
+    current_project_path: "C:/shows/opened.sdc",
+  };
+  const afterOpen = projectAuthorityDispositionTransition(
+    { baseline: null, observedDispositionGeneration: 0, dispositionInitialized: true, dirty: false },
+    { ...opened, authority_disposition_generation: 1, authority_disposition: "clean_at_path" },
+  );
+  assert.equal(afterOpen.dirty, false, "a freshly opened project is clean");
+  assert.equal(
+    projectAuthorityDispositionTransition(afterOpen, {
+      ...opened, authority_disposition_generation: 1, authority_disposition: "clean_at_path",
+    }),
+    afterOpen,
+    "the event/poll re-delivery of the open is a disposition no-op",
+  );
+  assert.equal(
+    projectAuthoritySavedBaselineMatches(afterOpen.baseline, opened),
+    true,
+    "a same-token Mutation/poll after the open recomputes clean",
+  );
+  const edited = { ...opened, project_revision: 1, checkpoint_hash: "edited-P" };
+  assert.equal(
+    projectAuthoritySavedBaselineMatches(afterOpen.baseline, edited),
+    false,
+    "an edit after the open (new revision/checkpoint, same disposition) is dirty",
+  );
+  assert.equal(
+    projectAuthoritySavedBaselineMatches(afterOpen.baseline, { ...opened, current_project_path: "C:/shows/other.sdc" }),
+    false,
+    "the same checkpoint at another path is not the saved file",
+  );
+  assert.equal(projectAuthoritySavedBaselineMatches(null, opened), false, "no saved baseline is never clean");
+}
 
 // A template/DVC/backup event has no direct command continuation, yet it is
 // unambiguously unsaved. Its duplicate reply must be a no-op and cannot erase

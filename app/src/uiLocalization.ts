@@ -3099,16 +3099,11 @@ const japaneseText: Record<string, string> = {
   "Discard and Close": "破棄して閉じる",
   "Discard and Close Anyway": "破棄して確認せずに閉じる",
   "Discard, Stop and Close": "破棄して停止して閉じる",
-  "Close Anyway": "確認せずに閉じる",
   "Keep Syndocal Open": "Syndocalを開いたままにする",
   "Keep Timeline Open": "タイムラインを開いたままにする",
-  "LIVE OUTPUT ACTIVE": "ライブ出力中",
   "Live DMX output will stop.": "ライブDMX出力は停止します。",
   "OUTPUT STATE UNKNOWN": "出力状態不明",
-  "Playback/live output is active. Stop and close?": "再生／ライブ出力が有効です。停止して閉じますか？",
   "Playback/live output will stop.": "再生／ライブ出力は停止します。",
-  "Playback/live output state could not be verified before closing. Keep Syndocal open to avoid an unsafe shutdown.":
-    "閉じる前に再生／ライブ出力の状態を確認できませんでした。安全のためSyndocalを開いたままにしてください。",
   "Project changes will be discarded.": "プロジェクトの変更は破棄されます。",
   "Project changes will be discarded. Live DMX output will stop.":
     "プロジェクトの変更は破棄され、ライブDMX出力は停止します。",

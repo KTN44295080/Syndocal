@@ -953,6 +953,7 @@ import {
   projectAuthorityHasDirtyMappings,
   projectAuthorityMappingCommitRetiredInputs,
   projectAuthorityDispositionTransition,
+  projectAuthoritySavedBaselineMatches,
   projectAuthorityDispositionClearsRecovery,
   projectAuthorityRecoveryTombstonePreflight,
   projectAuthorityResponseIsCurrent,
@@ -983,6 +984,7 @@ import {
   type ProjectAuthorityRuntimeEffects,
   type ProjectAuthorityRuntimeState,
 } from "./projectAuthorityRuntime";
+import { mainProtectedCloseRequest, type MainProtectedCloseRequest } from "./protectedClosePolicy";
 import {
   controlMappingTargetsFromElement,
   controlMappingTargetsForMode,
@@ -14527,21 +14529,9 @@ function createAppView() {
     checkpoint_hash: authority.checkpoint_hash ?? projectMappingsAuthority().checkpoint_hash,
   });
 
-  const savedProjectAuthorityBaselineMatches = (bundle: ProjectAuthorityBundle): boolean => {
-    const saved = savedProjectAuthorityBaseline;
-    return saved !== null
-      && saved.project_epoch === bundle.project_epoch
-      && saved.checkpoint_hash === bundle.checkpoint_hash
-      && saved.current_project_path === bundle.current_project_path;
-  };
-
   const recomputeProjectDirtyFromAuthority = (bundle: ProjectAuthorityBundle) => {
     projectDirtyUsesAuthorityBaseline = true;
-    if (savedProjectAuthorityBaseline === null) {
-      setProjectDirty(true);
-      return;
-    }
-    setProjectDirty(!savedProjectAuthorityBaselineMatches(bundle));
+    setProjectDirty(!projectAuthoritySavedBaselineMatches(savedProjectAuthorityBaseline, bundle));
   };
 
   /**
@@ -26932,14 +26922,7 @@ function createAppView() {
         pendingClose: PaneWindowPendingCloseContext | null;
         pendingCloseQueryFailed: boolean;
       }
-    | {
-        pane: "main";
-        reason: "dirty-only" | "runtime-only" | "dirty-and-runtime" | "output-state-unknown";
-        projectDirty: boolean;
-        timelineDirty: boolean;
-        runtimeActive: boolean | null;
-      };
-  type MainProtectedCloseRequest = Extract<ProtectedCloseRequest, { pane: "main" }>;
+    | MainProtectedCloseRequest;
   const [protectedCloseRequest, setProtectedCloseRequest] = createSignal<ProtectedCloseRequest | null>(null);
   const queryOwnPanePendingCloseContext = async (): Promise<PaneWindowPendingCloseContext | null> => {
     if (!paneWindow || !isTauriRuntime()) return null;
@@ -27024,29 +27007,14 @@ function createAppView() {
         : null;
     }
     if (paneWindow) return null;
-    const projectIsDirty = projectDirty();
-    const timelineIsDirty = timelineEditorDirty();
-    const runtimeIsActive = mainRuntimeActive(current);
-    if (!projectIsDirty && !timelineIsDirty && !runtimeIsActive) return null;
-    const reason: MainProtectedCloseRequest["reason"] = runtimeIsActive
-      ? projectIsDirty || timelineIsDirty ? "dirty-and-runtime" : "runtime-only"
-      : "dirty-only";
-    return {
-      pane: "main",
-      reason,
-      projectDirty: projectIsDirty,
-      timelineDirty: timelineIsDirty,
-      runtimeActive: runtimeIsActive,
-    };
+    // Owner policy: only unsaved work asks. Live output is named in the
+    // dialog when it coincides with unsaved work, but never asks by itself.
+    return mainProtectedCloseRequest(projectDirty(), timelineEditorDirty(), mainRuntimeActive(current));
   };
-  const protectedCloseUnknownRequest = (): MainProtectedCloseRequest => ({
-    pane: "main",
-    reason: "output-state-unknown",
-    projectDirty: projectDirty(),
-    timelineDirty: timelineEditorDirty(),
-    runtimeActive: null,
-  });
+  const protectedCloseUnknownRequest = (): MainProtectedCloseRequest | null =>
+    mainProtectedCloseRequest(projectDirty(), timelineEditorDirty(), null);
   const closeProtectionRequired = () => protectedCloseRequestForCurrentState() !== null;
+  // A captured main request always carries unsaved work (see protectedClosePolicy).
   const protectedCloseMainDetail = (request: MainProtectedCloseRequest) => {
     if (request.reason === "output-state-unknown") {
       if (request.projectDirty && request.timelineDirty) {
@@ -27061,14 +27029,8 @@ function createAppView() {
           uiLocale(),
         );
       }
-      if (request.projectDirty) {
-        return translateUiText(
-          "Project changes will be discarded. Playback/live output state could not be verified before closing.",
-          uiLocale(),
-        );
-      }
       return translateUiText(
-        "Playback/live output state could not be verified before closing. Keep Syndocal open to avoid an unsafe shutdown.",
+        "Project changes will be discarded. Playback/live output state could not be verified before closing.",
         uiLocale(),
       );
     }
@@ -27082,10 +27044,7 @@ function createAppView() {
       if (request.timelineDirty) {
         return translateUiText("Timeline edits will be discarded. Playback/live output will stop.", uiLocale());
       }
-      if (request.projectDirty) {
-        return translateUiText("Project changes will be discarded. Playback/live output will stop.", uiLocale());
-      }
-      return translateUiText("Playback/live output is active. Stop and close?", uiLocale());
+      return translateUiText("Project changes will be discarded. Playback/live output will stop.", uiLocale());
     }
     if (request.projectDirty && request.timelineDirty) {
       return translateUiText("Project changes and Timeline edits will be discarded.", uiLocale());
@@ -27093,10 +27052,7 @@ function createAppView() {
     if (request.timelineDirty) {
       return translateUiText("Timeline edits will be discarded.", uiLocale());
     }
-    if (request.projectDirty) {
-      return translateUiText("Project changes will be discarded.", uiLocale());
-    }
-    return translateUiText("Playback/live output is active. Stop and close?", uiLocale());
+    return translateUiText("Project changes will be discarded.", uiLocale());
   };
   const protectedCloseCopy = () => {
     const request = protectedCloseRequest();
@@ -27120,18 +27076,7 @@ function createAppView() {
         title: translateUiText("Close Syndocal?", uiLocale()),
         detail: protectedCloseMainDetail(request),
         cancel: translateUiText("Keep Syndocal Open", uiLocale()),
-        confirm: request.projectDirty || request.timelineDirty
-          ? translateUiText("Discard and Close Anyway", uiLocale())
-          : translateUiText("Close Anyway", uiLocale()),
-      };
-    }
-    if (request.reason === "runtime-only") {
-      return {
-        eyebrow: translateUiText("LIVE OUTPUT ACTIVE", uiLocale()),
-        title: translateUiText("Close Syndocal?", uiLocale()),
-        detail: protectedCloseMainDetail(request),
-        cancel: translateUiText("Keep Syndocal Open", uiLocale()),
-        confirm: translateUiText("Stop and Close", uiLocale()),
+        confirm: translateUiText("Discard and Close Anyway", uiLocale()),
       };
     }
     if (request.reason === "dirty-and-runtime") {
@@ -27296,19 +27241,20 @@ function createAppView() {
           event.preventDefault();
           return;
         }
+        // Nothing unsaved: close now. Playback or an armed output is stopped
+        // by the backend main-window close shutdown, not by a question.
+        if (!closeProtectionRequired()) return;
         event.preventDefault();
         const freshSnapshot = await refreshSnapshotForProtectedClose();
         if (closeRequestListenerDisposed) return;
-        if (freshSnapshot) {
-          const closeRequest = protectedCloseRequestForCurrentState(freshSnapshot);
-          if (closeRequest) {
-            setProtectedCloseRequest(closeRequest);
-          } else {
-            scheduleApprovedNativeClose();
-          }
-          return;
+        const closeRequest = freshSnapshot
+          ? protectedCloseRequestForCurrentState(freshSnapshot)
+          : protectedCloseUnknownRequest();
+        if (closeRequest) {
+          setProtectedCloseRequest(closeRequest);
+        } else {
+          scheduleApprovedNativeClose();
         }
-        setProtectedCloseRequest(protectedCloseUnknownRequest());
       })
       .then((unlisten) => {
         if (closeRequestListenerDisposed) {

@@ -419,6 +419,19 @@ export type ProjectAuthorityDispositionCandidate = ProjectAuthorityToken & {
   authority_disposition: ProjectAuthorityDisposition;
 };
 
+/**
+ * Saved-file dirty truth: the exact saved epoch/checkpoint at the same path.
+ * Undo/Redo dispositions and ordinary Mutation publications (which keep the
+ * prior disposition) both compare against this one baseline.
+ */
+export const projectAuthoritySavedBaselineMatches = (
+  baseline: ProjectAuthoritySavedBaseline | null,
+  candidate: ProjectAuthorityToken & { current_project_path: string | null },
+): boolean => baseline !== null
+  && baseline.project_epoch === candidate.project_epoch
+  && baseline.checkpoint_hash === candidate.checkpoint_hash
+  && baseline.current_project_path === candidate.current_project_path;
+
 export const projectAuthorityDispositionTransition = (
   state: ProjectAuthorityDispositionState,
   candidate: ProjectAuthorityDispositionCandidate,
@@ -456,10 +469,7 @@ export const projectAuthorityDispositionTransition = (
       };
     case "history_navigation": {
       const baseline = state.baseline;
-      const clean = baseline !== null
-        && baseline.project_epoch === candidate.project_epoch
-        && baseline.checkpoint_hash === candidate.checkpoint_hash
-        && baseline.current_project_path === candidate.current_project_path;
+      const clean = projectAuthoritySavedBaselineMatches(baseline, candidate);
       return {
         baseline,
         observedDispositionGeneration,

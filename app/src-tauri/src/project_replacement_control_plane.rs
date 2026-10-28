@@ -255,10 +255,8 @@ pub(super) fn prepare(
     // deny-output runtime. In particular, an empty legacy Timeline bank must
     // be classified before the Engine normalizes it. This runs before output
     // retirement and hashes the image that publication will acknowledge.
-    prepared.snapshot = super::project_snapshot_for_save(
-        engine::prepare_project_snapshot_persistence(prepared.snapshot)
-            .map_err(|_| Error::InvalidProject)?,
-    );
+    super::canonicalize_prepared_project_snapshot(&mut prepared)
+        .map_err(|_| Error::InvalidProject)?;
     Ok(prepared)
 }
 

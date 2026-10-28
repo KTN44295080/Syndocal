@@ -67317,6 +67317,7 @@ fn load_project_from_file_with_control_mappings_in_scope_and_expected_output_fen
         input.path_label,
         input.current_path,
     )?;
+    canonicalize_prepared_project_snapshot(&mut prepared)?;
     prepared.authority_disposition = ProjectAuthorityDisposition::CleanAtPath;
     prepared.playback = standby_playback_policy(
         &input.standby_playback,
@@ -67350,6 +67351,7 @@ fn load_project_from_file_with_control_mappings_in_scope_and_disposition(
         input.path_label,
         input.current_path,
     )?;
+    canonicalize_prepared_project_snapshot(&mut prepared)?;
     prepared.authority_disposition = disposition;
     prepared.playback = standby_playback_policy(
         &input.standby_playback,
@@ -67399,6 +67401,23 @@ fn sanitize_current_project_runtime_under_authority(
         ),
     )
     .map(|(result, (), _)| result)
+}
+
+/// Run a file's snapshot through the real Engine load/persistence policy (a
+/// private deny-output runtime, no worker, media read or output permit)
+/// before any project effect, so the identity publishes the checkpoint of the
+/// image the engine will acknowledge. The engine migrates older file shapes
+/// on load (video graph and effect chains, Timeline bank, Cue numbering);
+/// hashing the raw file image instead made the first authority read
+/// reconcile that migration as an admitted external edit (revision 0->1,
+/// Mutation publication, history cleared), so an untouched, just-opened
+/// project showed as modified. The control-plane open/restore path shares it.
+fn canonicalize_prepared_project_snapshot(prepared: &mut PreparedProjectLoad) -> Result<(), String> {
+    let snapshot = std::mem::take(&mut prepared.snapshot);
+    prepared.snapshot = project_snapshot_for_save(engine::prepare_project_snapshot_persistence(
+        snapshot,
+    )?);
+    Ok(())
 }
 
 fn prepare_project_load(
@@ -91144,6 +91163,7 @@ pub(crate) mod tests {
     include!("project_replacement_control_plane_tests.rs");
     include!("project_backup_restoration_tests.rs");
     include!("project_backup_deletion_tests.rs");
+    include!("project_load_checkpoint_tests.rs");
     use super::*;
     use protocol::{ClockSource, VideoLayerSummary};
 
