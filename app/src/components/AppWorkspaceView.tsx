@@ -233,6 +233,7 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
     liveVideoMonitors,
     liveVideoProgramLabel,
     selectedVideoClipSlotLayer,
+    openVideoFxEditor,
     videoRecordingStatus,
     setVideoBlackout,
     renderTimelineDeskHeaderTools,
@@ -1834,6 +1835,7 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
             get keyboardEnabled() { return !controlLearnMode() && operatorLockMode() === null; },
             get controlLearnActive() { return controlLearnMode() !== null; },
             onOpenEditor: () => selectControlMode("mixer"),
+            onOpenFxEditor: () => openVideoFxEditor(),
             layout: {
               get topRatio() { return performTopSplitRatio(); },
               get lowerRatio() { return performLowerSplitRatio(); },

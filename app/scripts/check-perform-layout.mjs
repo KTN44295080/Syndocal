@@ -774,6 +774,13 @@ try {
       await prepareImmediateAction();
       await focus(selectors.guardedBlackout);await cdp.key('Enter','Enter',13);
       await assertImmediateRefusal('Blackout Enter');
+      // Owner decision 2026-10-28: the Perform key is "Video BO" (video only)
+      // and no text claims a confirmation that does not exist.
+      const videoBo=await cdp.evaluate('(()=>{const b=document.querySelector('+JSON.stringify(selectors.guardedBlackout)+');const r=document.querySelector('+JSON.stringify(root+' [data-video-perform-blackout-reason]')+');const dt=[...document.querySelectorAll('+JSON.stringify(root+' [data-video-perform-legend] dt')+')].find(e=>e.textContent.includes("Ctrl + Shift + B"));return {label:b.querySelector(".videoPerformBlackoutLabel")?.textContent.trim(),title:b.title,hint:r?.textContent.trim()??"",legend:dt?.nextElementSibling?.textContent.trim()??""}})()');
+      assert.equal(videoBo.label,locale==='ja'?'映像BO':'Video BO',label+': the Perform blackout key is named Video BO');
+      assert.equal(videoBo.legend,locale==='ja'?'映像BOのオン／オフ':'Video BO on or off',label+': the legend names Video BO without a confirmation');
+      for(const [part,text] of Object.entries({title:videoBo.title,hint:videoBo.hint,legend:videoBo.legend}))
+        assert.doesNotMatch(text,/confirm|確認/i,label+': Video BO '+part+' claims no confirmation');
       await writeFile(join(evidenceDir,label+'-blackout-immediate.png'),Buffer.from((await cdp.capture({format:'png',captureBeyondViewport:false})).data,'base64'));
       await prepareImmediateAction();
       await cdp.evaluate('document.activeElement?.blur()');
