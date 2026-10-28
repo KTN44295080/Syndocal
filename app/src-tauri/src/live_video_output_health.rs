@@ -13,6 +13,14 @@ use std::{
 const CAPACITY: usize = 600;
 const TARGET_FPS: u64 = 60;
 const INTERVAL_NS: u64 = 1_000_000_000 / TARGET_FPS;
+/// Whole-run present-interval histogram (ADR-01 section 13.3 (2)): bin `k`
+/// holds intervals in (k * width, (k + 1) * width]; longer intervals count in
+/// the overflow. Cumulative since registration and never reset, so a reader
+/// differences two snapshots of the same writer generation to obtain the exact
+/// distribution of every interval that ended between them.
+const INTERVAL_BIN_NS: u64 = 100_000;
+const INTERVAL_BINS: usize = 1_000;
+static WRITER_GENERATION: AtomicU64 = AtomicU64::new(0);
 // Zero is a valid preparation duration. Unmeasured startup / cached sends
 // must not become fabricated zero-cost preparation samples.
 const NO_RENDER_TIME_NS: u64 = u64::MAX;
@@ -21,8 +29,13 @@ static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
 
 struct Samples {
     origin: Instant,
+    generation: u64,
     timestamps_ns: [AtomicU64; CAPACITY],
     render_times_ns: [AtomicU64; CAPACITY],
+    interval_bins: [AtomicU64; INTERVAL_BINS],
+    interval_overflow: AtomicU64,
+    interval_total_ns: AtomicU64,
+    interval_max_ns: AtomicU64,
     count: AtomicU64,
     revision: AtomicU64,
     dropped: AtomicU64,
@@ -31,6 +44,7 @@ struct Samples {
 pub(crate) struct OutputHealthWriter {
     samples: Arc<Samples>,
     first_ns: Option<u64>,
+    last_ns: Option<u64>,
     count: u64,
     /// Deliveries before the current cadence anchor; they are not slot debt.
     anchor_count: u64,
@@ -61,14 +75,41 @@ pub(crate) struct LiveVideoOutputHealth {
     sample_count: usize,
     measurement_boundary: &'static str,
     last_frame_age_ms: Option<f64>,
+    /// Writer-clock time of this snapshot and of the newest delivery, so a
+    /// window boundary can be anchored to deliveries instead of IPC timing.
+    snapshot_elapsed_ns: u64,
+    last_delivery_elapsed_ns: Option<u64>,
+    present_intervals: PresentIntervalHistogram,
+}
+
+/// Cumulative, consistent with `delivered_frames` (same seqlock read):
+/// `interval_count == delivered_frames - 1` once a delivery exists.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PresentIntervalHistogram {
+    writer_generation: u64,
+    bin_width_ns: u64,
+    bin_count: usize,
+    /// Sparse `[bin index, cumulative count]` pairs, ascending, nonzero only.
+    bins: Vec<[u64; 2]>,
+    overflow_count: u64,
+    interval_count: u64,
+    interval_total_ns: u64,
+    /// Lifetime maximum; informational (a maximum cannot be differenced).
+    interval_max_ns: u64,
 }
 
 impl OutputHealthWriter {
     pub(crate) fn register(output_id: u64, kind: &'static str) -> Self {
         let samples = Arc::new(Samples {
             origin: Instant::now(),
+            generation: WRITER_GENERATION.fetch_add(1, Ordering::Relaxed) + 1,
             timestamps_ns: std::array::from_fn(|_| AtomicU64::new(0)),
             render_times_ns: std::array::from_fn(|_| AtomicU64::new(NO_RENDER_TIME_NS)),
+            interval_bins: std::array::from_fn(|_| AtomicU64::new(0)),
+            interval_overflow: AtomicU64::new(0),
+            interval_total_ns: AtomicU64::new(0),
+            interval_max_ns: AtomicU64::new(0),
             count: AtomicU64::new(0),
             revision: AtomicU64::new(0),
             dropped: AtomicU64::new(0),
@@ -80,6 +121,7 @@ impl OutputHealthWriter {
         Self {
             samples,
             first_ns: None,
+            last_ns: None,
             count: 0,
             anchor_count: 0,
             dropped: 0,
@@ -121,6 +163,25 @@ impl OutputHealthWriter {
                 .unwrap_or(NO_RENDER_TIME_NS),
             Ordering::Relaxed,
         );
+        if let Some(last) = self.last_ns.replace(now) {
+            // Single writer: plain load/store keeps this free of locked RMW.
+            let interval = now.saturating_sub(last);
+            let bin = interval.saturating_sub(1) / INTERVAL_BIN_NS;
+            let slot = usize::try_from(bin)
+                .ok()
+                .and_then(|bin| self.samples.interval_bins.get(bin))
+                .unwrap_or(&self.samples.interval_overflow);
+            slot.store(slot.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
+            let total = &self.samples.interval_total_ns;
+            total.store(
+                total.load(Ordering::Relaxed).saturating_add(interval),
+                Ordering::Relaxed,
+            );
+            let max = &self.samples.interval_max_ns;
+            if interval > max.load(Ordering::Relaxed) {
+                max.store(interval, Ordering::Relaxed);
+            }
+        }
         self.count = self.count.saturating_add(1);
         self.samples.dropped.store(self.dropped, Ordering::Relaxed);
         self.samples.count.store(self.count, Ordering::Release);
@@ -176,6 +237,18 @@ fn snapshot_at(
             .filter(|time| *time != NO_RENDER_TIME_NS)
             .collect::<Vec<_>>();
         let dropped = samples.dropped.load(Ordering::Relaxed);
+        let bins = samples
+            .interval_bins
+            .iter()
+            .enumerate()
+            .filter_map(|(index, bin)| {
+                let count = bin.load(Ordering::Relaxed);
+                (count != 0).then_some([index as u64, count])
+            })
+            .collect::<Vec<_>>();
+        let overflow_count = samples.interval_overflow.load(Ordering::Relaxed);
+        let interval_total_ns = samples.interval_total_ns.load(Ordering::Relaxed);
+        let interval_max_ns = samples.interval_max_ns.load(Ordering::Relaxed);
         // Keep every ring load before the final sequence check, including on
         // weakly ordered targets. All concurrent ring accesses remain atomic.
         std::sync::atomic::fence(Ordering::Acquire);
@@ -186,9 +259,10 @@ fn snapshot_at(
             .windows(2)
             .map(|pair| pair[1].saturating_sub(pair[0]))
             .collect::<Vec<_>>();
-        let age_ns = timestamps.last().map(|last| {
-            (elapsed.as_nanos().min(u128::from(u64::MAX)) as u64).saturating_sub(*last)
-        });
+        let snapshot_elapsed_ns = elapsed.as_nanos().min(u128::from(u64::MAX)) as u64;
+        let age_ns = timestamps
+            .last()
+            .map(|last| snapshot_elapsed_ns.saturating_sub(*last));
         // Include an in-progress stall; a stopped producer must not keep showing its old fps.
         let span_ns = timestamps
             .first()
@@ -238,6 +312,18 @@ fn snapshot_at(
                 "sender"
             },
             last_frame_age_ms: age_ns.map(|age| age as f64 / 1e6),
+            snapshot_elapsed_ns,
+            last_delivery_elapsed_ns: timestamps.last().copied(),
+            present_intervals: PresentIntervalHistogram {
+                writer_generation: samples.generation,
+                bin_width_ns: INTERVAL_BIN_NS,
+                bin_count: INTERVAL_BINS,
+                bins,
+                overflow_count,
+                interval_count: count.saturating_sub(1),
+                interval_total_ns,
+                interval_max_ns,
+            },
         });
     }
     None
@@ -359,6 +445,55 @@ mod tests {
         assert_eq!(unknown.render_sample_count, 0);
         assert_eq!(unknown.render_time_p95_ms, 0.0);
         assert_eq!(unknown.delivered_frames, 1400);
+    }
+
+    #[test]
+    fn present_interval_histogram_is_exact_cumulative_and_differences_between_snapshots() {
+        let mut writer = OutputHealthWriter::register(u64::MAX - 7, "display");
+        let at = Duration::from_micros;
+        // Bin edges are upper-inclusive: exactly 20.0 ms is in (19.9, 20.0].
+        let mut t = 0;
+        writer.record_at(at(t), None);
+        for interval in [16_600, 16_700, 20_000, 20_050, 33_300, 150_000] {
+            t += interval;
+            writer.record_at(at(t), None);
+        }
+        let before = snapshot_at(0, "display", &writer.samples, at(t)).unwrap();
+        let first = &before.present_intervals;
+        assert_eq!(before.delivered_frames, 7);
+        assert_eq!(first.interval_count, 6);
+        assert_eq!(first.bin_width_ns, INTERVAL_BIN_NS);
+        assert_eq!(
+            first.bins,
+            vec![[165, 1], [166, 1], [199, 1], [200, 1], [332, 1]]
+        );
+        assert_eq!(first.overflow_count, 1);
+        assert_eq!(first.interval_max_ns, 150_000_000);
+        assert_eq!(first.interval_total_ns, at(t).as_nanos() as u64);
+        assert_eq!(
+            before.last_delivery_elapsed_ns,
+            Some(at(t).as_nanos() as u64)
+        );
+        for _ in 0..3 {
+            t += 16_700;
+            writer.record_at(at(t), None);
+        }
+        let after = snapshot_at(0, "display", &writer.samples, at(t + 1_000)).unwrap();
+        let second = &after.present_intervals;
+        assert_eq!(second.writer_generation, first.writer_generation);
+        assert_eq!(second.interval_count - first.interval_count, 3);
+        assert_eq!(
+            after.delivered_frames - before.delivered_frames,
+            second.interval_count - first.interval_count
+        );
+        assert_eq!(second.bins[1], [166, 4]);
+        assert_eq!(after.snapshot_elapsed_ns, at(t + 1_000).as_nanos() as u64);
+        let next = OutputHealthWriter::register(u64::MAX - 8, "display");
+        let fresh = snapshot(0, "display", &next.samples).unwrap();
+        assert!(fresh.present_intervals.writer_generation > first.writer_generation);
+        assert_eq!(fresh.present_intervals.interval_count, 0);
+        assert!(fresh.present_intervals.bins.is_empty());
+        assert_eq!(fresh.last_delivery_elapsed_ns, None);
     }
 
     #[test]

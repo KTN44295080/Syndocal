@@ -369,6 +369,7 @@ impl NativeResidentDisplaySession {
             .request_sequence
             .checked_add(1)
             .ok_or_else(|| "native request sequence exhausted".to_string())?;
+        self.evidence.request_issued(self.request_sequence);
         let frame = NativeFrameId {
             output_id: self.output_id,
             project_epoch,
@@ -534,11 +535,16 @@ impl NativeResidentDisplaySession {
     }
 
     fn cpu_display_frame(
-        &self,
+        &mut self,
         request: NativeOutputRequest,
         output: crate::native_cpu_output::NativeCpuOutput,
     ) -> Result<NativeResidentDisplayFrame, String> {
         let crate::native_cpu_output::NativeCpuOutput { result, charge } = output;
+        let counters = self.evidence.counters_mut();
+        match result.payload {
+            VideoOutputArtisticPayload::HardBlackout => counters.hard_blackout_outputs += 1,
+            VideoOutputArtisticPayload::Frame(_) => counters.cpu_compositions += 1,
+        }
         let extent = (request.key.width, request.key.height);
         let pts_ms = result.frame().map_or(0, |frame| frame.pts_ms);
         let evidence = result.evidence.clone();
@@ -637,6 +643,12 @@ impl NativeResidentDisplaySession {
         renderer: &mut VideoPreviewRenderer<P>,
         snapshot: &VideoSnapshot,
     ) -> Result<NativeResidentDisplayFrame, NativeResidentPrepareError> {
+        // Outputs this session still owns at the end of the tick: the one in
+        // flight plus an unpublished predecessor (ADR-01 section 13.3 (4)).
+        let pending =
+            usize::from(self.ring.owns_in_flight()) + usize::from(self.ring.has_resolved());
+        self.evidence
+            .pending_outputs(pending, self.retirements.len() + self.retired_ready.len());
         // Anything the tick did not hand off is never presented.
         self.discard_ring_resolved();
         // A successful frame needs the final authority check. An earlier
@@ -1127,6 +1139,18 @@ impl NativeResidentDisplaySession {
                 request.frame.request_sequence,
             );
         }
+        {
+            let counters = self.evidence.counters_mut();
+            match &execution {
+                NativeResidentExecution::BudgetDeclined(_) => counters.budget_declines += 1,
+                NativeResidentExecution::Cpu { .. } => counters.cpu_declines += 1,
+                NativeResidentExecution::Gpu(_) => {
+                    counters.gpu_batch_ticks += 1;
+                    counters.gpu_batch_layers += plan.composition.layers.len() as u64;
+                }
+                NativeResidentExecution::Retiring(_) => {}
+            }
+        }
         match execution {
             NativeResidentExecution::BudgetDeclined(reason) => {
                 // A pre-execution refusal produces no frame. Complete any
@@ -1502,6 +1526,7 @@ impl NativeResidentDisplaySession {
             "native output requires retained retirement: {:?}",
             retirement.reason()
         );
+        self.evidence.counters_mut().fault_retirements += 1;
         self.retirements.push(retirement);
         self.terminal_fault = Some(reason.clone());
         Err(reason)
@@ -1631,6 +1656,7 @@ impl NativeResidentDisplaySession {
             drop(owner);
         }
         self.recovered_history = None;
+        self.evidence.counters_mut().recoveries += 1;
         self.handover_all_history_to_cpu(renderer, cancellation)?;
         self.normalize_cpu_queue_keys(renderer);
         Ok(faults)
@@ -1662,6 +1688,7 @@ impl NativeResidentDisplaySession {
                         drop(owner);
                     }
                     self.ring.recycle(readback);
+                    self.evidence.counters_mut().snapshots_published += 1;
                     return Ok(ResidentOutputCompletion::Ready(
                         ring::resident_display_frame(ready),
                     ));

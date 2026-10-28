@@ -234,9 +234,11 @@ impl NativeResidentDisplaySession {
         #[cfg(feature = "qa-native-frame-timing")]
         let _present_trace =
             crate::native_frame_timing::span(crate::native_frame_timing::Phase::PresenterPresent);
+        let pipelined = frame.pipelined;
         match frame.content {
             ResidentDisplayContent::Resident(mut ready) => {
-                let expected = NativePresentContent::Resident(ready.snapshot_identity());
+                let snapshot = ready.snapshot_identity();
+                let expected = NativePresentContent::Resident(snapshot);
                 let delivered = self
                     .delivery
                     .delivered()
@@ -267,6 +269,15 @@ impl NativeResidentDisplaySession {
                                         .into(),
                                 );
                             }
+                            let current_generation = request.context == self.owner.context().id()
+                                && request.frame.geometry_generation == self.geometry_generation;
+                            self.evidence.resident_presented(
+                                request.frame.request_sequence,
+                                snapshot.completed_submission.sequence,
+                                self.request_sequence,
+                                current_generation,
+                                pipelined,
+                            );
                             return Ok(NativeResidentPresentResult::Presented {
                                 hard_blackout: false,
                             });
@@ -308,6 +319,7 @@ impl NativeResidentDisplaySession {
                                 NativePresentContent::CpuArtistic,
                                 sequence,
                             )?;
+                            self.evidence.counters_mut().cpu_frame_uploads += 1;
                             return Ok(NativeResidentPresentResult::Presented {
                                 hard_blackout: false,
                             });

@@ -83605,6 +83605,8 @@ impl Default for NativeVideoOutputMetrics {
 struct NativeResidentPresentationMetrics {
     frames_presented: u64,
     hard_blackout_frames_presented: u64,
+    /// Cumulative trace-OFF path/identity/latency evidence (ADR-01 13.3).
+    path: video::NativeResidentPathEvidence,
 }
 
 fn native_legacy_buffer_stats_available(available: &bool) -> bool {
@@ -83796,6 +83798,7 @@ impl NativeVideoOutputMetrics {
         elapsed: Duration,
         frames_presented: u64,
         hard_blackout_frames_presented: u64,
+        path: video::NativeResidentPathEvidence,
         decoder_diagnostics: video::VideoDecoderDiagnostics,
         error: Option<String>,
         validation_identity: Option<NativeVideoOutputValidationIdentity>,
@@ -83804,6 +83807,7 @@ impl NativeVideoOutputMetrics {
         self.resident_presentation = Some(NativeResidentPresentationMetrics {
             frames_presented,
             hard_blackout_frames_presented,
+            path,
         });
         // Leave unmeasured legacy allocation data untouched and mark it as
         // unavailable in the snapshot. Timing/identity use the same validator.

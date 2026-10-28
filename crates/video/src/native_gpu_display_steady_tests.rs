@@ -103,6 +103,7 @@ fn session_with_compositor(extent: (u32, u32)) -> NativeResidentDisplaySession {
         follow_last_valid: None,
         ring: Default::default(),
         deferred_budget: None,
+        evidence: Default::default(),
     };
     session.compositor = Some(
         NativeGpuCompositor::from_shared(&mut session.owner)
@@ -1163,7 +1164,56 @@ fn native_gpu_output_display_single_budget_refusal_preserves_history_cache_and_o
         .owner
         .discard_unsubmitted_reservation(reservation)
         .unwrap();
+    let evidence = ring.session.path_evidence();
+    assert_eq!((evidence.budget_declines, evidence.cpu_declines), (1, 0));
+    assert_eq!(evidence.cpu_compositions, 0);
     assert_eq!(path_of(ring.prepare(EXTENT)), Path::Resident);
+    stop_and_reap(&mut ring.session, &mut ring.renderer);
+}
+
+/// ADR-01 section 13.3 (4)-(6) trace-OFF path evidence on the ordinary
+/// three-layer fixture: every tick is one three-layer GPU batch whose logical
+/// entries are this tick's, every returned output has exactly one published
+/// snapshot, and nothing declines, reads a layer back, replays, recovers,
+/// composes on the CPU or is discarded. The ring holds at most one output.
+#[test]
+fn native_gpu_output_display_path_evidence_counts_the_steady_resident_route() {
+    const STEADY_TICKS: u64 = 40;
+    let mut ring = RingFixture::new(3, EXTENT);
+    let mut returned = 0;
+    for _ in 0..STEADY_TICKS {
+        let frame = ring.prepare(EXTENT);
+        returned += u64::from(path_of(frame) == Path::Resident);
+    }
+    let e = ring.session.path_evidence();
+    assert_eq!(returned, STEADY_TICKS - 1, "one pipeline fill tick");
+    assert_eq!(e.gpu_batch_ticks, STEADY_TICKS);
+    assert_eq!(e.gpu_batch_layers, 3 * STEADY_TICKS, "Batch3 on every tick");
+    assert_eq!(e.logical_layers_issued, 3 * STEADY_TICKS);
+    assert_eq!(
+        e.logical_layers_selected_incoming + e.logical_layers_selected_resident,
+        e.logical_layers_issued
+    );
+    assert_eq!(e.snapshots_published, returned, "one snapshot per Ready");
+    assert_eq!(
+        [
+            e.budget_declines,
+            e.cpu_declines,
+            e.cpu_compositions,
+            e.hard_blackout_outputs,
+            e.layer_readbacks,
+            e.historical_replays,
+            e.recoveries,
+            e.fault_retirements,
+            e.ring_discards,
+            e.cpu_frame_uploads,
+        ],
+        [0; 10],
+        "{e:?}"
+    );
+    assert_eq!(e.pending_outputs_high_water, 1, "one ring output in flight");
+    // No surface exists here: Presented-receipt counters stay untouched.
+    assert_eq!((e.resident_presents, e.identity_verified_presents), (0, 0));
     stop_and_reap(&mut ring.session, &mut ring.renderer);
 }
 
@@ -1245,6 +1295,13 @@ fn native_gpu_output_display_loop_wrap_stays_resident_without_history_replay() {
             passes > 1 && passes <= 2 * wraps + 1,
             "{layers}L history passes {passes} for {wraps} wraps"
         );
+        let evidence = ring.session.path_evidence();
+        assert_eq!(
+            (evidence.historical_replays, evidence.layer_readbacks),
+            (0, 0),
+            "{layers}L loop wraps materialized history: {evidence:?}"
+        );
+        assert_eq!(evidence.cpu_compositions, 0);
         stop_and_reap(&mut ring.session, &mut ring.renderer);
     }
 }

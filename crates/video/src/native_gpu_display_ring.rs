@@ -61,6 +61,11 @@ impl ResidentSnapshotRing {
         self.submitted.is_some()
     }
 
+    /// A drained predecessor that was neither handed off nor discarded yet.
+    pub(super) fn has_resolved(&self) -> bool {
+        self.resolved.is_some()
+    }
+
     #[cfg(test)]
     pub(super) fn free_readbacks(&self) -> usize {
         self.free.len()
@@ -330,6 +335,7 @@ impl NativeResidentDisplaySession {
                     }
                     self.ring.recycle(readback);
                     self.ring.resolved_abandoned = false;
+                    self.evidence.counters_mut().snapshots_published += 1;
                     let mut frame = resident_display_frame(ready);
                     frame.pipelined = true;
                     return Ok(Some(frame));
@@ -356,6 +362,7 @@ impl NativeResidentDisplaySession {
         let Some(pending) = self.ring.resolved.take() else {
             return;
         };
+        self.evidence.counters_mut().ring_discards += 1;
         // A successful InFlight return does not make this discard publishable.
         // The next tick must render synchronously rather than repeat a stall.
         self.ring.disarm();

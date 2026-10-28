@@ -714,6 +714,7 @@ fn record_metrics(
             started.elapsed(),
             resources.session.presented_frames(),
             resources.session.hard_blackout_frames_presented(),
+            resources.session.path_evidence(),
             resources.renderer.frame_provider().decoder().diagnostics(),
             error,
             validation,
@@ -1730,6 +1731,11 @@ mod tests {
             Duration::from_millis(10),
             7,
             2,
+            video::NativeResidentPathEvidence {
+                resident_presents: 5,
+                present_lag_ticks: [1, 4, 0],
+                ..Default::default()
+            },
             video::VideoDecoderDiagnostics::default(),
             None,
             None,
@@ -1742,6 +1748,10 @@ mod tests {
             resident["resident_presentation"]["hard_blackout_frames_presented"],
             2
         );
+        let path = &resident["resident_presentation"]["path"];
+        assert_eq!(path["resident_presents"], 5);
+        assert_eq!(path["present_lag_ticks"], serde_json::json!([1, 4, 0]));
+        assert_eq!(path["layer_readbacks"], 0);
         assert_eq!(metrics.lifetime_frame_count, 0);
     }
 }

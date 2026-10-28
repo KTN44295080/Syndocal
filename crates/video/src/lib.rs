@@ -87,8 +87,8 @@ pub use live_source::{
 };
 pub use native_gpu_output::display::{
     NativeResidentDisplayCreationFailure, NativeResidentDisplayFrame, NativeResidentDisplaySession,
-    NativeResidentHistoryInput, NativeResidentPrepareError, NativeResidentPresentBoundary,
-    NativeResidentPresentDecision, NativeResidentPresentResult,
+    NativeResidentHistoryInput, NativeResidentPathEvidence, NativeResidentPrepareError,
+    NativeResidentPresentBoundary, NativeResidentPresentDecision, NativeResidentPresentResult,
     NativeResidentPresentationAuthority,
 };
 pub use video_render_cancellation::VideoRenderCancellation;

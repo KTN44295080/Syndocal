@@ -7,6 +7,8 @@
 
 use std::sync::Arc;
 
+#[path = "native_gpu_display_evidence.rs"]
+mod evidence;
 #[path = "native_gpu_display_prepare.rs"]
 mod prepare;
 #[path = "native_gpu_display_present.rs"]
@@ -23,6 +25,7 @@ mod control_tests;
 #[cfg(test)]
 #[path = "native_gpu_display_steady_tests.rs"]
 mod steady_tests;
+pub use evidence::NativeResidentPathEvidence;
 pub use present::{
     NativeResidentDisplayFrame, NativeResidentPresentBoundary, NativeResidentPresentDecision,
     NativeResidentPresentResult, NativeResidentPresentationAuthority,
@@ -171,6 +174,7 @@ pub struct NativeResidentDisplaySession {
     follow_last_valid: Option<prepare::ResidentFollowLastValid>,
     ring: ring::ResidentSnapshotRing,
     deferred_budget: Option<(u64, u64, u64)>,
+    evidence: evidence::ResidentEvidence,
 }
 
 /// Initialization can fail after a broker has retained real GPU work. The app
@@ -287,6 +291,7 @@ impl NativeResidentDisplaySession {
             follow_last_valid: None,
             ring: ring::ResidentSnapshotRing::default(),
             deferred_budget: None,
+            evidence: evidence::ResidentEvidence::default(),
         };
         session.presenter =
             match SharedNativePresenter::from_shared_unconfigured(surface, &mut session.owner) {
@@ -327,6 +332,11 @@ impl NativeResidentDisplaySession {
 
     pub fn output_id(&self) -> u64 {
         self.output_id
+    }
+
+    /// Cumulative trace-OFF path, receipt-identity and latency evidence.
+    pub fn path_evidence(&self) -> NativeResidentPathEvidence {
+        self.evidence.counters()
     }
 
     pub fn configure(&mut self, width: u32, height: u32) -> Result<(), String> {
@@ -624,12 +634,21 @@ impl NativeResidentDisplaySession {
                         },
                     ),
                 };
+                let replay = matches!(request, CpuMaterializationRequest::FrozenReplay { .. });
                 let materialized = match NativeGpuMaterializer::new(runtime).materialize_cpu(
                     request,
                     &mut self.owner,
                     cancellation,
                 ) {
-                    Ok(materialized) => materialized,
+                    Ok(materialized) => {
+                        let counters = self.evidence.counters_mut();
+                        if replay {
+                            counters.historical_replays += 1;
+                        } else {
+                            counters.layer_readbacks += 1;
+                        }
+                        materialized
+                    }
                     Err(error) => {
                         self.history = Some(ResidentHistoryState::Handover(handover));
                         return Err(format!("CPU history materialization failed: {error:?}"));
@@ -1254,6 +1273,14 @@ impl NativeResidentDisplaySession {
             self.refund_unsubmitted(reservation)?;
             return Err(error);
         }
+        // This tick's logical layer indices are now issued; record how the
+        // composition selected each layer (ADR-01 section 13.3 (5)).
+        let incoming = selected
+            .iter()
+            .filter(|layer| matches!(layer.kind, SelectedTextureKind::InThisTransaction))
+            .count();
+        self.evidence
+            .gpu_tick(identities.len(), incoming, selected.len() - incoming);
         let Some(compositor) = self.compositor.as_ref() else {
             drop(admitted);
             self.refund_unsubmitted(reservation)?;
