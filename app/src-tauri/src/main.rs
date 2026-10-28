@@ -81745,7 +81745,9 @@ fn vj_preview_frame_is_current(
         && rendered.generation == current.generation
 }
 
-#[tauri::command]
+// Async (C4R10): a cadence read must not queue behind the UI thread. The
+// snapshot is a lock-free seqlock read; nothing here needs the main thread.
+#[tauri::command(async)]
 fn get_live_video_output_health() -> Vec<live_video_output_health::LiveVideoOutputHealth> {
     live_video_output_health::snapshots()
 }
@@ -86260,7 +86262,10 @@ fn get_video_output_window_observation_v1(
     )
 }
 
-#[tauri::command]
+// Async (C4R10): the window registry, the truth map and the metrics are
+// thread-safe; the reconciliation below already runs off the main thread from
+// the Destroyed observer. The UI thread no longer delays the poll.
+#[tauri::command(async)]
 fn get_video_output_window_statuses(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
