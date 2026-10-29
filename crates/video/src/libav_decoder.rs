@@ -55,6 +55,10 @@ mod cancellation_tests;
 mod run_decode_ahead_tests;
 
 #[cfg(all(feature = "libav", test))]
+#[path = "libav_terminal_frame_tests.rs"]
+mod terminal_frame_tests;
+
+#[cfg(all(feature = "libav", test))]
 use std::cell::Cell;
 #[cfg(feature = "libav")]
 use std::cell::RefCell;
@@ -341,9 +345,9 @@ fn take_first_at_or_after(
 #[cfg(feature = "libav")]
 struct LibavLookaheadDone {
     session: LibavDecodeSession,
-    /// The run's last decode; `None` for a clip-start job, which decodes
+    /// The run's last decode, sharing the terminal frame at EOF; `None` for a clip-start job, which decodes
     /// nothing after the served frame (`start_clip_start_job`).
-    result: Option<Result<VideoFrame, VideoDecodeError>>,
+    result: Option<Result<Arc<VideoFrame>, VideoDecodeError>>,
     hardware_frames: u64,
 }
 
@@ -376,7 +380,7 @@ fn finish_demand_trace(
 
 #[cfg(feature = "libav")]
 struct LibavDemandDecoded {
-    result: Result<VideoFrame, VideoDecodeError>,
+    result: Result<Arc<VideoFrame>, VideoDecodeError>,
     hardware_frames: u64,
     #[cfg(feature = "qa-native-frame-timing")]
     work: demand_timing::DecoderWorkSample,
@@ -764,7 +768,7 @@ impl LibavFrameDecoder {
             &input.request,
             &mut self.sessions[session_index],
             job.seek_before_decode,
-            job.terminal.as_deref(),
+            job.terminal.as_ref(),
             &mut hardware_frames,
         );
         self.session_counters.hardware_frames = self
@@ -850,7 +854,7 @@ impl LibavFrameDecoder {
                 &input.request,
                 session,
                 job.seek_before_decode,
-                job.terminal.as_deref(),
+                job.terminal.as_ref(),
                 &mut hardware_frames,
             );
             (
@@ -1513,7 +1517,7 @@ impl LibavFrameDecoder {
                 Some(Ok(frame)) if frame.pts_ms > base_pts_ms.saturating_add(1) => {
                     session.last_request_ms = lookahead.last_request_ms;
                     session.next_frames = std::mem::take(&mut lookahead.ready);
-                    session.next_frames.push_back(Arc::new(frame));
+                    session.next_frames.push_back(frame);
                     self.sessions.push(session);
                 }
                 // The clip ended after the base frame (the fallback is the
@@ -1847,7 +1851,7 @@ impl LibavFrameDecoder {
         &mut self,
         input: &VideoRenderInput,
         job: LibavDecodeJob,
-        primary_decode: Result<VideoFrame, VideoDecodeError>,
+        primary_decode: Result<Arc<VideoFrame>, VideoDecodeError>,
         #[cfg(feature = "qa-native-frame-timing")] trace: demand_timing::DecoderRequest,
     ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
         let key = input.key;
@@ -1936,7 +1940,6 @@ impl LibavFrameDecoder {
                 return Err(error);
             }
         };
-        let frame = Arc::new(frame);
         self.replace_layer_cache_entry(LibavFrameCacheEntry {
             key,
             layer_id: request.layer_id,
@@ -2415,7 +2418,7 @@ fn run_libav_lookahead(
     mut base: Arc<VideoFrame>,
     control: &std::sync::Mutex<LibavRunControl>,
     frames: std::sync::mpsc::Sender<Arc<VideoFrame>>,
-) -> (Result<VideoFrame, VideoDecodeError>, u64) {
+) -> (Result<Arc<VideoFrame>, VideoDecodeError>, u64) {
     let mut hardware_frames = 0;
     loop {
         request.position_ms = base.pts_ms.saturating_add(1);
@@ -2467,11 +2470,11 @@ fn run_libav_lookahead(
             }
             return (result, hardware_frames);
         }
-        let frame = Arc::new(result.expect("a continuing run frame decoded"));
+        let frame = result.expect("a continuing run frame decoded");
         if frames.send(Arc::clone(&frame)).is_err() {
             // The owner no longer listens; end the run on this frame.
             lock_run_control(control).finished = true;
-            return (Ok(Arc::unwrap_or_clone(frame)), hardware_frames);
+            return (Ok(frame), hardware_frames);
         }
         base = frame;
     }
@@ -2523,19 +2526,13 @@ fn predecode_clip_start(
         {
             break false;
         }
-        let frame = Arc::new(frame);
         frames.push_back((Arc::clone(&frame), session.last_key_frame));
         if frame.pts_ms >= until_ms || frames.len() >= limit.max(1) {
             break true;
         }
         request.position_ms = frame.pts_ms.saturating_add(1);
-        decoded = decode_libav_session_frame(
-            &request,
-            session,
-            false,
-            Some(frame.as_ref()),
-            hardware_frames,
-        );
+        decoded =
+            decode_libav_session_frame(&request, session, false, Some(&frame), hardware_frames);
     };
     let physical = (session.eof_sent, session.decoder_drained);
     (
@@ -2561,9 +2558,9 @@ fn decode_libav_session_frame(
     request: &VideoFrameRequest,
     session: &mut LibavDecodeSession,
     seek_before_decode: bool,
-    terminal_frame: Option<&VideoFrame>,
+    terminal_frame: Option<&Arc<VideoFrame>>,
     hardware_frames: &mut u64,
-) -> Result<VideoFrame, VideoDecodeError> {
+) -> Result<Arc<VideoFrame>, VideoDecodeError> {
     session.stop.check()?;
     let hardware = session.hardware;
     // A rewound session must really be rewound: if the container cannot seek
@@ -2618,9 +2615,9 @@ fn decode_libav_session_frame_inner(
     request: &VideoFrameRequest,
     session: &mut LibavDecodeSession,
     seek_before_decode: bool,
-    terminal_frame: Option<&VideoFrame>,
+    terminal_frame: Option<&Arc<VideoFrame>>,
     hardware_frames: &mut u64,
-) -> Result<VideoFrame, VideoDecodeError> {
+) -> Result<Arc<VideoFrame>, VideoDecodeError> {
     session.stop.check()?;
     let target_offset_us = request
         .position_ms
@@ -2647,7 +2644,7 @@ fn decode_libav_session_frame_inner(
     session.decoder_drained = received.decoder_drained;
     if let Some(frame) = received.frame {
         session.last_request_ms = Some(request.position_ms);
-        return Ok(frame);
+        return Ok(Arc::new(frame));
     }
     if session.decoder_drained {
         let frame = finish_decoded_candidate_with_stop(
@@ -2698,7 +2695,7 @@ fn decode_libav_session_frame_inner(
         session.decoder_drained = received.decoder_drained;
         if let Some(frame) = received.frame {
             session.last_request_ms = Some(request.position_ms);
-            return Ok(frame);
+            return Ok(Arc::new(frame));
         }
     }
     if !session.eof_sent {
@@ -2722,7 +2719,7 @@ fn decode_libav_session_frame_inner(
     session.decoder_drained = received.decoder_drained;
     if let Some(frame) = received.frame {
         session.last_request_ms = Some(request.position_ms);
-        return Ok(frame);
+        return Ok(Arc::new(frame));
     }
     let frame = finish_decoded_candidate_with_stop(
         request,
@@ -2801,25 +2798,27 @@ fn finish_decoded_candidate(
     hardware: bool,
     hardware_frames: &mut u64,
 ) -> Result<VideoFrame, VideoDecodeError> {
+    let terminal_frame = terminal_frame.cloned().map(Arc::new);
     finish_decoded_candidate_with_stop(
         request,
         candidate,
-        terminal_frame,
+        terminal_frame.as_ref(),
         hardware,
         hardware_frames,
         &StopState::new(None),
     )
+    .map(Arc::unwrap_or_clone)
 }
 
 #[cfg(feature = "libav")]
 fn finish_decoded_candidate_with_stop(
     request: &VideoFrameRequest,
     candidate: Option<DecodedCandidate>,
-    terminal_frame: Option<&VideoFrame>,
+    terminal_frame: Option<&Arc<VideoFrame>>,
     hardware: bool,
     hardware_frames: &mut u64,
     stop: &StopState,
-) -> Result<VideoFrame, VideoDecodeError> {
+) -> Result<Arc<VideoFrame>, VideoDecodeError> {
     stop.check()?;
     match candidate {
         Some(candidate) => project_decoded_frame(
@@ -2829,7 +2828,11 @@ fn finish_decoded_candidate_with_stop(
             hardware,
             hardware_frames,
             stop,
-        ),
+        )
+        .map(Arc::new),
+        // EOF reuses the exact immutable frame. In particular, a look-ahead
+        // run retains this result while predecoding the next pass; copying
+        // its pixels here added one full output frame per input every wrap.
         None => terminal_frame
             .cloned()
             .ok_or_else(|| decode_message(request, "decoder produced no video frame")),

@@ -93,6 +93,7 @@ fn seek_projection_real_video_matches_eager_oracle_with_fewer_transfers() {
                         None,
                         &mut transfers,
                     )
+                    .map(Arc::new)
                 } else {
                     decode_libav_session_frame(
                         std::hint::black_box(&request),
