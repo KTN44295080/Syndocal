@@ -1155,13 +1155,44 @@ fn pure_output_pool_existing_alias_does_not_add_allocation_bytes() {
         context: context(),
         sequence: 51,
     };
-    let fresh = composition_allocations(frame(), 748, &[], None, None).unwrap();
-    let reused = composition_allocations(frame(), 748, &[], Some(readback), Some(output)).unwrap();
+    let cpu_snapshot = GpuAllocationId {
+        context: context(),
+        sequence: 52,
+    };
+    let fresh = composition_allocations(frame(), 748, &[], AllocationReuse::default()).unwrap();
+    let reused = composition_allocations(
+        frame(),
+        748,
+        &[],
+        AllocationReuse {
+            readback: Some(readback),
+            output: Some(output),
+            cpu_snapshot: None,
+        },
+    )
+    .unwrap();
     assert_eq!(fresh.requested_bytes(), 748 * 3);
     assert_eq!(
         reused.requested_bytes(),
         748,
         "only owned CPU snapshot remains new"
+    );
+    // C4R12: a recycled LastValid buffer's charge is the CPU snapshot alias.
+    let recycled = composition_allocations(
+        frame(),
+        748,
+        &[],
+        AllocationReuse {
+            readback: Some(readback),
+            output: Some(output),
+            cpu_snapshot: Some(cpu_snapshot),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        recycled.requested_bytes(),
+        0,
+        "every allocation is an alias"
     );
 }
 

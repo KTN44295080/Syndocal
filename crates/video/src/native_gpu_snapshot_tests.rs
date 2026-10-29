@@ -8,6 +8,11 @@ use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 type Events = Rc<RefCell<Vec<&'static str>>>;
 
+thread_local! {
+    /// Snapshot copies whose destination was a recycled LastValid buffer.
+    pub(crate) static RECYCLED_COPIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 fn descriptor() -> CacheCommitDescriptor {
     let context = GpuContextId {
         owner_id: 1,
@@ -263,6 +268,37 @@ fn snapshot_policy_pending_copy_unmap_cache_move_then_ready_input() {
     );
     drop(gpu);
     assert!(events.borrow().contains(&"drop-gpu"));
+}
+
+/// C4R12 stage B: a recycled packed buffer of exactly the packed size is
+/// the copy destination (no new allocation), fully overwritten, and gives the
+/// same pixels as a fresh allocation; any other capacity is not used.
+#[test]
+fn snapshot_policy_copies_into_a_recycled_buffer_of_exact_packed_capacity() {
+    let expected = descriptor();
+    let (mut fresh, _) = pending(&expected, vec![success(expected.snapshot)]);
+    let fresh = completed(&mut fresh, &expected).pixels;
+    assert_eq!(fresh.data, (1u8..=16).collect::<Vec<_>>());
+
+    let mut recycled = Vec::with_capacity(16);
+    recycled.extend_from_slice(&[0xEE; 16]);
+    let recycled_pointer = recycled.as_ptr();
+    let (mut reused, _) = pending(&expected, vec![success(expected.snapshot)]);
+    reused.packed = Some(recycled);
+    let reused = completed(&mut reused, &expected).pixels;
+    assert_eq!(reused, fresh, "recycled destination changes no pixel");
+    assert_eq!(reused.data.as_ptr(), recycled_pointer, "no new allocation");
+    assert_eq!(reused.data.capacity(), 16);
+
+    for wrong in [Vec::with_capacity(15), Vec::with_capacity(64)] {
+        let wrong_pointer = wrong.as_ptr();
+        let (mut other, _) = pending(&expected, vec![success(expected.snapshot)]);
+        other.packed = Some(wrong);
+        let other = completed(&mut other, &expected).pixels;
+        assert_eq!(other, fresh);
+        assert_ne!(other.data.as_ptr(), wrong_pointer);
+        assert_eq!(other.data.capacity(), 16);
+    }
 }
 
 #[test]

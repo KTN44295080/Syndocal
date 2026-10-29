@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use crate::native_gpu_budget::AllocationCharge;
+use crate::native_gpu_budget::{AllocationCharge, ChargeKind};
 use crate::native_gpu_composition::{EncodedPremappingSnapshot, NativeChargedBuffer};
 use crate::native_gpu_context::{NativeGpuOwner, PendingPhaseReceipt, ResolvedGpuTransaction};
 use crate::native_gpu_contract::{
@@ -82,6 +82,62 @@ impl NativeSnapshotGpu {
 
     pub(crate) fn cpu_capacity(&self) -> u64 {
         self.cpu_charge.capacity()
+    }
+
+    /// ADR-01's old/new CPU LastValid swap (2P): when the cache displaces a
+    /// LastValid whose owner is no longer shared, keep its packed buffer with
+    /// the CPU charge that covers it, so the next snapshot copies into
+    /// already-resident memory instead of a fresh 16 MiB allocation (C4R12).
+    /// The premapping target is released exactly as before. A shared owner
+    /// (a presentation or handover still holds it) or a buffer that is not
+    /// exactly the charged capacity is simply dropped.
+    pub(crate) fn recycle(owner: Arc<Self>, displaced: VideoFrame) -> Option<RecycledCpuSnapshot> {
+        let Self {
+            premapping,
+            cpu_charge,
+        } = Arc::try_unwrap(owner).ok()?;
+        drop(premapping);
+        let buffer = displaced.data;
+        (cpu_charge.kind() == ChargeKind::CpuSnapshot
+            && buffer.capacity() as u64 == cpu_charge.capacity())
+        .then_some(RecycledCpuSnapshot {
+            charge: cpu_charge,
+            buffer,
+        })
+    }
+}
+
+/// A displaced LastValid's packed buffer and the CPU snapshot charge that
+/// covers it. It only becomes the next snapshot's copy destination together
+/// with that charge, as an existing alias of the next frame's quote, so CPU
+/// snapshot memory is never uncharged and the steady CPU snapshot charge
+/// (LastValid, in-flight ring snapshot, recycled/pending) stays at its
+/// pre-recycling envelope.
+pub(crate) struct RecycledCpuSnapshot {
+    charge: AllocationCharge,
+    buffer: Vec<u8>,
+}
+
+impl RecycledCpuSnapshot {
+    pub(crate) fn charge(&self) -> &AllocationCharge {
+        &self.charge
+    }
+
+    pub(crate) fn buffer_capacity(&self) -> usize {
+        self.buffer.capacity()
+    }
+
+    pub(crate) fn into_parts(self) -> (AllocationCharge, Vec<u8>) {
+        (self.charge, self.buffer)
+    }
+}
+
+impl std::fmt::Debug for RecycledCpuSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RecycledCpuSnapshot")
+            .field("charge", &self.charge)
+            .field("buffer_capacity", &self.buffer.capacity())
+            .finish()
     }
 }
 
@@ -238,6 +294,8 @@ pub(crate) struct PendingPremappingSnapshot<R, M> {
     mapper: M,
     readback_row_pitch: u64,
     terminal: bool,
+    /// A recycled packed buffer covered by this snapshot's CPU charge.
+    packed: Option<Vec<u8>>,
 }
 
 pub(crate) struct CompletedPremappingSnapshot<R> {
@@ -331,7 +389,7 @@ impl NativeGpuSnapshotter {
         };
         let cpu_capacity = parts.cpu_charge.capacity();
         let map = NativeReadbackMap::start(parts.readback.buffer());
-        Ok(Self::begin(SnapshotEncoding {
+        let mut pending = Self::begin(SnapshotEncoding {
             descriptor: CacheCommitDescriptor {
                 key,
                 snapshot: identity,
@@ -353,7 +411,9 @@ impl NativeGpuSnapshotter {
             },
             // The premapping target is a packed storage buffer copied whole.
             readback_row_pitch: u64::from(identity.width) * 4,
-        }))
+        });
+        pending.packed = parts.cpu_buffer;
+        Ok(pending)
     }
 
     /// Owner-thread poll: G's owner drives device progress (map callbacks
@@ -398,6 +458,7 @@ impl NativeGpuSnapshotter {
             mapper: encoded.mapper,
             readback_row_pitch: encoded.readback_row_pitch,
             terminal: false,
+            packed: None,
         }
     }
 
@@ -449,6 +510,7 @@ impl NativeGpuSnapshotter {
             &mut pending.mapper,
             &phase.identity,
             pending.readback_row_pitch,
+            pending.packed.take(),
         ) {
             Ok(pixels) => pixels,
             Err(error) => return SnapshotProgress::Failed(error),
@@ -635,6 +697,7 @@ fn copy_and_unmap<M: SnapshotMapPort>(
     mapper: &mut M,
     identity: &SnapshotIdentity,
     row_pitch: u64,
+    recycled: Option<Vec<u8>>,
 ) -> Result<VideoFrame, NativeGpuFault> {
     let copied = match mapper.mapped_view() {
         Err(error) => Err(error),
@@ -651,7 +714,7 @@ fn copy_and_unmap<M: SnapshotMapPort>(
                     "mapped snapshot is shorter than the admitted layout",
                 ))
             } else {
-                let mut packed = Vec::with_capacity(row * height);
+                let mut packed = recycled_or_new(recycled, row * height);
                 for y in 0..height {
                     packed.extend_from_slice(&bytes[y * pitch..y * pitch + row]);
                 }
@@ -674,6 +737,20 @@ fn copy_and_unmap<M: SnapshotMapPort>(
     })
 }
 
+/// The packed destination: a recycled buffer of exactly the packed size
+/// (fully overwritten below), otherwise a new allocation.
+fn recycled_or_new(recycled: Option<Vec<u8>>, len: usize) -> Vec<u8> {
+    match recycled {
+        Some(mut buffer) if buffer.capacity() == len => {
+            #[cfg(test)]
+            tests::RECYCLED_COPIES.with(|copies| copies.set(copies.get() + 1));
+            buffer.clear();
+            buffer
+        }
+        _ => Vec::with_capacity(len),
+    }
+}
+
 fn fault(identity: &SnapshotIdentity, kind: NativeGpuFaultKind, message: &str) -> NativeGpuFault {
     NativeGpuFault {
         context: identity.allocation.context,
@@ -686,4 +763,4 @@ fn fault(identity: &SnapshotIdentity, kind: NativeGpuFaultKind, message: &str) -
 
 #[cfg(test)]
 #[path = "native_gpu_snapshot_tests.rs"]
-mod tests;
+pub(crate) mod tests;

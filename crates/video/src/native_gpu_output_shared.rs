@@ -30,8 +30,8 @@ use crate::native_gpu_result::{
     ValidatedLayerResult,
 };
 use crate::native_gpu_snapshot::{
-    NativeGpuSnapshotter, NativeSnapshotGpu, NativeSnapshotMap, RetiringPremappingSnapshot,
-    SharedPremappingSnapshot, SnapshotProgress,
+    NativeGpuSnapshotter, NativeSnapshotGpu, NativeSnapshotMap, RecycledCpuSnapshot,
+    RetiringPremappingSnapshot, SharedPremappingSnapshot, SnapshotProgress,
 };
 
 /// I's presenter retains the generation identity captured by its constructor.
@@ -157,6 +157,10 @@ impl SharedNativePresenter<NativeSurfaceTarget> {
 pub(crate) struct SharedNativeOutputCache {
     cache: NativeOutputCache,
     snapshot_owner: Option<Arc<NativeSnapshotGpu>>,
+    /// The displaced LastValid's buffer and charge, for the next snapshot.
+    recycled: Option<RecycledCpuSnapshot>,
+    #[cfg(test)]
+    recycled_commits: u64,
 }
 
 impl SharedNativeOutputCache {
@@ -164,7 +168,22 @@ impl SharedNativeOutputCache {
         Self {
             cache: NativeOutputCache::new(output),
             snapshot_owner: None,
+            recycled: None,
+            #[cfg(test)]
+            recycled_commits: 0,
         }
+    }
+
+    /// The displaced LastValid's packed buffer and charge, for the next
+    /// composition plan (`NativeCompositionPlan::reuse_cpu_snapshot`).
+    pub(crate) fn take_recycled_cpu_snapshot(&mut self) -> Option<RecycledCpuSnapshot> {
+        self.recycled.take()
+    }
+
+    /// Commits whose displaced LastValid became the recycled buffer.
+    #[cfg(test)]
+    pub(crate) fn recycled_commits(&self) -> u64 {
+        self.recycled_commits
     }
 
     pub(crate) fn begin_request(
@@ -175,6 +194,7 @@ impl SharedNativeOutputCache {
         let result = self.cache.begin_request(key, frame);
         if self.cache.cached.is_none() {
             self.snapshot_owner = None;
+            self.recycled = None;
         }
         result
     }
@@ -199,6 +219,7 @@ impl SharedNativeOutputCache {
         &mut self,
     ) -> Option<(VideoOutputLastValidKey, VideoFrame, Arc<NativeSnapshotGpu>)> {
         let owner = self.snapshot_owner.take()?;
+        self.recycled = None;
         match self.cache.take_last_valid() {
             Some((key, frame)) => Some((key, frame, owner)),
             None => {
@@ -219,6 +240,7 @@ impl SharedNativeOutputCache {
         let result = self.cache.blackout();
         // Pixels are destroyed before releasing their charge owner, on overflow too.
         self.snapshot_owner = None;
+        self.recycled = None;
         result
     }
 
@@ -245,6 +267,7 @@ impl SharedNativeOutputCache {
         }
         let publication = snapshot.commit(&mut writer, descriptor, cancel);
         writer.discard_binding();
+        let displaced = writer.take_displaced();
         drop(writer);
         match publication {
             Ok(bound) => {
@@ -252,7 +275,16 @@ impl SharedNativeOutputCache {
                 let owner = Arc::new(gpu);
                 // No callbacks/authority hooks occur between pixels publication
                 // and this owner move. A later Stop leaves this exact pair alive.
-                self.snapshot_owner = Some(Arc::clone(&owner));
+                let previous = self.snapshot_owner.replace(Arc::clone(&owner));
+                // The displaced pixels and their previous owner leave together:
+                // recycled as one charged buffer, or dropped as before.
+                self.recycled = previous.zip(displaced).and_then(|(previous, displaced)| {
+                    NativeSnapshotGpu::recycle(previous, displaced)
+                });
+                #[cfg(test)]
+                if self.recycled.is_some() {
+                    self.recycled_commits += 1;
+                }
                 Ok((owner, receipt))
             }
             Err(failure) => Err((

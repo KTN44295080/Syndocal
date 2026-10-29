@@ -27,6 +27,7 @@ use crate::native_gpu_contract::{
     NativeFrameId, NativeGpuDecline, NativeGpuFault, NativeGpuFaultKind, RetirementId,
 };
 use crate::native_gpu_result::{EncodedLayerCandidate, GpuAllocationReadUse, GpuLayerLease};
+use crate::native_gpu_snapshot::RecycledCpuSnapshot;
 use crate::{
     axis_aligned_source_lookup, gpu_composition_layer_plan, CompositionLayerPlan, VideoPixelFormat,
 };
@@ -81,6 +82,11 @@ pub(crate) struct NativeCompositionPlan {
     /// instead of a new allocation (ADR-01 section 7.2 ring, section 11 C/E).
     reused_readback: Option<Arc<NativeChargedBuffer>>,
     reused_output: Option<Arc<NativeChargedBuffer>>,
+    /// The displaced LastValid's packed buffer and its CPU charge, reused as
+    /// this frame's CPU snapshot (an existing alias instead of a new charge).
+    /// Taken once by the encoding port.
+    reused_cpu_snapshot: RefCell<Option<RecycledCpuSnapshot>>,
+    reused_cpu_snapshot_id: Option<GpuAllocationId>,
     pool_epoch: Option<u64>,
 }
 
@@ -203,7 +209,8 @@ impl NativeCompositionPlan {
             });
         }
         let native_allocations =
-            composition_allocations(frame, output_bytes, &layers, None, None).map_err(decline)?;
+            composition_allocations(frame, output_bytes, &layers, AllocationReuse::default())
+                .map_err(decline)?;
         Ok(Self {
             context,
             frame,
@@ -220,8 +227,72 @@ impl NativeCompositionPlan {
             native_allocations,
             reused_readback: None,
             reused_output: None,
+            reused_cpu_snapshot: RefCell::new(None),
+            reused_cpu_snapshot_id: None,
             pool_epoch: None,
         })
+    }
+
+    fn reuse(&self) -> AllocationReuse {
+        AllocationReuse {
+            readback: self
+                .reused_readback
+                .as_ref()
+                .map(|buffer| buffer.allocation_id()),
+            output: self
+                .reused_output
+                .as_ref()
+                .map(|buffer| buffer.allocation_id()),
+            cpu_snapshot: self.reused_cpu_snapshot_id,
+        }
+    }
+
+    /// Replace this plan's new CPU snapshot charge and allocation by the
+    /// displaced LastValid's packed buffer and its charge (ADR-01 2P swap,
+    /// C4R12). Call before the plan is merged into the frame quote; the charge
+    /// then becomes an existing alias of that quote. A mismatching context,
+    /// kind or capacity is returned unchanged for the caller to drop.
+    pub(crate) fn reuse_cpu_snapshot(
+        &mut self,
+        recycled: RecycledCpuSnapshot,
+    ) -> Result<(), RecycledCpuSnapshot> {
+        let charge = recycled.charge();
+        let id = charge.id();
+        if self.reused_cpu_snapshot_id.is_some()
+            || id.context != self.context
+            || charge.kind() != ChargeKind::CpuSnapshot
+            || charge.capacity() != self.allocations.premapping_bytes
+            || recycled.buffer_capacity() as u64 != self.allocations.premapping_bytes
+        {
+            return Err(recycled);
+        }
+        let reuse = AllocationReuse {
+            cpu_snapshot: Some(id),
+            ..self.reuse()
+        };
+        let Ok(native_allocations) = composition_allocations(
+            self.frame,
+            self.allocations.premapping_bytes,
+            &self.layers_bottom_first,
+            reuse,
+        ) else {
+            return Err(recycled);
+        };
+        self.native_allocations = native_allocations;
+        self.reused_cpu_snapshot_id = Some(id);
+        *self.reused_cpu_snapshot.get_mut() = Some(recycled);
+        Ok(())
+    }
+
+    fn take_reused_cpu_snapshot(&self) -> Option<RecycledCpuSnapshot> {
+        self.reused_cpu_snapshot.borrow_mut().take()
+    }
+
+    /// Before this tick leaves for the CPU route, release the recycled buffer
+    /// (and its charge) so idle resident storage does not consume the CPU
+    /// handover envelope.
+    pub(crate) fn release_reused_cpu_snapshot(&mut self) {
+        drop(self.reused_cpu_snapshot.get_mut().take());
     }
 
     /// Replace this plan's new snapshot readback by an existing, completed and
@@ -243,14 +314,15 @@ impl NativeCompositionPlan {
         {
             return Err(readback);
         }
+        let reuse = AllocationReuse {
+            readback: Some(id),
+            ..self.reuse()
+        };
         let Ok(native_allocations) = composition_allocations(
             self.frame,
             self.allocations.premapping_bytes,
             &self.layers_bottom_first,
-            Some(id),
-            self.reused_output
-                .as_ref()
-                .map(|buffer| buffer.allocation_id()),
+            reuse,
         ) else {
             return Err(readback);
         };
@@ -422,14 +494,15 @@ impl NativeGpuCompositor {
                 requested: plan.allocations.premapping_bytes,
                 limit: plan.allocations.premapping_bytes * COMPOSITION_OUTPUT_POOL_SLOTS as u64,
             })?;
+        let reuse = AllocationReuse {
+            output: output.as_ref().map(|buffer| buffer.allocation_id()),
+            ..plan.reuse()
+        };
         plan.native_allocations = composition_allocations(
             plan.frame,
             plan.allocations.premapping_bytes,
             &plan.layers_bottom_first,
-            plan.reused_readback
-                .as_ref()
-                .map(|buffer| buffer.allocation_id()),
-            output.as_ref().map(|buffer| buffer.allocation_id()),
+            reuse,
         )?;
         plan.reused_output = output;
         plan.pool_epoch = Some(pool_epoch);
@@ -603,6 +676,7 @@ impl NativeGpuCompositor {
         let transaction = txn.id();
         let phase = txn.begin_phase(GpuPhase::CompositionSnapshot)?;
         let mut port = SharedCompositionPort {
+            reused_cpu_snapshot: plan.take_reused_cpu_snapshot(),
             context: plan.context,
             frame: plan.frame,
             phase: Some(phase),
@@ -647,6 +721,7 @@ impl NativeGpuCompositor {
             output: encoded.output,
             readback: encoded.readback,
             cpu_charge: encoded.cpu_charge,
+            cpu_buffer: encoded.cpu_buffer,
             receipt,
             transaction,
             frame: plan.frame,
@@ -682,6 +757,8 @@ pub(crate) struct EncodedPremappingSnapshot {
     output: Arc<NativeChargedBuffer>,
     readback: Arc<NativeChargedBuffer>,
     cpu_charge: AllocationCharge,
+    /// The recycled packed buffer `cpu_charge` covers, if one was reused.
+    cpu_buffer: Option<Vec<u8>>,
     receipt: PendingPhaseReceipt,
     transaction: RetirementId,
     frame: NativeFrameId,
@@ -708,6 +785,7 @@ impl EncodedPremappingSnapshot {
             output: self.output,
             readback: self.readback,
             cpu_charge: self.cpu_charge,
+            cpu_buffer: self.cpu_buffer,
             receipt: self.receipt,
             transaction: self.transaction,
             frame: self.frame,
@@ -720,6 +798,7 @@ pub(crate) struct EncodedPremappingParts {
     pub output: Arc<NativeChargedBuffer>,
     pub readback: Arc<NativeChargedBuffer>,
     pub cpu_charge: AllocationCharge,
+    pub cpu_buffer: Option<Vec<u8>>,
     pub receipt: PendingPhaseReceipt,
     pub transaction: RetirementId,
     pub frame: NativeFrameId,
@@ -747,6 +826,7 @@ struct PortEncoding {
     encoder: wgpu::CommandEncoder,
     resources: Arc<ComposedResources>,
     cpu_charge: AllocationCharge,
+    cpu_buffer: Option<Vec<u8>>,
 }
 
 struct SharedEncodedPhase {
@@ -754,9 +834,11 @@ struct SharedEncodedPhase {
     output: Arc<NativeChargedBuffer>,
     readback: Arc<NativeChargedBuffer>,
     cpu_charge: AllocationCharge,
+    cpu_buffer: Option<Vec<u8>>,
 }
 
 struct SharedCompositionPort<'a> {
+    reused_cpu_snapshot: Option<RecycledCpuSnapshot>,
     context: GpuContextId,
     frame: NativeFrameId,
     phase: Option<GpuPhaseEncoder<'a>>,
@@ -808,11 +890,22 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
                 plan.allocations.readback_bytes,
             )?),
         };
-        let cpu_charge = phase.bind_reserved_allocation(
-            &mut self.reservation,
-            ChargeKind::CpuSnapshot,
-            plan.allocations.premapping_bytes,
-        )?;
+        // A recycled CPU snapshot is this quote's existing alias; otherwise
+        // the new charge is bound like every other planned allocation.
+        let (cpu_charge, cpu_buffer) = match self.reused_cpu_snapshot.take() {
+            Some(recycled) => {
+                let (charge, buffer) = recycled.into_parts();
+                (charge, Some(buffer))
+            }
+            None => (
+                phase.bind_reserved_allocation(
+                    &mut self.reservation,
+                    ChargeKind::CpuSnapshot,
+                    plan.allocations.premapping_bytes,
+                )?,
+                None,
+            ),
+        };
         let mut layer_charges = Vec::with_capacity(plan.layers_bottom_first.len());
         for layer in &plan.layers_bottom_first {
             let lookup = phase.bind_reserved_allocation(
@@ -942,6 +1035,7 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
             encoder,
             resources,
             cpu_charge,
+            cpu_buffer,
         });
         Ok(())
     }
@@ -1009,31 +1103,42 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
             output: Arc::clone(&encoding.resources.output),
             readback: Arc::clone(&encoding.resources.readback),
             cpu_charge: encoding.cpu_charge,
+            cpu_buffer: encoding.cpu_buffer,
         })
     }
 }
 
+/// Existing allocations a plan reuses instead of charging new ones.
+#[derive(Clone, Copy, Debug, Default)]
+struct AllocationReuse {
+    readback: Option<GpuAllocationId>,
+    output: Option<GpuAllocationId>,
+    cpu_snapshot: Option<GpuAllocationId>,
+}
+
 /// One exact charge per physical allocation, in the order the shared adapter
 /// binds them: premapping target, its single readback (or an existing ring
-/// readback alias), the owned packed CPU snapshot, then each layer's lookup
-/// and parameter buffer.
+/// readback alias), the owned packed CPU snapshot (or the recycled displaced
+/// LastValid's charge), then each layer's lookup and parameter buffer.
 fn composition_allocations(
     frame: NativeFrameId,
     output_bytes: u64,
     layers: &[CompositionLayerEncoding],
-    reused_readback: Option<GpuAllocationId>,
-    reused_output: Option<GpuAllocationId>,
+    reuse: AllocationReuse,
 ) -> Result<NativeAllocationPlan, NativeGpuDecline> {
     let mut native_allocations = NativeAllocationPlan::new(frame);
-    match reused_output {
+    match reuse.output {
         Some(id) => native_allocations.add_existing(id),
         None => native_allocations.add_new(ChargeKind::CompositionBuffer, output_bytes)?,
     }
-    match reused_readback {
+    match reuse.readback {
         Some(id) => native_allocations.add_existing(id),
         None => native_allocations.add_new(ChargeKind::SnapshotReadback, output_bytes)?,
     }
-    native_allocations.add_new(ChargeKind::CpuSnapshot, output_bytes)?;
+    match reuse.cpu_snapshot {
+        Some(id) => native_allocations.add_existing(id),
+        None => native_allocations.add_new(ChargeKind::CpuSnapshot, output_bytes)?,
+    }
     for layer in layers {
         native_allocations.add_new(ChargeKind::CompositionBuffer, layer.lookup.len() as u64 * 4)?;
         native_allocations.add_new(ChargeKind::CompositionBuffer, LAYER_PARAMS_BYTES)?;

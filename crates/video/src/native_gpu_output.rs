@@ -977,6 +977,15 @@ pub(crate) struct NativeCacheWriter<'a> {
     cache: &'a mut NativeOutputCache,
     cancel: &'a dyn VideoRenderCancellation,
     binding: Option<ValidatedSnapshotBinding>,
+    /// The LastValid pixels the last successful commit displaced. Dropped
+    /// with the writer unless its owner takes them for recycling.
+    displaced: Option<VideoFrame>,
+}
+
+impl NativeCacheWriter<'_> {
+    pub(crate) fn take_displaced(&mut self) -> Option<VideoFrame> {
+        self.displaced.take()
+    }
 }
 
 impl BoundSnapshotCache for NativeCacheWriter<'_> {
@@ -1008,9 +1017,16 @@ impl CpuSnapshotCommit for NativeCacheWriter<'_> {
             .binding
             .take()
             .ok_or(SnapshotCommitRejection::SnapshotIdentityMismatch)?;
-        self.cache
-            .commit_bound(binding, key, frame, snapshot, fence, self.cancel)
-            .map(CacheCommitReceipt::from_publication)
+        let (publication, displaced) = self.cache.commit_bound_displacing(
+            binding,
+            key,
+            frame,
+            snapshot,
+            fence,
+            self.cancel,
+        )?;
+        self.displaced = displaced;
+        Ok(CacheCommitReceipt::from_publication(publication))
     }
 
     #[cfg(test)]
@@ -1033,6 +1049,7 @@ impl NativeOutputCache {
             cache: self,
             cancel,
             binding: None,
+            displaced: None,
         }
     }
 
@@ -1159,6 +1176,7 @@ impl NativeOutputCache {
         self.last_valid(key).cloned()
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_bound(
         &mut self,
         binding: ValidatedSnapshotBinding,
@@ -1168,6 +1186,20 @@ impl NativeOutputCache {
         fence: CachePublicationFence,
         cancel: &dyn VideoRenderCancellation,
     ) -> Result<PublishedSnapshot, SnapshotCommitRejection> {
+        self.commit_bound_displacing(binding, key, frame, pixels, fence, cancel)
+            .map(|(publication, _displaced)| publication)
+    }
+
+    /// `commit_bound`, also returning the LastValid pixels it displaced.
+    pub(crate) fn commit_bound_displacing(
+        &mut self,
+        binding: ValidatedSnapshotBinding,
+        key: &VideoOutputLastValidKey,
+        frame: NativeFrameId,
+        pixels: VideoFrame,
+        fence: CachePublicationFence,
+        cancel: &dyn VideoRenderCancellation,
+    ) -> Result<(PublishedSnapshot, Option<VideoFrame>), SnapshotCommitRejection> {
         if cancel.is_cancelled() {
             return Err(SnapshotCommitRejection::Cancelled);
         }
@@ -1203,11 +1235,14 @@ impl NativeOutputCache {
         if cancel.is_cancelled() {
             return Err(SnapshotCommitRejection::Cancelled);
         }
-        self.cached = Some((key.clone(), pixels));
+        let displaced = self.cached.replace((key.clone(), pixels));
         self.published_request = Some(frame.request_sequence);
         // Publication is in logical order: nothing older stays publishable.
         self.previous = None;
-        Ok(PublishedSnapshot { descriptor })
+        Ok((
+            PublishedSnapshot { descriptor },
+            displaced.map(|(_, frame)| frame),
+        ))
     }
 
     /// The exact publishable target for `frame`: the current request, or the

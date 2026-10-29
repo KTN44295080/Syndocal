@@ -835,6 +835,8 @@ impl NativeResidentDisplaySession {
     ) -> Result<NativeResidentExecution, String> {
         // Idle resident storage must not consume the CPU handover envelope.
         // Prepared checkout pins and active history/transactions remain charged.
+        // A recycled LastValid buffer is idle resident storage too.
+        drop(self.cache.take_recycled_cpu_snapshot());
         self.owner.release_resource_pools();
         crate::native_gpu_output::guard(
             request,
@@ -1178,10 +1180,18 @@ impl NativeResidentDisplaySession {
                 drop(stale);
             }
         }
+        // LastValid swap: the displaced LastValid's packed buffer and its CPU
+        // charge become this frame's CPU snapshot; a stale one is dropped.
+        if let Some(recycled) = self.cache.take_recycled_cpu_snapshot() {
+            if let Err(stale) = composition.reuse_cpu_snapshot(recycled) {
+                drop(stale);
+            }
+        }
         if let Some(compositor) = &self.compositor {
             if let Err(reason) = compositor
                 .prepare_pooled_output(&mut composition, self.owner.context().resource_pool_epoch())
             {
+                composition.release_reused_cpu_snapshot();
                 let cpu = continuation.into_cpu().map_err(|fault| {
                     format!("premapping pool decline could not enter CPU continuation: {fault:?}")
                 })?;
@@ -1209,6 +1219,7 @@ impl NativeResidentDisplaySession {
             // the same preparation on the canonical CPU route. That route
             // quotes purely first and defers the tick if it cannot fit either.
             Err(reason) => {
+                composition.release_reused_cpu_snapshot();
                 let cpu = continuation.into_cpu().map_err(|fault| {
                     format!("native quote decline could not enter CPU continuation: {fault:?}")
                 })?;
@@ -1228,6 +1239,7 @@ impl NativeResidentDisplaySession {
                 reason,
                 continuation,
             } => {
+                composition.release_reused_cpu_snapshot();
                 let cpu = continuation.into_cpu().map_err(|fault| {
                     format!("native admission decline could not enter CPU continuation: {fault:?}")
                 })?;
@@ -1244,6 +1256,7 @@ impl NativeResidentDisplaySession {
         let reservation = match self.owner.reserve(quote) {
             Ok(reservation) => reservation,
             Err(error) => {
+                composition.release_reused_cpu_snapshot();
                 let cpu = admitted.return_unexecuted().into_cpu().map_err(|fault| {
                     format!(
                         "native reserve failure could not return to CPU continuation: {fault:?}"

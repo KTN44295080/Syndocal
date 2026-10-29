@@ -369,6 +369,60 @@ fn native_gpu_output_display_ordinary_fixture_stays_resident_with_steady_budget(
     }
 }
 
+/// C4R12 stage B (ADR-01 old/new CPU LastValid swap, 2P): once the ring is
+/// steady, every committed snapshot displaces a LastValid whose packed buffer
+/// and CPU charge become the next snapshot's destination, so no tick
+/// allocates a new 16 MiB CPU snapshot. The CPU snapshot charge never exceeds
+/// its pre-recycling steady envelope (LastValid, in-flight ring snapshot and
+/// the pending reservation: 3P) and stays steady.
+#[test]
+fn native_gpu_output_display_steady_ticks_recycle_the_displaced_last_valid_buffer() {
+    for layers in [1, 3] {
+        let mut session = session_with_compositor(EXTENT);
+        let mut renderer = VideoPreviewRenderer::with_frame_provider(
+            VideoRuntimeConfig::default(),
+            Provider::default(),
+        );
+        let mut snapshot = scene(layers, EXTENT);
+        let frame = u64::from(EXTENT.0) * u64::from(EXTENT.1) * 4;
+        let mut cpu_snapshot = Vec::new();
+        let mut recycled = Vec::new();
+        for index in 0..48 {
+            for layer in &mut snapshot.layers {
+                layer.state.position_ms = index * 16;
+            }
+            let path = tick(&mut session, &mut renderer, &snapshot, EXTENT);
+            assert!(matches!(path, Path::Resident | Path::InFlight), "{path:?}");
+            let kind = session.owner.budget_snapshot();
+            let kind = kind.for_kind(ChargeKind::CpuSnapshot);
+            cpu_snapshot.push(kind.active_bytes + kind.retired_bytes + kind.reserved_bytes);
+            recycled.push((
+                session.cache.recycled_commits(),
+                crate::native_gpu_snapshot::tests::RECYCLED_COPIES.with(std::cell::Cell::get),
+            ));
+        }
+        assert!(
+            cpu_snapshot.iter().all(|bytes| *bytes <= 3 * frame),
+            "{layers} layers: CPU snapshot charge above 3P: {cpu_snapshot:?}"
+        );
+        assert!(
+            cpu_snapshot[16..].windows(2).all(|pair| pair[0] == pair[1]),
+            "{layers} layers: CPU snapshot charge not steady: {cpu_snapshot:?}"
+        );
+        // In steady state each commit recycles its predecessor, and each
+        // tick's snapshot copy lands in a recycled buffer (plan alias accepted,
+        // charge and buffer moved through the port, copy reused it).
+        let steady = &recycled[16..];
+        assert!(
+            steady
+                .windows(2)
+                .all(|pair| pair[1].0 == pair[0].0 + 1 && pair[1].1 == pair[0].1 + 1),
+            "{layers} layers: a steady tick did not recycle: {recycled:?}"
+        );
+        stop_and_reap(&mut session, &mut renderer);
+    }
+}
+
 #[test]
 fn native_gpu_output_display_pool_shape_changes_release_old_idle_banks() {
     let mut session = session_with_compositor(EXTENT);
