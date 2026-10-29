@@ -26,6 +26,10 @@ use ffmpeg_next as ffmpeg;
 #[path = "libav_hardware.rs"]
 mod hardware;
 
+#[cfg(feature = "libav")]
+#[path = "libav_scaler.rs"]
+mod scaler;
+
 #[cfg(all(feature = "libav", test))]
 #[path = "libav_seek_projection_tests.rs"]
 mod seek_projection_tests;
@@ -98,14 +102,16 @@ const LIBAV_LOOKAHEAD_SLACK_FRAMES: u64 = 2;
 #[cfg(feature = "libav")]
 const LIBAV_LOOKAHEAD_END_MARGIN_MS: u64 = 150;
 
-// `ffmpeg_next::software::scaling::context::Context` owns a native pointer and
+// `scaler::RgbaScaler` owns a native pointer (and its slice threads) and
 // intentionally is not `Send`. Decoders, however, are moved into the native
 // output worker, so the scaler cannot be stored in `LibavDecodeSession`
 // without weakening that ownership boundary. Keep a bounded cache on the
 // decoding thread instead. A scaler is keyed by the complete source/target
 // geometry and pixel formats; it is therefore safe to reuse for any render
 // input that has the same conversion contract while leaving the input/session
-// ownership in `LibavDecodeSession` unchanged.
+// ownership in `LibavDecodeSession` unchanged. Only the process-lifetime
+// decode pool's workers cache slice-threaded scalers (`scaler::slice_threads`):
+// this cache is freed in TLS destructors, where joining threads deadlocks.
 #[cfg(feature = "libav")]
 thread_local! {
     static LIBAV_SCALER_CACHE: RefCell<Vec<LibavScalerCacheEntry>> = const {
@@ -116,6 +122,7 @@ thread_local! {
 #[cfg(all(feature = "libav", test))]
 thread_local! {
     static LIBAV_SCALER_CREATION_COUNT: Cell<usize> = const { Cell::new(0) };
+    static LIBAV_RGBA_ROW_COPIES: Cell<usize> = const { Cell::new(0) };
 }
 
 pub struct LibavFrameDecoder {
@@ -501,7 +508,7 @@ struct LibavScalerCacheEntry {
     source_height: u32,
     target_width: u32,
     target_height: u32,
-    scaler: ffmpeg::software::scaling::context::Context,
+    scaler: scaler::RgbaScaler,
 }
 
 #[cfg(feature = "libav")]
@@ -2265,7 +2272,7 @@ struct LibavScalerLease {
     source_height: u32,
     target_width: u32,
     target_height: u32,
-    scaler: Option<ffmpeg::software::scaling::context::Context>,
+    scaler: Option<scaler::RgbaScaler>,
 }
 
 #[cfg(feature = "libav")]
@@ -2281,15 +2288,43 @@ impl LibavScalerLease {
         input: &ffmpeg_next::util::frame::video::Video,
         output: &mut ffmpeg_next::util::frame::video::Video,
     ) -> Result<(), ffmpeg_next::Error> {
-        let result = self
-            .scaler
-            .as_mut()
-            .expect("scaler lease must own a scaler until drop")
-            .run(input, output);
+        let result = self.scaler().run(input, output);
         if result.is_err() {
             self.scaler = None;
         }
         result
+    }
+
+    /// As `run`, writing straight into a packed RGBA buffer that
+    /// `writes_in_place` accepted.
+    fn run_into(
+        &mut self,
+        input: &ffmpeg_next::util::frame::video::Video,
+        output: &mut [u8],
+    ) -> Result<(), ffmpeg_next::Error> {
+        let result = self.scaler().run_into(input, output);
+        if result.is_err() {
+            self.scaler = None;
+        }
+        result
+    }
+
+    fn packed_rows_aligned(&self) -> bool {
+        self.scaler
+            .as_ref()
+            .is_some_and(scaler::RgbaScaler::packed_rows_aligned)
+    }
+
+    fn writes_in_place(&self, output: &[u8]) -> bool {
+        self.scaler
+            .as_ref()
+            .is_some_and(|scaler| scaler.writes_in_place(output))
+    }
+
+    fn scaler(&mut self) -> &mut scaler::RgbaScaler {
+        self.scaler
+            .as_mut()
+            .expect("scaler lease must own a scaler until drop")
     }
 }
 
@@ -2330,11 +2365,6 @@ fn acquire_cached_libav_scaler(
     source_width: u32,
     source_height: u32,
 ) -> Result<LibavScalerLease, VideoDecodeError> {
-    use ffmpeg::{
-        format::Pixel,
-        software::scaling::{context::Context, flag::Flags},
-    };
-
     LIBAV_SCALER_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         let target_width = request.width;
@@ -2350,14 +2380,12 @@ fn acquire_cached_libav_scaler(
         } else {
             #[cfg(all(feature = "libav", test))]
             LIBAV_SCALER_CREATION_COUNT.with(|count| count.set(count.get() + 1));
-            Context::get(
+            scaler::RgbaScaler::new(
                 source_format,
                 source_width,
                 source_height,
-                Pixel::RGBA,
                 target_width,
                 target_height,
-                Flags::BILINEAR,
             )
             .map_err(|error| decode_error(request, error))?
         };
@@ -2730,10 +2758,31 @@ fn project_decoded_frame(
         *hardware_frames = hardware_frames.saturating_add(1);
     }
     let source = transferred.as_ref().unwrap_or(decoded);
-    #[cfg(feature = "qa-native-frame-timing")]
-    let scale_work = demand_timing::work_phase(demand_timing::DecoderWorkPhase::Swscale);
     let mut scaler =
         acquire_cached_libav_scaler(request, source.format(), source.width(), source.height())?;
+    // Convert straight into the frame's own buffer when its packed rows have
+    // an FFmpeg frame's alignment (every output-sized geometry); otherwise
+    // into an FFmpeg frame, then copied row by row as before.
+    if scaler.packed_rows_aligned() {
+        #[cfg(feature = "qa-native-frame-timing")]
+        let alloc_work = demand_timing::work_phase(demand_timing::DecoderWorkPhase::AllocCopy);
+        let mut data = vec![0; rgba_frame_len(request)?];
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(alloc_work);
+        if scaler.writes_in_place(&data) {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let scale_work = demand_timing::work_phase(demand_timing::DecoderWorkPhase::Swscale);
+            scaler
+                .run_into(source, &mut data)
+                .map_err(|error| decode_error(request, error))?;
+            #[cfg(feature = "qa-native-frame-timing")]
+            drop(scale_work);
+            stop.check()?;
+            return Ok(rgba_video_frame(request, pts_ms, data));
+        }
+    }
+    #[cfg(feature = "qa-native-frame-timing")]
+    let scale_work = demand_timing::work_phase(demand_timing::DecoderWorkPhase::Swscale);
     let mut rgba = ffmpeg::util::frame::video::Video::empty();
     scaler
         .run(source, &mut rgba)
@@ -2884,12 +2933,12 @@ fn copy_rgba_frame_with_stop(
     stop.check()?;
     #[cfg(feature = "qa-native-frame-timing")]
     let _copy_work = demand_timing::work_phase(demand_timing::DecoderWorkPhase::AllocCopy);
+    #[cfg(test)]
+    LIBAV_RGBA_ROW_COPIES.with(|copies| copies.set(copies.get() + 1));
     let row_bytes = (request.width as usize)
         .checked_mul(4)
         .ok_or_else(|| decode_message(request, "RGBA row size overflow"))?;
-    let data_len = row_bytes
-        .checked_mul(request.height as usize)
-        .ok_or_else(|| decode_message(request, "RGBA frame size overflow"))?;
+    let data_len = rgba_frame_len(request)?;
     let source = frame.data(0);
     let stride = frame.stride(0);
     let mut data = vec![0; data_len];
@@ -2907,6 +2956,19 @@ fn copy_rgba_frame_with_stop(
             .ok_or_else(|| decode_message(request, "RGBA source stride is too small"))?;
         data[destination_start..destination_start + row_bytes].copy_from_slice(source_row);
     }
+    Ok(rgba_video_frame(request, pts_ms, data))
+}
+
+#[cfg(feature = "libav")]
+fn rgba_frame_len(request: &VideoFrameRequest) -> Result<usize, VideoDecodeError> {
+    (request.width as usize)
+        .checked_mul(4)
+        .and_then(|row| row.checked_mul(request.height as usize))
+        .ok_or_else(|| decode_message(request, "RGBA frame size overflow"))
+}
+
+#[cfg(feature = "libav")]
+fn rgba_video_frame(request: &VideoFrameRequest, pts_ms: u64, data: Vec<u8>) -> VideoFrame {
     let duration_ms = request
         .source
         .metadata
@@ -2914,7 +2976,7 @@ fn copy_rgba_frame_with_stop(
         .filter(|rate| rate.is_finite() && *rate > 0.0)
         .map(|rate| (1_000.0 / rate).round().max(1.0) as u64)
         .unwrap_or(33);
-    Ok(VideoFrame {
+    VideoFrame {
         layer_id: request.layer_id,
         width: request.width,
         height: request.height,
@@ -2922,7 +2984,7 @@ fn copy_rgba_frame_with_stop(
         duration_ms,
         format: VideoPixelFormat::Rgba8,
         data,
-    })
+    }
 }
 
 #[cfg(feature = "libav")]
@@ -3376,6 +3438,127 @@ mod tests {
 
         LIBAV_SCALER_CACHE.with(|cache| cache.borrow_mut().clear());
         LIBAV_SCALER_CREATION_COUNT.with(|count| count.set(0));
+    }
+
+    /// C4R12: an output whose packed rows have FFmpeg-frame alignment (every
+    /// output-sized geometry) is converted straight into the frame's buffer;
+    /// only an unaligned width still goes through an FFmpeg frame and a row
+    /// copy. Both produce the same pixels as the previous path
+    /// (`scaler::tests` proves bit-exact parity).
+    #[cfg(feature = "libav")]
+    #[test]
+    fn decoded_frames_are_converted_in_place_without_an_rgba_row_copy() {
+        use std::process::Command;
+
+        LIBAV_SCALER_CACHE.with(|cache| cache.borrow_mut().clear());
+        let ffmpeg = std::env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
+        let path = std::env::temp_dir().join(format!(
+            "syndocal-libav-in-place-{}.mp4",
+            std::process::id()
+        ));
+        let generated = Command::new(&ffmpeg)
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=32x18:rate=30:duration=1",
+                "-c:v",
+                "mpeg4",
+                "-pix_fmt",
+                "yuv420p",
+                "-y",
+            ])
+            .arg(&path)
+            .output()
+            .expect("FFmpeg in-place fixture generator must be available");
+        assert!(
+            generated.status.success(),
+            "in-place fixture generation failed: {}",
+            String::from_utf8_lossy(&generated.stderr)
+        );
+        let mut request = request();
+        request.source.path = Some(path.to_string_lossy().into_owned());
+        request.source.codec = Some("mpeg4".to_string());
+        request.source.metadata = Some(protocol::VideoMediaMetadata {
+            duration_ms: Some(1_000),
+            width: Some(32),
+            height: Some(18),
+            frame_rate: Some(30.0),
+            has_audio: false,
+        });
+        for ((width, height), in_place) in [((64, 36), true), ((66, 38), false)] {
+            request.width = width;
+            request.height = height;
+            let mut decoder = LibavFrameDecoder::software_for_tests();
+            LIBAV_RGBA_ROW_COPIES.with(|copies| copies.set(0));
+            for target_ms in [0, 34, 67, 100] {
+                request.position_ms = target_ms;
+                let frame = decoder
+                    .decode_frame(&request)
+                    .unwrap()
+                    .expect("in-place fixture must decode");
+                assert_eq!((frame.width, frame.height), (width, height));
+                assert_eq!(frame.data.len(), width as usize * height as usize * 4);
+                assert!(frame.data.chunks_exact(4).all(|pixel| pixel[3] == 255));
+            }
+            let copies = LIBAV_RGBA_ROW_COPIES.with(Cell::get);
+            assert_eq!(
+                copies == 0,
+                in_place,
+                "{width}x{height}: {copies} RGBA row copies"
+            );
+        }
+        LIBAV_SCALER_CACHE.with(|cache| cache.borrow_mut().clear());
+        LIBAV_SCALER_CREATION_COUNT.with(|count| count.set(0));
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// C4R12: the scaler cache is thread-local and freed in TLS destructors.
+    /// A thread outside the decode pool that converted an output-sized frame
+    /// must still exit: freeing a slice-threaded context there would join its
+    /// workers under the Windows loader lock and never return. Pool workers,
+    /// which live for the process, are the only owners of threaded contexts.
+    #[cfg(feature = "libav")]
+    #[test]
+    fn a_thread_that_converted_an_output_sized_frame_exits_promptly() {
+        use ffmpeg::format::Pixel;
+        use ffmpeg::util::frame::video::Video;
+
+        let converter = std::thread::spawn(|| {
+            let mut request = request();
+            request.width = 2560;
+            request.height = 1600;
+            let source = Video::new(Pixel::NV12, 1920, 1080);
+            let mut lease = acquire_cached_libav_scaler(&request, Pixel::NV12, 1920, 1080).unwrap();
+            let mut data = vec![0; 2560 * 1600 * 4];
+            assert!(lease.writes_in_place(&data));
+            lease.run_into(&source, &mut data).unwrap();
+            drop(lease);
+            // The scaler stays cached until this thread's TLS destructor.
+            LIBAV_SCALER_CACHE.with(|cache| cache.borrow().len())
+        });
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(converter.join());
+        });
+        let joined = receiver
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("a converting thread did not exit (scaler freed under the loader lock)");
+        assert_eq!(joined.unwrap(), 1);
+
+        let pooled = libav_decode_pool().expect("decode pool").install(|| {
+            let mut request = request();
+            request.width = 2560;
+            request.height = 1600;
+            let lease = acquire_cached_libav_scaler(&request, Pixel::NV12, 1920, 1080).unwrap();
+            let threads = lease.scaler.as_ref().unwrap().threads();
+            drop(lease);
+            LIBAV_SCALER_CACHE.with(|cache| cache.borrow_mut().clear());
+            threads
+        });
+        assert_eq!(pooled, i64::from(scaler::SLICE_THREADS));
     }
 
     #[cfg(feature = "libav")]
