@@ -24,6 +24,8 @@ use protocol::{
 use serde::{Deserialize, Serialize};
 
 mod builtin_isf;
+mod external_video_route_inventory;
+pub use external_video_route_inventory::build_external_video_io_route_plans_with_runtime_status;
 #[cfg(test)]
 #[path = "decode_ahead_tests.rs"]
 mod decode_ahead_tests;

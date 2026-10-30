@@ -75006,8 +75006,7 @@ fn sync_external_video_transports_from_snapshot(
         ))]
         maintenance_transition,
     } = context;
-    let plans =
-        video::build_external_video_io_route_plans(snapshot, &video::video_runtime_status());
+    let plans = video::build_external_video_io_route_plans_with_runtime_status(snapshot);
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     let plans = show_spout_generic_sync::filter_generic_spout_sync_plans(
         plans,
