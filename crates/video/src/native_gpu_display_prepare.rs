@@ -663,11 +663,7 @@ impl NativeResidentDisplaySession {
         if observed != 0 || result.is_err() {
             // The pipeline broke this tick: the next resident tick is
             // synchronous again, so it produces a presentable frame.
-            self.ring.disarm();
-            self.owner.release_resource_pools();
-            if let Some(compositor) = &self.compositor {
-                compositor.release_pooled_outputs();
-            }
+            self.release_idle_resident_storage();
         }
         if observed == 2 && self.ring.owns_in_flight() {
             if let Err(error) = self.drain_ring(renderer, snapshot, committed) {
@@ -892,8 +888,10 @@ impl NativeResidentDisplaySession {
         // picks such a stale entry. Its resident texture was trimmed long ago,
         // so the tick would need a historical replay (the 12P CPU
         // continuation) in ordinary looping playback. Probe this tick's exact
-        // prospective selection before preparation; a selection that would
-        // need materialization starts a new history pass instead.
+        // prospective selection before preparation; a recipe replay starts a
+        // new history pass instead. An imported post-FX CPU entry is still
+        // canonical history in this pass; keep it for the prepared CPU
+        // continuation rather than discarding its pixels and charged owner.
         let stale_pass = match self.history.as_ref() {
             Some(ResidentHistoryState::Active(active)) => inputs
                 .iter()
@@ -917,7 +915,12 @@ impl NativeResidentDisplaySession {
                     history
                         .plan(&[incoming], layer_plan.position_ms)
                         .and_then(|plan| history.select_materialization_requests(&plan))
-                        .is_ok_and(|selection| selection.cold_materialization_required)
+                        .is_ok_and(|selection| {
+                            matches!(
+                                selection.selected,
+                                Some(crate::native_gpu_history::HistoryMaterializationRequest::Replay { .. })
+                            )
+                        })
                 }),
             _ => false,
         };
@@ -959,13 +962,16 @@ impl NativeResidentDisplaySession {
                 if new_pass {
                     if let Some(ResidentHistoryState::Active(active)) = self.history.take() {
                         for mut history in active.session.into_histories() {
-                            history.release_residents();
+                            history.retire_pass();
                             self.retiring_histories.push(history);
                         }
                         self.release_retiring_history_entries();
                     }
                 }
                 self.history = None;
+                // A retiring pass keeps its own host ledger until its last
+                // entry drops (one per input per tick); the new pass starts a
+                // fresh one, so seeks never publish against stale charges.
                 self.history_host = None;
                 if let Some(old) = self.history_configuration.as_ref() {
                     for (key, _, _) in &old.inputs {
@@ -1289,22 +1295,29 @@ impl NativeResidentDisplaySession {
         }
     }
 
-    /// A tick whose output is not the resident route: the resolved predecessor
-    /// is discarded (zero presents) and the ring re-arms only after the next
-    /// synchronous resident success.
     /// One entry of every retiring history per tick (see `retiring_histories`).
     fn release_retiring_history_entries(&mut self) {
         self.retiring_histories
             .retain_mut(|history| history.release_oldest_entry() > 0);
     }
 
-    fn leave_resident_tick(&mut self) {
-        self.discard_ring_resolved();
+    /// Release only idle storage. Submitted work and its charged owners stay
+    /// with the ring until the ordinary completion/retirement boundary.
+    pub(super) fn release_idle_resident_storage(&mut self) {
+        self.retiring_histories.clear();
+        drop(self.cache.take_recycled_cpu_snapshot());
         self.ring.release_idle();
         self.owner.release_resource_pools();
         if let Some(compositor) = &self.compositor {
             compositor.release_pooled_outputs();
         }
+    }
+
+    /// A non-resident tick discards its resolved predecessor (zero presents)
+    /// and releases idle storage before admitting the CPU handover envelope.
+    pub(super) fn leave_resident_tick(&mut self) {
+        self.discard_ring_resolved();
+        self.release_idle_resident_storage();
     }
 
     pub fn prepare_follow_output<P: VideoFrameProvider, A: NativeResidentPresentationAuthority>(
@@ -1377,6 +1390,7 @@ impl NativeResidentDisplaySession {
         }
         // Follow composes on the canonical CPU path: drain the snapshot ring.
         self.drain_ring(renderer, incoming, committed)?;
+        self.leave_resident_tick();
         self.follow_last_valid = self.follow_last_valid.take().filter(|cached| {
             cached.source_timeline_id == source_timeline_id
                 && cached.generation == follow_generation
@@ -1689,6 +1703,7 @@ impl NativeResidentDisplaySession {
         }
         self.recovered_history = None;
         self.evidence.counters_mut().recoveries += 1;
+        self.leave_resident_tick();
         self.handover_all_history_to_cpu(renderer, cancellation)?;
         self.normalize_cpu_queue_keys(renderer);
         Ok(faults)

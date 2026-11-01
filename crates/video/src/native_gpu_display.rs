@@ -158,7 +158,9 @@ pub struct NativeResidentDisplaySession {
     history: Option<ResidentHistoryState>,
     /// Histories of a retired playback pass (a loop wrap's new pass). Their
     /// GPU residents dropped when the pass retired; their host-side entries
-    /// (recipes, CPU backings and host charges) drop one per input per tick.
+    /// (recipes and host charges) drop one per input per tick. Managed CPU
+    /// backings drop immediately. Each pass keeps the host ledger it was
+    /// charged to; the new pass starts its own.
     /// The new pass adds at most one entry per input per tick, so an input
     /// never holds more than its history capacity across both. Cleared before
     /// Stop retires the owner and before a re-arm.
@@ -372,10 +374,7 @@ impl NativeResidentDisplaySession {
             .geometry_generation
             .checked_add(1)
             .ok_or_else(|| "shared native Display geometry generation exhausted".to_string())?;
-        self.owner.release_resource_pools();
-        if let Some(compositor) = &self.compositor {
-            compositor.release_pooled_outputs();
-        }
+        self.release_idle_resident_storage();
         self.reserved_geometry = Some((width, height, self.geometry_generation));
         Ok(self.geometry_generation)
     }
@@ -593,6 +592,7 @@ impl NativeResidentDisplaySession {
         if self.ring.owns_in_flight() {
             return Err("CPU history handover requires the snapshot ring to drain first".into());
         }
+        self.leave_resident_tick();
         let state = self
             .history
             .take()
@@ -792,6 +792,9 @@ impl NativeResidentDisplaySession {
                 );
         }
         self.history = None;
+        // Replay materialization can refill the idle ISF pools after the
+        // handover's entry cleanup. Release them before CPU composition.
+        self.release_idle_resident_storage();
         Ok(())
     }
 
@@ -835,9 +838,7 @@ impl NativeResidentDisplaySession {
     ) -> Result<NativeResidentExecution, String> {
         // Idle resident storage must not consume the CPU handover envelope.
         // Prepared checkout pins and active history/transactions remain charged.
-        // A recycled LastValid buffer is idle resident storage too.
-        drop(self.cache.take_recycled_cpu_snapshot());
-        self.owner.release_resource_pools();
+        self.leave_resident_tick();
         crate::native_gpu_output::guard(
             request,
             crate::native_gpu_output::OutputBoundary::BeforeCpuFallback,

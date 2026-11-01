@@ -16,6 +16,9 @@ use crate::{
 use protocol::{VideoLayerTransitionRuntimeSnapshot, VideoSnapshot};
 use std::time::{Duration, Instant};
 
+#[path = "native_gpu_display_route_exit_tests.rs"]
+mod route_exit_tests;
+
 const OUTPUT: u64 = 101;
 const EPOCH: u64 = 7;
 const EXTENT: (u32, u32) = (64, 40);

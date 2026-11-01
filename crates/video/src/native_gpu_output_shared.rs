@@ -180,6 +180,11 @@ impl SharedNativeOutputCache {
         self.recycled.take()
     }
 
+    #[cfg(test)]
+    pub(crate) fn has_recycled_cpu_snapshot(&self) -> bool {
+        self.recycled.is_some()
+    }
+
     /// Commits whose displaced LastValid became the recycled buffer.
     #[cfg(test)]
     pub(crate) fn recycled_commits(&self) -> u64 {

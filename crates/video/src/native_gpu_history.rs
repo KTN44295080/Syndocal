@@ -564,21 +564,19 @@ impl<R, T: HistoryResident, C> NativeHistory<R, T, C> {
     pub(crate) fn metadata(&self) -> Vec<HistoryMeta> {
         self.entries.iter().map(Entry::meta).collect()
     }
-    /// Drop the oldest entry with its backing, host charges and resident:
-    /// exactly what dropping the whole history releases, one entry at a time.
-    /// Returns the entries left. A retired playback pass of a live output is
-    /// released this way over the following ticks, because dropping all of
-    /// it at once (8 entries per layer, 16 MiB each at 2560x1600) took 24-25
-    /// ms of one render tick (C4R10 live probe).
-    /// Drop every GPU resident now; the CPU backings and recipes stay. A
-    /// retired pass releases its GPU textures at once (its residents leave
-    /// the G ledger exactly when the whole history would have dropped) and
-    /// only its host-side entries over the following ticks.
-    pub(crate) fn release_residents(&mut self) {
+    /// A retired pass may defer dropping raw recipe inputs, which belong to
+    /// the bounded host ledger. Its GPU residents and post-FX CPU backings
+    /// leave now: the latter can retain charges in the managed GPU ledger and
+    /// must not compete with the new pass's execution envelope.
+    pub(crate) fn retire_pass(&mut self) {
+        self.entries
+            .retain(|entry| matches!(entry.backing, HistoryBacking::Replay(_)));
         for entry in &mut self.entries {
             entry.resident = None;
         }
     }
+    /// Drop one retired recipe input per tick (C4R10: dropping all 24 at once
+    /// took 24-25 ms). Its host charge stays attached until the backing drops.
     pub(crate) fn release_oldest_entry(&mut self) -> usize {
         if !self.entries.is_empty() {
             drop(self.entries.remove(0));

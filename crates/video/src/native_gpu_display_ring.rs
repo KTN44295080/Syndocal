@@ -411,10 +411,7 @@ impl NativeResidentDisplaySession {
     /// discarded there with zero presents: it belongs to an unpresented tick.
     pub fn abandon_pipelined_output(&mut self) {
         self.ring.armed = false;
-        self.owner.release_resource_pools();
-        if let Some(compositor) = &self.compositor {
-            compositor.release_pooled_outputs();
-        }
+        self.release_idle_resident_storage();
         if self.ring.submitted.is_some() {
             self.ring.abandoned = true;
         }
