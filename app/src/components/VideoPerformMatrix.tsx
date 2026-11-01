@@ -463,8 +463,8 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
 
   const [fileDragOver, setFileDragOver] = createSignal(false);
   // The whole empty matrix is the drop target. Native drops reach App's drop
-  // router through the data attribute; a page-level drop carries no paths in
-  // WebView2, so it opens the same picker instead of doing nothing.
+  // router through the data attribute. Windows resolves DOM Files before this
+  // handler; other page-level drops use URI paths or the picker fallback.
   const EmptyState = () => {
     const show = () => props.firstShow;
     const startable = () => Boolean(show()?.available || show()?.busy);

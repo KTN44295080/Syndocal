@@ -8,6 +8,8 @@ mod agent_bridge;
 mod agent_bridge_execution;
 mod cli_console;
 mod native_adapter_error;
+#[cfg(target_os = "windows")]
+mod native_file_drop;
 mod vj_preview_slot;
 use vj_preview_slot::VjPreviewSlotAudition;
 mod process_identity_cli;
@@ -136611,6 +136613,7 @@ fn main() {
                 let main_window_startup_ready = Arc::new(AtomicBool::new(false));
                 let shortcut_startup_ready = Arc::clone(&main_window_startup_ready);
                 let shortcut_window = main_window.clone();
+                let file_drop_origin = native_file_drop::application_origin(app.config(), tauri::is_dev());
                 main_window.with_webview(move |webview| unsafe {
                     use webview2_com::{
                         AcceleratorKeyPressedEventHandler, ExecuteScriptCompletedHandler,
@@ -136626,6 +136629,9 @@ fn main() {
                     let result = (|| -> windows::core::Result<()> {
                         let controller = webview.controller();
                         let core_webview = controller.CoreWebView2()?;
+                        if let Err(error) = native_file_drop::install(&core_webview, file_drop_origin) {
+                            eprintln!("unable to install the WebView2 file-drop path resolver: {error}");
+                        }
                         let settings = core_webview.Settings()?;
                         let settings3: ICoreWebView2Settings3 = settings.cast()?;
                         settings3.SetAreBrowserAcceleratorKeysEnabled(false)?;

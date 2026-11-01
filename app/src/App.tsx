@@ -739,8 +739,9 @@ import { createFxAuditionSession } from "./createFxAuditionSession";
 import { fxChainStages } from "./fxAuditionModel";
 import { buildFxCatalog, normalizeFxSource, type FxCatalogEntry, type FxImportRejection } from "./fxCatalogModel";
 import { VideoEffectBrowser } from "./components/VideoEffectBrowser";
-import { videoClipSlotDropTarget, videoClipSlotReorderedIds } from "./videoClipSlotBankModel";
-import { isVideoPerformFirstShowDropTarget } from "./videoPerformFirstShow";
+import { videoClipSlotReorderedIds } from "./videoClipSlotBankModel";
+import { installNativeFileDrop, type FileDropWebView } from "./nativeFileDrop";
+import { routeFileDrop, isVisualMediaFilePath, isTimelineAudioFilePath, isSyndocalProjectPath } from "./fileDropRouting";
 import {
   inspectMediaAssetAvailability,
   mediaAssetImportReportMessage,
@@ -1760,13 +1761,6 @@ const listen = <T,>(event: string, handler: (event: { payload: T }) => void) => 
   return tauriListen<T>(event, handler);
 };
 
-const isSyndocalProjectPath = (path: string) => path.trim().toLowerCase().endsWith(".sdc");
-const timelineAudioFileExtensions = ["wav", "mp3", "m4a", "aac", "flac", "aiff", "aif", "ogg", "opus"];
-const visualMediaFileExtensions = ["mp4", "mov", "mxf", "avi", "mkv", "webm", "gif", "png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff"];
-const isTimelineAudioFilePath = (path: string) => {
-  const normalized = path.trim().toLowerCase();
-  return timelineAudioFileExtensions.some((extension) => normalized.endsWith(`.${extension}`));
-};
 const uiScaleStorageKey = "syndocal.uiScale.v1";
 type UiScale = 90 | 100 | 110;
 const loadUiScale = (): UiScale => {
@@ -1886,10 +1880,6 @@ type ProjectControlMappingsAuthority = {
   dmx_mappings: DmxControlMapping[];
   dj_track_triggers: DjTrackTriggerMapping[];
   mapping_runtimes_retired?: boolean;
-};
-const isVisualMediaFilePath = (path: string) => {
-  const normalized = path.trim().toLowerCase();
-  return visualMediaFileExtensions.some((extension) => normalized.endsWith(`.${extension}`));
 };
 
 type ProjectControlMappingsPersistResult =
@@ -12681,6 +12671,25 @@ function createAppView() {
     if (!isTauriRuntime()) return;
     let disposed = false;
     let unlistenProjectDrop: (() => void) | null = null;
+    const routeDrop = (paths: string[], target: Element | null) => routeFileDrop(paths, target, {
+      firstShow: createFirstRunVjShow,
+      importMedia: importMediaFilesFromPaths,
+      assignSlots: importAndAssignVideoClipSlots,
+      openProject: loadProjectPath,
+      addAudio: addTimelineAudioClipPath,
+      message: setMessage,
+    });
+    // Keep Windows DOM dragging intact. Only OS-backed file drops enter the
+    // WebView2 path resolver, then this same validated project/import router.
+    const webview = (window as Window & { chrome?: { webview?: FileDropWebView } }).chrome?.webview;
+    // Detached panes retain their existing Tauri-native drop handler. This
+    // resolver is installed on the main WebView whose OLE interceptor is off.
+    if (!paneWindow && typeof webview?.postMessageWithAdditionalObjects === "function") {
+      onCleanup(installNativeFileDrop({ document, webview, onDrop: routeDrop, onError: setMessage,
+        captureContext: captureProjectAuthorityIdentity,
+        contextIsCurrent: isProjectAuthorityIdentityCurrent,
+      }));
+    }
     void getCurrentWebview()
       .onDragDropEvent((event) => {
         if (event.payload.type === "enter") {
@@ -12705,59 +12714,11 @@ function createAppView() {
           return;
         }
         setProjectDropState(null);
-        // `.sdc` is always a project-surface operation. It never becomes a
-        // Media Library entry or a Clip Slot source, even in a mixed drop.
-        const scale = Math.max(1, window.devicePixelRatio || 1);
-        const dropTarget = document.elementFromPoint(
+        const scale = window.devicePixelRatio || 1;
+        routeDrop(event.payload.paths, document.elementFromPoint(
           event.payload.position.x / scale,
           event.payload.position.y / scale,
-        );
-        const projectPath = event.payload.paths.find(isSyndocalProjectPath);
-        if (projectPath && dropTarget?.closest("[data-project-drop-surface]")) {
-          void loadProjectPath(projectPath);
-          return;
-        }
-        const audioPath = event.payload.paths.find(isTimelineAudioFilePath);
-        if (audioPath) {
-          const target = dropTarget
-            ?.closest<HTMLElement>("[data-timeline-audio-layer-id], [data-timeline-layer-kind='Audio'][data-timeline-layer-id]");
-          const layerId = Number(
-            target?.dataset.timelineAudioLayerId
-              ?? target?.dataset.timelineLayerId,
-          );
-          if (!Number.isFinite(layerId)) {
-            setMessage("Drop Audio Clips on the Audio section header or an Audio lane.");
-            return;
-          }
-          void addTimelineAudioClipPath(layerId, audioPath);
-          return;
-        }
-        const visualPaths = event.payload.paths.filter(isVisualMediaFilePath);
-        if (visualPaths.length > 0) {
-          const target = dropTarget;
-          if (isVideoPerformFirstShowDropTarget(target)) {
-            void createFirstRunVjShow(visualPaths);
-            return;
-          }
-          const clipTarget = videoClipSlotDropTarget(target);
-          if (clipTarget) {
-            void importAndAssignVideoClipSlots(visualPaths, clipTarget.layerId, clipTarget.beforeSlotId);
-            return;
-          }
-          if (target?.closest("[data-media-library-rail]")) {
-            void importMediaFilesFromPaths(visualPaths);
-            return;
-          }
-          setMessage("Drop visual media on Media Library, a Video layer, or an exact Clip Slot.");
-          return;
-        }
-        if (projectPath) {
-          setMessage("Drop .sdc projects on the Project menu button.");
-          return;
-        }
-        if (event.payload.paths.length > 0) {
-          setMessage("Drop a .sdc project, visual media, or Audio clip on its matching surface.");
-        }
+        ));
       })
       .then((unlisten) => {
         if (disposed) {

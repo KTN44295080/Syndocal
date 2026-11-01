@@ -1,4 +1,6 @@
 import "./VideoPerformLayout.css";
+import "./VideoMediaFileDrop.css";
+import { dragCarriesFiles } from "../videoPerformFirstShow";
 import { videoSourceKindLabel } from "../videoHelpers";
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, type ComponentProps } from "solid-js";
 import type {
@@ -364,7 +366,19 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
             </For>
           </div>
         </Show>
-        <details class="videoMediaLibraryRail" data-media-library-rail open={props.libraryOnly}>
+        <details class="videoMediaLibraryRail" data-media-library-rail open={props.libraryOnly}
+          onDragOver={event => {
+            if (!props.mediaLibrary.backendAvailable || !dragCarriesFiles(event.dataTransfer)) return;
+            event.preventDefault();
+            if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+            event.currentTarget.setAttribute("data-file-drag-over", "true");
+          }}
+          onDragLeave={event => {
+            if (!(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) {
+              event.currentTarget.removeAttribute("data-file-drag-over");
+            }
+          }}
+          onDrop={event => event.currentTarget.removeAttribute("data-file-drag-over")}>
           <summary>
             <strong>Media Library</strong>
             <span>{props.mediaLibrary.assets.length} asset(s)</span>
