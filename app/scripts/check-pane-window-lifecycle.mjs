@@ -17,6 +17,7 @@ const lifecycle = await import(dataModule(compileTs(
   "paneWindowLifecycle.ts",
 )));
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const appWorkspaceView = await readFile(new URL("../src/components/AppWorkspaceView.tsx", import.meta.url), "utf8");
 const operations = await readFile(new URL("../src/components/WorkspaceOperationsMenu.tsx", import.meta.url), "utf8");
 const mainRs = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const localization = await readFile(new URL("../src/uiLocalization.ts", import.meta.url), "utf8");
@@ -1040,10 +1041,12 @@ assert.ok(
   "Save/select/Apply/Delete must all gate on workspace transitions",
 );
 assert.match(operations, /data-workspace-pane-toggle=\{pane\}/, "pane toggle hooks remain stable");
-assert.match(app, /paneTransitions=\{pendingPaneWindowOperations\(\)\}/, "App feeds pane-pending into the menu");
-assert.match(app, /workspaceBusy=\{workspaceApplyBusy\(\)\}/, "App feeds workspace-busy into the menu");
+// 2b0424df moved the main workspace JSX into AppWorkspaceView without
+// changing the pane lifecycle or its main-window-only menu contract.
+assert.match(appWorkspaceView, /paneTransitions=\{pendingPaneWindowOperations\(\)\}/, "workspace view feeds pane-pending into the menu");
+assert.match(appWorkspaceView, /workspaceBusy=\{workspaceApplyBusy\(\)\}/, "workspace view feeds workspace-busy into the menu");
 
-const operationsRenderSection = section(app, "operations={", "onWorkspaceTab={selectWorkspaceTab}");
+const operationsRenderSection = section(appWorkspaceView, "operations={", "onWorkspaceTab={selectWorkspaceTab}");
 assert.match(
   operationsRenderSection,
   /paneWindow \? null : \(/,
@@ -1051,14 +1054,14 @@ assert.match(
 );
 assert.match(operationsRenderSection, /<WorkspaceOperationsMenu/, "the main window keeps its operations menu");
 assert.equal(
-  [...app.matchAll(/<WorkspaceOperationsMenu/g)].length,
+  [...`${app}\n${appWorkspaceView}`.matchAll(/<WorkspaceOperationsMenu/g)].length,
   1,
   "the operations menu has exactly one gated render site",
 );
 assert.doesNotMatch(
-  app,
+  `${app}\n${appWorkspaceView}`,
   /data-workspace-pane-toggle/,
-  "App itself renders no direct popout toggles outside the gated menu",
+  "App and workspace view render no direct popout toggles outside the gated menu",
 );
 
 assert.match(mainRs, /struct PaneWindowLifecycleRegistry/, "native registry exists separately from AppState");

@@ -668,76 +668,10 @@
   min-width: 0;
 }
 
-.dmxRouteEnable {
-  min-height: 28px;
-  align-self: end;
-}
-
 .dmxRouteActions {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
-}
-
-.dmxRouteList {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  border-top: 1px solid var(--theme-line);
-  padding-top: 4px;
-}
-
-.dmxRouteRows {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.dmxRouteRow {
-  display: grid;
-  grid-template-columns: 12px minmax(110px, 0.7fr) minmax(170px, 1.5fr) 56px 26px 78px;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  min-height: 31px;
-  border: 1px solid var(--theme-line);
-  background: var(--theme-bg);
-  padding: 3px 5px;
-}
-
-.dmxRouteRow > strong,
-.dmxRouteRow > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dmxRouteRow > span {
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
-  font-variant-numeric: tabular-nums;
-}
-
-.dmxRouteRow > .checkbox {
-  justify-self: center;
-  min-height: 24px;
-}
-
-.dmxRoutePagination {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 5px;
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
-  font-variant-numeric: tabular-nums;
-}
-
-.dmxRoutePagination button {
-  width: 28px;
-  min-width: 28px;
-  padding-inline: 0;
 }
 
 .ioDisclosureStack {
@@ -2752,11 +2686,6 @@ h3 {
   min-height: 0;
 }
 
-.layoutTouch .touchCuePanel {
-  grid-column: 1;
-  grid-row: 1;
-}
-
 .layoutTouch .touchStagePanel {
   grid-column: 2;
   grid-row: 1;
@@ -2767,19 +2696,12 @@ h3 {
   grid-row: 1 / span 2;
 }
 
-.layoutTouch .touchRemotePanel {
-  grid-column: 1;
-  grid-row: 2;
-}
-
 .layoutTouch .touchVideoPanel {
   grid-column: 2;
   grid-row: 2;
 }
 
-.touchCuePanel,
 .touchFixturePanel,
-.touchRemotePanel,
 .touchVideoPanel {
   min-height: 0;
 }
@@ -2925,111 +2847,6 @@ h3 {
   color: var(--theme-text);
 }
 
-.touchCueStatus {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.touchCueStatus div,
-.touchRemoteUrl {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-  border: 1px solid var(--theme-line);
-  border-radius: 6px;
-  background: var(--theme-panel);
-  padding: 9px;
-}
-
-.touchCueStatus span,
-.touchRemoteUrl span {
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
-}
-
-.touchCueStatus strong,
-.touchRemoteUrl strong {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.layoutTouch .touchRemoteUrl {
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  padding: 7px;
-}
-
-.layoutTouch .touchRemoteUrl strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.touchTimelineDeck {
-  display: grid;
-  gap: 9px;
-  min-width: 0;
-  border: 1px solid var(--theme-line);
-  border-radius: 6px;
-  background: var(--theme-panel);
-  padding: 10px;
-}
-
-.touchTimelineHeader {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
-}
-
-.touchTimelineHeader > div {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.touchTimelineHeader strong,
-.touchTimelineHeader span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.touchTimelineHeader span,
-.touchTimelineHeader small {
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
-}
-
-.touchSceneToolbar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 8px;
-  align-items: end;
-}
-
-.touchSceneToolbar label {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-  color: var(--theme-muted);
-}
-
-.touchSceneToolbar button {
-  min-width: 82px;
-}
-
-.touchSceneGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
-  gap: 8px;
-  max-height: 276px;
-  overflow: auto;
-}
-
 .touchSceneButton {
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);
@@ -3063,8 +2880,7 @@ h3 {
 }
 
 .touchSceneButton span,
-.touchSceneButton small,
-.touchSceneEmpty {
+.touchSceneButton small {
   color: var(--theme-dim);
   font-size: var(--fs-text);
 }
@@ -3093,13 +2909,6 @@ h3 {
   font-size: var(--fs-text);
   font-style: normal;
   font-weight: 400;
-}
-
-.touchSceneEmpty {
-  align-self: center;
-  min-width: 0;
-  padding: 8px;
-  overflow-wrap: anywhere;
 }
 
 .remoteUrlList {
@@ -3137,54 +2946,6 @@ h3 {
   font-size: var(--fs-control);
 }
 
-.touchCuePadGrid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.touchCuePadGrid .liveCuePad {
-  min-height: 78px;
-}
-
-.layoutTouch .touchCuePadGrid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.layoutTouch .touchCuePadGrid .liveCuePad {
-  min-height: 58px;
-  padding: 6px;
-}
-
-.layoutTouch .touchCuePadGrid .liveCuePad strong,
-.layoutTouch .touchCuePadGrid .liveCuePad small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.touchFadeMeter {
-  grid-template-columns: 72px 1fr;
-}
-
-.touchMasterGrid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.touchMasterGrid.compact {
-  grid-template-columns: minmax(110px, 1fr) minmax(86px, 0.8fr) minmax(86px, 0.8fr);
-  align-items: end;
-}
-
-.layoutTouch .touchMasterGrid.compact {
-  grid-template-columns: minmax(82px, 1fr) minmax(64px, 0.7fr) minmax(64px, 0.7fr);
-}
-
-.touchMasterGrid label,
 .touchSlider {
   display: grid;
   grid-template-columns: auto minmax(140px, 1fr) 54px;
@@ -3192,21 +2953,11 @@ h3 {
   gap: 8px;
 }
 
-.touchMasterGrid.compact label {
-  grid-template-columns: 1fr;
-}
-
-.touchMasterGrid strong,
 .touchSlider strong {
   color: var(--theme-text);
   text-align: right;
 }
 
-.layoutTouch .touchMasterGrid {
-  grid-template-columns: 1fr;
-}
-
-.layoutTouch .touchMasterGrid label,
 .layoutTouch .touchSlider {
   grid-template-columns: 58px minmax(92px, 1fr) 46px;
   gap: 6px;
@@ -3259,90 +3010,6 @@ h3 {
 .layoutTouch .touchGroupStrobeControl {
   min-height: 36px;
   padding: 0 5px;
-}
-
-.touchPresetPanel {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-  border: 1px solid var(--theme-line);
-  border-radius: 6px;
-  background: var(--theme-bg);
-  padding: 8px;
-}
-
-.touchPresetActions {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
-  gap: 7px;
-}
-
-.touchPresetActions button {
-  min-height: 40px;
-}
-
-.touchPresetSnapshot {
-  display: grid;
-  gap: 7px;
-  min-width: 0;
-}
-
-.touchPresetSnapshotHeader {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
-.touchPresetSnapshotHeader strong {
-  color: var(--theme-text);
-}
-
-.touchPresetSnapshotHeader span {
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
-}
-
-.touchPresetSnapshotGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
-  gap: 6px;
-}
-
-.touchPresetSnapshotRow {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-  border: 1px solid var(--theme-line);
-  border-radius: 5px;
-  background: var(--theme-panel);
-  padding: 6px 8px;
-}
-
-.touchPresetSnapshotRow strong,
-.touchPresetSnapshotRow span,
-.touchPresetSnapshotRow small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.touchPresetSnapshotRow strong {
-  color: var(--theme-text);
-  font-size: var(--fs-text);
-}
-
-.touchPresetSnapshotRow span {
-  color: var(--theme-text);
-  font-size: var(--fs-text);
-  font-weight: 400;
-}
-
-.touchPresetSnapshotRow small {
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
 }
 
 .touchGroupScroller,
@@ -3495,112 +3162,7 @@ h3 {
   text-align: right;
 }
 
-.touchAttributeEditorBody {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-}
-
-.touchAttributeEditorBody .visualControlPanel {
-  background: var(--theme-bg);
-}
-
-.touchFaderRack {
-  display: grid;
-  gap: 7px;
-  min-width: 0;
-  max-height: 360px;
-  overflow: auto;
-  border: 1px solid var(--theme-line);
-  border-radius: 6px;
-  background: var(--theme-bg);
-  padding: 8px;
-}
-
-.touchFaderRow {
-  display: grid;
-  grid-template-columns: minmax(126px, 0.72fr) minmax(160px, 1fr) 46px;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  border: 1px solid var(--theme-line);
-  border-radius: 5px;
-  background: var(--theme-panel);
-  padding: 8px;
-}
-
-.touchFaderLabel {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.touchFaderLabel strong,
-.touchFaderLabel span,
-.touchFaderLabel small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.touchFaderLabel strong {
-  color: var(--theme-text);
-  font-size: var(--fs-text);
-}
-
-.touchFaderLabel span {
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
-}
-
-.touchFaderLabel small {
-  color: #ffd27d;
-  font-size: var(--fs-text);
-}
-
-.touchFaderRow input {
-  width: 100%;
-  min-height: 28px;
-  padding: 0;
-}
-
-.touchFaderValue {
-  color: var(--theme-text);
-  font-size: var(--fs-text);
-  text-align: right;
-}
-
-.touchFaderFunctionBands {
-  grid-column: 2 / -1;
-  display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
-  gap: 3px;
-  min-width: 0;
-}
-
-.touchFaderFunctionBands button {
-  min-height: 14px;
-  border-color: rgba(255, 255, 255, 0.12);
-  border-radius: 3px;
-  padding: 0;
-}
-
-.touchFaderFunctionBands button.active {
-  border-color: var(--theme-selected);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.28);
-}
-
 @media (max-width: 720px) {
-  .touchFaderRow {
-    grid-template-columns: minmax(0, 1fr) 48px;
-  }
-
-  .touchFaderLabel,
-  .touchFaderRow input,
-  .touchFaderFunctionBands {
-    grid-column: 1 / -1;
-  }
 }
 
 .touchPanTiltPad {
@@ -3617,51 +3179,6 @@ h3 {
   min-height: 42px;
 }
 
-.touchOpticsGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(188px, 1fr));
-  gap: 8px;
-}
-
-.touchOpticsCard {
-  display: grid;
-  gap: 7px;
-  min-width: 0;
-  border: 1px solid var(--theme-line);
-  border-radius: 6px;
-  background: var(--theme-bg);
-  padding: 8px;
-}
-
-.touchOpticsHeader {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.touchOpticsHeader strong,
-.touchOpticsHeader span,
-.touchOpticsCard small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.touchOpticsHeader strong {
-  color: var(--theme-text);
-}
-
-.touchOpticsHeader span,
-.touchOpticsCard small {
-  color: var(--theme-dim);
-}
-
-.touchOpticsPreview {
-  min-height: 128px;
-}
-
 .touchTransportRow.compact {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -3670,13 +3187,8 @@ h3 {
   min-height: 34px;
 }
 
-.touchVideoOutputPanel,
 .touchVideoPanel {
   grid-column: 1 / -1;
-}
-
-.layoutTouch .touchVideoOutputPanel {
-  grid-column: auto;
 }
 
 .touchVideoOutputGrid,
@@ -3724,34 +3236,6 @@ h3 {
 
 .touchVideoOutputDeck:not(.active) {
   opacity: 0.82;
-}
-
-.touchOutputMapPanel {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-  border: 1px solid var(--theme-line);
-  border-radius: 6px;
-  background: var(--theme-bg);
-  padding: 8px;
-}
-
-.touchOutputMapPanel .projectorMapEditor {
-  background: var(--theme-inset);
-}
-
-.touchMapPresetRow {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
-  gap: 6px;
-}
-
-.touchMapPresetRow button {
-  min-height: 34px;
-  overflow: hidden;
-  padding: 0 9px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .touchVideoHeader {
@@ -3819,70 +3303,6 @@ h3 {
   height: 100%;
   border-radius: inherit;
   background: #58a7f6;
-}
-
-.touchVideoSyncPanel {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-  border: 1px solid var(--theme-line);
-  border-radius: 6px;
-  background: var(--theme-bg);
-  padding: 8px;
-}
-
-.touchVideoSyncHeader {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.touchVideoSyncHeader > div {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.touchVideoSyncHeader strong,
-.touchVideoSyncHeader span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.touchVideoSyncHeader strong {
-  color: var(--theme-text);
-  font-size: var(--fs-text);
-}
-
-.touchVideoSyncHeader span {
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
-}
-
-.touchVideoSyncHeader button {
-  min-width: 82px;
-  min-height: 34px;
-}
-
-.touchBpmPresetRow {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(68px, 1fr));
-  gap: 6px;
-}
-
-.touchBpmPresetRow button {
-  min-height: 32px;
-  padding: 4px 7px;
-}
-
-.touchBpmPresetRow button.active {
-  border-color: #5dd64c;
-  background: rgba(93, 214, 76, 0.14);
-  color: var(--theme-text);
 }
 
 .touchTransportRow {
@@ -4854,134 +4274,8 @@ h3 {
 /* The show route is an operator action, not an explanation panel. It is the
    Universe 0 row of the DMX universes table; manual controls and facts stay
    in Advanced. */
-.dmxShowSetupCopy {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.dmxShowSetupCopy > strong,
-.dmxShowSetupCopy > span,
-.dmxShowSetupState > p {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dmxShowSetupCopy > span,
-.dmxShowSetupState > p {
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
-}
-
-.dmxShowSetupState {
-  display: grid;
-  justify-items: start;
-  gap: 3px;
-  min-width: 0;
-}
-
-.dmxShowSetupState > p {
-  max-width: 100%;
-  margin: 0;
-}
-
-.dmxShowSetupControls {
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) max-content;
-  align-items: end;
-  gap: 6px 8px;
-  min-width: 0;
-}
-
-.dmxShowSetupUsb {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.dmxShowSetupUsb > span {
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
-  font-weight: 400;
-}
-
-.dmxShowSetupUsb select {
-  width: 100%;
-  min-width: 0;
-}
-
-.dmxShowSetupSelectionState {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
-  text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dmxNestedDisclosure {
-  background: var(--theme-bg);
-}
-
-.dmxNestedDisclosure > summary {
-  min-height: 28px;
-  padding-block: 6px;
-  color: var(--theme-muted);
-  font-size: var(--fs-control);
-}
-
-.dmxIndividualDiagnostics {
-  margin-top: 0;
-}
 
 @media (max-width: 900px) {
-  .dmxShowSetupControls {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .dmxShowSetupSelectionState {
-    text-align: left;
-  }
-}
-
-.dmxProtocolFacts {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 4px 12px;
-  align-items: baseline;
-  margin: 0;
-  min-width: 0;
-}
-
-.dmxProtocolFacts dt,
-.dmxProtocolFacts dd {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dmxProtocolFacts dt {
-  color: var(--theme-dim);
-  font-size: var(--fs-control);
-  font-weight: 400;
-}
-
-.dmxProtocolFacts dd {
-  color: var(--theme-muted);
-  font-size: var(--fs-control);
-  font-variant-numeric: tabular-nums;
-}
-
-.dmxLogHint {
-  margin: 0;
-  color: var(--theme-dim);
 }
 
 .dmxProtocolDiagnostics {
@@ -5617,12 +4911,6 @@ progress {
     grid-template-columns: repeat(5, minmax(60px, 1fr));
     overflow: hidden auto;
   }
-}
-
-.layoutTouch .touchCuePadGrid .liveCuePad {
-  min-height: 64px;
-  border-radius: 2px;
-  font-size: var(--fs-control);
 }
 
 .layoutTouch .touchPanel {
@@ -8250,65 +7538,6 @@ progress {
   background: var(--theme-panel);
 }
 
-.dmxSearchSummary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  border: 1px solid var(--theme-line);
-  border-radius: 5px;
-  background: var(--theme-bg);
-  padding: 7px 8px;
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
-}
-
-.dmxAllocationStatus {
-  display: inline-grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: baseline;
-  gap: 6px;
-  max-width: 100%;
-  border: 1px solid var(--theme-line);
-  border-radius: 4px;
-  background: var(--theme-panel);
-  padding: 4px 7px;
-  color: var(--theme-muted);
-  font-size: var(--fs-text);
-}
-
-.dmxAllocationStatus small {
-  min-width: 0;
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dmxAllocationStatus.ok {
-  border-color: color-mix(in srgb, var(--theme-ok) 55%, var(--theme-line));
-  background: color-mix(in srgb, var(--theme-ok) 16%, var(--theme-raised));
-  color: #9ef08d;
-}
-
-.dmxAllocationStatus.warn {
-  border-color: #715f39;
-  background: color-mix(in srgb, var(--theme-warn) 16%, var(--theme-raised));
-  color: #ffd98a;
-}
-
-.dmxAllocationStatus.bad {
-  border-color: #7e3939;
-  background: color-mix(in srgb, var(--theme-error) 16%, var(--theme-raised));
-  color: #ffc0c0;
-}
-
-.dmxAllocationStatus.idle {
-  color: var(--theme-dim);
-}
-
 .dmxAddressGrid {
   --dmx-cell-size: 18px;
   --dmx-grid-gap: 1px;
@@ -8473,14 +7702,6 @@ progress {
 .dmxPatchListItem.selected {
   border-color: var(--theme-selected);
   background: var(--theme-key);
-}
-
-.dmxGridSummary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
 }
 
 .dmxPatchAddressReadout {
@@ -20692,22 +19913,6 @@ input[type="color"] {
   gap: 8px;
 }
 
-.dmxRoutes {
-  display: grid;
-  gap: 8px;
-  border-top: 1px solid var(--theme-line);
-  padding-top: 10px;
-}
-
-.dmxRoutes .timelineItem {
-  grid-template-columns: minmax(0, 1fr) auto minmax(58px, auto);
-}
-
-.dmxRoutes .timelineItem button {
-  min-width: 0;
-  padding: 0 8px;
-}
-
 .dmxOutputDiagnostics {
   display: grid;
   gap: 8px;
@@ -20820,106 +20025,6 @@ input[type="color"] {
 .dmxOutputDiagnosticsHeader button {
   min-width: 76px;
   min-height: 30px;
-}
-
-.dmxOutputErrorBanner {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  border: 1px solid #813a3a;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--theme-error) 16%, var(--theme-panel));
-  color: #ffb4b4;
-  padding: 7px 8px;
-}
-
-.dmxOutputErrorBanner strong {
-  color: #ffd1d1;
-  font-size: var(--fs-text);
-  white-space: nowrap;
-}
-
-.dmxOutputErrorBanner span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.dmxOutputDraftWarning {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  border: 1px solid #78622a;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--theme-warn) 16%, var(--theme-panel));
-  color: #ffd27d;
-  padding: 7px 8px;
-}
-
-.dmxOutputDraftWarning strong {
-  color: #ffe0a0;
-  font-size: var(--fs-text);
-  white-space: nowrap;
-}
-
-.dmxOutputDraftWarning span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.dmxOutputDiagnosticGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
-  gap: 6px;
-}
-
-.dmxOutputDiagnosticCard {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-  border: 1px solid var(--theme-line);
-  border-radius: 6px;
-  background: var(--theme-panel);
-  padding: 6px 8px;
-}
-
-.dmxOutputDiagnosticCard.ok {
-  border-color: #2d6f45;
-  background: color-mix(in srgb, var(--theme-ok) 16%, var(--theme-panel));
-}
-
-.dmxOutputDiagnosticCard.warn {
-  border-color: #78622a;
-  background: color-mix(in srgb, var(--theme-warn) 16%, var(--theme-panel));
-}
-
-.dmxOutputDiagnosticCard.bad {
-  border-color: #813a3a;
-  background: color-mix(in srgb, var(--theme-error) 16%, var(--theme-panel));
-}
-
-.dmxOutputDiagnosticCard span,
-.dmxOutputDiagnosticCard strong,
-.dmxOutputDiagnosticCard small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dmxOutputDiagnosticCard span {
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
-}
-
-.dmxOutputDiagnosticCard strong {
-  color: var(--theme-text);
-}
-
-.dmxOutputDiagnosticCard small {
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
 }
 
 .clock {
@@ -21174,75 +20279,6 @@ input[type="color"] {
   color: var(--theme-text);
 }
 
-.dmxOutputNetworkHint {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  border: 1px solid var(--theme-line);
-  border-radius: 6px;
-  background: var(--theme-panel);
-  padding: 7px 8px;
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
-}
-
-.dmxOutputNetworkHint span,
-.dmxOutputNetworkHint strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dmxOutputNetworkHint strong {
-  color: var(--theme-text);
-  font-variant-numeric: tabular-nums;
-}
-
-.dmxOutputNetworkHint button {
-  min-height: 28px;
-  padding: 0 8px;
-}
-
-.dmxOutputProtocolHint {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-  border: 1px solid var(--theme-line);
-  border-radius: 6px;
-  background: var(--theme-panel);
-  padding: 7px 8px;
-}
-
-.dmxOutputProtocolHint.warn {
-  border-color: #6b5428;
-  background: color-mix(in srgb, var(--theme-warn) 16%, var(--theme-panel));
-}
-
-.dmxOutputProtocolHint.ok {
-  border-color: color-mix(in srgb, var(--theme-ok) 55%, var(--theme-line));
-}
-
-.dmxOutputProtocolHint strong,
-.dmxOutputProtocolHint span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.dmxOutputProtocolHint strong {
-  color: var(--theme-text);
-  font-size: var(--fs-text);
-}
-
-.dmxOutputProtocolHint span {
-  color: var(--theme-dim);
-  font-size: var(--fs-text);
-  line-height: 1.25;
-}
-
 .telemetry {
   display: grid;
   gap: 8px;
@@ -21358,14 +20394,6 @@ input[type="color"] {
 .app .layoutTouch > .touchSurfacePanel label:has(input[type="checkbox"]) {
   min-height: 40px;
   align-items: center;
-}
-
-.app .layoutTouch .touchFaderFunctionBands {
-  grid-template-columns: repeat(4, minmax(40px, 1fr));
-}
-
-.app .layoutTouch .touchFaderFunctionBands button {
-  min-height: 40px;
 }
 
 /* Syndocal Broadcast base controls. Theme palettes and aliases live in theme.css. */
@@ -22410,7 +21438,6 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
   max-height: none;
 }
 
-.dmxEndpointDesk,
 .dmxOutputConfigPanel,
 .dmxInputPanel,
 .artRdmPanel,
@@ -22421,18 +21448,6 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
   gap: 6px;
   min-width: 0;
   min-height: 0;
-}
-
-.dmxEndpointDesk {
-  grid-auto-rows: max-content;
-  align-content: start;
-  overflow: auto;
-  border-right: 1px solid var(--theme-line);
-  padding-right: 5px;
-}
-
-.dmxEndpointDesk > * {
-  min-height: max-content;
 }
 
 .dmxInputPanel {
@@ -22727,13 +21742,6 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
    cables and the Art-Net / sACN universes, with the Add row as its footer.
    The I/O workbench stays the only scroll owner, so the fixed columns
    shrink and long identities ellipsize instead of scrolling. */
-.dmxUniverseHeaderStates {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
-  min-width: 0;
-}
 
 .dmxUniverseTable {
   width: 100%;
@@ -22790,19 +21798,6 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
   border-bottom: 0;
 }
 
-.dmxUniverseTarget,
-.dmxUniverseAddHint {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dmxUniverseAddHint {
-  color: var(--theme-dim);
-}
-
 .dmxUniverseDestination {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(64px, 6.5rem);
@@ -22823,23 +21818,6 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
   align-items: center;
   gap: 4px;
   white-space: nowrap;
-}
-
-.dmxUniverseFooter {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.dmxUniverseFooter > p {
-  margin: 0;
-}
-
-.dmxUniverseFooter > .dmxUniverseApply {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
 }
 
 .ltcInputControls {
@@ -23452,9 +22430,7 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 .transformEditor,
 .liveStagePanel,
 .serialOutput,
-.beatMeterPanel,
-.dmxOutputNetworkHint,
-.dmxOutputProtocolHint {
+.beatMeterPanel {
   border-color: var(--theme-line);
   border-radius: 2px;
   background: var(--theme-bg);
@@ -23501,7 +22477,6 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 .liveStatusItem,
 .liveStageSelectionItem,
 .connectionBadge,
-.dmxOutputDiagnosticCard,
 .telemetryGrid span {
   border-color: var(--theme-line);
   border-radius: 2px;
@@ -23509,7 +22484,6 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 }
 
 .patchFreeSummary,
-.dmxSearchSummary,
 .footprint {
   border-color: var(--theme-line);
   border-radius: 2px;
@@ -23615,7 +22589,6 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
 .dmxTestFramePanel,
 .phase1SmokePanel,
 .dmxOutputDiagnostics,
-.dmxRoutes,
 .serialOutput,
 .outputRouteList,
 .outputRouteItem {
@@ -23638,15 +22611,11 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
   background: var(--theme-raised);
 }
 
-.touchCueStatus > div,
-.touchRemoteUrl,
 .touchStageSelectionItem,
 .touchVideoDeck,
 .touchVideoOutputDeck,
-.touchMasterGrid label,
 .touchSlider,
-.touchGuardRow,
-.touchFixtureActionPanel {
+.touchGuardRow {
   border-color: var(--theme-line);
   border-radius: 2px;
   background: var(--theme-panel);
@@ -31488,11 +30457,9 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
   grid-row: 3;
 }
 
-.layoutTouch > .touchCuePanel,
 .layoutTouch > .touchStagePanel,
 .layoutTouch > .touchFixturePanel,
-.layoutTouch > .touchVideoPanel,
-.layoutTouch > .touchRemotePanel {
+.layoutTouch > .touchVideoPanel {
   display: none;
 }
 

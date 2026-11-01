@@ -271,12 +271,21 @@ assert.match(
 }
 const standbyWiring = {
   app: appSource,
+  workspace: await readFile(new URL("../src/components/AppWorkspaceView.tsx", import.meta.url), "utf8"),
   chrome: await readFile(new URL("../src/components/WorkspaceChrome.tsx", import.meta.url), "utf8"),
   desk: await readFile(new URL("../src/components/VideoPerformDesk.tsx", import.meta.url), "utf8"),
 };
 assert.match(standbyWiring.app, /checkOutputDrive: readOutputDriveForAction,/, "the one blackout controller receives the fresh output-authority check (after a pending automatic take)");
 assert.match(standbyWiring.app, /const drive = await readOutputDriveForAction\(\);\s*if \(drive\.kind === "blocked"\)[\s\S]*?return setVideoBlackout\(enabled\);/, "the role is explained in-app; otherwise Blackout acts at once");
-assert.match(standbyWiring.app, /blackoutBlockedReason=\{blackoutBlockedReason\(\)\}/, "top-bar DMX/VID/ALL keys receive the reason");
+// 2b0424df extracted workspace JSX; the controller still owns the accessor.
+assert.match(standbyWiring.app, /const appWorkspaceModel = \{[^}]*\bblackoutBlockedReason,/,
+  "the workspace model receives the controller-owned blocked-reason accessor");
+assert.match(standbyWiring.app, /<AppWorkspaceView model=\{appWorkspaceModel\}/,
+  "the rendered workspace receives the authoritative model");
+assert.match(standbyWiring.workspace, /const \{[^}]*\bblackoutBlockedReason,[\s\S]*?\} = props\.model;/,
+  "the workspace consumes the model's blocked-reason accessor");
+assert.match(standbyWiring.workspace, /<WorkspaceChrome\b[^>]*blackoutBlockedReason=\{blackoutBlockedReason\(\)\}/,
+  "top-bar DMX/VID/ALL keys receive the reason");
 assert.equal((standbyWiring.chrome.match(/aria-disabled=\{props\.blackoutBlockedReason \? "true" : undefined\}/g) ?? []).length, 3, "DMX, VID and ALL keys expose the reason without disappearing");
 assert.match(standbyWiring.desk, /aria-disabled=\{blackoutBlockedReason\(\) \? "true" : undefined\}/, "Perform desk Blackout exposes the reason");
 assert.doesNotMatch(standbyWiring.chrome + standbyWiring.desk, /\sdisabled=\{[^}]*blackoutBlockedReason/, "emergency keys are never removed from the tab order");
