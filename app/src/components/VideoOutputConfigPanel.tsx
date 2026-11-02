@@ -1,4 +1,5 @@
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
+import { NdiAttribution } from "./NdiAttribution";
 import type { VideoOutputConfigDraft } from "../editorDrafts";
 import type { VideoOutputKind, VideoOutputSummary } from "../types";
 import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
@@ -104,6 +105,9 @@ export function VideoOutputConfigPanel(props: VideoOutputConfigPanelProps) {
             ? "Publishes video to Syphon clients on this Mac and follows the current output state."
             : "Syphon output is available on macOS only. This saved output is preserved; choose another type to use it on this computer."}
         </p>
+      </Show>
+      <Show when={props.draft.kind === "NdiSender"}>
+        <NdiAttribution class="hint" output />
       </Show>
       <Show when={props.draft.kind !== "Display"}>
         <label>{props.draft.kind === "SyphonServer" ? "Server name" : "Endpoint"}<input value={props.draft.endpoint_name} disabled={busy()}

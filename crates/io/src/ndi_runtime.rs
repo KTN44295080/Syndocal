@@ -18,7 +18,10 @@ pub(crate) fn initialize_ndi() -> Result<grafton_ndi::NDI, crate::ndi::NdiError>
 
 #[cfg(all(target_os = "windows", target_env = "msvc"))]
 mod windows {
-    use std::{ffi::OsString, path::PathBuf};
+    use std::{
+        ffi::OsString,
+        path::{Path, PathBuf},
+    };
 
     use libloading::os::windows::{
         Library, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
@@ -64,7 +67,15 @@ mod windows {
         Invalid(String),
     }
 
+    #[cfg(test)]
     fn runtime_candidates(
+        lookup: impl Fn(&str) -> Option<OsString>,
+    ) -> Result<Vec<PathBuf>, RuntimeLoadError> {
+        runtime_candidates_with_exe_dir(None, lookup)
+    }
+
+    fn runtime_candidates_with_exe_dir(
+        exe_dir: Option<&Path>,
         lookup: impl Fn(&str) -> Option<OsString>,
     ) -> Result<Vec<PathBuf>, RuntimeLoadError> {
         let checked_directory = |key: &str, value: OsString| {
@@ -76,8 +87,31 @@ mod windows {
             }
             Ok(directory)
         };
-        // An explicit selection is authoritative. Never fall back to PATH,
-        // the working directory, or a different installed version if it fails.
+        let mut candidates = Vec::new();
+        let mut push_unique = |candidate: PathBuf| {
+            if !candidates.iter().any(|existing| existing == &candidate) {
+                candidates.push(candidate);
+            }
+        };
+        // Priority 1: Bundled NDI runtime DLL placed next to the executable.
+        if let Some(directory) = exe_dir {
+            if !directory.is_absolute() {
+                return Err(RuntimeLoadError::Invalid(
+                    "Executable directory must be an absolute NDI runtime directory".to_string(),
+                ));
+            }
+            let bundled = directory.join(RUNTIME_DLL);
+            // A present bundle is authoritative, including an invalid bundle:
+            // load_runtime must report its error rather than choose another DLL.
+            // Irrelevant environment overrides cannot block an installed bundle.
+            if bundled.exists() {
+                return Ok(vec![bundled]);
+            }
+            push_unique(bundled);
+        }
+        // Priority 2: Explicit NDI runtime or SDK environment variables.
+        // An explicit selection is authoritative over ProgramFiles and never
+        // falls back to PATH, the working directory, or another installed version.
         for key in [
             "NDI_RUNTIME_DIR_V6",
             "NDI_RUNTIME_DIR_V5",
@@ -86,7 +120,8 @@ mod windows {
             "NDI_RUNTIME_DIR_V2",
         ] {
             if let Some(value) = lookup(key) {
-                return Ok(vec![checked_directory(key, value)?.join(RUNTIME_DLL)]);
+                push_unique(checked_directory(key, value)?.join(RUNTIME_DLL));
+                return Ok(candidates);
             }
         }
         let architecture = if cfg!(target_arch = "x86_64") {
@@ -95,22 +130,32 @@ mod windows {
             "x86"
         };
         if let Some(value) = lookup("NDI_SDK_DIR") {
-            return Ok(vec![checked_directory("NDI_SDK_DIR", value)?
-                .join("Bin")
-                .join(architecture)
-                .join(RUNTIME_DLL)]);
+            push_unique(
+                checked_directory("NDI_SDK_DIR", value)?
+                    .join("Bin")
+                    .join(architecture)
+                    .join(RUNTIME_DLL),
+            );
+            return Ok(candidates);
         }
-        let program_files = lookup("ProgramFiles").ok_or_else(|| {
-            RuntimeLoadError::Missing("No NDI runtime or SDK directory is configured".to_string())
-        })?;
-        let root = checked_directory("ProgramFiles", program_files)?.join("NDI");
-        Ok(vec![
-            root.join("NDI 6 Runtime").join("v6").join(RUNTIME_DLL),
-            root.join("NDI 6 SDK")
-                .join("Bin")
-                .join(architecture)
-                .join(RUNTIME_DLL),
-        ])
+        // Priority 3: Standard Windows NDI 6 Runtime and NDI 6 SDK install roots.
+        if let Some(program_files) = lookup("ProgramFiles") {
+            let root = checked_directory("ProgramFiles", program_files)?.join("NDI");
+            push_unique(root.join("NDI 6 Runtime").join("v6").join(RUNTIME_DLL));
+            push_unique(
+                root.join("NDI 6 SDK")
+                    .join("Bin")
+                    .join(architecture)
+                    .join(RUNTIME_DLL),
+            );
+            return Ok(candidates);
+        }
+        if !candidates.is_empty() {
+            return Ok(candidates);
+        }
+        Err(RuntimeLoadError::Missing(
+            "No NDI runtime or SDK directory is configured".to_string(),
+        ))
     }
 
     fn validate_symbols(library: &Library) -> Result<(), RuntimeLoadError> {
@@ -209,7 +254,11 @@ mod windows {
             RuntimeLoadError::Invalid("NDI runtime loader state was poisoned".to_string())
         })?;
         if runtime.is_none() {
-            let candidates = runtime_candidates(|key| std::env::var_os(key))?;
+            let exe_dir = std::env::current_exe()
+                .ok()
+                .and_then(|path| path.parent().map(Path::to_path_buf));
+            let candidates =
+                runtime_candidates_with_exe_dir(exe_dir.as_deref(), |key| std::env::var_os(key))?;
             *runtime = Some(load_runtime(&candidates)?);
         }
         Ok(())
@@ -218,6 +267,67 @@ mod windows {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn present_bundle_does_not_consult_invalid_environment_overrides() {
+            let directory = std::env::temp_dir().join(format!(
+                "syndocal-ndi-bundle-policy-{}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&directory).unwrap();
+            let bundled = directory.join(RUNTIME_DLL);
+            std::fs::write(&bundled, b"invalid DLL must remain authoritative").unwrap();
+            let paths = runtime_candidates_with_exe_dir(Some(&directory), |_| {
+                panic!("present bundle must take precedence before environment validation")
+            })
+            .unwrap();
+            assert_eq!(paths, vec![bundled.clone()]);
+            std::fs::remove_file(bundled).unwrap();
+            std::fs::remove_dir(directory).unwrap();
+        }
+
+        #[test]
+        fn bundled_exe_directory_is_priority_one_before_env_and_program_files() {
+            let exe_dir = Path::new(r"C:\Syndocal");
+            let with_env = runtime_candidates_with_exe_dir(Some(exe_dir), |key| match key {
+                "NDI_RUNTIME_DIR_V6" => Some(OsString::from(r"C:\NDI Runtime\v6")),
+                "NDI_SDK_DIR" => Some(OsString::from(r"C:\SDK")),
+                "ProgramFiles" => Some(OsString::from(r"C:\Program Files")),
+                "PATH" => panic!("PATH must never be inspected"),
+                _ => None,
+            })
+            .unwrap();
+            assert_eq!(
+                with_env,
+                vec![
+                    PathBuf::from(r"C:\Syndocal").join(RUNTIME_DLL),
+                    PathBuf::from(r"C:\NDI Runtime\v6").join(RUNTIME_DLL),
+                ]
+            );
+
+            let with_program_files =
+                runtime_candidates_with_exe_dir(Some(exe_dir), |key| match key {
+                    "ProgramFiles" => Some(OsString::from(r"C:\Program Files")),
+                    "PATH" => panic!("PATH must never be inspected"),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(
+                with_program_files,
+                vec![
+                    PathBuf::from(r"C:\Syndocal").join(RUNTIME_DLL),
+                    PathBuf::from(r"C:\Program Files\NDI\NDI 6 Runtime\v6").join(RUNTIME_DLL),
+                    PathBuf::from(r"C:\Program Files\NDI\NDI 6 SDK\Bin\x64").join(RUNTIME_DLL),
+                ]
+            );
+        }
+
+        #[test]
+        fn bundled_exe_directory_succeeds_even_without_env_or_program_files() {
+            let exe_dir = Path::new(r"C:\Syndocal");
+            let paths = runtime_candidates_with_exe_dir(Some(exe_dir), |_| None).unwrap();
+            assert_eq!(paths, vec![PathBuf::from(r"C:\Syndocal").join(RUNTIME_DLL)]);
+        }
 
         #[test]
         fn explicit_runtime_directory_has_priority_and_is_never_path_searched() {

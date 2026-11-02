@@ -25,6 +25,7 @@ import { summarizeShowClockForShell } from "../showClockShell";
 import { TopbarPulseMeter } from "./TopbarPulseMeter";
 import { TopbarBpmControl } from "./TopbarBpmControl";
 import { TopbarTempoSync } from "./TopbarTempoSync";
+import { NdiOfficialLinks } from "./NdiAttribution";
 import "./WorkspaceChrome.css";
 import { TopbarTools } from "./TopbarTools";
 import { nextTopbarTempoPlacement, type TopbarTempoPlacement } from "../topbarTempoPlacement";
@@ -631,6 +632,19 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               <Show when={props.applicationUpdateError}>
                 <div class="inlineError" role="status">{props.applicationUpdateError}</div>
               </Show>
+              <details class="appProjectMenuDisclosure" data-about-legal-disclosure>
+                <summary>About &amp; Legal Notices</summary>
+                <div class="appProjectMenuLabel" role="separator">
+                  <span>NDI® Attribution</span>
+                  <small>NDI® is a registered trademark of Vizrt NDI AB.</small>
+                </div>
+                <div class="appProjectMenuLabel">
+                  <span>NDI® 6 Runtime is bundled in the ordinary Windows package under the NDI SDK License Agreement (THIRD_PARTY_NOTICES.md / licenses/Processing.NDI.Lib.Licenses.txt).</span>
+                  <small>
+                    <NdiOfficialLinks />
+                  </small>
+                </div>
+              </details>
             </div>
           </Show>
           <nav class="workspaceTabs" aria-label="Workspace" data-workspace-navigation>

@@ -4,11 +4,18 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertSafeExternalDirectory, loadWindowsRuntimeInventory, readVerifiedRegularFile } from "./windows-runtime-inventory.mjs";
+import { assertSafeExternalDirectory, canonicalPinnedNdiRuntime, loadWindowsRuntimeInventory, readVerifiedRegularFile } from "./windows-runtime-inventory.mjs";
 import { parseStrictJson } from "./strict-json.mjs";
 import { withMaterializedVerifiedExecutable } from "./verified-materialization.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+// Preserve the vendor signature on the exact approved NDI redistributable.
+// A runtime upgrade must re-verify these identities; no other upstream signing
+// exception is admitted by this policy.
+export const ndiVendorCertificateThumbprint = "D5D721C160B3C125B77CBD404ACB030F5D746930";
+const isPinnedVendorNdi = (component) => component.ownership === "upstream"
+  && component.path === "payload/" + canonicalPinnedNdiRuntime.dll.filename
+  && component.sha256 === canonicalPinnedNdiRuntime.dll.sha256;
 const exact = (value, keys, label) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(label + " must be an object.");
   assert.deepEqual(Object.keys(value).sort(), [...keys].sort(), label + " keys are not exact.");
@@ -39,9 +46,10 @@ export function validateWindowsSigningState(value) {
     if (!safePath(component.path) || paths.has(component.path.toLowerCase()) || !/\.(exe|dll)$/iu.test(component.path)
       || !/^[0-9a-f]{64}$/u.test(component.sha256) || !["project", "upstream"].includes(component.ownership)) throw new Error("Windows signing component path, hash, or ownership is invalid or duplicated.");
     paths.add(component.path.toLowerCase());
-    const signed = component.ownership === "project" && value.state === "signpath-signed";
+    const vendorNdi = isPinnedVendorNdi(component);
+    const signed = vendorNdi || (component.ownership === "project" && value.state === "signpath-signed");
     if (component.authenticode !== (signed ? "valid" : "not-signed")
-      || component.certificateThumbprint !== (signed ? value.signpath.certificateThumbprint : null)) throw new Error("Mixed or invalid component signature state is rejected: " + component.path);
+      || component.certificateThumbprint !== (vendorNdi ? ndiVendorCertificateThumbprint : signed ? value.signpath.certificateThumbprint : null)) throw new Error("Mixed or invalid component signature state is rejected: " + component.path);
   }
   if (!paths.has("payload/syndocal.exe") || value.components.filter((c) => c.path.startsWith("installer/")).length !== 1) throw new Error("Signing declaration requires exactly one installer and payload/syndocal.exe.");
   if (value.components.some((c) => (c.path.startsWith("installer/") || c.path === "payload/syndocal.exe") && c.ownership !== "project")) throw new Error("Installer and application executable must be project owned.");
@@ -81,6 +89,11 @@ export function verifyWindowsSigningComponent(declaration, path, bytes, inspect 
   const result = inspect(bytes);
   if (component.authenticode === "not-signed") {
     if (result.status !== "NotSigned" || result.thumbprint !== null) throw new Error("Expected explicitly unsigned component: " + path);
+  } else if (isPinnedVendorNdi(component)) {
+    if (result.status !== "Valid" || result.thumbprint?.toUpperCase() !== ndiVendorCertificateThumbprint
+      || result.timestamped !== true || !/(?:^|,\s*)CN=Vizrt AG(?:,|$)/u.test(result.subject ?? "")) {
+      throw new Error("NDI runtime lacks its pinned timestamped Vizrt AG Authenticode: " + path);
+    }
   } else if (result.status !== "Valid" || result.thumbprint?.toUpperCase() !== component.certificateThumbprint
     || result.timestamped !== true || !/(?:^|,\s*)CN=SignPath Foundation(?:,|$)/u.test(result.subject ?? "")) {
     throw new Error("Component lacks valid timestamped SignPath Foundation Authenticode: " + path);
@@ -89,7 +102,11 @@ export function verifyWindowsSigningComponent(declaration, path, bytes, inspect 
 
 export function collectWindowsSigningComponents({ installer, payloadRoot, inventory = loadWindowsRuntimeInventory() }) {
   const root = assertSafeExternalDirectory(resolve(payloadRoot), "signing payload root");
-  const pinned = new Map([...inventory.runtime_dlls, inventory.recording_encoder].map((entry) => [entry.filename, entry.sha256]));
+  const pinned = new Map([
+    ...inventory.runtime_dlls,
+    inventory.recording_encoder,
+    ...(inventory.ndi_runtime?.dll ? [inventory.ndi_runtime.dll] : []),
+  ].map((entry) => [entry.filename, entry.sha256]));
   const records = [];
   const requiredPayload = new Set(["syndocal.exe", "uninstall.exe", ...pinned.keys()]);
   const add = (file, path) => {

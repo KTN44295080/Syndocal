@@ -11,6 +11,7 @@ import {
   canonicalWindowsFfmpegRuntimeDllNames,
   loadWindowsRuntimeInventory,
   readVerifiedRegularFile,
+  resolvePinnedNdiRuntimeDll,
   verifyPinnedRuntimeFile,
 } from "./windows-runtime-inventory.mjs";
 
@@ -22,9 +23,17 @@ function isDescendant(root, candidate) {
   return child !== "" && !child.startsWith("..") && !child.includes(":");
 }
 
-export function validateFfmpegRuntimeDllNames(names, label = "FFmpeg runtime directory", inventory = loadWindowsRuntimeInventory()) {
+export function validateFfmpegRuntimeDllNames(
+  names,
+  label = "FFmpeg runtime directory",
+  inventory = loadWindowsRuntimeInventory(),
+  { requireNdiRuntime = false } = {},
+) {
   if (!Array.isArray(names)) throw new Error(label + " DLL inventory must be an array.");
   const expected = new Set(inventory.runtime_dlls.map((runtime) => runtime.filename.toLocaleLowerCase("en-US")));
+  if (requireNdiRuntime && inventory.ndi_runtime?.dll) {
+    expected.add(inventory.ndi_runtime.dll.filename.toLocaleLowerCase("en-US"));
+  }
   const seen = new Set();
   for (const rawName of names) {
     const name = String(rawName);
@@ -63,7 +72,12 @@ export function assertNoAsioRuntimeDllInDirectory(directory, label, inventory = 
   }
 }
 
-export function validatePinnedFfmpegRuntimeDirectory(directory, label, inventory = loadWindowsRuntimeInventory()) {
+export function validatePinnedFfmpegRuntimeDirectory(
+  directory,
+  label,
+  inventory = loadWindowsRuntimeInventory(),
+  { requireNdiRuntime = false } = {},
+) {
   if (!existsSync(directory)) throw new Error(label + " is missing: " + directory);
   const releaseDirectory = assertSafeExternalDirectory(directory, label);
   const names = readdirSync(releaseDirectory, { withFileTypes: true })
@@ -74,8 +88,13 @@ export function validatePinnedFfmpegRuntimeDirectory(directory, label, inventory
       }
       return entry.name;
     });
-  validateFfmpegRuntimeDllNames(names, label, inventory);
-  for (const runtime of [...inventory.runtime_dlls, inventory.recording_encoder]) {
+  validateFfmpegRuntimeDllNames(names, label, inventory, { requireNdiRuntime });
+  const requiredRuntimes = [
+    ...inventory.runtime_dlls,
+    inventory.recording_encoder,
+    ...(requireNdiRuntime && inventory.ndi_runtime?.dll ? [inventory.ndi_runtime.dll] : []),
+  ];
+  for (const runtime of requiredRuntimes) {
     verifyPinnedRuntimeFile(
       join(releaseDirectory, runtime.filename),
       runtime,
@@ -106,7 +125,7 @@ export function releaseDirectories(
   return [...new Set(directories)];
 }
 
-export function assertNoNdiEnabledBundling(environment = process.env) {
+export function assertNoNdiEnvironmentOverrides(environment = process.env) {
   const indicators = [
     ["CARGO_FEATURE_NDI", environment.CARGO_FEATURE_NDI],
     ["SYNDOCAL_NDI_ENABLED", environment.SYNDOCAL_NDI_ENABLED],
@@ -116,12 +135,13 @@ export function assertNoNdiEnabledBundling(environment = process.env) {
   for (const [name, value] of indicators) {
     if (typeof value === "string" && (value === "1" || /\bndi\b/iu.test(value))) {
       throw new Error(
-        "NDI-enabled bundling is fail-closed (" + name + "); a separately licensed NDI runtime overlay and its independent artifact proof are required.",
+        "NDI-enabled bundling is fail-closed (" + name + "); select NDI only through the approved Windows platform overlay with pinned runtime and license resources.",
       );
     }
   }
   const allowedNdiNamedKeys = new Set([
     "WINDIR",
+    "SYNDOCAL_NDI_RUNTIME_DIR",
     "NDI_SDK_DIR",
     "NDI_RUNTIME_DIR_V2",
     "NDI_RUNTIME_DIR_V3",
@@ -130,11 +150,11 @@ export function assertNoNdiEnabledBundling(environment = process.env) {
     "NDI_RUNTIME_DIR_V6",
   ]);
   for (const key of Object.keys(environment)) {
-    if (!/NDI/iu.test(key) || allowedNdiNamedKeys.has(key.toUpperCase())) continue;
+    if (!/^(?:NDI(?:_|$)|(?:SYNDOCAL|CARGO|TAURI)_.*NDI)/iu.test(key) || allowedNdiNamedKeys.has(key.toUpperCase())) continue;
     throw new Error(
       "Unknown NDI environment signal is fail-closed ("
         + key
-        + "); the only sanctioned repository-owned feature signals are CARGO_FEATURE_NDI, SYNDOCAL_NDI_ENABLED, TAURI_BUNDLE_FEATURES, and SYNDOCAL_TAURI_FEATURES, and every one of them rejects NDI until a separately licensed overlay is proven.",
+        + "); the only sanctioned repository-owned feature signals are CARGO_FEATURE_NDI, SYNDOCAL_NDI_ENABLED, TAURI_BUNDLE_FEATURES, and SYNDOCAL_TAURI_FEATURES, and every one of them rejects overrides of the approved Windows NDI overlay.",
     );
   }
 }
@@ -304,6 +324,10 @@ function joinCommandContinuations(entries) {
 function classifyFeatureSelection(optionText, payload, form) {
   const value = payload.trim();
   const snippet = (optionText + value).trim().slice(0, 240);
+  // Shell builtins such as `declare -f -- name` use -f without a feature
+  // operand. The option terminator must not make later task paths into features.
+  // Cargo/Tauri cannot select a feature with this invalid empty argument either.
+  if (form === "short" && /^--(?:\s|$)/u.test(value)) return null;
   if (/all-features/iu.test(optionText)) return { kind: "all-features-forbidden", snippet };
   if (ndiTokenPattern.test(value)) return { kind: "ndi-feature-escape", snippet };
   if (/no-default-features/iu.test(optionText)) return null;
@@ -422,7 +446,7 @@ function ndiFeatureEscapeErrorMessage(label, path, failure) {
       + path
       + "): '"
       + failure.snippet
-      + "'. Default Tauri features must remain exactly libav + spout + asio; a separately licensed NDI runtime overlay and its independent artifact proof are required.";
+      + "'. Default Tauri features must remain exactly libav + spout + asio + syphon; select NDI only through the approved Windows platform overlay with pinned runtime and license resources.";
   }
   if (failure.kind === "all-features-forbidden") {
     return "--all-features bundling is fail-closed in the "
@@ -431,7 +455,7 @@ function ndiFeatureEscapeErrorMessage(label, path, failure) {
       + path
       + "): '"
       + failure.snippet
-      + "'. Selecting every feature implicitly enables NDI; default Tauri features must remain exactly libav + spout + asio and only the approved literal set may be selected.";
+      + "'. Selecting every feature implicitly enables NDI; default Tauri features must remain exactly libav + spout + asio + syphon and only the approved literal set may be selected.";
   }
   return "Unresolved NDI-feature indirection is fail-closed in the "
     + label
@@ -442,7 +466,7 @@ function ndiFeatureEscapeErrorMessage(label, path, failure) {
     + "' ("
     + failure.kind
     + (failure.detail ? ": " + failure.detail : "")
-    + "). Default Tauri features must remain exactly libav + spout + asio; every packaging feature selection must resolve to the approved literal set.";
+    + "). Default Tauri features must remain exactly libav + spout + asio + syphon; every packaging feature selection must resolve to the approved literal set.";
 }
 
 function assertSurfaceFreeOfNdiFeatureEscape(readManifest, path, label) {
@@ -542,17 +566,17 @@ export function assertNoNdiCliBypass(
         failure.kind === "ndi-feature-escape"
           ? "NDI-enabled bundling is fail-closed: an ancestor packaging process was invoked with an NDI feature flag ('"
               + failure.snippet
-              + "'); a separately licensed NDI runtime overlay and its independent artifact proof are required."
+              + "'); select NDI only through the approved Windows platform overlay with pinned runtime and license resources."
           : failure.kind === "all-features-forbidden"
               ? "NDI-enabled bundling is fail-closed: an ancestor packaging process invoked '--all-features' ('"
                   + failure.snippet
-                  + "'), which implicitly enables NDI; a separately licensed NDI runtime overlay and its independent artifact proof are required."
+                  + "'), which implicitly enables NDI; select NDI only through the approved Windows platform overlay with pinned runtime and license resources."
               : "NDI-enabled bundling is fail-closed: an ancestor packaging process invoked an unresolved cargo/tauri feature selection ('"
               + failure.snippet
               + "' ("
               + failure.kind
               + (failure.detail ? ": " + failure.detail : "")
-              + ")); a separately licensed NDI runtime overlay and its independent artifact proof are required.",
+              + ")); select NDI only through the approved Windows platform overlay with pinned runtime and license resources.",
       );
     }
     cursor = byPid.get(cursor.parentProcessId) ?? null;
@@ -576,7 +600,7 @@ export function main(options = {}) {
     console.log("No staged runtime libraries are required on this platform.");
     return { stagedDirectories: [] };
   }
-  assertNoNdiEnabledBundling(environment);
+  assertNoNdiEnvironmentOverrides(environment);
   assertNoNdiCliBypass(environment, { platform, snapshot: processSnapshot });
   const inventory = loadWindowsRuntimeInventory({ workspace });
   const releaseDirs = releaseDirectories(workspace, targetTriple);
@@ -584,8 +608,7 @@ export function main(options = {}) {
     assertNoAsioRuntimeDllInDirectory(releaseDir, "Windows release directory", inventory);
   }
   if (ffmpegDir === undefined) {
-    console.log("FFMPEG_DIR is not set; producing the SDK-independent bundle without creating runtime directories.");
-    return { stagedDirectories: [] };
+    throw new Error("FFMPEG_DIR is required for the ordinary Windows bundle; pinned FFmpeg and NDI runtimes must be staged.");
   }
   const sourceRoot = assertSafeExternalDirectory(ffmpegDir, "FFMPEG_DIR");
   const sourceDir = assertSafeExternalDirectory(join(sourceRoot, "bin"), "FFMPEG_DIR/bin");
@@ -607,6 +630,9 @@ export function main(options = {}) {
       { allowedRoots: [sourceDir] },
     );
   }
+  const resolvedNdi = inventory.ndi_runtime?.dll
+    ? resolvePinnedNdiRuntimeDll({ environment, inventory })
+    : null;
   for (const releaseDir of releaseDirs) {
     if (existsSync(releaseDir)) {
       assertNoAsioRuntimeDllInDirectory(releaseDir, "Windows release directory", inventory);
@@ -616,10 +642,28 @@ export function main(options = {}) {
     for (const runtime of [...inventory.runtime_dlls, inventory.recording_encoder]) {
       copyFileSync(join(sourceDir, runtime.filename), join(releaseDir, runtime.filename));
     }
-    validatePinnedFfmpegRuntimeDirectory(releaseDir, "Windows staged runtime directory", inventory);
-    console.log("Staged " + inventory.runtime_dlls.length + " pinned LGPL FFmpeg " + inventory.ffmpeg_build.version + " DLLs and the pinned recording ffmpeg.exe in " + releaseDir);
+    if (resolvedNdi) {
+      copyFileSync(resolvedNdi.dllPath, join(releaseDir, inventory.ndi_runtime.dll.filename));
+    }
+    validatePinnedFfmpegRuntimeDirectory(releaseDir, "Windows staged runtime directory", inventory, {
+      requireNdiRuntime: Boolean(resolvedNdi),
+    });
+    console.log(
+      "Staged "
+        + inventory.runtime_dlls.length
+        + " pinned LGPL FFmpeg "
+        + inventory.ffmpeg_build.version
+        + " DLLs, the pinned recording ffmpeg.exe, and "
+        + (resolvedNdi ? inventory.ndi_runtime.dll.filename : "no NDI runtime")
+        + " in "
+        + releaseDir,
+    );
   }
-  validateAsioPackagingBoundary(undefined, { workspace, verifyWindowsRuntimeSources: true });
+  validateAsioPackagingBoundary(undefined, {
+    workspace,
+    verifyWindowsRuntimeSources: true,
+    requireStagedNdiRuntime: Boolean(resolvedNdi),
+  });
   return { stagedDirectories: releaseDirs };
 }
 
@@ -757,7 +801,7 @@ function benignSurfaceFixture(path) {
     case "app/src-tauri/tauri.updater.conf.json":
       return "{\n  \"plugins\": {\n    \"updater\": {\n      \"pubkey\": \"\",\n      \"endpoints\": []\n    }\n  }\n}";
     case "app/src-tauri/Cargo.toml":
-      return "[features]\ndefault = [\"libav\", \"spout\", \"asio\"]\n";
+      return "[features]\ndefault = [\"libav\", \"spout\", \"asio\", \"syphon\"]\n";
     case "Cargo.toml":
       return "[workspace]\nresolver = \"2\"\n[workspace.dependencies]\ntauri = { version = \"=2.5.1\", features = [\"unstable\"] }\ngrafton-ndi = { version = \"=0.11.0\", default-features = false }\n";
     default:

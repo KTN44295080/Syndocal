@@ -16,9 +16,11 @@ import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
 import {
   canonicalCommonBundleResources,
+  canonicalPinnedNdiRuntime,
   canonicalWindowsFfmpegRuntimeDllNames,
   commonBundleResourceMap,
   loadWindowsRuntimeInventory,
+  resolvePinnedNdiRuntimeDll,
   verifyPinnedCommonResource,
   verifyPinnedRuntimeFile,
   windowsFfmpegBundleResourceMap,
@@ -41,12 +43,13 @@ const workspaceRoot = resolve(appRoot, "..");
 const read = (path) => readFileSync(resolve(workspaceRoot, path), "utf8");
 
 export const windowsFfmpegRuntimeDlls = canonicalWindowsFfmpegRuntimeDllNames;
-export const pinnedCommonResourceAttributeLines = Object.freeze(
-  canonicalCommonBundleResources.map((resource) => {
+export const pinnedCommonResourceAttributeLines = Object.freeze([
+  ...canonicalCommonBundleResources.map((resource) => {
     const repositoryRelativePath = resource.source.replace(/^(?:\.\.\/)+/u, "");
     return `${repositoryRelativePath} text eol=lf`;
   }),
-);
+  `${canonicalPinnedNdiRuntime.license_resource.source.replace(/^(?:\.\.\/)+/u, "")} text eol=lf`,
+]);
 
 export const blockedAsioRuntimeDlls = Object.freeze([
   "syndocal_asio_bridge.dll",
@@ -191,24 +194,55 @@ export class MissingStagedWindowsRuntimeError extends Error {
   }
 }
 
-function assertDefaultBundleDoesNotEnableNdi(readManifest) {
+function assertOrdinaryBundleNdiCompliance(readManifest) {
   const cargoManifest = readManifest("app/src-tauri/Cargo.toml");
-  // Syphon output is intentional (9a6836f1) and its native bridge is macOS-only.
-  // Keep the exact approved defaults pinned without admitting the NDI overlay.
+  // Platform-neutral defaults must not require an NDI SDK on macOS/Linux.
+  // The Windows overlay is the canonical ordinary-package NDI selection.
   if (!/^\s*default\s*=\s*\[\s*"libav"\s*,\s*"spout"\s*,\s*"asio"\s*,\s*"syphon"\s*\]\s*$/mu.test(cargoManifest)) {
-    throw new Error("Default Tauri feature selection must remain exactly libav + spout + asio + syphon; NDI-enabled bundling needs a separately licensed overlay.");
+    throw new Error("Default Tauri feature selection must remain exactly libav + spout + asio + syphon; NDI is selected in the Windows overlay.");
+  }
+  const windows = parseRequiredJson(readManifest("app/src-tauri/tauri.windows.conf.json"), "Windows config");
+  const showAsio = parseRequiredJson(readManifest("app/src-tauri/tauri.show-asio.conf.json"), "Show-ASIO config");
+  if (JSON.stringify(windows.build?.features) !== JSON.stringify(["ndi"])) {
+    throw new Error("Ordinary Windows build.features must be exactly ndi.");
+  }
+  if (JSON.stringify(showAsio.build?.features) !== "[]") {
+    throw new Error("Show-ASIO must clear Windows build.features to exclude NDI.");
+  }
+  if (windows.bundle?.licenseFile !== "../../THIRD_PARTY_NOTICES.md") {
+    throw new Error("Ordinary Windows installer must display THIRD_PARTY_NOTICES.md as its component license.");
   }
   const packageManifest = readManifest("app/package.json");
   const workflow = readManifest(".github/workflows/cross-platform.yml");
   const bundleCommandEnablesNdi = /tauri\s+build[^\r\n]*--features[^\r\n]*\bndi\b/iu;
   if (bundleCommandEnablesNdi.test(packageManifest) || bundleCommandEnablesNdi.test(workflow)) {
-    throw new Error("NDI-enabled bundling is forbidden until a separate licensed runtime overlay is proven.");
+    throw new Error("NDI-enabled bundling is forbidden through ad hoc feature flags; use the approved Windows platform overlay.");
+  }
+  const thirdPartyNotices = readManifest("THIRD_PARTY_NOTICES.md");
+  for (const requiredNotice of [
+    "NDI® is a registered trademark of Vizrt NDI AB.",
+    "https://ndi.video/",
+    "https://ndi.video/tools/",
+    "https://docs.ndi.video/all/developing-with-ndi/sdk/licensing",
+    "https://docs.ndi.video/all/developing-with-ndi/sdk/installing-the-sdk/windows-installation",
+    "http://ndi.link/ndisdk_license",
+    "http://ndi.link/NDIRedistV6",
+    "Processing.NDI.Lib.x64.dll",
+    "licenses/Processing.NDI.Lib.Licenses.txt",
+  ]) {
+    if (!thirdPartyNotices.includes(requiredNotice)) {
+      throw new Error(`THIRD_PARTY_NOTICES.md lacks required NDI notice token: ${requiredNotice}`);
+    }
   }
 }
 
 export function validateAsioPackagingBoundary(
   readManifest = read,
-  { workspace = workspaceRoot, verifyWindowsRuntimeSources = process.platform === "win32" } = {},
+  {
+    workspace = workspaceRoot,
+    verifyWindowsRuntimeSources = process.platform === "win32",
+    requireStagedNdiRuntime = verifyWindowsRuntimeSources,
+  } = {},
 ) {
   assertPinnedCommonResourceLineEndings(readManifest(".gitattributes"));
   verifyPinnedCommonResourceGitAttributes(workspace);
@@ -241,7 +275,7 @@ export function validateAsioPackagingBoundary(
   if (Object.hasOwn(updater.bundle ?? {}, "resources")) {
     throw new Error("Updater overlay must not add or remap normal bundle resources.");
   }
-  assertDefaultBundleDoesNotEnableNdi(readManifest);
+  assertOrdinaryBundleNdiCompliance(readManifest);
 
   const tauriRoot = resolve(workspace, "app", "src-tauri");
   for (const resource of inventory.common_resources) {
@@ -252,9 +286,22 @@ export function validateAsioPackagingBoundary(
       { allowedRoots: [workspace] },
     );
   }
+  if (inventory.ndi_runtime?.license_resource) {
+    verifyPinnedCommonResource(
+      resolve(tauriRoot, inventory.ndi_runtime.license_resource.source),
+      inventory.ndi_runtime.license_resource,
+      "Normal NDI license resource " + inventory.ndi_runtime.license_resource.destination,
+      { allowedRoots: [workspace] },
+    );
+  }
   if (verifyWindowsRuntimeSources) {
     if (process.platform === "win32") {
-      const missingStagedRuntimePaths = [...inventory.runtime_dlls, inventory.recording_encoder]
+      const requiredStagedRuntimes = [
+        ...inventory.runtime_dlls,
+        inventory.recording_encoder,
+        ...(requireStagedNdiRuntime && inventory.ndi_runtime?.dll ? [inventory.ndi_runtime.dll] : []),
+      ];
+      const missingStagedRuntimePaths = requiredStagedRuntimes
         .map((runtime) => resolve(tauriRoot, "../../target/release/" + runtime.filename))
         .filter((stagedPath) => !existsSync(stagedPath));
       if (missingStagedRuntimePaths.length > 0) {
@@ -268,6 +315,19 @@ export function validateAsioPackagingBoundary(
         "Windows FFmpeg bundle resource " + runtime.filename,
         { allowedRoots: [resolve(workspace, "target")] },
       );
+    }
+    if (inventory.ndi_runtime?.dll) {
+      const stagedNdiPath = resolve(tauriRoot, "../../target/release/" + inventory.ndi_runtime.dll.filename);
+      if (existsSync(stagedNdiPath)) {
+        verifyPinnedRuntimeFile(
+          stagedNdiPath,
+          inventory.ndi_runtime.dll,
+          "Windows NDI bundle resource " + inventory.ndi_runtime.dll.filename,
+          { allowedRoots: [resolve(workspace, "target")] },
+        );
+      } else if (process.platform === "win32") {
+        resolvePinnedNdiRuntimeDll({ inventory });
+      }
     }
   }
 }

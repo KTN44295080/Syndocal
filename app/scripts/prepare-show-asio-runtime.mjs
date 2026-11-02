@@ -28,6 +28,7 @@ import {
 import { validatePinnedFfmpegRuntimeDirectory } from "./prepare-release-runtime.mjs";
 import {
   assertExactShowAsioArtifactDirectory,
+  assertPeImageHasNoNdiReference,
   checkShowAsioArtifact,
   collectShowAsioSourceIdentity,
   expectedShowAsioArtifactRelativeDirectory,
@@ -193,6 +194,7 @@ export function collectShowAsioInputRecords({
     : readVerifiedRegularFile(exactApplication, "Show-ASIO built application", { allowedRoots: [applicationTarget] });
   const appPe = parsePeIdentity(appRecord.bytes, "Show-ASIO built application");
   assertApplicationPe(appPe);
+  assertPeImageHasNoNdiReference(appRecord.bytes, "Show-ASIO built application");
   const bridgeTarget = resolve(resolvedWorkspace, "target/show-asio-build/bridge");
   const bridgeRecord = allowCargoRootDepsAliases
     ? readVerifiedCargoBridgeBuildOutput(exactBridge, bridgeTarget)
@@ -200,6 +202,7 @@ export function collectShowAsioInputRecords({
   if (hash(bridgeRecord.bytes) !== expectedBridgeSha256) throw new Error("Show-ASIO bridge hash changed after the bridge build checkpoint.");
   const bridgePe = parsePeIdentity(bridgeRecord.bytes, "Show-ASIO built bridge");
   assertDllPe(bridgePe, "Show-ASIO built bridge");
+  assertPeImageHasNoNdiReference(bridgeRecord.bytes, "Show-ASIO built bridge");
   const bridgeExports = exportInspector(exactBridge);
   assertExactExports(bridgeExports);
 
@@ -361,14 +364,33 @@ export function prepareShowAsioRuntime({
   return { artifactDir: exactArtifactDir, manifest, filesVerified: checked.filesVerified };
 }
 
-function syntheticPe({ dll, marker }) {
-  const bytes = Buffer.alloc(0x120, marker);
+function syntheticPe({ dll, marker, ndiImport = false }) {
+  const bytes = Buffer.alloc(0x600);
+  bytes.fill(marker, 0x500);
   bytes.write("MZ", 0, "latin1");
   bytes.writeUInt32LE(0x80, 0x3c);
   bytes.write("PE\0\0", 0x80, "latin1");
   bytes.writeUInt16LE(0x8664, 0x84);
+  bytes.writeUInt16LE(1, 0x86);
+  bytes.writeUInt16LE(240, 0x94);
   bytes.writeUInt16LE(0x0002 | (dll ? 0x2000 : 0), 0x80 + 22);
   bytes.writeUInt16LE(0x20b, 0x80 + 24);
+  bytes.writeUInt32LE(0x200, 0x98 + 60);
+  bytes.writeUInt32LE(16, 0x98 + 108);
+  bytes.writeUInt32LE(0x400, 0x188 + 8);
+  bytes.writeUInt32LE(0x1000, 0x188 + 12);
+  bytes.writeUInt32LE(0x400, 0x188 + 16);
+  bytes.writeUInt32LE(0x200, 0x188 + 20);
+  bytes.write("licenses/Processing.NDI.Lib.Licenses.txt", 0x400, "latin1");
+  if (ndiImport) {
+    bytes.writeUInt32LE(0x1000, 0x98 + 112 + 13 * 8);
+    bytes.writeUInt32LE(64, 0x98 + 112 + 13 * 8 + 4);
+    bytes.writeUInt32LE(1, 0x200);
+    bytes.writeUInt32LE(0x1080, 0x204);
+    bytes.writeUInt32LE(0x10e0, 0x20c);
+    bytes.writeUInt32LE(0x10f0, 0x210);
+    bytes.write("Processing.NDI.Lib.x64.dll\0", 0x280, "latin1");
+  }
   return bytes;
 }
 
@@ -452,8 +474,9 @@ async function runSelfTest() {
     const valid = makeFixture(root, "valid");
     const inspect = () => [...showAsioBridgeExports];
     pass(
-      valid.sourceFiles.length === 70 && valid.sourceFiles.some((entry) => entry.path === "app/src/uiLocalization.ts"),
-      "runtime staging carries the exact 70-path source identity including UI localization",
+      valid.sourceFiles.length === 71 && valid.sourceFiles.some((entry) => entry.path === "app/src/uiLocalization.ts")
+        && valid.sourceFiles.some((entry) => entry.path === "app/scripts/pe-imports.mjs"),
+      "runtime staging carries the exact 71-path source identity including UI localization and PE import verification",
     );
     const result = prepareShowAsioRuntime({
       workspace: valid.workspace,
@@ -528,6 +551,13 @@ async function runSelfTest() {
       () => collectShowAsioInputRecords({ ...wrongPe, applicationPath: wrongPe.appPath, bridgePath: wrongPe.bridgePath, expectedBridgeSha256: hash(Buffer.from("not-pe")), inventory: wrongPe.inventory, exportInspector: inspect }),
       /DOS\/PE/,
       "non-PE bridge is rejected",
+    );
+    const ndiTainted = makeFixture(root, "ndi-tainted-app");
+    writeFileSync(ndiTainted.appPath, syntheticPe({ dll: false, marker: 0x61, ndiImport: true }));
+    rejects(
+      () => collectShowAsioInputRecords({ ...ndiTainted, applicationPath: ndiTainted.appPath, bridgePath: ndiTainted.bridgePath, expectedBridgeSha256: ndiTainted.bridgeHash, inventory: ndiTainted.inventory, exportInspector: inspect }),
+      /must never reference or import Processing\.NDI\.Lib/,
+      "NDI-delay-importing Show-ASIO application is rejected",
     );
     const missingFfmpeg = makeFixture(root, "missing-ffmpeg");
     unlinkSync(join(missingFfmpeg.ffmpegDir, "bin", missingFfmpeg.inventory.runtime_dlls[0].filename));

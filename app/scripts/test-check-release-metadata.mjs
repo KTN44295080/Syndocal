@@ -647,12 +647,13 @@ try {
   const approvedDefaults = 'default = ["libav", "spout", "asio", "syphon"]';
   pass(
     readRepoFile("app/src-tauri/Cargo.toml").includes(approvedDefaults),
-    "approved default bundle preserves target-gated Syphon output",
+    "platform-neutral defaults preserve Syphon without requiring NDI SDK",
   );
   for (const [defaults, label] of [
-    ['default = ["libav", "spout", "asio"]', "retired defaults without Syphon"],
-    ['default = ["libav", "spout", "asio", "syphon", "ndi"]', "NDI-enabled defaults"],
-    ['default = ["libav", "spout", "asio", "syphon", "unapproved"]', "unapproved default feature"],
+    ['default = ["libav", "spout", "asio"]', "retired defaults without Syphon or NDI"],
+    ['default = ["libav", "spout", "asio", "syphon", "ndi"]', "NDI leaking into non-Windows defaults"],
+    ['default = ["libav", "spout", "show-asio", "syphon", "ndi"]', "show-asio in normal defaults"],
+    ['default = ["libav", "spout", "asio", "syphon", "ndi", "unapproved"]', "unapproved default feature"],
   ]) {
     staticRejects(
       (files) => {
@@ -662,6 +663,20 @@ try {
       `${label} are rejected`,
     );
   }
+  staticRejects(
+    (files) => {
+      files.set(
+        "THIRD_PARTY_NOTICES.md",
+        replaceOnce(
+          readRepoFile("THIRD_PARTY_NOTICES.md"),
+          "NDI® is a registered trademark of Vizrt NDI AB.",
+          "NDI trademark omitted",
+        ),
+      );
+    },
+    /THIRD_PARTY_NOTICES\.md lacks required NDI notice token/,
+    "missing NDI trademark notice in THIRD_PARTY_NOTICES.md is rejected",
+  );
   for (const path of ["app/package.json", ".github/workflows/cross-platform.yml"]) {
     staticRejects(
       (files) => {

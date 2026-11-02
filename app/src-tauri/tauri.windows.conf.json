@@ -1,5 +1,9 @@
 {
+  "build": {
+    "features": ["ndi"]
+  },
   "bundle": {
+    "licenseFile": "../../THIRD_PARTY_NOTICES.md",
     "resources": {
       "../../target/release/avcodec-62.dll": "avcodec-62.dll",
       "../../target/release/avdevice-62.dll": "avdevice-62.dll",
@@ -8,7 +12,9 @@
       "../../target/release/avutil-60.dll": "avutil-60.dll",
       "../../target/release/swresample-6.dll": "swresample-6.dll",
       "../../target/release/swscale-9.dll": "swscale-9.dll",
-      "../../target/release/ffmpeg.exe": "ffmpeg.exe"
+      "../../target/release/ffmpeg.exe": "ffmpeg.exe",
+      "../../target/release/Processing.NDI.Lib.x64.dll": "Processing.NDI.Lib.x64.dll",
+      "../../licenses/Processing.NDI.Lib.Licenses.txt": "licenses/Processing.NDI.Lib.Licenses.txt"
     }
   }
 }

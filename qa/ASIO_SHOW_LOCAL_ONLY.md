@@ -46,12 +46,15 @@ must pass immediately after manifest creation and again immediately before use.
 Any changed, missing, extra, linked, reparse-backed, ambiguous, or unverified
 entry fails closed.
 
-The source identity is one exact 70-path set containing the complete local
+The source identity is one exact 71-path set containing the complete local
 import closure and runtime sources, not a directory hash. It includes the
 ASIO/PROGRAM/CUE AudioOutput UI execution-time localization source
 `app/src/uiLocalization.ts` and each trusted first-party helper:
 `check-release-metadata.mjs`, `prepare-release-runtime.mjs`, `run-tauri.mjs`,
-`strict-json.mjs`, and `windows-runtime-inventory.mjs`. A post-build change or
+`strict-json.mjs`, `pe-imports.mjs`, and `windows-runtime-inventory.mjs`. The PE
+parser rejects ordinary or delay imports of the NDI runtime while allowing
+embedded legal attribution text. Older 70-path manifests are rejected and need
+a rebuild. A post-build change or
 missing entry in any source identity path invalidates the artifact before
 runtime payload inspection or acceptance.
 

@@ -49,7 +49,8 @@ commands initialized and verified against the exact paths above.
 
 Use the LGPL shared 8.1 build recorded in
 [FFMPEG_WINDOWS_RUNTIME_INVENTORY.json](FFMPEG_WINDOWS_RUNTIME_INVENTORY.json)
-(schema 3, exact provenance, configure line, seven DLL identities and the recording executable). It is a
+(schema 4, exact provenance, configure line, seven FFmpeg DLL identities, the recording executable,
+and the ordinary Windows package's NDI runtime and license identities). It is a
 Syndocal self-build of the pinned BtbN FFmpeg-Builds recipe with the GPL-only
 Chromaprint/FFTW3 recipes removed (`tools/ffmpeg-sdk/`, workflow
 `.github/workflows/ffmpeg-lgpl-sdk.yml`):

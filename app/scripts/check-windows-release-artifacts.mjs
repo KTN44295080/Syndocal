@@ -18,6 +18,7 @@ import {
   walkVerifiedFiles,
 } from "./windows-runtime-inventory.mjs";
 import { parseStrictJson } from "./strict-json.mjs";
+import { assertPeImageDelayLoadsNdi } from "./pe-imports.mjs";
 import {
   computeVerifiedCandidateTreeSha256,
   expectedWindowsCandidateArtifactRelativePaths,
@@ -77,10 +78,10 @@ function slashRelativePath(root, path, label) {
 
 function approvedArtifactFiles(inventory) {
   const approved = new Map([["syndocal.exe", Object.freeze({ kind: "executable" })]]);
-  for (const runtime of [...inventory.runtime_dlls, inventory.recording_encoder]) {
+  for (const runtime of [...inventory.runtime_dlls, inventory.recording_encoder, ...(inventory.ndi_runtime?.dll ? [inventory.ndi_runtime.dll] : [])]) {
     approved.set(runtime.filename, Object.freeze({ kind: "runtime", runtime }));
   }
-  for (const resource of inventory.common_resources) {
+  for (const resource of [...inventory.common_resources, ...(inventory.ndi_runtime?.license_resource ? [inventory.ndi_runtime.license_resource] : [])]) {
     approved.set(resource.destination, Object.freeze({ kind: "common-resource", resource }));
   }
   return approved;
@@ -88,7 +89,7 @@ function approvedArtifactFiles(inventory) {
 
 function approvedArtifactDirectories(inventory) {
   const directories = new Set();
-  for (const resource of inventory.common_resources) {
+  for (const resource of [...inventory.common_resources, ...(inventory.ndi_runtime?.license_resource ? [inventory.ndi_runtime.license_resource] : [])]) {
     const segments = resource.destination.split("/");
     for (let index = 1; index < segments.length; index += 1) {
       directories.add(segments.slice(0, index).join("/"));
@@ -371,8 +372,9 @@ export function assertExtractedWindowsArtifactContents(
     }
   }
 
-  assertSyndocalExecutable(join(realRoot, "syndocal.exe"), label + " syndocal.exe", [realRoot]);
-  for (const runtime of [...verifiedInventory.runtime_dlls, verifiedInventory.recording_encoder]) {
+  const executable = assertSyndocalExecutable(join(realRoot, "syndocal.exe"), label + " syndocal.exe", [realRoot]);
+  assertPeImageDelayLoadsNdi(executable.bytes, label + " syndocal.exe");
+  for (const runtime of [...verifiedInventory.runtime_dlls, verifiedInventory.recording_encoder, ...(verifiedInventory.ndi_runtime?.dll ? [verifiedInventory.ndi_runtime.dll] : [])]) {
     verifyPinnedRuntimeFile(
       join(realRoot, runtime.filename),
       runtime,
@@ -380,7 +382,7 @@ export function assertExtractedWindowsArtifactContents(
       { allowedRoots: [realRoot] },
     );
   }
-  for (const resource of verifiedInventory.common_resources) {
+  for (const resource of [...verifiedInventory.common_resources, ...(verifiedInventory.ndi_runtime?.license_resource ? [verifiedInventory.ndi_runtime.license_resource] : [])]) {
     verifyPinnedCommonResource(
       join(realRoot, resource.destination),
       resource,
@@ -393,7 +395,8 @@ export function assertExtractedWindowsArtifactContents(
     applicationDirectory: realRoot,
     fileCount: filesByRelativePath.size,
     ffmpegRuntimeCount: verifiedInventory.runtime_dlls.length + 1,
-    commonResourceCount: verifiedInventory.common_resources.length,
+    ndiRuntimeCount: verifiedInventory.ndi_runtime?.dll ? 1 : 0,
+    commonResourceCount: verifiedInventory.common_resources.length + (verifiedInventory.ndi_runtime?.license_resource ? 1 : 0),
   });
 }
 
@@ -417,11 +420,11 @@ export function assertManualThreeRootWindowsReleaseArtifacts({
   const roots = [["NSIS", nsisRoot], ["MSI", msiRoot], ["Updater", updaterRoot]];
   const identities = [];
   for (const [roleLabel, root] of roots) {
+    // The authoritative hash comes first: a substituted executable is reported
+    // as such before its contents (such as the NDI delay-load) are inspected.
+    const identity = assertSyndocalExecutableReleaseIdentity(root, roleLabel + " extracted artifact", authority, activeInspector);
     assertExtractedWindowsArtifactContents(root, roleLabel + " extracted artifact", verifiedInventory);
-    identities.push([
-      roleLabel,
-      assertSyndocalExecutableReleaseIdentity(root, roleLabel + " extracted artifact", authority, activeInspector),
-    ]);
+    identities.push([roleLabel, identity]);
   }
   for (let index = 1; index < identities.length; index += 1) {
     const [previousRole, previous] = identities[index - 1];
@@ -474,17 +477,15 @@ export function assertManualTwoRootWindowsInstallerArtifacts({
   ];
   const identities = [];
   for (const [roleLabel, root, options] of roots) {
+    const identity = assertSyndocalExecutableReleaseIdentity(
+      root,
+      roleLabel + " installed artifact",
+      authority,
+      activeInspector,
+      { allowExactProductVersionFileVersion: true },
+    );
     assertExtractedWindowsArtifactContents(root, roleLabel + " installed artifact", verifiedInventory, options);
-    identities.push([
-      roleLabel,
-      assertSyndocalExecutableReleaseIdentity(
-        root,
-        roleLabel + " installed artifact",
-        authority,
-        activeInspector,
-        { allowExactProductVersionFileVersion: true },
-      ),
-    ]);
+    identities.push([roleLabel, identity]);
   }
   for (const field of ["sha256", "productVersion", "fileVersion"]) {
     if (identities[0][1][field] !== identities[1][1][field]) {
@@ -996,15 +997,15 @@ function selfTest() {
     assertions += 1;
   };
   pass(
-    inventory.schema_version === 3
+    inventory.schema_version === 4
       && inventory.ffmpeg_build.license === "LGPL version 3 or later"
       && !/--enable-(?:gpl|nonfree)(?:\s|$)/u.test(inventory.ffmpeg_build.configure),
     "the approved normal Windows runtime has exact LGPL provenance",
   );
-  for (const schemaVersion of [1, 2, 4]) {
+  for (const schemaVersion of [1, 2, 3, 5]) {
     rejects(
       () => validateWindowsRuntimeInventory({ ...structuredClone(inventory), schema_version: schemaVersion }),
-      /must be schema_version 3/u,
+      /must be schema_version 4/u,
     );
   }
   for (const [key, value] of [
@@ -1221,14 +1222,32 @@ function selfTest() {
   try {
     const clean = join(root, "clean");
     mkdirSync(clean);
-    const fixturePe = (seed, characteristics = 0x222e) => {
-      const bytes = Buffer.alloc(128, seed);
+    const fixturePe = (seed, characteristics = 0x222e, ndi = true) => {
+      const bytes = Buffer.alloc(0x600);
+      bytes.fill(seed, 0x500);
       bytes.write("MZ", 0, "latin1");
-      bytes.writeUInt32LE(0x40, 0x3c);
-      bytes.write("PE\0\0", 0x40, "latin1");
-      bytes.writeUInt16LE(0x8664, 0x44);
-      bytes.writeUInt16LE(characteristics, 0x56);
-      bytes.writeUInt16LE(0x20b, 0x58);
+      bytes.writeUInt32LE(0x80, 0x3c);
+      bytes.write("PE\0\0", 0x80, "latin1");
+      bytes.writeUInt16LE(0x8664, 0x84);
+      bytes.writeUInt16LE(1, 0x86);
+      bytes.writeUInt16LE(240, 0x94);
+      bytes.writeUInt16LE(characteristics, 0x96);
+      bytes.writeUInt16LE(0x20b, 0x98);
+      bytes.writeUInt32LE(0x200, 0x98 + 60);
+      bytes.writeUInt32LE(16, 0x98 + 108);
+      bytes.writeUInt32LE(0x400, 0x188 + 8);
+      bytes.writeUInt32LE(0x1000, 0x188 + 12);
+      bytes.writeUInt32LE(0x400, 0x188 + 16);
+      bytes.writeUInt32LE(0x200, 0x188 + 20);
+      if (ndi) {
+        bytes.writeUInt32LE(0x1000, 0x98 + 112 + 13 * 8);
+        bytes.writeUInt32LE(64, 0x98 + 112 + 13 * 8 + 4);
+        bytes.writeUInt32LE(1, 0x200);
+        bytes.writeUInt32LE(0x1080, 0x204);
+        bytes.writeUInt32LE(0x10e0, 0x20c);
+        bytes.writeUInt32LE(0x10f0, 0x210);
+        bytes.write("Processing.NDI.Lib.x64.dll\0", 0x280, "latin1");
+      }
       return bytes;
     };
     writeFileSync(join(clean, "syndocal.exe"), fixturePe(0, 0x0022), { flag: "wx" });
@@ -1250,6 +1269,17 @@ function selfTest() {
     writeFileSync(join(clean, "ffmpeg.exe"), encoderBytes, { flag: "wx" });
     cleanInventory.recording_encoder.byte_size = encoderBytes.length;
     cleanInventory.recording_encoder.sha256 = createHash("sha256").update(encoderBytes).digest("hex");
+    rejects(
+      () => assertExtractedWindowsArtifactContents(clean, "missing NDI runtime artifact", cleanInventory),
+      /missing approved artifact file: Processing\.NDI\.Lib\.x64\.dll/,
+    );
+    const ndiBytes = fixturePe(9, 0x2022);
+    writeFileSync(join(clean, cleanInventory.ndi_runtime.dll.filename), ndiBytes, { flag: "wx" });
+    cleanInventory.ndi_runtime.dll = {
+      ...cleanInventory.ndi_runtime.dll,
+      byte_size: ndiBytes.length,
+      sha256: createHash("sha256").update(ndiBytes).digest("hex"),
+    };
     const writeCommonResource = (resource) => {
       const source = resolve(workspaceRoot, resource.source.slice("../../".length));
       const record = readVerifiedRegularFile(source, "self-test source common resource", { allowedRoots: [workspaceRoot] });
@@ -1258,13 +1288,23 @@ function selfTest() {
       writeFileSync(destination, record.bytes, { flag: "wx" });
       return record.bytes;
     };
+    const allCommonResources = [
+      ...cleanInventory.common_resources,
+      ...(cleanInventory.ndi_runtime?.license_resource ? [cleanInventory.ndi_runtime.license_resource] : []),
+    ];
     const commonResourceBytes = new Map(
-      cleanInventory.common_resources.map((resource) => [resource.destination, writeCommonResource(resource)]),
+      allCommonResources.map((resource) => [resource.destination, writeCommonResource(resource)]),
     );
     const cleanResult = assertExtractedWindowsArtifactContents(clean, "clean extracted artifact", cleanInventory);
+    writeFileSync(join(clean, "syndocal.exe"), fixturePe(0, 0x0022, false));
+    rejects(
+      () => assertExtractedWindowsArtifactContents(clean, "NDI-disabled ordinary binary", cleanInventory),
+      /must delay-import exactly/,
+    );
+    writeFileSync(join(clean, "syndocal.exe"), fixturePe(0, 0x0022));
     pass(
-      cleanResult.fileCount === 15 && cleanResult.ffmpegRuntimeCount === 8 && cleanResult.commonResourceCount === 6,
-      "clean materialized artifact passes the exact approved fifteen-file tree",
+      cleanResult.fileCount === 17 && cleanResult.ffmpegRuntimeCount === 8 && cleanResult.ndiRuntimeCount === 1 && cleanResult.commonResourceCount === 7,
+      "clean materialized artifact passes the exact approved seventeen-file tree including bundled NDI runtime and license",
     );
 
     const notices = cleanInventory.common_resources.find((resource) => resource.destination === "THIRD_PARTY_NOTICES.md");

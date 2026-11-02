@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { typescriptFixtureModuleUrl } from "./typescript-fixture-module.mjs";
 
 const discovery = await import(await typescriptFixtureModuleUrl(new URL("../src/videoNdiSources.ts", import.meta.url)));
@@ -45,4 +46,18 @@ assert.equal(stateOf({ ...status, live_source_faults: [fault("NDI input signal l
 assert.equal(stateOf({ ...status, live_source_faults: [fault("NDI receiver failed")] }), "unavailable");
 assert.equal(stateOf({ ...status, live_source_faults: [{ ...fault("NDI input signal lost for another layer"), route_id: 8 }] }), "connected", "other layer fault does not overwrite this source");
 assert.equal(health.buildNdiInputHealthRows([{ ...layer, source: { kind: "File", path: "a.mp4" } }], status).length, 0);
-console.log("NDI input checks passed: strict discovery, explicit exact-source admission, UTF-8 identity and connected/no-signal/lost health.");
+
+const attribution = await readFile(new URL("../src/components/NdiAttribution.tsx", import.meta.url), "utf8");
+assert.match(attribution, /NDI® is a registered trademark of Vizrt NDI AB\./, "NdiAttribution must display the exact NDI® trademark notice");
+assert.match(attribution, /https:\/\/ndi\.video\//, "NdiAttribution must show https://ndi.video/");
+assert.match(attribution, /https:\/\/ndi\.video\/tools\//, "NdiAttribution must show https://ndi.video/tools/");
+for (const [relativePath, component] of [
+  ["../src/components/VideoNdiSourcePicker.tsx", "<NdiAttribution"],
+  ["../src/components/VideoOutputCreatePanel.tsx", "<NdiAttribution"],
+  ["../src/components/VideoOutputConfigPanel.tsx", "<NdiAttribution"],
+  ["../src/components/WorkspaceChrome.tsx", "<NdiOfficialLinks"],
+]) {
+  const text = await readFile(new URL(relativePath, import.meta.url), "utf8");
+  assert.ok(text.includes(component), `${relativePath} must render the NDI® attribution`);
+}
+console.log("NDI input checks passed: strict discovery, explicit exact-source admission, UTF-8 identity, connected/no-signal/lost health, and NDI® attribution.");

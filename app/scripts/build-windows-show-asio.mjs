@@ -22,7 +22,7 @@ import {
   loadWindowsRuntimeInventory,
   readVerifiedRegularFile,
 } from "./windows-runtime-inventory.mjs";
-import { assertNoNdiEnabledBundling, validatePinnedFfmpegRuntimeDirectory } from "./prepare-release-runtime.mjs";
+import { assertNoNdiEnvironmentOverrides, validatePinnedFfmpegRuntimeDirectory } from "./prepare-release-runtime.mjs";
 import {
   requiredMsvcToolchain,
   requireExactMsvcLinkerFirst,
@@ -149,8 +149,8 @@ export function validateShowAsioFeatureContract(cargoText, requestedFeatures = s
   }
   const section = featureSection(cargoText);
   const defaults = parseFeatureArray(section, "default", "Tauri features");
-  if (JSON.stringify(defaults) !== JSON.stringify(["libav", "spout", "asio"])) {
-    throw new Error("Normal default features must remain exactly libav + spout + asio; the bridge DLL remains a separate explicit payload.");
+  if (JSON.stringify(defaults) !== JSON.stringify(["libav", "spout", "asio", "syphon"])) {
+    throw new Error("Normal default features must remain exactly libav + spout + asio + syphon; Windows adds ndi through its platform config. Show-ASIO disables defaults and clears platform features.");
   }
   if (!/^show-asio\s*=/mu.test(section)) {
     throw new ShowAsioBlockedError(
@@ -229,7 +229,7 @@ export function assertSourceAndGitStable(before, after, sourceBefore, sourceAfte
 }
 
 export function assertNoShowAsioEnvironmentEscape(environment) {
-  assertNoNdiEnabledBundling(environment);
+  assertNoNdiEnvironmentOverrides(environment);
   assertExactWindowsTargetTriple(environment.TAURI_ENV_TARGET_TRIPLE);
   const forbiddenExact = [
     "CARGO_TARGET_DIR",
@@ -451,15 +451,7 @@ export function buildShowAsio({ workspace = workspaceRoot, environment = process
   runChecked(
     "isolated unbundled Show-ASIO Tauri build",
     process.execPath,
-    [
-      tauriCli,
-      "build",
-      "--no-bundle",
-      "--config", "src-tauri/tauri.show-asio.conf.json",
-      "--features", showAsioFeatures.join(","),
-      "--",
-      "--locked",
-    ],
+    showAsioTauriBuildArguments(tauriCli),
     { cwd: resolve(workspace, "app"), environment: applicationEnvironment },
   );
 
@@ -485,6 +477,19 @@ export function buildShowAsio({ workspace = workspaceRoot, environment = process
   });
 }
 
+function showAsioTauriBuildArguments(tauriCli) {
+  return [
+    tauriCli,
+    "build",
+    "--no-bundle",
+    "--config", "src-tauri/tauri.show-asio.conf.json",
+    "--features", showAsioFeatures.join(","),
+    "--",
+    "--no-default-features",
+    "--locked",
+  ];
+}
+
 async function runSelfTest() {
   let assertions = 0;
   const pass = (condition, label) => { assert.ok(condition, label); assertions += 1; };
@@ -493,13 +498,24 @@ async function runSelfTest() {
   pass(parseBuildMode(["--plan"]) === "plan", "one exact plan argument is accepted");
   pass(parseBuildMode(["--self-test"]) === "self-test", "one exact self-test argument is accepted");
   pass(
-    showAsioSourceIdentityPaths.length === 70 && showAsioSourceIdentityPaths.includes("app/src/uiLocalization.ts"),
-    "build authority carries the exact 70-path source identity including UI localization",
+    showAsioSourceIdentityPaths.length === 71 && showAsioSourceIdentityPaths.includes("app/src/uiLocalization.ts")
+      && showAsioSourceIdentityPaths.includes("app/scripts/pe-imports.mjs"),
+    "build authority carries the exact 71-path source identity including UI localization and PE import verification",
   );
+  const tauriArguments = showAsioTauriBuildArguments("tauri.js");
+  const cargoArgumentStart = tauriArguments.indexOf("--");
+  pass(cargoArgumentStart >= 0 && tauriArguments.indexOf("--no-default-features") > cargoArgumentStart,
+    "Show-ASIO disables Cargo defaults after the Tauri runner argument boundary");
+  pass(tauriArguments[tauriArguments.indexOf("--features") + 1] === "libav,spout,show-asio",
+    "Show-ASIO passes only its explicit approved feature union to Tauri");
+  const windowsConfig = JSON.parse(readFileSync(resolve(workspaceRoot, "app/src-tauri/tauri.windows.conf.json"), "utf8"));
+  const showConfig = JSON.parse(readFileSync(resolve(workspaceRoot, "app/src-tauri/tauri.show-asio.conf.json"), "utf8"));
+  pass(JSON.stringify(windowsConfig.build?.features) === '["ndi"]' && JSON.stringify(showConfig.build?.features) === "[]",
+    "Show-ASIO overlay explicitly clears the ordinary Windows NDI feature selection");
   for (const args of [["--features", "ndi"], ["--plan", "extra"], ["--bundle"], ["--target-dir", "elsewhere"]]) {
     rejects(() => parseBuildMode(args), /overrides are forbidden|Usage/, "extra/override arguments fail closed: " + args.join(" "));
   }
-  const baseCargo = '[features]\ndefault = ["libav", "spout", "asio"]\nasio = ["dep:libloading"]\nshow-asio = ["asio"]\nlibav = []\nspout = []\nndi = []\n\n[dependencies]\n';
+  const baseCargo = '[features]\ndefault = ["libav", "spout", "asio", "syphon"]\nasio = ["dep:libloading"]\nshow-asio = ["asio"]\nlibav = []\nspout = []\nsyphon = []\nndi = []\n\n[dependencies]\n';
   pass(JSON.stringify(validateShowAsioFeatureContract(baseCargo)) === JSON.stringify(showAsioFeatures), "exact feature contract is accepted");
   rejects(
     () => validateShowAsioFeatureContract(baseCargo.replace('show-asio = ["asio"]\n', "")),
@@ -507,7 +523,7 @@ async function runSelfTest() {
     "missing app integration produces typed BLOCKED before Cargo",
   );
   rejects(() => validateShowAsioFeatureContract(baseCargo, [...showAsioFeatures, "ndi"]), /feature union/, "extra requested feature is rejected");
-  rejects(() => validateShowAsioFeatureContract(baseCargo.replace('default = ["libav", "spout", "asio"]', 'default = ["libav", "spout", "show-asio"]')), /Normal default features/, "normal default feature drift is rejected");
+  rejects(() => validateShowAsioFeatureContract(baseCargo.replace('default = ["libav", "spout", "asio", "syphon"]', 'default = ["libav", "spout", "show-asio"]')), /Normal default features/, "normal default feature drift is rejected");
   rejects(() => validateShowAsioFeatureContract(baseCargo.replace('show-asio = ["asio"]', 'show-asio = ["asio", "legacy"]')), /fallback aliases/, "legacy/fallback show feature is rejected");
   const cleanGit = { branch: "beta", head: "a".repeat(40), upstream: "a".repeat(40), status: "" };
   pass(validateGitState(cleanGit).head === cleanGit.head, "clean pushed Git state is accepted");

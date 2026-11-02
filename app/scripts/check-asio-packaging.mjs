@@ -40,8 +40,9 @@ import {
 import {
   assertNoAsioRuntimeDllInDirectory,
   assertNoNdiCliBypass,
-  assertNoNdiEnabledBundling,
+  assertNoNdiEnvironmentOverrides,
   assertNoNdiFeatureEscape,
+  findNdiFeatureEscape,
   main as prepareReleaseRuntime,
   parseProcessChainSnapshot,
   releaseDirectories,
@@ -220,7 +221,7 @@ for (const [field, value] of [["characteristics", 0x222e], ["machine", 0xaa64], 
 for (const mutate of [(value) => { delete value.recording_encoder; }, (value) => { value.schema_version = 2; }]) {
   const mutated = structuredClone(inventory);
   mutate(mutated);
-  rejects(() => validateWindowsRuntimeInventory(mutated), /keys are not exact|schema_version 3/,
+  rejects(() => validateWindowsRuntimeInventory(mutated), /keys are not exact|schema_version 4/,
     "old inventory without the recording executable is rejected");
 }
 
@@ -301,13 +302,48 @@ enforceWindowsRuntimeInventoryAnchors(validateWindowsRuntimeInventory(reorderedB
 assertions += 1;
 
 rejectsBoundary(
+  (mutations) => mutateJson(mutations, "app/src-tauri/tauri.windows.conf.json", (config) => { config.build.features = []; }),
+  /Ordinary Windows build.features/,
+  "ordinary Windows cannot omit NDI",
+);
+rejectsBoundary(
   (mutations) => {
-    const cargo = sourceMap.get("app/src-tauri/Cargo.toml").replace('default = ["libav", "spout", "asio", "syphon"]', 'default = ["libav", "spout", "asio", "syphon", "ndi"]');
+    const cargo = sourceMap.get("app/src-tauri/Cargo.toml").replace('default = ["libav", "spout", "asio", "syphon"]', 'default = ["libav", "spout", "asio", "syphon", "ndi", "show-asio"]');
     mutations.set("app/src-tauri/Cargo.toml", cargo);
   },
   /Default Tauri feature selection/,
-  "NDI default-feature bundling is rejected",
+  "show-asio default-feature bundling is rejected",
 );
+rejectsBoundary(
+  (mutations) => mutateJson(mutations, "app/src-tauri/tauri.windows.conf.json", (config) => {
+    delete config.bundle.resources["../../target/release/Processing.NDI.Lib.x64.dll"];
+  }),
+  /exact approved explicit runtime-resource map/,
+  "missing bundled NDI runtime DLL resource in tauri.windows.conf.json is rejected",
+);
+rejectsBoundary(
+  (mutations) => mutateJson(mutations, "app/src-tauri/tauri.windows.conf.json", (config) => {
+    delete config.bundle.resources["../../licenses/Processing.NDI.Lib.Licenses.txt"];
+  }),
+  /exact approved explicit runtime-resource map/,
+  "missing bundled NDI license resource in tauri.windows.conf.json is rejected",
+);
+{
+  const mutatedNdiDll = structuredClone(inventory);
+  mutatedNdiDll.ndi_runtime.dll.sha256 = "0".repeat(64);
+  rejects(
+    () => enforceWindowsRuntimeInventoryAnchors(validateWindowsRuntimeInventory(mutatedNdiDll)),
+    /NDI runtime DLL contradicts the independently anchored/,
+    "tampered NDI runtime DLL hash in inventory is rejected",
+  );
+  const mutatedNdiLicense = structuredClone(inventory);
+  mutatedNdiLicense.ndi_runtime.license_resource.sha256 = "0".repeat(64);
+  rejects(
+    () => enforceWindowsRuntimeInventoryAnchors(validateWindowsRuntimeInventory(mutatedNdiLicense)),
+    /NDI license resource contradicts the independently anchored/,
+    "tampered NDI license resource hash in inventory is rejected",
+  );
+}
 rejectsBoundary(
   (mutations) => {
     const packageManifest = sourceMap.get("app/package.json") + "\n\"tauri build --features ndi\"";
@@ -350,27 +386,27 @@ for (const [path, hostileText, label] of [
 }
 
 rejects(
-  () => assertNoNdiEnabledBundling({ CARGO_FEATURE_NDI: "1" }),
+  () => assertNoNdiEnvironmentOverrides({ CARGO_FEATURE_NDI: "1" }),
   /NDI-enabled bundling is fail-closed/,
   "runtime NDI Cargo feature is rejected",
 );
 rejects(
-  () => assertNoNdiEnabledBundling({ TAURI_BUNDLE_FEATURES: "libav ndi" }),
+  () => assertNoNdiEnvironmentOverrides({ TAURI_BUNDLE_FEATURES: "libav ndi" }),
   /NDI-enabled bundling is fail-closed/,
   "runtime NDI feature list is rejected",
 );
 rejects(
-  () => assertNoNdiEnabledBundling({ SYNDOCAL_NDI_EXPERIMENT: "1" }),
+  () => assertNoNdiEnvironmentOverrides({ SYNDOCAL_NDI_EXPERIMENT: "1" }),
   /Unknown NDI environment signal is fail-closed/,
   "unknown NDI-named environment signal is rejected",
 );
 rejects(
-  () => assertNoNdiEnabledBundling({ SYNDOCAL_NDI_OVERLAY_INTENT: "" }),
+  () => assertNoNdiEnvironmentOverrides({ SYNDOCAL_NDI_OVERLAY_INTENT: "" }),
   /Unknown NDI environment signal is fail-closed/,
   "empty unknown NDI environment signal is still rejected",
 );
 pass(
-  assertNoNdiEnabledBundling({
+  assertNoNdiEnvironmentOverrides({
     windir: "C:\\Windows",
     NDI_SDK_DIR: "C:\\Program Files\\NDI",
     NDI_RUNTIME_DIR_V6: "C:\\Program Files\\NDI\\Runtime\\v6",
@@ -534,6 +570,8 @@ try {
       "unsafe path is rejected: " + JSON.stringify(unsafe),
     );
   }
+  pass(findNdiFeatureEscape("declare -f -- unsetenv; powershell -File run-sol.ps1 -Task task91-vj-ndi-bundled") === null,
+    "shell builtin -f followed by an option terminator does not consume the later NDI task name");
   for (const runtime of inventory.runtime_dlls) {
     const bridgeBytes = Buffer.from("bridge-payload-" + runtime.filename, "utf8");
     const bridgeInventory = { ...inventory, known_asio_bridge_sha256: [createHash("sha256").update(bridgeBytes).digest("hex")] };
@@ -600,21 +638,20 @@ try {
   const targetRoot = resolve(workspaceRoot, "target");
   const targetExistedBefore = existsSync(targetRoot);
   const beforeNames = targetExistedBefore ? JSON.stringify(readdirSync(targetRoot).sort()) : null;
-  const result = prepareReleaseRuntime({
+  rejects(() => prepareReleaseRuntime({
     platform: "win32",
     ffmpegDir: undefined,
     workspace: workspaceRoot,
     targetTriple: undefined,
     environment: {},
     processSnapshot: [{ processId: currentProcessId, parentProcessId: 0, commandLine: "node scripts/check-asio-packaging.mjs" }],
-  });
-  pass(result.stagedDirectories.length === 0, "unset FFMPEG_DIR creates no release directory");
+  }), /FFMPEG_DIR is required/, "unset FFMPEG_DIR blocks the mandatory runtime bundle");
   if (targetExistedBefore) {
     pass(beforeNames === JSON.stringify(readdirSync(targetRoot).sort()), "unset FFMPEG_DIR copies no DLL into the untracked target tree");
   } else {
     skipVisibility(
       "cold-checkout no-op evidence",
-      "untracked target directory absent on this cold checkout; stagedDirectories==0 above is the executed assertion",
+      "untracked target directory absent on this cold checkout; missing SDK rejection above is the executed assertion",
     );
   }
 } finally {

@@ -64,8 +64,8 @@
     },
     "sourceFiles": {
       "type": "array",
-      "minItems": 70,
-      "maxItems": 70,
+      "minItems": 71,
+      "maxItems": 71,
       "items": { "$ref": "#/$defs/sourceFile" }
     },
     "restrictions": {

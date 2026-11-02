@@ -17,6 +17,8 @@ import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
 import { parseStrictJson } from "./strict-json.mjs";
 import { requiredMsvcToolchain } from "./run-tauri.mjs";
+import { assertPeImageHasNoNdiReference } from "./pe-imports.mjs";
+export { assertPeImageHasNoNdiReference } from "./pe-imports.mjs";
 import {
   assertDirectoryTreeHasNoReparsePoints,
   assertSafeExternalDirectory,
@@ -53,6 +55,7 @@ export const showAsioBridgeExports = Object.freeze([
 ]);
 export const showAsioTrustedHelperIdentityPaths = Object.freeze([
   "app/scripts/check-release-metadata.mjs",
+  "app/scripts/pe-imports.mjs",
   "app/scripts/prepare-release-runtime.mjs",
   "app/scripts/run-tauri.mjs",
   "app/scripts/strict-json.mjs",
@@ -926,6 +929,7 @@ export function checkShowAsioArtifact({
       const actualPe = parsePeIdentity(record.bytes, "Show-ASIO artifact " + file.path);
       if (JSON.stringify(actualPe) !== JSON.stringify(file.pe)) throw new Error("Show-ASIO PE identity changed after manifest creation: " + file.path);
       assertPeRole(actualPe, file.role, "Show-ASIO artifact " + file.path, file.path);
+      assertPeImageHasNoNdiReference(record.bytes, "Show-ASIO artifact " + file.path);
     }
     if (file.role === "ffmpeg-runtime") {
       const pinned = [...inventory.runtime_dlls, inventory.recording_encoder].find((entry) => entry.filename === file.path);
@@ -965,14 +969,34 @@ function readCurrentProductVersion(workspace) {
   return packageVersion;
 }
 
-function syntheticPe({ dll, marker }) {
-  const bytes = Buffer.alloc(0x120, marker);
+function syntheticPe({ dll, marker, ndiImport = false }) {
+  const bytes = Buffer.alloc(0x600);
+  bytes.fill(marker, 0x500);
   bytes.write("MZ", 0, "latin1");
   bytes.writeUInt32LE(0x80, 0x3c);
   bytes.write("PE\0\0", 0x80, "latin1");
   bytes.writeUInt16LE(0x8664, 0x84);
+  bytes.writeUInt16LE(1, 0x86);
+  bytes.writeUInt16LE(240, 0x94);
   bytes.writeUInt16LE(0x0002 | (dll ? 0x2000 : 0), 0x80 + 22);
   bytes.writeUInt16LE(0x20b, 0x80 + 24);
+  bytes.writeUInt32LE(0x200, 0x98 + 60);
+  bytes.writeUInt32LE(16, 0x98 + 108);
+  bytes.writeUInt32LE(0x400, 0x188 + 8);
+  bytes.writeUInt32LE(0x1000, 0x188 + 12);
+  bytes.writeUInt32LE(0x400, 0x188 + 16);
+  bytes.writeUInt32LE(0x200, 0x188 + 20);
+  // Embedded notices must not be mistaken for loader imports.
+  bytes.write("licenses/Processing.NDI.Lib.Licenses.txt", 0x400, "latin1");
+  if (ndiImport) {
+    bytes.writeUInt32LE(0x1000, 0x98 + 112 + 13 * 8);
+    bytes.writeUInt32LE(64, 0x98 + 112 + 13 * 8 + 4);
+    bytes.writeUInt32LE(1, 0x200);
+    bytes.writeUInt32LE(0x1080, 0x204);
+    bytes.writeUInt32LE(0x10e0, 0x20c);
+    bytes.writeUInt32LE(0x10f0, 0x210);
+    bytes.write("Processing.NDI.Lib.x64.dll\0", 0x280, "latin1");
+  }
   return bytes;
 }
 
@@ -1102,7 +1126,7 @@ async function runSelfTest() {
   let assertions = 0;
   const pass = (condition, label) => { assert.ok(condition, label); assertions += 1; };
   const rejects = (action, pattern, label) => { assert.throws(action, pattern, label); assertions += 1; };
-  pass(showAsioSourceIdentityPaths.length === 70, "Show-ASIO source identity authority remains exactly 70 paths");
+  pass(showAsioSourceIdentityPaths.length === 71, "Show-ASIO source identity authority includes the PE import parser in exactly 71 paths");
   pass(showAsioSourceIdentityPaths.includes("app/src/uiLocalization.ts"), "Show-ASIO source identity includes the AudioOutput UI localization runtime source");
   pass(showAsioCriticalRuntimeIdentityPaths.length === 39, "Show-ASIO critical runtime mutation authority remains exactly 39 paths");
   pass(showAsioEvidenceOnlyPathAllowlist.length === 5, "Show-ASIO evidence-only path allowlist remains narrow and exact");
@@ -1730,6 +1754,28 @@ async function runSelfTest() {
       "one-byte post-manifest mutation is rejected",
     );
     writeFileSync(appPath, originalApp);
+    const ndiTaintedApp = syntheticPe({ dll: false, marker: 0x51, ndiImport: true });
+    const ndiTaintedManifest = structuredClone(fixture.manifest);
+    ndiTaintedManifest.files[0].byteSize = ndiTaintedApp.length;
+    ndiTaintedManifest.files[0].sha256 = hash(ndiTaintedApp);
+    writeFileSync(appPath, ndiTaintedApp);
+    writeFileSync(manifestPath, JSON.stringify(ndiTaintedManifest));
+    rejects(
+      () => checkShowAsioArtifact({
+        workspace: fixture.workspace,
+        artifactDir: fixture.artifactDir,
+        expectedVersion: fixture.version,
+        expectedCommit: fixture.commit,
+        expectedSourceBranch: fixture.sourceBranch,
+        expectedHostBindingSha256: fixture.hostBinding,
+        inventory: fixture.inventory,
+        exportInspector: inspect,
+      }),
+      /must never reference or import Processing\.NDI\.Lib/,
+      "Show-ASIO executable delay-importing Processing.NDI.Lib.x64.dll is rejected",
+    );
+    writeFileSync(appPath, originalApp);
+    writeFileSync(manifestPath, originalManifest);
     const extra = join(fixture.artifactDir, "installer.msi");
     writeFileSync(extra, "forbidden", { flag: "wx" });
     mkdirSync(join(fixture.artifactDir, "empty-installer-dir"));

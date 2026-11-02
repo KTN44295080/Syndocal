@@ -73,13 +73,32 @@ export const canonicalPinnedRecordingEncoder = Object.freeze({
 });
 
 export const canonicalPinnedCommonResourceIdentity = Object.freeze(new Map([
-  ["../../THIRD_PARTY_NOTICES.md\0THIRD_PARTY_NOTICES.md", Object.freeze({ byte_size: 7797, sha256: "98d1628f679efa8f91daed0b893dd7bea0cd99f65a56a4efef623686bf058c87" })],
+  ["../../THIRD_PARTY_NOTICES.md\0THIRD_PARTY_NOTICES.md", Object.freeze({ byte_size: 11341, sha256: "2bdb71a03bf52659bc4b89e8e18b66314a2d7a1408e52663a8ecf11a724c5749" })],
   ["../../licenses/FFmpeg-LGPL-3.0.txt\0licenses/FFmpeg-LGPL-3.0.txt", Object.freeze({ byte_size: 7652, sha256: "97628afebc60f026f5c2b25d7491c46a5c4ee61f693e7cfa07fbd2c03605979b" })],
   ["../../licenses/GPL-3.0.txt\0licenses/GPL-3.0.txt", Object.freeze({ byte_size: 35147, sha256: "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903" })],
   ["../../licenses/FFmpeg-DEPENDENCIES.txt\0licenses/FFmpeg-DEPENDENCIES.txt", Object.freeze({ byte_size: 2726746, sha256: "1a3daf94b43fc3daa000449c71ed6b0e0710d0aeaeae3971626ff22eacbea734" })],
   ["../../licenses/Spout2-BSD-2-Clause.txt\0licenses/Spout2-BSD-2-Clause.txt", Object.freeze({ byte_size: 2726, sha256: "04514504b4636462450722a84452b6fe5f671d1f74f22d68867256267f3030f6" })],
   ["../../licenses/bcdec_rs-MIT.txt\0licenses/bcdec_rs-MIT.txt", Object.freeze({ byte_size: 1060, sha256: "0194fa871df6d82a26d58f3b6e035bed033afdc413e2a6ac0ae2f15b7becbb20" })],
 ]));
+
+export const canonicalPinnedNdiRuntime = Object.freeze({
+  dll: Object.freeze({
+    filename: "Processing.NDI.Lib.x64.dll",
+    version: "6.3.2.0",
+    byte_size: 29863120,
+    sha256: "2b6602075868ba4401f82f417d72424805d69b11ca86078023d0d489ff45dd84",
+    pe_identity: Object.freeze({
+      ...anchoredAmd64PeIdentity,
+      characteristics: 0x2022,
+    }),
+  }),
+  license_resource: Object.freeze({
+    source: "../../licenses/Processing.NDI.Lib.Licenses.txt",
+    destination: "licenses/Processing.NDI.Lib.Licenses.txt",
+    byte_size: 12347,
+    sha256: "25fb86f3e3632769542a5edf5de5bd3d7d431da75b1a304529b7647d07e0d555",
+  }),
+});
 
 export const canonicalKnownAsioBridgeSha256 = Object.freeze([
   "73ede85d5a5568f5dcad33990158c3bd755590c6d06c797166ac7041f6d786f0",
@@ -308,6 +327,12 @@ function freezeInventory(inventory) {
   for (const resource of inventory.common_resources) Object.freeze(resource);
   Object.freeze(inventory.recording_encoder.pe_identity);
   Object.freeze(inventory.recording_encoder);
+  if (inventory.ndi_runtime) {
+    Object.freeze(inventory.ndi_runtime.dll.pe_identity);
+    Object.freeze(inventory.ndi_runtime.dll);
+    Object.freeze(inventory.ndi_runtime.license_resource);
+    Object.freeze(inventory.ndi_runtime);
+  }
   Object.freeze(inventory.ffmpeg_build);
   Object.freeze(inventory.runtime_dlls);
   Object.freeze(inventory.common_resources);
@@ -316,9 +341,9 @@ function freezeInventory(inventory) {
 }
 
 export function validateWindowsRuntimeInventory(inventory, label = runtimeInventoryRelativePath) {
-  assertExactKeys(inventory, ["schema_version", "platform", "ffmpeg_build", "runtime_dlls", "recording_encoder", "common_resources", "known_asio_bridge_sha256"], label);
-  if (inventory.schema_version !== 3 || inventory.platform !== "windows-x86_64") {
-    throw new Error(label + " must be schema_version 3 for windows-x86_64 (legacy or future inventories are rejected).");
+  assertExactKeys(inventory, ["schema_version", "platform", "ffmpeg_build", "runtime_dlls", "recording_encoder", "common_resources", "ndi_runtime", "known_asio_bridge_sha256"], label);
+  if (inventory.schema_version !== 4 || inventory.platform !== "windows-x86_64") {
+    throw new Error(label + " must be schema_version 4 for windows-x86_64 (legacy or future inventories are rejected).");
   }
   assertExactKeys(inventory.ffmpeg_build, Object.keys(canonicalPinnedFfmpegBuild), label + " FFmpeg provenance");
   for (const [key, expected] of Object.entries(canonicalPinnedFfmpegBuild)) {
@@ -380,6 +405,35 @@ export function validateWindowsRuntimeInventory(inventory, label = runtimeInvent
   if (seenCommonResources.size !== canonicalCommonBundleResources.length) {
     throw new Error(label + " common_resources are incomplete.");
   }
+  const ndi = inventory.ndi_runtime;
+  assertExactKeys(ndi, ["dll", "license_resource"], label + " ndi_runtime");
+  assertExactKeys(ndi.dll, ["filename", "version", "byte_size", "sha256", "pe_identity"], label + " NDI runtime DLL");
+  assertPlainFilename(ndi.dll.filename, label + " NDI runtime DLL filename");
+  if (ndi.dll.filename !== canonicalPinnedNdiRuntime.dll.filename) {
+    throw new Error(label + " NDI runtime DLL filename must be " + canonicalPinnedNdiRuntime.dll.filename + ".");
+  }
+  if (typeof ndi.dll.version !== "string" || ndi.dll.version !== canonicalPinnedNdiRuntime.dll.version) {
+    throw new Error(label + " NDI runtime DLL version must be " + canonicalPinnedNdiRuntime.dll.version + ".");
+  }
+  assertPositiveInteger(ndi.dll.byte_size, label + " NDI runtime DLL byte_size");
+  assertSha256(ndi.dll.sha256, label + " NDI runtime DLL SHA-256");
+  assertExactKeys(ndi.dll.pe_identity, Object.keys(canonicalPinnedNdiRuntime.dll.pe_identity), label + " NDI runtime DLL PE identity");
+  for (const [key, value] of Object.entries(canonicalPinnedNdiRuntime.dll.pe_identity)) {
+    if (ndi.dll.pe_identity[key] !== value) {
+      throw new Error(label + " NDI runtime DLL PE identity must be the pinned PE32+ AMD64 DLL identity.");
+    }
+  }
+  assertExactKeys(ndi.license_resource, ["source", "destination", "byte_size", "sha256"], label + " NDI license resource");
+  assertResourcePath(ndi.license_resource.source, label + " NDI license resource source");
+  assertResourcePath(ndi.license_resource.destination, label + " NDI license resource destination");
+  if (
+    ndi.license_resource.source !== canonicalPinnedNdiRuntime.license_resource.source
+    || ndi.license_resource.destination !== canonicalPinnedNdiRuntime.license_resource.destination
+  ) {
+    throw new Error(label + " NDI license resource source/destination is unapproved or remapped.");
+  }
+  assertPositiveInteger(ndi.license_resource.byte_size, label + " NDI license resource byte_size");
+  assertSha256(ndi.license_resource.sha256, label + " NDI license resource SHA-256");
   if (!Array.isArray(inventory.known_asio_bridge_sha256) || inventory.known_asio_bridge_sha256.length === 0) {
     throw new Error(label + " must pin one or more known ASIO bridge SHA-256 values.");
   }
@@ -422,6 +476,20 @@ export function enforceWindowsRuntimeInventoryAnchors(inventory, label = runtime
       );
     }
   }
+  const ndiDll = inventory.ndi_runtime.dll;
+  if (
+    ndiDll.byte_size !== canonicalPinnedNdiRuntime.dll.byte_size
+    || ndiDll.sha256 !== canonicalPinnedNdiRuntime.dll.sha256
+  ) {
+    throw new Error(label + " NDI runtime DLL contradicts the independently anchored approved byte_size/SHA-256 authority.");
+  }
+  const ndiLicense = inventory.ndi_runtime.license_resource;
+  if (
+    ndiLicense.byte_size !== canonicalPinnedNdiRuntime.license_resource.byte_size
+    || ndiLicense.sha256 !== canonicalPinnedNdiRuntime.license_resource.sha256
+  ) {
+    throw new Error(label + " NDI license resource contradicts the independently anchored approved byte_size/SHA-256 authority.");
+  }
   if (
     JSON.stringify([...inventory.known_asio_bridge_sha256].sort())
       !== JSON.stringify([...canonicalKnownAsioBridgeSha256].sort())
@@ -453,8 +521,89 @@ export function commonBundleResourceMap(inventory = loadWindowsRuntimeInventory(
 }
 
 export function windowsFfmpegBundleResourceMap(inventory = loadWindowsRuntimeInventory()) {
-  return Object.freeze(
-    Object.fromEntries([...inventory.runtime_dlls, inventory.recording_encoder].map((runtime) => ["../../target/release/" + runtime.filename, runtime.filename])),
+  const entries = [
+    ...[...inventory.runtime_dlls, inventory.recording_encoder].map((runtime) => [
+      "../../target/release/" + runtime.filename,
+      runtime.filename,
+    ]),
+  ];
+  if (inventory.ndi_runtime) {
+    entries.push([
+      "../../target/release/" + inventory.ndi_runtime.dll.filename,
+      inventory.ndi_runtime.dll.filename,
+    ]);
+    entries.push([
+      inventory.ndi_runtime.license_resource.source,
+      inventory.ndi_runtime.license_resource.destination,
+    ]);
+  }
+  return Object.freeze(Object.fromEntries(entries));
+}
+
+export function resolvePinnedNdiRuntimeDll({
+  environment = process.env,
+  inventory = loadWindowsRuntimeInventory(),
+} = {}) {
+  const runtime = inventory.ndi_runtime.dll;
+  const candidateDirs = [];
+  let explicitKey = null;
+  const pushDir = (candidate) => {
+    if (typeof candidate !== "string" || candidate.trim().length === 0) return;
+    const trimmed = candidate.trim();
+    if (!candidateDirs.includes(trimmed)) candidateDirs.push(trimmed);
+  };
+  for (const key of [
+    "SYNDOCAL_NDI_RUNTIME_DIR",
+    "NDI_RUNTIME_DIR_V6",
+    "NDI_RUNTIME_DIR_V5",
+    "NDI_RUNTIME_DIR_V4",
+    "NDI_RUNTIME_DIR_V3",
+    "NDI_RUNTIME_DIR_V2",
+  ]) {
+    if (Object.hasOwn(environment, key)) {
+      if (typeof environment[key] !== "string" || environment[key].trim() !== environment[key]
+        || !isAbsolute(environment[key])) {
+        throw new Error(key + " must select one absolute NDI runtime directory without surrounding whitespace.");
+      }
+      pushDir(environment[key]);
+      explicitKey = key;
+      break;
+    }
+  }
+  if (!explicitKey && Object.hasOwn(environment, "NDI_SDK_DIR")) {
+    if (typeof environment.NDI_SDK_DIR !== "string" || environment.NDI_SDK_DIR.trim() !== environment.NDI_SDK_DIR
+      || !isAbsolute(environment.NDI_SDK_DIR)) {
+      throw new Error("NDI_SDK_DIR must select one absolute SDK directory without surrounding whitespace.");
+    }
+    pushDir(join(environment.NDI_SDK_DIR, "Bin", "x64"));
+    explicitKey = "NDI_SDK_DIR";
+  }
+  const programFiles = typeof environment.ProgramFiles === "string" && environment.ProgramFiles.trim().length > 0
+    ? environment.ProgramFiles.trim()
+    : "C:\\Program Files";
+  if (!explicitKey) {
+    pushDir(join(programFiles, "NDI", "NDI 6 Runtime", "v6"));
+    pushDir(join(programFiles, "NDI", "NDI 6 SDK", "Bin", "x64"));
+  }
+
+  for (const candidateDir of candidateDirs) {
+    if (!existsSync(candidateDir)) continue;
+    const dllCandidate = join(candidateDir, runtime.filename);
+    if (!existsSync(dllCandidate)) continue;
+    const verifiedDir = assertSafeExternalDirectory(candidateDir, "NDI 6 Runtime directory");
+    const verifiedDllPath = join(verifiedDir, runtime.filename);
+    const record = verifyPinnedRuntimeFile(
+      verifiedDllPath,
+      runtime,
+      "Pinned NDI 6 runtime " + runtime.filename,
+      { allowedRoots: [verifiedDir] },
+    );
+    return { directory: verifiedDir, dllPath: verifiedDllPath, record };
+  }
+  throw new Error(
+    explicitKey
+      ? "Selected " + explicitKey + " does not contain the pinned " + runtime.filename + "; repair that directory or remove the explicit override. No fallback is permitted."
+      : "Pinned NDI 6 Runtime (" + runtime.filename + ") was not found in SYNDOCAL_NDI_RUNTIME_DIR, NDI_RUNTIME_DIR_V6, NDI_SDK_DIR/Bin/x64, or C:\\Program Files\\NDI\\NDI 6 Runtime\\v6.",
   );
 }
 

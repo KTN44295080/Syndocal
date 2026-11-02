@@ -472,7 +472,7 @@ unaccepted.
 - 変形、クロップ、色補正、pixelate / blur / glow / edge / color key
 - レイヤーごとに最大8段のordered ISF 2 stack。14種の内蔵FXまたは単一pass ISFを追加し、段別に選択、並べ替え、bypass、reset、削除、parameter操作して`.sdc`へ埋め込み保存
 - wgpuネイティブ出力、複数Display、投影比率/keystone/lens/corner warp補正
-- feature-gated NDI送受信。SDK未導入時は起動失敗せず`NotBuilt`を表示
+- 通常Windowsパッケージ（MIT）でNDI®送受信を既定有効化（`Processing.NDI.Lib.x64.dll`および`licenses/Processing.NDI.Lib.Licenses.txt`を同梱し、Priority 1で実行ファイル隣接DLLを解決、Priority 2/3で`NDI_RUNTIME_DIR_V6`..`V2` / `NDI_SDK_DIR` / `C:\Program Files\NDI\NDI 6 Runtime\v6`へフォールバック）。GPL-ASIO（`show-asio`）パッケージからはNDI featureおよびDLLを厳格に除外
 
 ### 統合制御
 
@@ -640,3 +640,16 @@ CIではcold clean Windows runnerでも、いかなるtestより先に`prepare:r
 Syndocal本体は[MIT License](LICENSE)です。一般動画デコード用の配布物は、
 GPLコンポーネントを無効化したFFmpeg 8.1共有ライブラリを動的リンクします。
 詳細とLGPLv3本文は[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)を参照してください。
+
+### NDI® 商標・ライセンス表記 (Ordinary Windows Package)
+
+NDI® is a registered trademark of Vizrt NDI AB.
+
+- NDI® 公式サイト: <https://ndi.video/>
+- NDI® Tools (無償テスト・監視ツール): <https://ndi.video/tools/>
+- NDI® SDK Licensing: <https://docs.ndi.video/all/developing-with-ndi/sdk/licensing>
+- NDI® SDK Windows Installation & Redistribution: <https://docs.ndi.video/all/developing-with-ndi/sdk/installing-the-sdk/windows-installation>
+- NDI® SDK License Agreement: `http://ndi.link/ndisdk_license`
+- NDI® 6 Runtime Redistributable: `http://ndi.link/NDIRedistV6`
+
+通常版のWindowsインストーラー（MITパッケージ）は、NDI® SDK License Agreementに基づき`Processing.NDI.Lib.x64.dll`（NDI 6.3.2.0）および`licenses/Processing.NDI.Lib.Licenses.txt`を同梱しています。GPLv3の`show-asio`パッケージには`ndi` featureおよび`Processing.NDI.Lib.x64.dll`を一切含めません。操作方法の詳細は[USER_GUIDE.md](USER_GUIDE.md)を参照してください。

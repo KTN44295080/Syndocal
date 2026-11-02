@@ -1,4 +1,5 @@
 import { For, onMount, Show, createEffect, createMemo, createSignal } from "solid-js";
+import { NdiAttribution } from "./NdiAttribution";
 import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
 import { displayAddDiagnosticText, displayAddErrorMessage, loadUiLocale } from "../uiLocalization";
 import type { CompositionSummary, VideoOutputKind } from "../types";
@@ -304,6 +305,9 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
                 </select>
               </label>
               <p class="hint videoOutputQuickHint">New outputs follow the current output state and may start sending immediately.</p>
+              <Show when={props.kind === "NdiSender"}>
+                <NdiAttribution class="hint videoOutputQuickHint" output />
+              </Show>
               <button class="primary" data-video-output-add
                 disabled={!externalAvailable() || compositionId() === null || addPending()}
                 onClick={() => void addSelectedExternalOutput()}>
@@ -453,6 +457,9 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
               <p class="hint" data-syphon-output-help>
                 Publishes video to Syphon clients on this Mac and follows the current output state.
               </p>
+            </Show>
+            <Show when={props.kind === "NdiSender"}>
+              <NdiAttribution class="hint" output />
             </Show>
             <Show when={props.kind !== "Display"}>
               <label>

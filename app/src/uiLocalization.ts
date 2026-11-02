@@ -4668,6 +4668,15 @@ const japaneseText: Record<string, string> = {
   "LIVE: this changes Program right away.": "LIVE：本番映像にすぐ反映されます。",
   "No timeline placements are linked to this Cue.": "このキューにリンクされたタイムライン配置はありません。",
   "No incoming jumps will be changed.": "このキューへのジャンプは変更されません。",
+  "NDI® is a registered trademark of Vizrt NDI AB.": "NDI® は Vizrt NDI AB の登録商標です。 (NDI® is a registered trademark of Vizrt NDI AB.)",
+  "NDI® website:": "NDI® 公式サイト：",
+  "Free NDI® Tools:": "無料の NDI® Tools：",
+  "About & Legal Notices": "このソフトについて・法的通知",
+  "About &amp; Legal Notices": "このソフトについて・法的通知",
+  "NDI® Attribution": "NDI® 商標・ライセンス表記",
+  "NDI® 6 Runtime:": "NDI® 6 Runtime：",
+  "NDI® 6 Runtime is bundled in the ordinary Windows package under the NDI SDK License Agreement (THIRD_PARTY_NOTICES.md / licenses/Processing.NDI.Lib.Licenses.txt).":
+    "NDI® 6 Runtime は NDI SDK License Agreement に基づき通常版 Windows パッケージに同梱されています (THIRD_PARTY_NOTICES.md / licenses/Processing.NDI.Lib.Licenses.txt)。",
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [

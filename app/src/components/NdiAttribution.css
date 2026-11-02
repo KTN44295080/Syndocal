@@ -1,0 +1,13 @@
+.ndiAttributionUrl {
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Menu rows truncate to one line; a legal notice must stay readable in full. */
+.appProjectMenu [data-about-legal-disclosure] :is(span, small) {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

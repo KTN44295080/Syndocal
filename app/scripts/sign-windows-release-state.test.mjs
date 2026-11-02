@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collectWindowsSigningComponents, validateWindowsSigningState, verifyWindowsSigningComponent, verifyWindowsSigningTree } from "./sign-windows-release-state.mjs";
+import { collectWindowsSigningComponents, ndiVendorCertificateThumbprint, validateWindowsSigningState, verifyWindowsSigningComponent, verifyWindowsSigningTree } from "./sign-windows-release-state.mjs";
+import { canonicalPinnedNdiRuntime } from "./windows-runtime-inventory.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const root = mkdtempSync(join(tmpdir(), "syndocal-signing-contract-"));
@@ -36,6 +37,23 @@ try {
   const signedInspect = (value) => value.equals(runtime) ? { status: "NotSigned", thumbprint: null }
     : { status: "Valid", thumbprint, subject: "CN=SignPath Foundation, O=SignPath Foundation", timestamped: true };
   pass(() => verifyWindowsSigningTree(signed, { ...options, inspect: signedInspect }));
+  const vendorComponent = { path: "payload/Processing.NDI.Lib.x64.dll", sha256: canonicalPinnedNdiRuntime.dll.sha256,
+    ownership: "upstream", authenticode: "valid", certificateThumbprint: ndiVendorCertificateThumbprint };
+  for (const base of [unsigned, signed]) {
+    const withVendor = structuredClone(base);
+    withVendor.components.push(structuredClone(vendorComponent));
+    pass(() => validateWindowsSigningState(withVendor));
+    for (const mutate of [
+      (c) => { c.sha256 = "0".repeat(64); },
+      (c) => { c.path = "payload/other.dll"; },
+      (c) => { c.certificateThumbprint = thumbprint; },
+      (c) => { c.authenticode = "not-signed"; c.certificateThumbprint = null; },
+    ]) {
+      const changed = structuredClone(withVendor);
+      mutate(changed.components.at(-1));
+      rejects(() => validateWindowsSigningState(changed), /Mixed/);
+    }
+  }
   const mutateReject = (base, mutate, pattern) => { const value = structuredClone(base); mutate(value); rejects(() => verifyWindowsSigningTree(value, { ...options, inspect: base === signed ? signedInspect : options.inspect }), pattern); };
   rejects(() => validateWindowsSigningState(undefined), /must be an object/);
   mutateReject(unsigned, (s) => { s.unsignedReason = null; }, /explicit reason/);

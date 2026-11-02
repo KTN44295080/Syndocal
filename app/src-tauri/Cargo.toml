@@ -10,6 +10,8 @@ license.workspace = true
 # is absent the UI fails closed instead of silently falling back or guessing a
 # device.  This makes ASIO a normal selectable backend without bundling the
 # SDK-derived bridge into the approved default package.
+# Windows adds NDI through tauri.windows.conf.json; other platforms keep
+# their SDK-independent defaults. Direct Windows Cargo tests select the ndi feature.
 default = ["libav", "spout", "asio", "syphon"]
 asio = ["dep:libloading"]
 show-asio = ["asio"]

@@ -137,3 +137,63 @@ This is the same lossy ordered-DMX-layout conversion described above. Adjacent
 coarse/fine pairs are represented as 16-bit controls; unrecognized channel
 semantics remain addressable as numbered generic controls so the source mode's
 DMX footprint is preserved exactly.
+
+## NDI® 6 Runtime and grafton-ndi (Windows ordinary package)
+
+NDI® is a registered trademark of Vizrt NDI AB. Learn more about NDI® and free
+NDI® Tools at https://ndi.video/ and https://ndi.video/tools/.
+
+The ordinary MIT-licensed Windows package of Syndocal enables the `ndi` Cargo
+feature (Windows platform `build.features = ["ndi"]`), delay-loads
+`Processing.NDI.Lib.x64.dll` (`/DELAYLOAD:Processing.NDI.Lib.x64.dll`), and
+bundles the unmodified Windows x64 NDI 6 runtime DLL alongside its third-party
+notice file:
+
+- Runtime DLL: `Processing.NDI.Lib.x64.dll` (NDI 6 Runtime `6.3.2.0`,
+  29,863,120 bytes, SHA-256
+  `2b6602075868ba4401f82f417d72424805d69b11ca86078023d0d489ff45dd84`)
+- Runtime component third-party notices: `licenses/Processing.NDI.Lib.Licenses.txt`
+  (12,347 bytes, SHA-256
+  `25fb86f3e3632769542a5edf5de5bd3d7d431da75b1a304529b7647d07e0d555`)
+- Rust FFI binding: `grafton-ndi` 0.11.0 (https://crates.io/crates/grafton-ndi,
+  Apache-2.0)
+- Official NDI SDK licensing documentation:
+  https://docs.ndi.video/all/developing-with-ndi/sdk/licensing
+- Official NDI SDK Windows installation & redistribution documentation:
+  https://docs.ndi.video/all/developing-with-ndi/sdk/installing-the-sdk/windows-installation
+- Official NDI SDK License Agreement: http://ndi.link/ndisdk_license
+- Official NDI 6 Runtime redistributable: http://ndi.link/NDIRedistV6
+
+NDI runtime component license terms (NDI SDK License Agreement §3.d and §10,
+scoped strictly to the proprietary `Processing.NDI.Lib.x64.dll` runtime binary
+and never restricting your MIT License rights in Syndocal's own source code or
+binaries):
+
+1. `Processing.NDI.Lib.x64.dll` is proprietary to Vizrt NDI AB and its
+   licensors and is distributed in object-code form only for use with
+   Syndocal's NDI video send and receive features.
+2. You must not modify the NDI runtime component; reverse engineer,
+   disassemble, recompile or attempt to reverse engineer the component or its
+   NDI protocols; circumvent its technical limitations; or remove, obscure or
+   alter its proprietary notices or labels. You must not redistribute the
+   component standalone outside an authorized application distribution.
+3. `Processing.NDI.Lib.x64.dll` is provided "AS IS" without warranty of any
+   kind from Vizrt NDI AB or its suppliers, and Vizrt NDI AB disclaims all
+   warranties and liability for damages arising from the NDI runtime component
+   to the maximum extent permitted by law.
+4. You must comply with relevant United States export laws and regulations
+   when exporting the NDI component or a product containing it.
+5. Copyright (C) NDI, Inc. All rights reserved. Copyright (C) 2023-2026
+   Vizrt NDI AB. All rights reserved.
+6. Third-party developers using Syndocal to develop products using the NDI
+   component must comply with the NDI SDK license, maintain current and complete
+   NDI compatibility, and include the §3.d terms in their own end-user licenses.
+7. The NDI SDK license is governed by Swedish law, without its choice-of-law
+   rules, with exclusive jurisdiction in Sweden (§10). These component terms
+   do not change the licenses of Syndocal, FFmpeg or other independent components.
+
+Packaging separation boundary: the local-only GPL-3.0 `show-asio` build
+(`app/scripts/build-windows-show-asio.mjs`) is compiled with
+`--no-default-features --features libav,spout,show-asio` and never enables the
+`ndi` feature, never links or delay-loads `Processing.NDI.Lib.x64.dll`, and
+never stages `Processing.NDI.Lib.x64.dll` in its artifact directory.

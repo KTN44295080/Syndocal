@@ -2,6 +2,9 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Syndocal Show ASIO Local",
   "identifier": "jp.seraf.ktn.syndocal.show-asio-local",
+  "build": {
+    "features": []
+  },
   "plugins": {
     "updater": {
       "pubkey": "",

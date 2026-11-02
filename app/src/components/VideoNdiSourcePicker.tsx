@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
 import "./VideoNdiSourcePicker.css";
+import { NdiAttribution } from "./NdiAttribution";
 import { ndiDiscoveryStateMessage, ndiSourceAllowsAdd, parseVideoNdiDiscovery, type VideoNdiDiscovery } from "../videoNdiSources";
 
 export interface VideoNdiSourcePickerProps {
@@ -80,6 +81,13 @@ export function VideoNdiSourcePicker(props: VideoNdiSourcePickerProps) {
           <p data-no-localize>{discovery()?.message}</p>
         </details>
       </Show>
+      <Show when={discovery()?.state === "runtime_missing"}>
+        <p class="fieldHint">
+          <span>NDI® 6 Runtime:</span>{" "}
+          <span class="ndiAttributionUrl" data-no-localize>https://ndi.link/NDIRedistV6</span>
+        </p>
+      </Show>
+      <NdiAttribution class="fieldHint" />
     </section>
   );
 }
