@@ -1259,40 +1259,7 @@ impl NativeResidentDisplaySession {
         }
         match execution {
             NativeResidentExecution::BudgetDeclined(reason) => {
-                // A pre-execution refusal produces no frame. Complete any
-                // already-finished CPU handover, retaining every charged owner.
-                // One refusal keeps history, cache and owner (Task66). A second
-                // in a row means the workload cannot fit beside its own
-                // retained CPU-backed history, which no refused tick ever
-                // replaces: retire that history and release the CPU queues so
-                // the next tick runs from fresh frames instead of freezing.
-                self.budget_refusals += 1;
-                if self.budget_refusals >= 2 {
-                    if let Some(ResidentHistoryState::Active(active)) = self.history.take() {
-                        for mut history in active.session.into_histories() {
-                            history.retire_pass();
-                            self.retiring_histories.push(history);
-                        }
-                        self.release_retiring_history_entries();
-                    }
-                    renderer.release_native_cpu_queues_for_budget();
-                }
-                if matches!(self.history, Some(ResidentHistoryState::Handover(_))) {
-                    self.publish_history_to_cpu(renderer)?;
-                    self.normalize_cpu_queue_keys(renderer);
-                }
-                if let NativeGpuDecline::BudgetExceeded {
-                    live,
-                    requested,
-                    limit,
-                } = reason
-                {
-                    self.deferred_budget = Some((live, requested, limit));
-                    return Err(format!("native tick budget refused: {reason:?}"));
-                }
-                Err(format!(
-                    "unexpected non-budget admission deferral: {reason:?}"
-                ))
+                self.defer_budget_output(renderer, reason)
             }
             NativeResidentExecution::Cpu { reason, results } => {
                 self.leave_resident_tick();
@@ -1401,6 +1368,53 @@ impl NativeResidentDisplaySession {
         if let Some(compositor) = &self.compositor {
             compositor.release_pooled_outputs();
         }
+    }
+
+    /// Both CPU entry points must be able to retire history that their own
+    /// refused ticks can never replace. The first refusal preserves it; later
+    /// refusals invalidate queue plans through the canonical release operation.
+    fn defer_budget_output<P: VideoFrameProvider>(
+        &mut self,
+        renderer: &mut VideoPreviewRenderer<P>,
+        reason: NativeGpuDecline,
+    ) -> Result<NativeResidentDisplayFrame, String> {
+        // A broker admission refusal produces no output. Complete any
+        // already-finished CPU handover, retaining every charged owner.
+        // One refusal keeps history, cache and owner (Task66). A second
+        // in a row means the workload cannot fit beside its own
+        // retained CPU-backed history, which no refused tick ever
+        // replaces: retire that history and release the CPU queues so
+        // the next tick runs from fresh frames instead of freezing.
+        self.budget_refusals = self.budget_refusals.saturating_add(1);
+        if self.budget_refusals >= 2 {
+            match self.history.take() {
+                Some(ResidentHistoryState::Active(active)) => {
+                    for mut history in active.session.into_histories() {
+                        history.retire_pass();
+                        self.retiring_histories.push(history);
+                    }
+                    self.release_retiring_history_entries();
+                }
+                other => self.history = other,
+            }
+            renderer.release_native_cpu_queues_for_budget();
+        }
+        if matches!(self.history, Some(ResidentHistoryState::Handover(_))) {
+            self.publish_history_to_cpu(renderer)?;
+            self.normalize_cpu_queue_keys(renderer);
+        }
+        if let NativeGpuDecline::BudgetExceeded {
+            live,
+            requested,
+            limit,
+        } = reason
+        {
+            self.deferred_budget = Some((live, requested, limit));
+            return Err(format!("native tick budget refused: {reason:?}"));
+        }
+        Err(format!(
+            "unexpected non-budget admission deferral: {reason:?}"
+        ))
     }
 
     /// A non-resident tick discards its resolved predecessor (zero presents)
@@ -1523,6 +1537,7 @@ impl NativeResidentDisplaySession {
                 || incoming_plan.output_opacity <= f32::EPSILON
                 || incoming_plan.composition.blackout);
         if both_black {
+            self.budget_refusals = 0;
             self.follow_last_valid = None;
             self.cache
                 .blackout()
@@ -1566,82 +1581,100 @@ impl NativeResidentDisplaySession {
             })
             .map(|cached| Arc::clone(&cached.owner));
         let owner = self.owner.take();
-        let (owner, output) = renderer.with_native_cpu_owner(owner, request.frame, |renderer| {
-            let outgoing_result = renderer.prepare_native_cpu_artistic_with_plan(
-                outgoing,
-                context,
-                transitions,
-                &outgoing_plan,
-                extent.0,
-                extent.1,
-                cancellation,
-            )?;
-            if outgoing_result.evidence.freshness != crate::VideoOutputRenderFreshness::Fresh
-                || outgoing_result.evidence.error.is_some()
-            {
-                return renderer.capture_native_cpu_output(outgoing_result);
-            }
-            let incoming_result = renderer.prepare_native_cpu_artistic_with_plan(
-                incoming,
-                context,
-                transitions,
-                &incoming_plan,
-                extent.0,
-                extent.1,
-                cancellation,
-            )?;
-            if incoming_result.evidence.freshness != crate::VideoOutputRenderFreshness::Fresh
-                || incoming_result.evidence.error.is_some()
-            {
-                return renderer.capture_native_cpu_output(incoming_result);
-            }
-            let contract = VideoOutputPresentationContract {
-                project_render_epoch: context.project_render_epoch,
-                output_id: self.output_id,
-                width: extent.0,
-                height: extent.1,
-                output_mapping_identity: request.mapping_identity,
-            };
-            for result in [&outgoing_result, &incoming_result] {
-                contract.admit(result).map_err(|error| {
-                    crate::VideoPreviewError::Runtime(crate::VideoRuntimeError::NativeGpu(format!(
-                        "Follow side admission rejected: {error:?}"
-                    )))
-                })?;
-            }
-            let combined = renderer.render_native_follow_output_transition(
-                crate::native_cpu_output::NativeFollowTransitionRequest {
-                    outgoing: outgoing_result.frame(),
-                    incoming: incoming_result.frame(),
-                    extent,
-                    kind,
-                    curve,
-                    progress_millis,
-                    source_timeline_id,
-                    transition_chain,
-                    last_valid: last_valid.as_ref().map(|owner| owner.frame.as_ref()),
-                    audio_frame: context.audio_frame,
-                },
-                cancellation,
-            )?;
-            renderer.capture_native_cpu_output(crate::VideoOutputArtisticRenderResult {
-                payload: combined.payload,
-                output_mapping: request.mapping.clone(),
-                output_mapping_identity: request.mapping_identity,
-                evidence: crate::VideoOutputRenderEvidence {
+        let (owner, output, refusal) =
+            renderer.with_native_cpu_owner_budgeted(owner, request.frame, |renderer| {
+                let outgoing_result = renderer.prepare_native_cpu_artistic_with_plan(
+                    outgoing,
+                    context,
+                    transitions,
+                    &outgoing_plan,
+                    extent.0,
+                    extent.1,
+                    cancellation,
+                )?;
+                if outgoing_result.evidence.freshness != crate::VideoOutputRenderFreshness::Fresh
+                    || outgoing_result.evidence.error.is_some()
+                {
+                    return renderer.capture_native_cpu_output(outgoing_result);
+                }
+                let incoming_result = renderer.prepare_native_cpu_artistic_with_plan(
+                    incoming,
+                    context,
+                    transitions,
+                    &incoming_plan,
+                    extent.0,
+                    extent.1,
+                    cancellation,
+                )?;
+                if incoming_result.evidence.freshness != crate::VideoOutputRenderFreshness::Fresh
+                    || incoming_result.evidence.error.is_some()
+                {
+                    return renderer.capture_native_cpu_output(incoming_result);
+                }
+                let contract = VideoOutputPresentationContract {
                     project_render_epoch: context.project_render_epoch,
                     output_id: self.output_id,
-                    freshness: combined.evidence.freshness,
-                    error: combined.evidence.error,
-                },
-            })
-        });
+                    width: extent.0,
+                    height: extent.1,
+                    output_mapping_identity: request.mapping_identity,
+                };
+                for result in [&outgoing_result, &incoming_result] {
+                    contract.admit(result).map_err(|error| {
+                        crate::VideoPreviewError::Runtime(crate::VideoRuntimeError::NativeGpu(
+                            format!("Follow side admission rejected: {error:?}"),
+                        ))
+                    })?;
+                }
+                let combined = renderer.render_native_follow_output_transition(
+                    crate::native_cpu_output::NativeFollowTransitionRequest {
+                        outgoing: outgoing_result.frame(),
+                        incoming: incoming_result.frame(),
+                        extent,
+                        kind,
+                        curve,
+                        progress_millis,
+                        source_timeline_id,
+                        transition_chain,
+                        last_valid: last_valid.as_ref().map(|owner| owner.frame.as_ref()),
+                        audio_frame: context.audio_frame,
+                    },
+                    cancellation,
+                )?;
+                renderer.capture_native_cpu_output(crate::VideoOutputArtisticRenderResult {
+                    payload: combined.payload,
+                    output_mapping: request.mapping.clone(),
+                    output_mapping_identity: request.mapping_identity,
+                    evidence: crate::VideoOutputRenderEvidence {
+                        project_render_epoch: context.project_render_epoch,
+                        output_id: self.output_id,
+                        freshness: combined.evidence.freshness,
+                        error: combined.evidence.error,
+                    },
+                })
+            });
         self.owner.restore(owner);
+        if let Some(reason) = refusal {
+            // No owner/reservation is discarded to manufacture healthy idle.
+            // A partial side may already have advanced its canonical clocks;
+            // this skips the output, without rerunning that side or publishing
+            // a Fresh frame/Follow receipt for this refused tick.
+            if !cancellation.is_cancelled()
+                && self.owner.state() == crate::native_gpu_contract::GpuOwnerState::Active
+                && !self.owner.has_unfinished_logical_frame()
+                && self.unsubmitted.is_empty()
+                && self.recovered_history.is_none()
+                && self.retirements.is_empty()
+                && renderer.native_cpu_retained_reservations.is_empty()
+            {
+                self.evidence.counters_mut().budget_declines += 1;
+                return self.defer_budget_output(renderer, reason);
+            }
+        }
+        let output =
+            output.map_err(|error| format!("canonical shared Follow failed: {error:?}"))?;
+        self.budget_refusals = 0;
         let key = request.key.clone();
-        let frame = self.cpu_display_frame(
-            request,
-            output.map_err(|error| format!("canonical shared Follow failed: {error:?}"))?,
-        )?;
+        let frame = self.cpu_display_frame(request, output)?;
         if let ResidentDisplayContent::Cpu(cpu) = &frame.content {
             self.follow_last_valid = Some(ResidentFollowLastValid {
                 key,

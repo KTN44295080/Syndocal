@@ -10,7 +10,7 @@ use crate::native_gpu_budget::{
     AllocationCharge, ChargeKind, FrameReservation, NativeAllocationPlan,
 };
 use crate::native_gpu_context::NativeGpuOwner;
-use crate::native_gpu_contract::{MaterializationFailure, NativeFrameId};
+use crate::native_gpu_contract::{MaterializationFailure, NativeFrameId, NativeGpuDecline};
 use crate::native_gpu_result::{NativeCpuFrameOwner, NativeCpuOutcome, NativeCpuResults};
 
 pub(crate) struct NativeCpuOutput {
@@ -215,6 +215,19 @@ pub(crate) struct NativeCpuBridge {
     inputs: Vec<Arc<VideoFrame>>,
     aliases: Vec<Arc<NativeCpuFrameOwner>>,
     rejected: Vec<FrameReservation>,
+    // The exact error returned at a broker quote keeps its typed admission cause.
+    // A caught refusal must not relabel a later, unrelated native failure.
+    budget_refusal: Option<(VideoRuntimeError, NativeGpuDecline)>,
+}
+
+impl NativeCpuBridge {
+    fn quote_error(&mut self, operation: &str, reason: NativeGpuDecline) -> VideoRuntimeError {
+        let error = native_error(format!("{operation}: {reason:?}"));
+        if matches!(reason, NativeGpuDecline::BudgetExceeded { .. }) {
+            self.budget_refusal = Some((error.clone(), reason));
+        }
+        error
+    }
 }
 
 struct NeverCancelled;
@@ -265,6 +278,23 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         frame: NativeFrameId,
         operation: impl FnOnce(&mut Self) -> Result<T, VideoPreviewError>,
     ) -> (NativeGpuOwner, Result<T, VideoPreviewError>) {
+        let (owner, result, _) = self.with_native_cpu_owner_budgeted(owner, frame, operation);
+        (owner, result)
+    }
+
+    /// Follow needs the broker's exact refusal, rather than treating healthy
+    /// budget pressure as a terminal native fault. The owner is restored before
+    /// the caller can shed queues; partial side work is never rerun here.
+    pub(crate) fn with_native_cpu_owner_budgeted<T>(
+        &mut self,
+        owner: NativeGpuOwner,
+        frame: NativeFrameId,
+        operation: impl FnOnce(&mut Self) -> Result<T, VideoPreviewError>,
+    ) -> (
+        NativeGpuOwner,
+        Result<T, VideoPreviewError>,
+        Option<NativeGpuDecline>,
+    ) {
         if self.native_cpu_bridge.is_some()
             || owner.context().id().owner_id != frame.output_id
             || self
@@ -279,6 +309,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 Err(VideoPreviewError::Runtime(native_error(
                     "canonical CPU bridge requires its sole shared owner and runtime",
                 ))),
+                None,
             );
         }
         let mut aliases = Vec::<Arc<NativeCpuFrameOwner>>::new();
@@ -291,7 +322,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                             Ok(whole) => Some(whole),
                             Err(error) => return (owner, Err(VideoPreviewError::Runtime(native_error(
                                 format!("canonical history owner cannot enter shared CPU execution: {error:?}"),
-                            )))),
+                            ))), None),
                         },
                         None => None,
                     },
@@ -321,6 +352,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             inputs: Vec::new(),
             aliases,
             rejected: Vec::new(),
+            budget_refusal: None,
         });
         let result = operation(self);
         let bridge = self
@@ -329,7 +361,11 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .expect("affine native CPU operation");
         self.native_cpu_retained_reservations
             .extend(bridge.rejected);
-        (bridge.owner, result)
+        let refusal = bridge.budget_refusal.and_then(|(recorded, reason)| {
+            matches!(&result, Err(VideoPreviewError::Runtime(error)) if *error == recorded)
+                .then_some(reason)
+        });
+        (bridge.owner, result, refusal)
     }
 
     pub(crate) fn prepare_native_cpu_output(
@@ -789,7 +825,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         let quote = bridge
             .owner
             .quote(&plan)
-            .map_err(|reason| native_error(format!("CPU allocation budget: {reason:?}")))?;
+            .map_err(|reason| bridge.quote_error("CPU allocation budget", reason))?;
         let reservation = bridge
             .owner
             .reserve(quote)
@@ -1100,7 +1136,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         let quote = bridge
             .owner
             .quote(plan)
-            .map_err(|reason| native_error(format!("CPU scoped budget declined: {reason:?}")))?;
+            .map_err(|reason| bridge.quote_error("CPU scoped budget declined", reason))?;
         let reservation = bridge.owner.reserve(quote).map_err(|reason| {
             native_error(format!("CPU scoped reservation declined: {reason:?}"))
         })?;

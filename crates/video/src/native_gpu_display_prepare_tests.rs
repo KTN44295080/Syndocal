@@ -730,3 +730,6 @@ fn native_gpu_output_display_foreign_cpu_and_blackout_frames_are_rejected_before
     target.begin_stop().unwrap();
     reap_started(&mut target);
 }
+
+#[path = "native_gpu_display_follow_tests.rs"]
+mod follow_budget;

@@ -198,8 +198,9 @@ pub struct NativeResidentDisplayCreationFailure {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeResidentPrepareError {
-    /// Admission refused before execution. Keep the healthy session and skip
-    /// this tick; there is no Fresh result or presentation/Follow receipt.
+    /// A broker refused a scope's allocation before that scope executed.
+    /// Earlier Follow sides may have completed; keep the healthy session and
+    /// skip this output, without a Fresh result or presentation/Follow receipt.
     BudgetDeferred {
         live: u64,
         requested: u64,
