@@ -927,7 +927,7 @@ struct ComposedLayer {
 
 struct ComposedGroup {
     members: Vec<usize>,
-    _buffers: Vec<NativeChargedBuffer>,
+    _buffers: Vec<Arc<NativeChargedBuffer>>,
     transform: Option<ComposedLayer>,
     outer: ComposedLayer,
     straighten: wgpu::BindGroup,
@@ -1043,22 +1043,25 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
             )?;
             layer_charges.push((lookup, params));
         }
-        let mut group_charges = Vec::with_capacity(plan.groups.len());
-        for group in &plan.groups {
-            let scratch = phase.bind_reserved_allocation(
-                &mut self.reservation,
-                ChargeKind::CompositionBuffer,
-                plan.allocations.premapping_bytes,
-            )?;
-            let transformed = if group.transform.is_some() {
-                Some(phase.bind_reserved_allocation(
+        // Groups encode one after another, so every group shares one isolated
+        // target and, when any group is transformed, one transform target.
+        let mut scratch_charge = None;
+        let mut transformed_charge = None;
+        let transformed = plan.groups.iter().any(|group| group.transform.is_some());
+        for (slot, needed) in [
+            (&mut scratch_charge, !plan.groups.is_empty()),
+            (&mut transformed_charge, transformed),
+        ] {
+            if needed {
+                *slot = Some(phase.bind_reserved_allocation(
                     &mut self.reservation,
                     ChargeKind::CompositionBuffer,
                     plan.allocations.premapping_bytes,
-                )?)
-            } else {
-                None
-            };
+                )?);
+            }
+        }
+        let mut group_charges = Vec::with_capacity(plan.groups.len());
+        for group in &plan.groups {
             let mut samplings = Vec::new();
             for sampling in group.transform.iter().chain(std::iter::once(&group.outer)) {
                 let lookup = phase.bind_reserved_allocation(
@@ -1073,7 +1076,7 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
                 )?;
                 samplings.push((lookup, params));
             }
-            group_charges.push((scratch, transformed, samplings));
+            group_charges.push(samplings);
         }
         let device = phase.device();
         let output = match (plan.reused_output.as_ref(), output_charge) {
@@ -1105,25 +1108,21 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
             _ => unreachable!("readback is either reused or bound above"),
         };
         let mut ids = vec![output.allocation_id(), readback.allocation_id()];
-        let mut group_buffers = Vec::with_capacity(group_charges.len());
-        let mut group_sampling_charges = Vec::with_capacity(group_charges.len());
-        for (scratch, transformed, samplings) in group_charges {
-            let mut buffers = vec![charged_group_buffer(
+        let charged = |charge| {
+            Arc::new(charged_group_buffer(
                 device,
                 plan.allocations.premapping_bytes,
-                scratch,
-            )];
-            if let Some(charge) = transformed {
-                buffers.push(charged_group_buffer(
-                    device,
-                    plan.allocations.premapping_bytes,
-                    charge,
-                ));
-            }
-            ids.extend(buffers.iter().map(NativeChargedBuffer::allocation_id));
-            group_buffers.push(buffers);
-            group_sampling_charges.push(samplings);
-        }
+                charge,
+            ))
+        };
+        let scratch = scratch_charge.map(charged);
+        let transformed = transformed_charge.map(charged);
+        ids.extend(
+            scratch
+                .iter()
+                .chain(&transformed)
+                .map(|buffer| buffer.allocation_id()),
+        );
         let mut layers = Vec::with_capacity(layer_charges.len());
         for (layer_index, ((layer, read), (lookup_charge, params_charge))) in plan
             .layers_bottom_first
@@ -1157,7 +1156,9 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
                 .groups
                 .iter()
                 .position(|group| group.members.contains(&layer_index))
-                .map_or(&*output, |index| &group_buffers[index][0]);
+                .map_or(&*output, |_| {
+                    scratch.as_deref().expect("groups share one target")
+                });
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Syndocal shared composition G read view"),
                 layout: &self.pipelines.layout,
@@ -1189,13 +1190,17 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
             });
         }
         let mut groups = Vec::with_capacity(plan.groups.len());
-        for ((group, buffers), charges) in plan
-            .groups
-            .iter()
-            .zip(group_buffers)
-            .zip(group_sampling_charges)
-        {
+        for (group, charges) in plan.groups.iter().zip(group_charges) {
             let mut charges = charges.into_iter();
+            let scratch = scratch.as_ref().expect("groups share one target");
+            let mut buffers = vec![Arc::clone(scratch)];
+            if group.transform.is_some() {
+                buffers.push(Arc::clone(
+                    transformed
+                        .as_ref()
+                        .expect("a transformed group has its target"),
+                ));
+            }
             let transform = group.transform.as_ref().map(|sampling| {
                 make_group_layer(
                     device,
@@ -1698,11 +1703,14 @@ fn composition_allocations(
         native_allocations.add_new(ChargeKind::CompositionBuffer, layer.lookup.len() as u64 * 4)?;
         native_allocations.add_new(ChargeKind::CompositionBuffer, LAYER_PARAMS_BYTES)?;
     }
-    for group in groups {
+    // Groups share one isolated target and one transform target (see encode).
+    if !groups.is_empty() {
         native_allocations.add_new(ChargeKind::CompositionBuffer, output_bytes)?;
-        if group.transform.is_some() {
-            native_allocations.add_new(ChargeKind::CompositionBuffer, output_bytes)?;
-        }
+    }
+    if groups.iter().any(|group| group.transform.is_some()) {
+        native_allocations.add_new(ChargeKind::CompositionBuffer, output_bytes)?;
+    }
+    for group in groups {
         for sampling in group.transform.iter().chain(std::iter::once(&group.outer)) {
             native_allocations.add_new(
                 ChargeKind::CompositionBuffer,

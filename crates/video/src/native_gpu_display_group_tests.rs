@@ -172,6 +172,15 @@ fn native_gpu_group_composition_matches_cpu_parity() {
         .push(group(&[2], 0.4, VideoBlendMode::Multiply));
     assert_matches_canonical("singleton Normal child folds", singleton);
 
+    let mut two = scene(3, EXTENT);
+    let mut first = group(&[1, 2], 0.8, VideoBlendMode::Overlay);
+    first.transform = Some(rotated(25.0));
+    let mut second = group(&[3], 0.6, VideoBlendMode::Difference);
+    second.id = VideoLayerGroupId(10);
+    second.transform = Some(rotated(-60.0));
+    two.layer_groups.extend([first, second]);
+    assert_matches_canonical("two transformed groups share targets", two);
+
     let mut layer = scene(2, EXTENT);
     layer.layers[1].state.transform = rotated(-40.0);
     assert_matches_canonical("rotated layer without a group", layer);
@@ -228,4 +237,51 @@ fn resident_layer_chains_admits_isolated_group_and_rotated_transform() {
     snapshot.layer_groups[0].bypassed = false;
     let (paths, _) = resident(&mut snapshot, 2);
     assert!(paths.iter().all(|path| *path == Path::Cpu), "{paths:?}");
+}
+
+/// QA diagnostic at the C4 physical extent: three layers in two rotated,
+/// translucent groups stay resident on the pipelined route and
+/// within the managed budget. Run explicitly with --ignored.
+#[test]
+#[ignore = "QA diagnostic: allocates 2560x1600 frames for three layers"]
+fn native_gpu_group_composition_budget_trace_at_c4_extent() {
+    const C4: (u32, u32) = (2560, 1600);
+    let mut session = session_with_compositor(C4);
+    let mut renderer = VideoPreviewRenderer::with_frame_provider(
+        VideoRuntimeConfig::default(),
+        Provider::default(),
+    );
+    let mut snapshot = scene(3, C4);
+    let mut screen = group(&[1, 2], 0.65, VideoBlendMode::Screen);
+    screen.transform = Some(rotated(25.0));
+    let mut second = group(&[3], 0.6, VideoBlendMode::Difference);
+    second.id = VideoLayerGroupId(10);
+    second.transform = Some(rotated(-60.0));
+    snapshot.layer_groups.extend([screen, second]);
+    let mut high = 0;
+    for index in 0..240 {
+        for layer in &mut snapshot.layers {
+            layer.state.position_ms = index * 16;
+        }
+        let path = tick(&mut session, &mut renderer, &snapshot, C4);
+        let (bytes, line) = budget_line(&session, C4);
+        high = high.max(bytes);
+        println!("group c4 tick={index} path={path:?} {line}");
+        assert!(
+            matches!(path, Path::Resident | Path::InFlight),
+            "tick {index} left the resident route: {path:?}"
+        );
+    }
+    println!(
+        "group c4 live high water {:.1} MiB",
+        high as f64 / 1048576.0
+    );
+    // Any number of groups shares one isolated and one transform target: the
+    // ungrouped 29P steady state plus two frames.
+    let frame = u64::from(C4.0) * u64::from(C4.1) * 4;
+    assert!(
+        high < 31 * frame + frame / 10,
+        "two transformed groups must share their targets"
+    );
+    stop_and_reap(&mut session, &mut renderer);
 }
