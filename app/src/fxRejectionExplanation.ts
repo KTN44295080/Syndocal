@@ -139,6 +139,12 @@ const rules: Rule[] = [
     action: word("Use a fragment-only version of the effect whose output does not depend on the companion vertex shader.", "付属の頂点シェーダーに依存しない、フラグメントシェーダーだけの版を使ってください。"),
   },
   {
+    test: (raw) => /ISF declares too many passes/i.test(raw),
+    title: word("The shader has too many render passes", "シェーダーの描画パス数が上限を超えています"),
+    detail: () => word("An ISF shader supports at most 16 passes. Display output also checks the total render workload and available memory.", "ISFシェーダーの描画パスは16個までです。Display出力では、描画処理の合計と利用可能なメモリーも確認します。"),
+    action: word("Reduce the PASSES list or split the effect into smaller shaders.", "PASSESの項目を減らすか、エフェクトを小さなシェーダーに分けてください。"),
+  },
+  {
     test: (raw) => /ISF (?:PERSISTENT pass|pass (?:PERSISTENT|FLOAT)|target\b)|target-buffer|multi-pass|\bpass(es)?\b.*not supported/i.test(raw),
     title: word("The render pass configuration cannot be used", "描画パスの設定を使用できません"),
     detail: () => word("A pass flag or TARGET declaration is invalid or unsupported. Multiple passes and persistent named buffers are supported within the runtime limits.", "パスのフラグやTARGETの宣言が正しくないか、対応していない設定です。複数パスと名前付きの永続バッファーは、実行時の上限内で使えます。"),
@@ -167,6 +173,18 @@ const rules: Rule[] = [
     title: word("The shader uses a name that is not defined", "定義されていない名前を使っています"),
     detail: (found) => word(`The code refers to${named(found).en || " a name"}${at(found).en} that is not an INPUT, a built-in or a local variable.`, `コードが${named(found).ja || "ある名前"}を参照していますが${at(found).ja}、INPUT・組み込み変数・ローカル変数のどれにもありません。`),
     action: word("Check the spelling against INPUTS and the code, declare the missing INPUT, then import again.", "INPUTSやコードのつづりを確認し、足りないINPUTを追加して、もう一度読み込んでください。"),
+  },
+  {
+    test: (raw) => /forbidden or unsupported construct '#(?:version|extension|include)'/i.test(raw),
+    title: word("This GLSL directive is not supported", "このGLSLディレクティブには対応していません"),
+    detail: (found) => word(`The code uses ${found.token}${at(found).en}. Syndocal supplies the shader version, graphics capabilities and input declarations.`, `コードに${found.token}があります${at(found).ja}。シェーダーのバージョン・GPU機能・入力宣言はSyndocalが用意します。`),
+    action: word("Use an ISF fragment shader without #version, #extension or #include, and declare supported inputs in its ISF header.", "#version・#extension・#includeを使わないISFフラグメントシェーダーを用意し、対応する入力をISFヘッダーで宣言してください。"),
+  },
+  {
+    test: (raw) => /forbidden or unsupported construct 'uniform '/i.test(raw),
+    title: word("Declare shader inputs in the ISF header", "シェーダーの入力はISFヘッダーで宣言してください"),
+    detail: (found) => word(`The code declares a raw GLSL uniform${at(found).en}. Syndocal can supply inputs declared in the ISF header.`, `コードにGLSLのuniform宣言があります${at(found).ja}。Syndocalが供給できるのはISFヘッダーで宣言した入力です。`),
+    action: word("Remove the uniform declaration and add its supported input type to INPUTS in the ISF header.", "uniform宣言を取り除き、対応する入力タイプをISFヘッダーのINPUTSへ追加してください。"),
   },
   {
     test: (raw) => /forbidden or unsupported construct/i.test(raw),
@@ -263,6 +281,7 @@ export function explainFxRejection(raw: string, locale = "en", source = ""): FxR
     if (token) line = lineOf(source, token, true);
     else if (unknownName(raw)) line = lineOf(source, unknownName(raw)!, true);
     else if (inputName) line = lineOf(source, `"${inputName}"`) ?? lineOf(source, inputName);
+    else if (/ISF declares too many passes/i.test(raw)) line = lineOf(source, '"PASSES"');
   }
   const found: Found = { input: inputName, line, count, token, source };
   const rule = rules.find((candidate) => candidate.test(raw, source)) ?? generic;

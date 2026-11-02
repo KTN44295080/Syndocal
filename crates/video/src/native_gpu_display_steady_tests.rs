@@ -22,6 +22,9 @@ mod route_exit_tests;
 #[path = "native_gpu_display_group_tests.rs"]
 mod group_tests;
 
+#[path = "native_gpu_display_isf_stages_tests.rs"]
+mod isf_stages_tests;
+
 const OUTPUT: u64 = 101;
 const EPOCH: u64 = 7;
 const EXTENT: (u32, u32) = (64, 40);
@@ -129,6 +132,7 @@ fn session_with_compositor(extent: (u32, u32)) -> NativeResidentDisplaySession {
         follow_last_valid: None,
         ring: Default::default(),
         deferred_budget: None,
+        budget_refusals: 0,
         evidence: Default::default(),
     };
     session.compositor = Some(

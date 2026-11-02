@@ -522,6 +522,23 @@ pub(crate) fn load_imported_images(
                 "ISF imported image '{name}' PATH must stay inside the shader directory; absolute paths, URLs and parent traversal are unsupported"
             )));
         }
+        // Reject aliases even when their destination happens to remain inside
+        // this directory. Each imported resource must have one ordinary,
+        // shader-relative identity; canonicalization alone hides such aliases.
+        let mut component_path = source_directory.clone();
+        for component in relative_path.components() {
+            component_path.push(component);
+            let metadata = std::fs::symlink_metadata(&component_path).map_err(|io_error| {
+                error(format!(
+                    "ISF imported image '{name}' cannot resolve PATH '{path_text}': {io_error}"
+                ))
+            })?;
+            if imported_path_is_alias(&component_path, &metadata) {
+                return Err(error(format!(
+                    "ISF imported image '{name}' PATH contains a symlink or reparse point; use ordinary files inside the shader directory"
+                )));
+            }
+        }
         let resolved_path = source_directory
             .join(relative_path)
             .canonicalize()
@@ -611,6 +628,22 @@ pub(crate) fn load_imported_images(
         });
     }
     Ok(result)
+}
+
+fn imported_path_is_alias(_path: &Path, metadata: &std::fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        // read_link also recognizes junctions. Do not reject every reparse
+        // point: ordinary OneDrive files can carry cloud-provider reparse data
+        // without redirecting their filesystem identity.
+        metadata.file_attributes() & 0x400 != 0 && std::fs::read_link(_path).is_ok()
+    }
+    #[cfg(not(windows))]
+    false
 }
 
 fn imported_rgba_size(width: u32, height: u32) -> Result<u64, IsfPrepareError> {
@@ -784,7 +817,8 @@ mod tests {
                 NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
             );
             let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("target/t23-isf-resources")
+                .join("target")
+                .join("t23-isf-resources")
                 .join(name);
             std::fs::create_dir_all(&directory).unwrap();
             Self(directory)
@@ -907,6 +941,50 @@ mod tests {
             .map(|index| (format!("image{index}"), json!({"PATH": "x.png"})))
             .collect();
         assert!(load_imported_images(&too_many, Some(&directory.shader_path())).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn isf_imports_reject_file_and_directory_symlinks_inside_shader_directory() {
+        let directory = TestDirectory::new();
+        std::fs::create_dir(directory.0.join("assets")).unwrap();
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]))
+            .save_with_format(directory.0.join("assets/pixels.png"), ImageFormat::Png)
+            .unwrap();
+        std::os::unix::fs::symlink("assets/pixels.png", directory.0.join("alias.png")).unwrap();
+        std::os::unix::fs::symlink("assets", directory.0.join("linked-assets")).unwrap();
+        for path in ["alias.png", "linked-assets/pixels.png"] {
+            let failure = load_imported_images(&imports(path), Some(&directory.shader_path())).unwrap_err();
+            assert_eq!(failure.message, "ISF imported image 'testImage' PATH contains a symlink or reparse point; use ordinary files inside the shader directory");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn isf_imports_reject_windows_junction_inside_shader_directory() {
+        // Directory junctions require no symlink privilege on Windows.
+        let directory = TestDirectory::new();
+        let assets = directory.0.join("assets");
+        let alias = directory.0.join("linked-assets");
+        std::fs::create_dir(&assets).unwrap();
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]))
+            .save_with_format(assets.join("pixels.png"), ImageFormat::Png)
+            .unwrap();
+        let status = protocol::hidden_console_command::hidden_command("cmd.exe")
+            .arg("/d")
+            .arg("/c")
+            .arg("mklink")
+            .arg("/J")
+            .arg(&alias)
+            .arg(&assets)
+            .output()
+            .unwrap();
+        assert!(status.status.success(), "{}", String::from_utf8_lossy(&status.stderr));
+        let result = load_imported_images(&imports("linked-assets/pixels.png"), Some(&directory.shader_path()));
+        // Remove the alias itself before TestDirectory's recursive cleanup.
+        std::fs::remove_dir(&alias).unwrap();
+        assert_eq!(result.unwrap_err().message, "ISF imported image 'testImage' PATH contains a symlink or reparse point; use ordinary files inside the shader directory");
+        assert!(assets.join("pixels.png").is_file());
     }
 
     #[cfg(unix)]

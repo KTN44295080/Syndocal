@@ -183,6 +183,8 @@ pub struct NativeResidentDisplaySession {
     follow_last_valid: Option<prepare::ResidentFollowLastValid>,
     ring: ring::ResidentSnapshotRing,
     deferred_budget: Option<(u64, u64, u64)>,
+    /// Consecutive pre-execution budget refusals (see `BudgetDeclined`).
+    budget_refusals: u32,
     evidence: evidence::ResidentEvidence,
 }
 
@@ -301,6 +303,7 @@ impl NativeResidentDisplaySession {
             follow_last_valid: None,
             ring: ring::ResidentSnapshotRing::default(),
             deferred_budget: None,
+            budget_refusals: 0,
             evidence: evidence::ResidentEvidence::default(),
         };
         session.presenter =
@@ -1016,7 +1019,8 @@ impl NativeResidentDisplaySession {
                 )
             })
         });
-        self.owner.configure_stack_pool_shape(shape);
+        self.owner
+            .configure_stack_pool_workload(shape, layers.iter().map(|layer| &layer.chain));
         let history = match self.history.as_mut() {
             Some(ResidentHistoryState::Active(active)) => active,
             Some(ResidentHistoryState::Handover(_)) => {

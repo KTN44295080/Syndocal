@@ -390,7 +390,7 @@ fn isf_native_gpu_g2_prospective_queries_keep_full_identity_and_batch3_advances_
 }
 
 #[test]
-fn isf_native_gpu_g2_resourceful_and_cpu_prospective_queries_return_typed_declines_without_work() {
+fn isf_native_gpu_g2_resourceful_prospective_queries_and_uncovered_quote_are_pure() {
     let mut fixture = gpu();
     let before = submission_probe(&mut fixture.owner, 80);
     let budget = fixture.owner.budget_snapshot();
@@ -408,10 +408,9 @@ fn isf_native_gpu_g2_resourceful_and_cpu_prospective_queries_return_typed_declin
             assert_eq!(
                 prepared
                     .prospective_identities(&fixture.runtime)
-                    .unwrap_err(),
-                NativeProspectiveIdentityError::Declined(NativeGpuDecline::UnsupportedChain {
-                    reason: UnsupportedNativeFx::Multipass,
-                })
+                    .unwrap()
+                    .len(),
+                3
             );
         }
         let quote = fixture
@@ -420,19 +419,16 @@ fn isf_native_gpu_g2_resourceful_and_cpu_prospective_queries_return_typed_declin
             .unwrap();
         match fixture.runtime.admit_native_batch(prepared, &quote) {
             NativeBatchAdmission::Declined { reason, prepared } => {
-                assert_eq!(
-                    reason,
-                    NativeGpuDecline::UnsupportedChain {
-                        reason: UnsupportedNativeFx::Multipass,
-                    }
-                );
+                assert_eq!(reason, NativeGpuDecline::QuoteExpired);
                 let returned = prepared.into_layers();
                 assert!(returned
                     .iter()
                     .zip(&originals)
                     .all(|(job, original)| Arc::ptr_eq(&job.input, original)));
             }
-            NativeBatchAdmission::Accepted(_) => panic!("resourceful work entered Batch3"),
+            NativeBatchAdmission::Accepted(_) => {
+                panic!("uncovered resourceful allocation plan entered Batch3")
+            }
         }
         assert!(originals.iter().all(|input| Arc::strong_count(input) == 1));
     }
@@ -1032,13 +1028,10 @@ fn isf_native_gpu_all_failed_stages_return_original_pixels_and_three_chain_clock
 
 #[test]
 fn isf_native_gpu_unsupported_returns_same_prepared_inputs_without_work() {
-    // One pass keeps target-specific rejection independent of the Multipass case.
-    const PERSISTENT_TARGET: &str = r#"/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"}],"PASSES":[{"TARGET":"historyBuffer","PERSISTENT":true}]}*/
-void main() { gl_FragColor = IMG_THIS_PIXEL(inputImage); }"#;
-    const CUSTOM_TARGET: &str = r#"/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"}],"PASSES":[{"TARGET":"customBuffer"}]}*/
+    const TOO_MANY_PASSES: &str = r#"/*{"INPUTS":[{"NAME":"inputImage","TYPE":"image"}],"PASSES":[{},{},{},{},{}]}*/
 void main() { gl_FragColor = IMG_THIS_PIXEL(inputImage); }"#;
     let mut fixture = gpu();
-    for case in 0..9 {
+    for case in 0..7 {
         let mut prepared = identity_jobs(3, 2);
         let mut restrictions = NativeBatchRestrictions::default();
         let expected = match case {
@@ -1055,7 +1048,7 @@ void main() { gl_FragColor = IMG_THIS_PIXEL(inputImage); }"#;
                 UnsupportedNativeFx::InterLayerDependency
             }
             3 => {
-                prepared = jobs(3, 2, &[shader(MULTIPASS)]);
+                prepared = jobs(3, 2, &[shader(TOO_MANY_PASSES)]);
                 UnsupportedNativeFx::Multipass
             }
             4 => {
@@ -1072,14 +1065,7 @@ void main() { gl_FragColor = IMG_THIS_PIXEL(inputImage); }"#;
                 prepared[0].date[0] = f32::NAN;
                 UnsupportedNativeFx::AuxiliaryResource
             }
-            7 => {
-                prepared = jobs(3, 2, &[shader(PERSISTENT_TARGET)]);
-                UnsupportedNativeFx::PersistentTarget
-            }
-            _ => {
-                prepared = jobs(3, 2, &[shader(CUSTOM_TARGET)]);
-                UnsupportedNativeFx::CustomTarget
-            }
+            _ => unreachable!(),
         };
         let inputs: Vec<_> = prepared.iter().map(|job| Arc::clone(&job.input)).collect();
         let before = submission_probe(&mut fixture.owner, 100 + case * 2);
@@ -1963,7 +1949,10 @@ fn isf_native_gpu_cpu_bridge_reuses_all_three_declined_prepared_jobs_without_dup
         .prepare_native_inputs(
             request(1),
             prepared_jobs,
-            NativeBatchRestrictions::default(),
+            NativeBatchRestrictions {
+                callback: true,
+                ..Default::default()
+            },
         )
         .unwrap();
     let empty = NativeAllocationPlan::new(request(1));
@@ -1972,7 +1961,7 @@ fn isf_native_gpu_cpu_bridge_reuses_all_three_declined_prepared_jobs_without_dup
         NativeBatchAdmission::Declined {
             reason:
                 NativeGpuDecline::UnsupportedChain {
-                    reason: UnsupportedNativeFx::Multipass,
+                    reason: UnsupportedNativeFx::Callback,
                 },
             prepared,
         } => prepared,
@@ -2447,3 +2436,6 @@ fn isf_native_gpu_cpu_bridge_handover_stop_and_post_submit_cancel_retain_charged
         "must observe a real submitted canonical CPU transaction cancelled without output"
     );
 }
+
+#[path = "isf_native_extended_tests.rs"]
+mod extended;

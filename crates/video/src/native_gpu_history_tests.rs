@@ -9,6 +9,7 @@ struct FakeRecipe {
     input: Arc<VideoFrame>,
     clocks: FrozenChainClocks,
     drops: Arc<AtomicUsize>,
+    requires_resident: bool,
 }
 impl Drop for FakeRecipe {
     fn drop(&mut self) {
@@ -16,6 +17,9 @@ impl Drop for FakeRecipe {
     }
 }
 impl HistoryHostFootprint for FakeRecipe {
+    fn requires_resident(&self) -> bool {
+        self.requires_resident
+    }
     fn host_allocations(&self) -> Vec<HostAllocation> {
         vec![HostAllocation::shared_frame(&self.input, false)]
     }
@@ -249,6 +253,7 @@ impl Env {
             input,
             clocks: clocks(i.entry.sequence),
             drops: Arc::clone(&self.r),
+            requires_resident: false,
         };
         let replay_host = self.host.charge_all(recipe.host_allocations()).unwrap();
         Entry {
@@ -330,6 +335,50 @@ fn eight(e: &Env, h: &mut History) {
         264,
     );
 }
+#[test]
+fn stateful_history_keeps_only_resident_results_and_rejects_missing_lease() {
+    let e = env();
+    let mut h = e.history();
+    for sequence in 1..=12 {
+        let mut entry = e.entry(identity(sequence, sequence * 33), true);
+        let HistoryBacking::Replay(recipe) = &mut entry.backing else {
+            unreachable!()
+        };
+        recipe.requires_resident = true;
+        commit(&mut h, vec![entry], sequence * 33);
+        // A stateful entry that loses its resident leaves history, so it is
+        // bounded like an ordinary input's residents.
+        assert_eq!(
+            h.entries.len(),
+            sequence.min(RESIDENT_CAPACITY as u64) as usize
+        );
+        assert!(h.entries.iter().all(|entry| entry.resident.is_some()));
+    }
+    // Kept selections keep their validated pixels; feedback is never replayed
+    // against today's state.
+    for entry in &h.entries {
+        assert!(h.pin(entry.identity.entry).is_ok());
+    }
+    let mut missing = e.entry(identity(13, 429), false);
+    let HistoryBacking::Replay(recipe) = &mut missing.backing else {
+        unreachable!()
+    };
+    recipe.requires_resident = true;
+    let plan = h.plan(&[missing.meta()], 429).unwrap();
+    let failure = h
+        .commit_validated(plan, batch(vec![missing], VALID))
+        .err()
+        .unwrap();
+    assert_eq!(failure.error, HistoryError::StateMismatch);
+    assert_eq!(h.entries.len(), RESIDENT_CAPACITY);
+    assert!(h.entries.iter().all(|entry| entry.resident.is_some()));
+    let handover = h.begin_cpu_handover();
+    assert!(matches!(
+        handover.next_entry(),
+        Some(CpuHistoryMaterializationRequest::ReadValidatedGpu { .. })
+    ));
+}
+
 #[test]
 fn provisional_selection_is_not_public_and_predecessor_beats_new_decode() {
     let e = env();
@@ -869,6 +918,7 @@ fn host_budget_counts_aliases_once_rejects_overflow_atomically_and_releases_on_l
         input: Arc::new(pixels(identity(4, 0))),
         clocks: clocks(4),
         drops: Arc::clone(&e.r),
+        requires_resident: false,
     };
     let entry = Entry {
         identity: identity(4, 0),

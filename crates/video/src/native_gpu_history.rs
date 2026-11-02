@@ -29,6 +29,11 @@ pub(crate) trait HistoryResident {
 /// Long-lived host allocations a frozen recipe keeps alive (its raw inputs).
 pub(crate) trait HistoryHostFootprint {
     fn host_allocations(&self) -> Vec<HostAllocation>;
+    /// Stateful/resourceful executions cannot be regenerated from a stateless
+    /// recipe. Keep their charged result for the complete eight-entry history.
+    fn requires_resident(&self) -> bool {
+        false
+    }
 }
 /// An affine validated CPU readback: pixels, completion descriptor and the
 /// charge of that same CPU allocation (adapter: G's ValidatedCpuMaterialization).
@@ -525,7 +530,7 @@ pub(crate) struct NativeHistory<R, T, C> {
     entries: Vec<Entry<R, T, C>>,
     host: HistoryHostBudget,
 }
-impl<R, T: HistoryResident, C> NativeHistory<R, T, C> {
+impl<R: HistoryHostFootprint, T: HistoryResident, C> NativeHistory<R, T, C> {
     pub(crate) fn new(
         context: GpuContextId,
         scope: HistoryScope,
@@ -731,7 +736,11 @@ impl<R, T: HistoryResident, C> NativeHistory<R, T, C> {
                 // A failed GPU phase never becomes a successful recipe.
                 return Err(HistoryError::StateMismatch);
             }
-            HistoryBacking::Replay(_) => {}
+            HistoryBacking::Replay(recipe) => {
+                if recipe.requires_resident() && e.resident.is_none() {
+                    return Err(HistoryError::StateMismatch);
+                }
+            }
         }
         Ok(())
     }
@@ -822,8 +831,20 @@ impl<R, T: HistoryResident, C> NativeHistory<R, T, C> {
                 std::cmp::Reverse(e.identity.entry.sequence),
             )
         });
+        // A stateful result cannot be regenerated from its recipe, so an entry
+        // that loses its resident leaves history: residents stay bounded at
+        // RESIDENT_CAPACITY per input for ordinary and stateful chains alike.
+        let mut dropped = Vec::new();
         for i in order.into_iter().skip(RESIDENT_CAPACITY) {
             retire(&mut self.entries[i], retired);
+            if matches!(&self.entries[i].backing, HistoryBacking::Replay(recipe) if recipe.requires_resident())
+            {
+                dropped.push(i);
+            }
+        }
+        dropped.sort_unstable();
+        for i in dropped.into_iter().rev() {
+            drop(self.entries.remove(i));
         }
     }
     #[cfg(test)]
@@ -1086,7 +1107,7 @@ pub(crate) struct CpuHandoverFailure<M> {
     pub error: HistoryError,
     pub materialized: M,
 }
-impl<R, T: HistoryResident, C> CpuHistoryHandover<R, T, C> {
+impl<R: HistoryHostFootprint, T: HistoryResident, C> CpuHistoryHandover<R, T, C> {
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.history.entries.len()

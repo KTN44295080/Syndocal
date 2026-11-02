@@ -724,6 +724,18 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         Ok(NativeCpuOutput { result, charge })
     }
 
+    /// The native CPU route refused a tick it could not fit. Its queued
+    /// history is the only charge the route itself can shed, and a refused
+    /// tick never replaces it, so release it rather than defer every later
+    /// tick. Image bindings alias queue pixels; release those views first.
+    pub(crate) fn release_native_cpu_queues_for_budget(&mut self) {
+        self.isf_frame_inputs.layers.clear();
+        self.isf_frame_inputs.sampled_layers.clear();
+        for queue in &mut self.runtime.queues {
+            queue.release_for_budget();
+        }
+    }
+
     pub(crate) fn release_native_cpu_ownership_for_stop(&mut self) -> Option<NativeGpuOwner> {
         // Image bindings alias queue pixels without carrying their charge.
         // Release those views before their complete queue/cache owners.

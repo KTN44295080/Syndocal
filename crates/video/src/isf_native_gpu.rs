@@ -32,6 +32,26 @@ pub(crate) struct PreparedNativeLayer {
     pub date: [f32; 4],
 }
 impl PreparedNativeLayer {
+    /// Extended resources are time/state dependent: retain their exact result
+    /// throughout history rather than pretending they are stateless recipes.
+    pub(crate) fn requires_retained_history(&self) -> bool {
+        self.chain.stages.iter().any(|stage| {
+            stage.shader.passes.len() != 1
+                || !IsfStageInputs {
+                    shader: &stage.shader,
+                    controls: &stage.controls,
+                    images: &[],
+                }
+                .can_share_host_buffers()
+                || IsfStageInputs {
+                    shader: &stage.shader,
+                    controls: &stage.controls,
+                    images: &[],
+                }
+                .native_target_restriction()
+                .is_some()
+        })
+    }
     fn stages(&self) -> Vec<IsfStageInputs<'_>> {
         self.chain
             .stages
@@ -338,6 +358,16 @@ impl IsfGpuRuntime {
             if restrictions.callback {
                 return Err(unsupported(UnsupportedNativeFx::Callback));
             }
+            // Bound additional multipass work without regressing the accepted
+            // three-layer x three ordinary-stage (nine pass) resident show.
+            let additional_passes: usize = jobs
+                .iter()
+                .flat_map(|job| &job.chain.stages)
+                .map(|stage| stage.shader.passes.len().saturating_sub(1))
+                .sum();
+            if additional_passes > 8 {
+                return Err(unsupported(UnsupportedNativeFx::Multipass));
+            }
             let mut plan = NativeAllocationPlan::new(frame);
             for (index, job) in jobs.iter().enumerate() {
                 validate_job(job, context.capabilities().limits.max_texture_dimension_2d)?;
@@ -360,8 +390,9 @@ impl IsfGpuRuntime {
                 )?;
                 selection.add_plan(
                     &mut plan,
-                    &job.input,
+                    job,
                     context.capabilities().upload_row_pitch,
+                    self,
                 )?;
                 pooled.push(selection);
             }
@@ -458,6 +489,7 @@ impl IsfGpuRuntime {
                 "CPU invocation cannot enter resident Batch3",
             ));
         };
+        self.set_audio_frame(inputs.audio.as_ref());
         let logical = inputs.clocks.expect("validated prospective clock range");
         let clocks = StackBatch::from_fn(jobs.len(), |index| jobs[index].clocks(logical.at(index)));
         let mut phase = txn.begin_phase(GpuPhase::IsfBatch)?;
@@ -638,8 +670,18 @@ impl IsfGpuRuntime {
         });
         phase.retain_resource(Arc::clone(&retained), &retained.allocation_ids())?;
         phase.mark_queue_write();
-        let (command, pins) = self
-            .native_encode_canonical_stack(
+        let encoded = if job.requires_retained_history() {
+            self.native_encode_resident_resources(
+                phase,
+                &resources,
+                &job.input,
+                &stages,
+                &job.chain.keys,
+                clocks,
+                request,
+            )
+        } else {
+            self.native_encode_canonical_stack(
                 &phase,
                 &resources,
                 &job.input,
@@ -647,15 +689,16 @@ impl IsfGpuRuntime {
                 &job.chain.keys,
                 clocks,
             )
-            .map_err(|error| {
-                fault(
-                    context,
-                    request,
-                    GpuPhase::IsfBatch,
-                    NativeGpuFaultKind::Validation,
-                    error.message,
-                )
-            })?;
+        };
+        let (command, pins) = encoded.map_err(|error| {
+            fault(
+                context,
+                request,
+                GpuPhase::IsfBatch,
+                NativeGpuFaultKind::Validation,
+                error.message,
+            )
+        })?;
         let bindings = NativeRecipeBindings::new(pins, resources.sampler());
         phase.retain_resource(Arc::new(bindings.clone()), &[])?;
         Ok((command, final_image, bindings))
@@ -704,10 +747,16 @@ impl IsfGpuRuntime {
                 retirement: None,
             };
         }
+        let extended = encoded
+            .jobs
+            .iter()
+            .any(|job| job.requires_retained_history());
         if cancel.is_cancelled() {
+            self.finish_native_resident_resources(phase.frame(), false);
             return NativeIsfCompletion::Cancelled { retirement: None };
         }
         if let Err(error) = ensure_publication_active(owner, phase.frame(), GpuPhase::IsfBatch) {
+            self.finish_native_resident_resources(phase.frame(), false);
             return match error {
                 MaterializationFailure::Cancelled { retirement } => {
                     NativeIsfCompletion::Cancelled { retirement }
@@ -717,8 +766,15 @@ impl IsfGpuRuntime {
                 }
             };
         }
+        self.finish_native_resident_resources(phase.frame(), phase.validation().is_ok());
         if phase.validation().is_err() {
             let original = phase.validation().unwrap_err();
+            if extended {
+                return NativeIsfCompletion::Failed {
+                    fault: copy_fault(original),
+                    retirement: None,
+                };
+            }
             if matches!(
                 original.kind,
                 NativeGpuFaultKind::DeviceLost | NativeGpuFaultKind::ScopeDrain
@@ -866,26 +922,8 @@ fn validate_job(job: &PreparedNativeLayer, max_extent: u32) -> Result<(), Native
         if !stage.images.is_empty() || !stage.shader.required_layer_images.is_empty() {
             return Err(unsupported(UnsupportedNativeFx::InterLayerDependency));
         }
-        if stage.shader.passes.len() != 1 {
+        if !(1..=4).contains(&stage.shader.passes.len()) {
             return Err(unsupported(UnsupportedNativeFx::Multipass));
-        }
-        if let Some(reason) = (IsfStageInputs {
-            shader: &stage.shader,
-            controls: &stage.controls,
-            images: &[],
-        })
-        .native_target_restriction()
-        {
-            return Err(unsupported(reason));
-        }
-        if !(IsfStageInputs {
-            shader: &stage.shader,
-            controls: &stage.controls,
-            images: &[],
-        })
-        .can_share_host_buffers()
-        {
-            return Err(unsupported(UnsupportedNativeFx::AuxiliaryResource));
         }
     }
     Ok(())
@@ -1427,6 +1465,9 @@ impl IsfGpuRuntime {
         frame: NativeFrameId,
         recipe: &FrozenStatelessRecipe,
     ) -> Result<NativeAllocationPlan, NativeGpuDecline> {
+        if recipe.job().requires_retained_history() {
+            return Err(unsupported(UnsupportedNativeFx::PersistentTarget));
+        }
         let mut plan = NativeAllocationPlan::new(frame);
         let context = self
             .native_context()

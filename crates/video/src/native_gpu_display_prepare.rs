@@ -1204,10 +1204,29 @@ impl NativeResidentDisplaySession {
                 NativeResidentExecution::Retiring(_) => {}
             }
         }
+        if !matches!(execution, NativeResidentExecution::BudgetDeclined(_)) {
+            self.budget_refusals = 0;
+        }
         match execution {
             NativeResidentExecution::BudgetDeclined(reason) => {
                 // A pre-execution refusal produces no frame. Complete any
                 // already-finished CPU handover, retaining every charged owner.
+                // One refusal keeps history, cache and owner (Task66). A second
+                // in a row means the workload cannot fit beside its own
+                // retained CPU-backed history, which no refused tick ever
+                // replaces: retire that history and release the CPU queues so
+                // the next tick runs from fresh frames instead of freezing.
+                self.budget_refusals += 1;
+                if self.budget_refusals >= 2 {
+                    if let Some(ResidentHistoryState::Active(active)) = self.history.take() {
+                        for mut history in active.session.into_histories() {
+                            history.retire_pass();
+                            self.retiring_histories.push(history);
+                        }
+                        self.release_retiring_history_entries();
+                    }
+                    renderer.release_native_cpu_queues_for_budget();
+                }
                 if matches!(self.history, Some(ResidentHistoryState::Handover(_))) {
                     self.publish_history_to_cpu(renderer)?;
                     self.normalize_cpu_queue_keys(renderer);

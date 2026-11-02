@@ -3,7 +3,7 @@
 use super::*;
 use std::sync::Weak;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct StackKey {
     width: u32,
     height: u32,
@@ -12,6 +12,7 @@ struct StackKey {
     output: u64,
     geometry: u64,
     epoch: u64,
+    resources: Option<(u64, u64, Vec<IsfInstanceKey>, Vec<u64>)>,
 }
 impl StackKey {
     fn new(epoch: u64, frame: NativeFrameId, job: &PreparedNativeLayer) -> Self {
@@ -23,6 +24,18 @@ impl StackKey {
             output: frame.output_id,
             geometry: frame.geometry_generation,
             epoch,
+            resources: job.requires_retained_history().then(|| {
+                (
+                    frame.project_epoch,
+                    job.input.layer_id,
+                    job.chain.keys.clone(),
+                    job.chain
+                        .stages
+                        .iter()
+                        .map(|stage| stage.shader.fingerprint)
+                        .collect(),
+                )
+            }),
         }
     }
 }
@@ -47,9 +60,9 @@ pub(super) struct StackSelection {
     scratch: Option<Arc<ScratchAllocation>>,
     final_image: Option<Arc<NativeTextureAllocation>>,
 }
-fn checkout<T>(entries: &[(StackKey, Weak<T>)], key: StackKey) -> Option<Arc<T>> {
+fn checkout<T>(entries: &[(StackKey, Weak<T>)], key: &StackKey) -> Option<Arc<T>> {
     entries.iter().find_map(|(old, weak)| {
-        if *old != key {
+        if old != key {
             return None;
         }
         // Upgrade before inspecting: two concurrent read-only preflights must
@@ -68,11 +81,11 @@ impl NativeStackPool {
     ) -> Result<StackSelection, NativeGpuDecline> {
         let key = StackKey::new(epoch, frame, job);
         let selection = StackSelection {
-            key,
-            scratch: checkout(&self.scratch, key),
-            final_image: checkout(&self.finals, key),
+            key: key.clone(),
+            scratch: checkout(&self.scratch, &key),
+            final_image: checkout(&self.finals, &key),
         };
-        fn capacity(key: StackKey, scratch: bool) -> u64 {
+        fn capacity(key: &StackKey, scratch: bool) -> u64 {
             let pixels = u64::from(key.width) * u64::from(key.height) * 4;
             if scratch {
                 pixels * 2 + key.stages as u64 * UNIFORM_BYTES
@@ -80,11 +93,27 @@ impl NativeStackPool {
                 pixels
             }
         }
-        // Initial routing admits one logical output at a time: three scratch
-        // sets and three generations of resident finals (two history + new).
+        // Ordinary stacks need three final generations. Extended/stateful
+        // stacks retain all eight history generations plus the incoming tick;
+        // a mixed frame shares that pool capacity, independent of job order.
         // A full pool declines before clock/upload/allocation. It never grows
         // a second workspace set to hide pending retirement or history pins.
-        for (scratch, limit) in [(true, 3usize), (false, 9usize)] {
+        for (scratch, limit) in [
+            (true, 3usize),
+            (
+                false,
+                if key.resources.is_some()
+                    || self.finals.iter().any(|(old, weak)| {
+                        old.epoch == epoch && old.resources.is_some() && weak.strong_count() != 0
+                    })
+                    || pending.iter().any(|entry| entry.key.resources.is_some())
+                {
+                    27usize
+                } else {
+                    9usize
+                },
+            ),
+        ] {
             if (scratch && selection.scratch.is_some())
                 || (!scratch && selection.final_image.is_some())
             {
@@ -97,13 +126,13 @@ impl NativeStackPool {
                 self.scratch
                     .iter()
                     .filter(|(old, weak)| old.epoch == epoch && weak.strong_count() != 0)
-                    .map(|(old, _)| capacity(*old, true))
+                    .map(|(old, _)| capacity(old, true))
                     .fold((0, 0, 0), accumulate)
             } else {
                 self.finals
                     .iter()
                     .filter(|(old, weak)| old.epoch == epoch && weak.strong_count() != 0)
-                    .map(|(old, _)| capacity(*old, false))
+                    .map(|(old, _)| capacity(old, false))
                     .fold((0, 0, 0), accumulate)
             };
             let (count, live, largest) = pending
@@ -115,10 +144,10 @@ impl NativeStackPool {
                         entry.final_image.is_none()
                     }
                 })
-                .map(|entry| capacity(entry.key, scratch))
+                .map(|entry| capacity(&entry.key, scratch))
                 .fold(initial, accumulate);
             if count >= limit {
-                let requested = capacity(key, scratch);
+                let requested = capacity(&key, scratch);
                 return Err(NativeGpuDecline::BudgetExceeded {
                     live,
                     requested,
@@ -151,9 +180,11 @@ impl StackSelection {
     pub(super) fn add_plan(
         &self,
         plan: &mut NativeAllocationPlan,
-        input: &VideoFrame,
+        job: &PreparedNativeLayer,
         pitch: Option<u64>,
+        runtime: &IsfGpuRuntime,
     ) -> Result<(), NativeGpuDecline> {
+        let input = &job.input;
         let pixels = rgba_bytes(input.width, input.height)?;
         if let Some(scratch) = &self.scratch {
             for id in scratch.ids() {
@@ -177,10 +208,31 @@ impl StackSelection {
             checked_upload_staging_bytes(input.width, input.height, pitch)?,
         )?;
         plan.add_new(ChargeKind::QueueUploadStaging, self.uniform_upload())?;
+        if job.requires_retained_history() {
+            let resources = self.scratch.as_ref().map(|scratch| &scratch.resources);
+            let auxiliary = runtime
+                .native_resident_resource_plan(
+                    plan.frame(),
+                    input,
+                    &job.stages(),
+                    &job.chain.keys,
+                    runtime.native_audio_snapshot().as_ref(),
+                    resources,
+                )
+                .map_err(|_| unsupported(UnsupportedNativeFx::AuxiliaryResource))?;
+            plan.merge(&auxiliary)?;
+        }
         Ok(())
     }
 }
 impl IsfGpuRuntime {
+    pub(super) fn finish_native_resident_resources(&mut self, frame: NativeFrameId, success: bool) {
+        for (_, weak) in &self.native_stack_pool.scratch {
+            if let Some(scratch) = weak.upgrade() {
+                scratch.resources.finish_resident(frame, success);
+            }
+        }
+    }
     #[cfg(test)]
     pub(crate) fn clear_native_stack_pool(&mut self) {
         // G's release_resource_pools removes the owning cache. Clearing lookup
@@ -236,7 +288,7 @@ impl IsfGpuRuntime {
             phase.retain_pooled_resource(Arc::clone(&scratch))?;
             self.native_stack_pool
                 .scratch
-                .push((selected.key, Arc::downgrade(&scratch)));
+                .push((selected.key.clone(), Arc::downgrade(&scratch)));
             scratch
         };
         phase.retain_resource(Arc::clone(&scratch), &scratch.ids())?;
@@ -259,7 +311,7 @@ impl IsfGpuRuntime {
             phase.retain_pooled_resource(Arc::clone(&image))?;
             self.native_stack_pool
                 .finals
-                .push((selected.key, Arc::downgrade(&image)));
+                .push((selected.key.clone(), Arc::downgrade(&image)));
             image
         };
         // Retain before any queue write; failure/cancellation keeps both GPU

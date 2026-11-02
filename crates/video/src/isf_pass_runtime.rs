@@ -48,6 +48,8 @@ mod stack_workspace;
 pub(super) use stack_workspace::queue_upload_pitch;
 use stack_workspace::StackWorkspace;
 
+#[path = "isf_resident_resources.rs"]
+mod resident_resources;
 #[path = "isf_stack_transaction.rs"]
 mod stack_transaction;
 pub(super) use stack_transaction::IndependentStack;
@@ -191,6 +193,7 @@ struct NativeCpuAllocationScope<'a, 'b> {
     phase: &'a mut crate::native_gpu_context::GpuPhaseEncoder<'b>,
     buffers: Vec<std::sync::Arc<NativeCpuBuffer>>,
     failure: Option<crate::native_gpu_contract::NativeGpuFault>,
+    primary_upload_precharged: bool,
 }
 struct NativeCpuBuffer {
     buffer: wgpu::Buffer,
@@ -537,7 +540,14 @@ impl IsfGpuRuntime {
         if let Some(timing) = self.resources.phase_timing.as_mut() {
             timing.mark(1);
         }
-        planned_upload(input, &self.queue, &rgba.data, &mut native)?;
+        if native
+            .as_ref()
+            .is_some_and(|scope| scope.primary_upload_precharged)
+        {
+            input.upload_rgba(&self.queue, &rgba.data);
+        } else {
+            planned_upload(input, &self.queue, &rgba.data, &mut native)?;
+        }
         #[cfg(test)]
         {
             self.resources.stack_upload_count += 1;
@@ -773,6 +783,24 @@ impl IsfGpuRuntime {
                     stage_output,
                 );
                 current = stage_output.clone();
+            } else if readback.is_none()
+                && stage_index + 1 == stages.len()
+                && shader
+                    .passes
+                    .last()
+                    .is_some_and(|pass| pass.target.is_some())
+            {
+                // Canonical readback can read a named final target directly;
+                // resident publication instead owns the separate final slot.
+                encoder.copy_texture_to_texture(
+                    current.texture.as_image_copy(),
+                    stage_output.texture.as_image_copy(),
+                    wgpu::Extent3d {
+                        width: frame.width,
+                        height: frame.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
             }
             state.has_history = true;
             pending_bytes += state.bytes + state.transient_bytes;
@@ -1387,6 +1415,7 @@ impl IsfGpuRuntime {
 pub(crate) struct NativeStackResources {
     workspace: StackWorkspace,
     uniforms: Vec<wgpu::Buffer>,
+    resident: std::sync::Arc<std::sync::Mutex<resident_resources::ResidentStates>>,
 }
 
 impl NativeStackResources {
@@ -1475,6 +1504,7 @@ impl IsfGpuRuntime {
         Ok(NativeStackResources {
             workspace,
             uniforms,
+            resident: Default::default(),
         })
     }
 
@@ -1535,6 +1565,7 @@ impl IsfGpuRuntime {
         NativeStackResources {
             workspace,
             uniforms: template.uniforms.clone(),
+            resident: std::sync::Arc::clone(&template.resident),
         }
     }
 
@@ -1555,10 +1586,11 @@ impl IsfGpuRuntime {
             ));
         }
         self.validate_pass_size(frame.width, frame.height)?;
-        if stages
-            .iter()
-            .any(|stage| !stage.can_share_host_buffers() || stage.shader.passes.len() != 1)
-        {
+        if stages.iter().any(|stage| {
+            !stage.can_share_host_buffers()
+                || stage.shader.passes.len() != 1
+                || stage.native_target_restriction().is_some()
+        }) {
             return Err(runtime_error(
                 "native stack resources require one resource-neutral pass per stage",
             ));
@@ -1593,6 +1625,7 @@ impl IsfGpuRuntime {
         Ok(NativeStackResources {
             workspace,
             uniforms,
+            resident: Default::default(),
         })
     }
 
@@ -1667,7 +1700,7 @@ mod cpu_bridge {
     }
     #[derive(Clone)]
     pub(crate) struct NativeCpuCacheModel {
-        entries: BTreeMap<IsfInstanceKey, NativeCpuCacheEntry>,
+        pub(in crate::isf_runtime) entries: BTreeMap<IsfInstanceKey, NativeCpuCacheEntry>,
         clock: u64,
     }
     impl NativeCpuCacheModel {
@@ -2093,6 +2126,7 @@ mod cpu_bridge {
                 phase,
                 buffers: Vec::new(),
                 failure: None,
+                primary_upload_precharged: false,
             };
             let result = (|| -> Result<NativeCpuEncodedChunk, IsfRuntimeError> {
                 let mut allocation = Some(&mut native);
@@ -2264,6 +2298,113 @@ mod cpu_bridge {
             )
         }
 
+        pub(in crate::isf_runtime) fn native_stage_resource_plan(
+            &self,
+            plan: &mut NativeAllocationPlan,
+            frame: &VideoFrame,
+            stages: &[IsfStageInputs<'_>],
+            keys: &[IsfInstanceKey],
+            audio: Option<&protocol::LiveAudioTextureFrame>,
+            cache: &NativeCpuCacheModel,
+        ) -> Result<(), IsfRuntimeError> {
+            let pitch = self.resources.queue_upload_pitch;
+            for (stage, key) in stages.iter().zip(keys) {
+                let shader = stage.shader;
+                if shader.passes.iter().any(|pass| pass.float)
+                    && !self
+                        .device
+                        .features()
+                        .contains(wgpu::Features::FLOAT32_FILTERABLE)
+                {
+                    return Err(runtime_error("ISF FLOAT buffers require 32-bit float texture filtering, which this GPU does not support"));
+                }
+                let transparent = transparent_needed(stage);
+                let dynamic = self.dynamic_image_bytes(stage, transparent)?;
+                let layout =
+                    self.stage_resource_layout(shader, stage.controls, frame, 0, dynamic)?;
+                let cached = cache.entries.get(key).filter(|state| {
+                    state.fingerprint == shader.fingerprint && state.sizes == layout.sizes
+                });
+                if let Some(state) = cached {
+                    for id in &state.allocations {
+                        plan.add_existing(*id);
+                    }
+                } else {
+                    for (pass, &(width, height)) in shader.passes.iter().zip(&layout.sizes) {
+                        if pass.target.is_some() {
+                            let bytes = image_bytes(width, height, pass.float)?;
+                            add(plan, ChargeKind::CachedEffectResource, bytes)?;
+                            add(plan, ChargeKind::CachedEffectResource, bytes)?;
+                        }
+                    }
+                    for image in shader.imported_images.iter().chain(&shader.bound_images) {
+                        add(
+                            plan,
+                            ChargeKind::CachedEffectResource,
+                            image_bytes(image.width, image.height, false)?,
+                        )?;
+                        upload(plan, image.width, image.height, pitch)?;
+                    }
+                    for input in &shader.audio_inputs {
+                        add(
+                            plan,
+                            ChargeKind::CachedEffectResource,
+                            image_bytes(input.width, 1, false)?,
+                        )?;
+                    }
+                }
+                for input in stage.images {
+                    validate_input_bytes(input.frame)?;
+                    let bytes = image_bytes(input.frame.width, input.frame.height, false)?;
+                    add(plan, ChargeKind::IsfScratch, bytes)?;
+                    if input.frame.format != VideoPixelFormat::Rgba8 {
+                        add(plan, ChargeKind::ActiveCpuInput, bytes)?;
+                    }
+                    upload(plan, input.frame.width, input.frame.height, pitch)?;
+                }
+                if transparent {
+                    add(plan, ChargeKind::IsfScratch, 4)?;
+                    upload(plan, 1, 1, pitch)?;
+                }
+                let audio_identity = audio.map(|frame| (frame.generation, frame.feature_sequence));
+                if cached.is_none_or(|state| {
+                    !state.audio_initialized || state.audio_identity != audio_identity
+                }) {
+                    for input in &shader.audio_inputs {
+                        upload(plan, input.width, 1, pitch)?;
+                    }
+                }
+                for (pass, &(width, height)) in shader.passes.iter().zip(&layout.sizes) {
+                    if pass.target.is_none()
+                        && (width != frame.width || height != frame.height || pass.float)
+                    {
+                        add(
+                            plan,
+                            ChargeKind::IsfScratch,
+                            image_bytes(width, height, pass.float)?,
+                        )?;
+                    }
+                    add(
+                        plan,
+                        ChargeKind::CachedEffectResource,
+                        48 + super::super::ISF_MAX_CONTROL_INPUTS as u64 * 16,
+                    )?;
+                }
+                if shader.passes.last().zip(layout.sizes.last()).is_some_and(
+                    |(pass, &(width, height))| {
+                        width != frame.width || height != frame.height || pass.float
+                    },
+                ) {
+                    add(
+                        plan,
+                        ChargeKind::CachedEffectResource,
+                        48 + super::super::ISF_MAX_CONTROL_INPUTS as u64 * 16,
+                    )?;
+                }
+            }
+            Ok(())
+        }
+
         fn native_cpu_chunk_plan_in_model(
             &self,
             request: NativeFrameId,
@@ -2301,92 +2442,7 @@ mod cpu_bridge {
             if input_format != VideoPixelFormat::Rgba8 {
                 add(&mut plan, ChargeKind::ActiveCpuInput, pixels)?;
             }
-            for (stage, key) in stages.iter().zip(keys) {
-                let shader = stage.shader;
-                let transparent = transparent_needed(stage);
-                let dynamic = self.dynamic_image_bytes(stage, transparent)?;
-                let layout =
-                    self.stage_resource_layout(shader, stage.controls, frame, 0, dynamic)?;
-                let cached = cache.entries.get(key).filter(|state| {
-                    state.fingerprint == shader.fingerprint && state.sizes == layout.sizes
-                });
-                if let Some(state) = cached {
-                    for id in &state.allocations {
-                        plan.add_existing(*id);
-                    }
-                } else {
-                    for (pass, &(width, height)) in shader.passes.iter().zip(&layout.sizes) {
-                        if pass.target.is_some() {
-                            let bytes = image_bytes(width, height, pass.float)?;
-                            add(&mut plan, ChargeKind::CachedEffectResource, bytes)?;
-                            add(&mut plan, ChargeKind::CachedEffectResource, bytes)?;
-                        }
-                    }
-                    for image in shader.imported_images.iter().chain(&shader.bound_images) {
-                        add(
-                            &mut plan,
-                            ChargeKind::CachedEffectResource,
-                            image_bytes(image.width, image.height, false)?,
-                        )?;
-                        upload(&mut plan, image.width, image.height, pitch)?;
-                    }
-                    for input in &shader.audio_inputs {
-                        add(
-                            &mut plan,
-                            ChargeKind::CachedEffectResource,
-                            image_bytes(input.width, 1, false)?,
-                        )?;
-                    }
-                }
-                for input in stage.images {
-                    validate_input_bytes(input.frame)?;
-                    let bytes = image_bytes(input.frame.width, input.frame.height, false)?;
-                    add(&mut plan, ChargeKind::IsfScratch, bytes)?;
-                    if input.frame.format != VideoPixelFormat::Rgba8 {
-                        add(&mut plan, ChargeKind::ActiveCpuInput, bytes)?;
-                    }
-                    upload(&mut plan, input.frame.width, input.frame.height, pitch)?;
-                }
-                if transparent {
-                    add(&mut plan, ChargeKind::IsfScratch, 4)?;
-                    upload(&mut plan, 1, 1, pitch)?;
-                }
-                let audio_identity = audio.map(|frame| (frame.generation, frame.feature_sequence));
-                if cached.is_none_or(|state| {
-                    !state.audio_initialized || state.audio_identity != audio_identity
-                }) {
-                    for input in &shader.audio_inputs {
-                        upload(&mut plan, input.width, 1, pitch)?;
-                    }
-                }
-                for (pass, &(width, height)) in shader.passes.iter().zip(&layout.sizes) {
-                    if pass.target.is_none()
-                        && (width != frame.width || height != frame.height || pass.float)
-                    {
-                        add(
-                            &mut plan,
-                            ChargeKind::IsfScratch,
-                            image_bytes(width, height, pass.float)?,
-                        )?;
-                    }
-                    add(
-                        &mut plan,
-                        ChargeKind::CachedEffectResource,
-                        48 + super::super::ISF_MAX_CONTROL_INPUTS as u64 * 16,
-                    )?;
-                }
-                if shader.passes.last().zip(layout.sizes.last()).is_some_and(
-                    |(pass, &(width, height))| {
-                        width != frame.width || height != frame.height || pass.float
-                    },
-                ) {
-                    add(
-                        &mut plan,
-                        ChargeKind::CachedEffectResource,
-                        48 + super::super::ISF_MAX_CONTROL_INPUTS as u64 * 16,
-                    )?;
-                }
-            }
+            self.native_stage_resource_plan(&mut plan, frame, stages, keys, audio, cache)?;
             Ok(NativeCpuChunkPlan { plan })
         }
     }

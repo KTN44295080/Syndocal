@@ -351,6 +351,9 @@ impl HistoryResident for GpuLayerLease {
     }
 }
 impl HistoryHostFootprint for FrozenStatelessRecipe {
+    fn requires_resident(&self) -> bool {
+        self.job().requires_retained_history()
+    }
     /// The recipe pins its raw input frame for exact replay. While a frame is
     /// active G charges that input separately (ActiveCpuInput); the long-term
     /// retention is the host budget's, so it is not marked managed here.

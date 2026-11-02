@@ -1,0 +1,41 @@
+[
+  {
+    "name": "raw-version",
+    "source": "/*{}*/\n#version 330\nvoid main() { gl_FragColor = vec4(1.0); }",
+    "raw": "ISF source uses forbidden or unsupported construct '#version'",
+    "token": "#version",
+    "kind": "directive"
+  },
+  {
+    "name": "raw-extension",
+    "source": "/*{}*/\n#extension GL_ARB_gpu_shader5 : enable\nvoid main() { gl_FragColor = vec4(1.0); }",
+    "raw": "ISF source uses forbidden or unsupported construct '#extension'",
+    "token": "#extension",
+    "kind": "directive"
+  },
+  {
+    "name": "relative-include",
+    "source": "/*{}*/\n#include \"common.glsl\"\nvoid main() { gl_FragColor = vec4(1.0); }",
+    "raw": "ISF source uses forbidden or unsupported construct '#include'",
+    "token": "#include",
+    "kind": "directive"
+  },
+  {
+    "name": "raw-uniform",
+    "source": "/*{}*/\nuniform float gain;\nvoid main() { gl_FragColor = vec4(gain); }",
+    "raw": "ISF source uses forbidden or unsupported construct 'uniform '",
+    "kind": "uniform"
+  },
+  {
+    "name": "twenty-passes",
+    "source": "/*{\"PASSES\":[{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}]}*/\nvoid main() { gl_FragColor = vec4(1.0); }",
+    "raw": "ISF declares too many passes; the safety limit is 16",
+    "kind": "passes"
+  },
+  {
+    "name": "import-parent-traversal",
+    "source": "/*{\"IMPORTED\":{\"noise\":{\"PATH\":\"../noise.png\"}}}*/\nvoid main() { gl_FragColor = IMG_THIS_PIXEL(noise); }",
+    "raw": "ISF imported image 'noise' PATH must stay inside the shader directory; absolute paths, URLs and parent traversal are unsupported",
+    "kind": "path"
+  }
+]

@@ -183,7 +183,12 @@ fn isf_native_gpu_g4_decline_keeps_frozen_audio_date_keys_and_prepared_cpu_work(
         .prepare_native_layer_continuation(
             request(1),
             input,
-            NativeBatchRestrictions::default(),
+            // Audio is resident-capable; a callback restriction forces the
+            // decline whose frozen keys and prepared CPU work this checks.
+            NativeBatchRestrictions {
+                callback: true,
+                ..NativeBatchRestrictions::default()
+            },
             None,
         )
         .unwrap();
@@ -194,7 +199,7 @@ fn isf_native_gpu_g4_decline_keeps_frozen_audio_date_keys_and_prepared_cpu_work(
     );
     assert!(
         prepared.allocation_plan().is_err(),
-        "audio work declines resident Batch3"
+        "callback-restricted work declines resident Batch3"
     );
     assert_eq!(prepared.runtime.native_frame_index(), 0);
     let quote = owner.quote(&NativeAllocationPlan::new(request(1))).unwrap();
@@ -206,7 +211,7 @@ fn isf_native_gpu_g4_decline_keeps_frozen_audio_date_keys_and_prepared_cpu_work(
             assert!(matches!(reason, NativeGpuDecline::UnsupportedChain { .. }));
             continuation
         }
-        _ => panic!("audio inputs must keep canonical CPU continuation"),
+        _ => panic!("a declined batch must keep canonical CPU continuation"),
     };
     let cpu = continuation.into_cpu().unwrap().refresh().unwrap();
     assert_eq!(cpu.runtime.native_frame_index(), 0);

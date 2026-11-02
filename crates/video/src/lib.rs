@@ -2764,6 +2764,19 @@ impl FrameQueue {
             .expect("fresh frame queue policy plan must match its source")
     }
 
+    /// Drops every queued frame and its charged owners. The next push starts a
+    /// fresh policy revision, so no plan prepared against the old contents can
+    /// apply. Used when the native CPU route cannot fit its ledger.
+    pub(crate) fn release_for_budget(&mut self) {
+        self.slots.fill(None);
+        self.native_owners.fill(None);
+        self.native_entry_ids.fill(None);
+        self.native_cpu_owners.fill(None);
+        self.len = 0;
+        self.policy.clear();
+        self.policy_revision = self.next_policy_revision();
+    }
+
     fn next_policy_revision(&self) -> u64 {
         self.policy_revision
             .checked_add(1)

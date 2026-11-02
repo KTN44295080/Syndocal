@@ -45,6 +45,7 @@ fn headless_session() -> NativeResidentDisplaySession {
         follow_last_valid: None,
         ring: Default::default(),
         deferred_budget: None,
+        budget_refusals: 0,
         evidence: Default::default(),
     }
 }

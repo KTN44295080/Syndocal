@@ -5,6 +5,7 @@
   "author": "Seraf()",
   "type": "module",
   "scripts": {
+    "check:fx-rejection": "node scripts/check-fx-rejection-explanations.mjs",
     "check:ai0-source-coverage": "node scripts/check-ai0-source-coverage.mjs",
     "check:ai0-source-coverage:self-test": "node scripts/check-ai0-source-coverage.mjs --self-test",
     "check:ai1-query-event-contract": "node scripts/check-ai1-query-event-contract.mjs",

@@ -26,6 +26,10 @@ use crate::native_gpu_contract::{
 };
 use crate::VideoRenderCancellation;
 
+#[path = "native_gpu_pool_authorship.rs"]
+mod pool_authorship;
+use pool_authorship::PoolAuthorship;
+
 static NEXT_DEVICE_GENERATION: AtomicU64 = AtomicU64::new(1);
 const ACTIVE_TOKEN: u8 = 0;
 const CANCELLED_TOKEN: u8 = 1;
@@ -280,6 +284,7 @@ impl NativeGpuFactory {
             context,
             pooled_resources: Vec::new(),
             stack_pool_shape: [None; 3],
+            stack_pool_authorship: PoolAuthorship::default(),
         })
     }
 }
@@ -1177,6 +1182,7 @@ pub(crate) struct NativeGpuOwner {
     // transaction registries and validated leases independently pin active uses.
     pooled_resources: Vec<Arc<dyn Any + Send + Sync>>,
     stack_pool_shape: [Option<(u32, u32, crate::VideoPixelFormat, usize)>; 3],
+    stack_pool_authorship: PoolAuthorship,
 }
 
 impl Drop for NativeGpuOwner {
@@ -1188,9 +1194,22 @@ impl Drop for NativeGpuOwner {
 }
 
 impl NativeGpuOwner {
+    pub(crate) fn configure_stack_pool_workload<'a>(
+        &mut self,
+        shape: [Option<(u32, u32, crate::VideoPixelFormat, usize)>; 3],
+        chains: impl Iterator<Item = &'a crate::ResolvedVideoEffectChain> + Clone,
+    ) {
+        if self.stack_pool_shape != shape || !self.stack_pool_authorship.matches(chains.clone()) {
+            self.release_resource_pools();
+            self.stack_pool_shape = shape;
+            self.stack_pool_authorship = PoolAuthorship::capture(chains);
+        }
+    }
+
     /// One active resident workload shape per owner. Replacing the cache bank
     /// before preflight prevents alternating stage/extent shapes accumulating
     /// idle charges. Existing transaction and history references remain intact.
+    #[cfg(test)]
     pub(crate) fn configure_stack_pool_shape(
         &mut self,
         shape: [Option<(u32, u32, crate::VideoPixelFormat, usize)>; 3],
@@ -1376,6 +1395,7 @@ impl NativeGpuOwner {
         }
         self.pooled_resources.clear();
         self.stack_pool_shape = [None; 3];
+        self.stack_pool_authorship = PoolAuthorship::default();
     }
 
     #[cfg(test)]
