@@ -124,6 +124,7 @@ fn eof_run_keeps_shared_terminal_pixels_during_full_wrap_predecode() {
         finished: false,
         clip_end: false,
         wrap_until_ms: 91,
+        wrap_cover_ms: 25,
     });
     let (tx, rx) = std::sync::mpsc::channel();
     let (result, _) =
@@ -143,6 +144,76 @@ fn eof_run_keeps_shared_terminal_pixels_during_full_wrap_predecode() {
     assert_eq!(wrap.frames.len(), 4);
     assert!(wrap.frames.back().unwrap().0.pts_ms >= 91);
     assert!(session.decoder_drained);
+    drop(session);
+    drop(decoder);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn eof_wrap_predecode_shares_the_allowance_with_untaken_clip_end_frames() {
+    let path = std::env::temp_dir().join(format!("syndocal-eof-share-{}.mkv", std::process::id()));
+    let ffmpeg = std::env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
+    let output = std::process::Command::new(ffmpeg)
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=48x32:rate=30:duration=1",
+            "-c:v",
+            "ffv1",
+            "-g",
+            "10",
+            "-y",
+        ])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = request(Some(&path));
+    let input = VideoRenderInput::legacy(request.clone());
+    let mut decoder = LibavFrameDecoder::software_for_tests();
+    let terminal = decoder
+        .decode_tick(std::slice::from_ref(&input), false)
+        .pop()
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let mut session = decoder.sessions.pop().unwrap();
+    // The owner still holds three clip-end frames of its allowance of four.
+    let control = std::sync::Mutex::new(LibavRunControl {
+        until_ms: 1_100,
+        limit: 4,
+        outstanding: 3,
+        finished: false,
+        clip_end: false,
+        wrap_until_ms: 91,
+        wrap_cover_ms: 25,
+    });
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let (result, _) =
+        run_libav_lookahead(request, &mut session, Arc::clone(&terminal), &control, tx);
+    result.unwrap();
+    let wrap = session
+        .wrap
+        .as_ref()
+        .expect("the wrap request stays covered");
+    let pts: Vec<u64> = wrap.frames.iter().map(|(frame, _)| frame.pts_ms).collect();
+    assert_eq!(
+        pts.len(),
+        2,
+        "cover frame only, not a second allowance: {pts:?}"
+    );
+    assert_eq!(pts[0], 0);
+    assert!(
+        pts[1] >= 25,
+        "the first request after the wrap is covered: {pts:?}"
+    );
     drop(session);
     drop(decoder);
     std::fs::remove_file(path).unwrap();

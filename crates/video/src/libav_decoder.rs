@@ -286,6 +286,10 @@ struct LibavRunControl {
     /// the first requests after the loop wrap are covered with the same one
     /// source frame of slack as any other run.
     wrap_until_ms: u64,
+    /// The part of the wrap window without that slack: the first request
+    /// after the wrap is always covered, even when the owner still holds
+    /// clip-end frames that use up its allowance.
+    wrap_cover_ms: u64,
 }
 
 #[cfg(feature = "libav")]
@@ -1594,6 +1598,7 @@ impl LibavFrameDecoder {
             .saturating_add(slack_ms);
         let until_ms = input.request.position_ms.saturating_add(window_ms);
         let wrap_until_ms = window_ms.max(1);
+        let wrap_cover_ms = stride_ms.saturating_add(stride_ms / 2).max(1);
         // The owner's run is still out (this request was answered from it):
         // widen its window while it decodes, or, once it has ended, take its
         // session back and continue from its queue below.
@@ -1614,6 +1619,7 @@ impl LibavFrameDecoder {
                 if !control.finished {
                     control.until_ms = control.until_ms.max(until_ms);
                     control.wrap_until_ms = control.wrap_until_ms.max(wrap_until_ms);
+                    control.wrap_cover_ms = control.wrap_cover_ms.max(wrap_cover_ms);
                     control.limit = limit;
                     return;
                 }
@@ -1635,7 +1641,13 @@ impl LibavFrameDecoder {
                 && session.wrap.is_none()
                 && !session.wrap_attempted
             {
-                self.start_clip_start_job(input, served, index, limit, wrap_until_ms);
+                self.start_clip_start_job(
+                    input,
+                    served,
+                    index,
+                    limit,
+                    (wrap_until_ms, wrap_cover_ms),
+                );
             }
             return;
         }
@@ -1660,6 +1672,7 @@ impl LibavFrameDecoder {
             finished: false,
             clip_end: false,
             wrap_until_ms,
+            wrap_cover_ms,
         }));
         let worker_control = Arc::clone(&control);
         let (frames_sender, frames) = std::sync::mpsc::channel();
@@ -1710,7 +1723,7 @@ impl LibavFrameDecoder {
         served: &Arc<VideoFrame>,
         index: usize,
         limit: usize,
-        wrap_until_ms: u64,
+        (wrap_until_ms, wrap_cover_ms): (u64, u64),
     ) {
         let Some(pool) = libav_decode_pool() else {
             return;
@@ -1727,6 +1740,7 @@ impl LibavFrameDecoder {
             finished: false,
             clip_end: true,
             wrap_until_ms,
+            wrap_cover_ms,
         }));
         let worker_control = Arc::clone(&control);
         let (frames_sender, frames) = std::sync::mpsc::channel::<Arc<VideoFrame>>();
@@ -2497,9 +2511,9 @@ fn predecode_clip_start(
     control: &std::sync::Mutex<LibavRunControl>,
     hardware_frames: &mut u64,
 ) -> Option<LibavWrapAhead> {
-    let (until_ms, limit) = {
+    let (until_ms, cover_ms, limit) = {
         let control = lock_run_control(control);
-        (control.wrap_until_ms, control.limit)
+        (control.wrap_until_ms, control.wrap_cover_ms, control.limit)
     };
     let logical = (
         session.eof_sent,
@@ -2528,6 +2542,14 @@ fn predecode_clip_start(
         }
         frames.push_back((Arc::clone(&frame), session.last_key_frame));
         if frame.pts_ms >= until_ms || frames.len() >= limit.max(1) {
+            break true;
+        }
+        // The queue shares the owner's allowance with the clip-end frames it
+        // has not taken yet. Holding both in full put a second allowance of
+        // output-sized frames per layer in memory around every wrap (C5 soak,
+        // 2026-11-03: +185 MiB for three 2560x1600 layers).
+        let outstanding = lock_run_control(control).outstanding;
+        if frame.pts_ms >= cover_ms && frames.len().saturating_add(outstanding) >= limit {
             break true;
         }
         request.position_ms = frame.pts_ms.saturating_add(1);
