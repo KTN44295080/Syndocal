@@ -17,6 +17,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "syphon_diagnostics.rs"]
+pub(crate) mod syphon_diagnostics;
+
 #[path = "physical_output_fence.rs"]
 mod physical_output_fence;
 use physical_output_fence::*;
@@ -88,12 +91,12 @@ impl SyphonTransportState {
         let failed_ids = self
             .output_workers
             .iter()
-            .filter_map(|(route_id, worker)| {
-                worker.has_finished().then_some(*route_id)
-            })
+            .filter_map(|(route_id, worker)| worker.has_finished().then_some(*route_id))
             .collect::<Vec<_>>();
         for route_id in failed_ids {
-            let failure = self.output_workers.get(&route_id)
+            let failure = self
+                .output_workers
+                .get(&route_id)
                 .and_then(SyphonRouteWorker::failure_snapshot);
             let stop_result = self.retire_output_worker(route_id, engine, Duration::ZERO);
             if let Some(failure) = failure.or_else(|| stop_result.err()) {
@@ -124,12 +127,15 @@ impl SyphonTransportState {
             let message = format!(
                 "Syphon output route {route_id} stop timed out; worker and native retirement remain pending"
             );
-            self.pending_output_retirement_leases.entry(route_id)
+            self.pending_output_retirement_leases
+                .entry(route_id)
                 .or_insert_with(|| engine.begin_output_ownership_failure_fence(message.clone()));
             self.failed_output_routes.insert(route_id, message.clone());
             return Err(SyphonOutputWorkerStopError { message });
         }
-        let worker = self.output_workers.remove(&route_id)
+        let worker = self
+            .output_workers
+            .remove(&route_id)
             .expect("finished Syphon owner remains registered until join");
         let result = worker.stop();
         self.pending_output_retirement_leases.remove(&route_id);
@@ -160,7 +166,10 @@ impl SyphonTransportState {
         authority: &dyn Fn() -> Result<(), String>,
     ) -> Result<(), video::ExternalVideoTransportDriverError> {
         self.start_route_with_factory_and_authority(
-            route, engine, activation, crate::syphon_native::SyphonSender::new,
+            route,
+            engine,
+            activation,
+            crate::syphon_native::SyphonSender::new,
             Some(authority),
         )
     }
@@ -259,16 +268,18 @@ impl SyphonTransportState {
             }
         };
         self.output_workers.insert(route.route_id, worker);
-        let publish_result = authority.map_or(Ok(()), |validate| validate()).and_then(|()| {
-            self.output_workers
-                .get_mut(&route.route_id)
-                .expect("inserted Syphon worker")
-                .publish()
-        });
+        let publish_result = authority
+            .map_or(Ok(()), |validate| validate())
+            .and_then(|()| {
+                self.output_workers
+                    .get_mut(&route.route_id)
+                    .expect("inserted Syphon worker")
+                    .publish()
+            });
         if let Err(error) = publish_result {
-            if let Err(stop_error) = self.retire_output_worker(
-                route.route_id, engine, OUTPUT_WORKER_STOP_TIMEOUT,
-            ) {
+            if let Err(stop_error) =
+                self.retire_output_worker(route.route_id, engine, OUTPUT_WORKER_STOP_TIMEOUT)
+            {
                 self.failed_output_routes
                     .insert(route.route_id, stop_error.message.clone());
                 return Err(driver_error(format!(
@@ -326,12 +337,14 @@ impl SyphonTransportState {
                 "Syphon transport accepts Syphon output routes only",
             ));
         }
-        if authority.is_none() && !matches!(
-            engine.output_ownership_status().state,
-            protocol::OutputOwnershipState::Transitioning
-                | protocol::OutputOwnershipState::Activating
-                | protocol::OutputOwnershipState::Failed
-        ) {
+        if authority.is_none()
+            && !matches!(
+                engine.output_ownership_status().state,
+                protocol::OutputOwnershipState::Transitioning
+                    | protocol::OutputOwnershipState::Activating
+                    | protocol::OutputOwnershipState::Failed
+            )
+        {
             return Err(driver_error(
                 "Syphon output teardown requires the serialized ownership transition",
             ));
@@ -339,13 +352,13 @@ impl SyphonTransportState {
         if let Some(validate) = authority {
             validate().map_err(driver_error)?;
             if let Some(worker) = self.output_workers.get(&route.route_id) {
-                worker.admit_authoring_retirement(engine).map_err(driver_error)?;
+                worker
+                    .admit_authoring_retirement(engine)
+                    .map_err(driver_error)?;
             }
         }
         if self.output_workers.contains_key(&route.route_id) {
-            match self.retire_output_worker(
-                route.route_id, engine, OUTPUT_WORKER_STOP_TIMEOUT,
-            ) {
+            match self.retire_output_worker(route.route_id, engine, OUTPUT_WORKER_STOP_TIMEOUT) {
                 Ok(()) => {
                     self.failed_output_routes.remove(&route.route_id);
                 }
@@ -523,10 +536,17 @@ fn take_syphon_creation_lease(
 trait SyphonOutputSender {
     fn send_rgba(&mut self, width: u32, height: u32, pixels: &[u8]) -> Result<(), String>;
     fn close(&mut self) -> Result<(), String>;
+    fn diagnostic_metadata(&self) -> Result<Option<syphon_diagnostics::NativeMetadata>, String> {
+        Ok(None)
+    }
+    fn record_diagnostic_error(&mut self, _error: &str) {}
 }
 
 #[cfg(all(feature = "syphon", target_os = "macos"))]
 impl SyphonOutputSender for crate::syphon_native::SyphonSender {
+    fn diagnostic_metadata(&self) -> Result<Option<syphon_diagnostics::NativeMetadata>, String> {
+        self.metadata().map(Some)
+    }
     fn send_rgba(&mut self, width: u32, height: u32, pixels: &[u8]) -> Result<(), String> {
         crate::syphon_native::SyphonSender::send_rgba(self, width, height, pixels)
     }
@@ -540,6 +560,7 @@ struct SyphonOwnedSender<S: SyphonOutputSender> {
     engine: EngineHandle,
     teardown_lease: Arc<Mutex<Option<OutputOwnershipTeardownLease>>>,
     retired: bool,
+    diagnostics: Option<syphon_diagnostics::Recorder>,
 }
 
 impl<S: SyphonOutputSender> SyphonOwnedSender<S> {
@@ -553,26 +574,87 @@ impl<S: SyphonOutputSender> SyphonOwnedSender<S> {
             engine,
             teardown_lease,
             retired: false,
+            diagnostics: None,
         }
+    }
+
+    fn with_diagnostics(mut self, output_id: u64, name: &str) -> Self {
+        let metadata = self
+            .sender
+            .as_ref()
+            .expect("owned sender exists during construction")
+            .diagnostic_metadata();
+        let (metadata, error) = match metadata {
+            Ok(metadata) => (metadata, None),
+            Err(error) => (
+                Some(syphon_diagnostics::NativeMetadata {
+                    macos_version: "unavailable".to_owned(),
+                    metal_device_name: None,
+                    has_unified_memory: None,
+                }),
+                Some(error),
+            ),
+        };
+        self.diagnostics = metadata.map(|metadata| {
+            syphon_diagnostics::Recorder::new(
+                output_id,
+                name,
+                metadata,
+                self.engine.output_ownership_status(),
+            )
+        });
+        if let (Some(diagnostics), Some(error)) = (self.diagnostics.as_mut(), error) {
+            diagnostics.error(&error);
+        }
+        if let Some(diagnostics) = self.diagnostics.as_mut() {
+            diagnostics.snapshot(self.engine.output_ownership_status());
+        }
+        self
     }
 }
 
 impl<S: SyphonOutputSender> SyphonOutputSender for SyphonOwnedSender<S> {
     fn send_rgba(&mut self, width: u32, height: u32, pixels: &[u8]) -> Result<(), String> {
-        self.sender
+        let started = Instant::now();
+        let result = self
+            .sender
             .as_mut()
             .ok_or_else(|| "Syphon sender has already retired".to_string())?
-            .send_rgba(width, height, pixels)
+            .send_rgba(width, height, pixels);
+        if let Some(diagnostics) = self.diagnostics.as_mut() {
+            match &result {
+                Ok(()) => diagnostics.published(width, height, started.elapsed()),
+                Err(error) => diagnostics.error(error),
+            }
+        }
+        result
+    }
+
+    fn record_diagnostic_error(&mut self, error: &str) {
+        if let Some(diagnostics) = self.diagnostics.as_mut() {
+            // Close writes the snapshot after ownership fencing; never put
+            // diagnostic I/O ahead of the failure fence.
+            diagnostics.error(error);
+        }
     }
 
     fn close(&mut self) -> Result<(), String> {
         if self.retired {
             return Ok(());
         }
-        self.sender
+        let result = self
+            .sender
             .as_mut()
             .ok_or_else(|| "Syphon sender has already retired".to_string())?
-            .close()?;
+            .close();
+        if let Some(diagnostics) = self.diagnostics.as_mut() {
+            match &result {
+                Ok(()) => diagnostics.native_closed(),
+                Err(error) => diagnostics.error(error),
+            }
+            diagnostics.snapshot(self.engine.output_ownership_status());
+        }
+        result?;
         self.retired = true;
         Ok(())
     }
@@ -593,7 +675,16 @@ impl<S: SyphonOutputSender> Drop for SyphonOwnedSender<S> {
         let lease = self.engine.begin_output_ownership_failure_fence(
             "Syphon sender owner exited before acknowledging native teardown",
         );
-        match sender.close() {
+        let result = sender.close();
+        if let Some(diagnostics) = self.diagnostics.as_mut() {
+            diagnostics.error("Syphon sender owner exited before acknowledging native teardown");
+            match &result {
+                Ok(()) => diagnostics.native_closed(),
+                Err(error) => diagnostics.error(error),
+            }
+            diagnostics.snapshot(self.engine.output_ownership_status());
+        }
+        match result {
             Ok(()) => {
                 drop(sender);
                 let mut slot = self
@@ -757,6 +848,12 @@ impl SyphonRouteWorker {
                         );
                     }
                     creation_lease.retire();
+                    #[cfg(all(feature = "syphon", target_os = "macos", not(test)))]
+                    if let Ok(metadata) = crate::syphon_native::unavailable_metadata() {
+                        let mut diagnostics = syphon_diagnostics::Recorder::new(output_id, &sender_name, metadata, engine.output_ownership_status());
+                        diagnostics.error(&message);
+                        diagnostics.snapshot(engine.output_ownership_status());
+                    }
                     let _ = ready_tx.send(Err(message.clone()));
                     eprintln!("{message}");
                     return Err(SyphonOutputWorkerStopError { message });
@@ -766,7 +863,7 @@ impl SyphonRouteWorker {
                 sender,
                 engine.clone(),
                 Arc::clone(&worker_teardown_lease),
-            );
+            ).with_diagnostics(output_id, &sender_name);
             match worker_creation_lease_slot.lock() {
                 Ok(mut slot) => *slot = Some(creation_lease),
                 Err(poisoned) => *poisoned.into_inner() = Some(creation_lease),
@@ -1165,7 +1262,9 @@ impl SyphonRouteWorker {
 
     fn admit_authoring_retirement(&self, engine: &EngineHandle) -> Result<(), String> {
         let lease = engine.begin_video_output_resource_teardown()?;
-        let mut slot = self.teardown_lease.lock()
+        let mut slot = self
+            .teardown_lease
+            .lock()
             .map_err(|_| "Video authoring retirement lease slot was poisoned".to_string())?;
         if slot.is_none() {
             *slot = Some(lease);
@@ -1209,7 +1308,9 @@ impl SyphonRouteWorker {
     }
 
     fn has_finished(&self) -> bool {
-        self.worker.as_ref().is_none_or(std::thread::JoinHandle::is_finished)
+        self.worker
+            .as_ref()
+            .is_none_or(std::thread::JoinHandle::is_finished)
     }
 
     fn signal_retirement(&mut self) -> Option<OutputOwnershipCreationLease> {
@@ -1279,7 +1380,8 @@ fn finish_syphon_output_worker<S: SyphonOutputSender>(
     failure_lease: Option<engine::OutputOwnershipTeardownLease>,
     mut worker_error: Option<String>,
 ) -> Result<(), SyphonOutputWorkerStopError> {
-    let authored_teardown = teardown_lease_slot.lock()
+    let authored_teardown = teardown_lease_slot
+        .lock()
         .map(|mut slot| slot.take())
         .unwrap_or_else(|poisoned| poisoned.into_inner().take());
     let teardown_lease = if let Some(lease) = failure_lease {
@@ -1298,6 +1400,10 @@ fn finish_syphon_output_worker<S: SyphonOutputSender>(
             }
         }
     };
+
+    if let Some(error) = worker_error.as_ref() {
+        sender.record_diagnostic_error(error);
+    }
 
     // Native close waits for accepted GPU work and unregisters the server.
     // Never release ownership accounting for a framework object whose stop
@@ -1468,7 +1574,9 @@ where
                             // stuck gate into a visible fault instead of an
                             // indefinite silent hold.
                             #[cfg(test)]
-                            external_output_retirement::stop_after_denied_admission_for_test(Some(&worker_stop));
+                            external_output_retirement::stop_after_denied_admission_for_test(Some(
+                                &worker_stop,
+                            ));
                             std::thread::sleep(Duration::from_millis(5));
                         }
                     }
@@ -1647,11 +1755,9 @@ where
                     // Render failures happen before a frame permit can be
                     // acquired. The inner render path may already have
                     // fenced and handed off its lease; otherwise fence here.
-                    failure_lease = Some(
-                        engine.begin_output_ownership_failure_fence(format!(
-                            "Syphon output route {output_id} render failed: {error}"
-                        ))
-                    );
+                    failure_lease = Some(engine.begin_output_ownership_failure_fence(format!(
+                        "Syphon output route {output_id} render failed: {error}"
+                    )));
                 }
                 worker_error = Some(error.clone());
             }
@@ -1776,6 +1882,97 @@ mod tests {
         }
     }
 
+    #[test]
+    fn syphon_friend_project_loads_and_renders_animated_rgb_corners_without_media() {
+        let json =
+            include_str!("../../../tools/distribution/syphon-friend/syphon-acceptance-project.sdc");
+        let value = crate::parse_project_json(json).unwrap();
+        let (project, mappings) = crate::project_and_control_mappings_from_value(value).unwrap();
+        let prepared = crate::prepare_project_load(
+            project,
+            mappings,
+            "Syphon friend fixture".to_owned(),
+            None,
+        )
+        .unwrap();
+        assert!(
+            prepared.result.warnings.is_empty(),
+            "{:?}",
+            prepared.result.warnings
+        );
+        let mut snapshot = prepared.snapshot;
+        assert!(snapshot.fixtures.is_empty());
+        assert!(!snapshot.output.enabled);
+        assert!(snapshot.dmx_outputs.is_empty());
+        // Canonical loading registers the procedural generator in the catalog.
+        // It must never introduce an external file or device dependency.
+        assert_eq!(snapshot.video.media_assets.len(), 1);
+        assert!(snapshot.video.media_assets.iter().all(|asset| {
+            asset.source.path.is_none()
+                && matches!(asset.source.kind, protocol::VideoSourceKind::Generator(_))
+        }));
+        assert!(snapshot
+            .video
+            .layers
+            .iter()
+            .all(|layer| layer.source.path.is_none()));
+        assert_eq!(snapshot.video.outputs.len(), 1);
+        let output = &snapshot.video.outputs[0];
+        assert_eq!(output.kind, protocol::VideoOutputKind::SyphonServer);
+        assert_eq!(
+            output.endpoint_name.as_deref(),
+            Some("Syndocal-Syphon-Test")
+        );
+        assert_eq!((output.width, output.height), (1920, 1080));
+        let output_id = output.id;
+        let mut renderer = video::VideoPreviewRenderer::new(video::VideoRuntimeConfig::default());
+        let first = renderer
+            .prepare_output_artistic_render_result_preview_with_effects(
+                &snapshot.video,
+                syphon_output_effect_render_context(&snapshot, 92),
+                output_id,
+                1920,
+                1080,
+            )
+            .unwrap();
+        assert_eq!(
+            first.evidence.freshness,
+            video::VideoOutputRenderFreshness::Fresh
+        );
+        assert!(first.evidence.error.is_none(), "{:?}", first.evidence.error);
+        let first = first
+            .frame()
+            .expect("ISF must produce an artistic frame")
+            .clone();
+        let pixel = |frame: &video::VideoFrame, x: usize, y: usize| {
+            let offset = (y * frame.width as usize + x) * 4;
+            frame.data[offset..offset + 4].to_vec()
+        };
+        assert_eq!(pixel(&first, 10, 10), vec![255, 0, 0, 255]);
+        assert_eq!(pixel(&first, 1910, 10), vec![0, 255, 0, 255]);
+        assert_eq!(pixel(&first, 10, 1070), vec![0, 0, 255, 255]);
+        snapshot.video.layers[0].state.position_ms = 1000;
+        let second = renderer
+            .prepare_output_artistic_render_result_preview_with_effects(
+                &snapshot.video,
+                syphon_output_effect_render_context(&snapshot, 92),
+                output_id,
+                1920,
+                1080,
+            )
+            .unwrap();
+        assert_eq!(
+            second.evidence.freshness,
+            video::VideoOutputRenderFreshness::Fresh
+        );
+        let second = second.frame().unwrap();
+        assert_ne!(
+            pixel(&first, 960, 690),
+            pixel(second, 960, 690),
+            "TIME must animate the gold circle"
+        );
+    }
+
     fn test_engine(output_id: u64) -> EngineHandle {
         let engine = EngineHandle::start_for_tests(protocol::DmxOutputConfig {
             enabled: false,
@@ -1850,7 +2047,9 @@ mod tests {
     fn syphon_authoring_rejects_expired_authority_after_readiness_without_sending() {
         let engine = test_engine(930_020);
         let before = engine.output_ownership_status();
-        let activation = engine.admit_output_activation(before.effective_role).unwrap();
+        let activation = engine
+            .admit_output_activation(before.effective_role)
+            .unwrap();
         let expired = Arc::new(AtomicBool::new(false));
         let expiry_after_constructor = Arc::clone(&expired);
         let sends = Arc::new(AtomicUsize::new(0));
@@ -1865,22 +2064,29 @@ mod tests {
             }
         };
         let mut transport = test_transport();
-        let error = transport.start_route_with_factory_and_authority(
-            &test_route(930_020), &engine, Some(activation),
-            move |_| {
-                expiry_after_constructor.store(true, Ordering::Release);
-                Ok(FakeSender::new(sender_sends, sender_closed))
-            },
-            Some(&authority),
-        ).unwrap_err();
+        let error = transport
+            .start_route_with_factory_and_authority(
+                &test_route(930_020),
+                &engine,
+                Some(activation),
+                move |_| {
+                    expiry_after_constructor.store(true, Ordering::Release);
+                    Ok(FakeSender::new(sender_sends, sender_closed))
+                },
+                Some(&authority),
+            )
+            .unwrap_err();
         assert!(error.message.contains("authoring lease expired"));
         assert_eq!(sends.load(Ordering::Acquire), 0);
         assert!(closed.load(Ordering::Acquire));
         assert!(transport.output_workers.is_empty());
         assert!(transport.pending_output_startups.is_empty());
         assert_eq!(engine.output_ownership_status(), before);
-        engine.begin_output_ownership_transition(protocol::MachineOutputRole::Standby)
-            .unwrap().complete().unwrap();
+        engine
+            .begin_output_ownership_transition(protocol::MachineOutputRole::Standby)
+            .unwrap()
+            .complete()
+            .unwrap();
     }
 
     #[test]
@@ -1903,60 +2109,96 @@ mod tests {
         let closed_a = Arc::new(AtomicBool::new(false));
         let closed_b = Arc::new(AtomicBool::new(false));
         let mut transport = test_transport();
-        for (id, closed) in [(930_021, Arc::clone(&closed_a)), (930_022, Arc::clone(&closed_b))] {
-            let activation = engine.admit_output_activation(before.effective_role).unwrap();
-            transport.start_route_with_factory_and_authority(
-                &test_route(id), &engine, Some(activation),
-                move |_| Ok(FakeSender::new(Arc::new(AtomicUsize::new(0)), closed)),
-                Some(&|| Ok(())),
-            ).unwrap();
+        for (id, closed) in [
+            (930_021, Arc::clone(&closed_a)),
+            (930_022, Arc::clone(&closed_b)),
+        ] {
+            let activation = engine
+                .admit_output_activation(before.effective_role)
+                .unwrap();
+            transport
+                .start_route_with_factory_and_authority(
+                    &test_route(id),
+                    &engine,
+                    Some(activation),
+                    move |_| Ok(FakeSender::new(Arc::new(AtomicUsize::new(0)), closed)),
+                    Some(&|| Ok(())),
+                )
+                .unwrap();
         }
         let signals = transport.output_stop_signals();
         assert_eq!(signals.len(), 2);
-        assert!(signals.iter().all(|signal| !signal.load(Ordering::Acquire)),
-            "observing cancellation must not stop either output");
+        assert!(
+            signals.iter().all(|signal| !signal.load(Ordering::Acquire)),
+            "observing cancellation must not stop either output"
+        );
         assert_eq!(transport.output_workers.len(), 2);
-        assert!(transport.stop_route(&test_route(930_021), &engine).is_err(),
-            "the ordinary API still requires a global transition");
-        assert!(transport.stop_route_for_authoring(&test_route(930_021), &engine,
-            &|| Err("stale authoring owner".to_string())).is_err());
+        assert!(
+            transport.stop_route(&test_route(930_021), &engine).is_err(),
+            "the ordinary API still requires a global transition"
+        );
+        assert!(transport
+            .stop_route_for_authoring(&test_route(930_021), &engine, &|| Err(
+                "stale authoring owner".to_string()
+            ))
+            .is_err());
         assert_eq!(transport.output_workers.len(), 2);
         assert!(!closed_a.load(Ordering::Acquire));
-        transport.stop_route_for_authoring(&test_route(930_021), &engine, &|| Ok(())).unwrap();
+        transport
+            .stop_route_for_authoring(&test_route(930_021), &engine, &|| Ok(()))
+            .unwrap();
         assert!(closed_a.load(Ordering::Acquire));
         assert!(!closed_b.load(Ordering::Acquire));
         assert!(!transport.output_workers.contains_key(&930_021));
         assert!(transport.output_workers.contains_key(&930_022));
         assert_eq!(engine.output_ownership_status(), before);
-        transport.stop_route_for_authoring(&test_route(930_022), &engine, &|| Ok(())).unwrap();
+        transport
+            .stop_route_for_authoring(&test_route(930_022), &engine, &|| Ok(()))
+            .unwrap();
         assert!(closed_b.load(Ordering::Acquire));
         assert!(transport.output_workers.is_empty());
-        engine.begin_output_ownership_transition(protocol::MachineOutputRole::Standby)
-            .unwrap().complete().unwrap();
+        engine
+            .begin_output_ownership_transition(protocol::MachineOutputRole::Standby)
+            .unwrap()
+            .complete()
+            .unwrap();
     }
 
     #[test]
     fn syphon_authoring_failed_native_close_retains_accounting_and_fences_successors() {
         let engine = test_engine(930_023);
-        let activation = engine.admit_output_activation(protocol::MachineOutputRole::Both).unwrap();
+        let activation = engine
+            .admit_output_activation(protocol::MachineOutputRole::Both)
+            .unwrap();
         let closed = Arc::new(AtomicBool::new(false));
         let sender_closed = Arc::clone(&closed);
         let mut transport = test_transport();
-        transport.start_route_with_factory_and_authority(
-            &test_route(930_023), &engine, Some(activation),
-            move |_| {
-                let mut sender = FakeSender::new(Arc::new(AtomicUsize::new(0)), sender_closed);
-                sender.close_error = true;
-                Ok(sender)
-            },
-            Some(&|| Ok(())),
-        ).unwrap();
-        let error = transport.stop_route_for_authoring(&test_route(930_023), &engine, &|| Ok(())).unwrap_err();
+        transport
+            .start_route_with_factory_and_authority(
+                &test_route(930_023),
+                &engine,
+                Some(activation),
+                move |_| {
+                    let mut sender = FakeSender::new(Arc::new(AtomicUsize::new(0)), sender_closed);
+                    sender.close_error = true;
+                    Ok(sender)
+                },
+                Some(&|| Ok(())),
+            )
+            .unwrap();
+        let error = transport
+            .stop_route_for_authoring(&test_route(930_023), &engine, &|| Ok(()))
+            .unwrap_err();
         assert!(error.message.contains("native stop failure"));
         assert!(!closed.load(Ordering::Acquire));
         assert!(transport.failed_output_routes.contains_key(&930_023));
-        assert_eq!(engine.output_ownership_status().state, protocol::OutputOwnershipState::Failed);
-        assert!(engine.begin_output_ownership_transition(protocol::MachineOutputRole::Both).is_err());
+        assert_eq!(
+            engine.output_ownership_status().state,
+            protocol::OutputOwnershipState::Failed
+        );
+        assert!(engine
+            .begin_output_ownership_transition(protocol::MachineOutputRole::Both)
+            .is_err());
     }
 
     #[test]
@@ -2049,8 +2291,15 @@ mod tests {
         assert!(error.message.contains("injected constructor failure"));
         let signals = transport.output_stop_signals();
         assert_eq!(signals.len(), 1);
-        assert!(Arc::ptr_eq(&signals[0], &transport.pending_output_startups[&930_003].stop));
-        assert_eq!(transport.pending_output_startups.len(), 1, "observing cancellation must retain quarantine ownership");
+        assert!(Arc::ptr_eq(
+            &signals[0],
+            &transport.pending_output_startups[&930_003].stop
+        ));
+        assert_eq!(
+            transport.pending_output_startups.len(),
+            1,
+            "observing cancellation must retain quarantine ownership"
+        );
         assert_eq!(
             engine.output_ownership_status().state,
             protocol::OutputOwnershipState::Failed

@@ -40,6 +40,7 @@ const moduleUrl = async (path, replacements = {}) => {
   let javascript = result.outputText.replaceAll('from "solid-js"', `from "${solidUrl}"`);
   for (const [specifier, url] of Object.entries(replacements)) {
     javascript = javascript.replaceAll(`from "${specifier}"`, `from "${url}"`);
+    javascript = javascript.replaceAll(`import "${specifier}";`, `import "${url}";`);
   }
   return dataUrl(elementHost + javascript);
 };
@@ -49,12 +50,18 @@ const performanceBudgetUrl = await moduleUrl("liveVideoPerformanceBudget.ts", {
   "./liveVideoMonitorPolicy": policyUrl,
 });
 const authoringUrl = await moduleUrl("videoOutputAuthoring.ts");
+const ndiAttributionUrl = await moduleUrl("components/NdiAttribution.tsx", {
+  // The virtual-element host evaluates markup; it has no CSS rendering surface.
+  "./NdiAttribution.css": dataUrl(""),
+});
 const createPanelUrl = await moduleUrl("components/VideoOutputCreatePanel.tsx", {
+  "./NdiAttribution": ndiAttributionUrl,
   "../uiLocalization": localizationUrl,
   "../videoOutputAuthoring": authoringUrl,
 });
 const { VideoOutputCreatePanel } = await import(createPanelUrl);
 const { VideoOutputConfigPanel } = await import(await moduleUrl("components/VideoOutputConfigPanel.tsx", {
+  "./NdiAttribution": ndiAttributionUrl,
   "./VideoOutputCreatePanel": createPanelUrl,
   "../videoOutputAuthoring": authoringUrl,
 }));

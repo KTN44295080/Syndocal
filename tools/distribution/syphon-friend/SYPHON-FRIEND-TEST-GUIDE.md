@@ -1,0 +1,16 @@
+# Syphon friend test / 友人向けSyphonテスト (about 15 min / 約15分)
+
+Apple Silicon Mac, macOS 12+. Free, unsigned development kit; save any existing show first. Keep the extracted kit together. No video/media download is needed. Syphon **input is not built** in this kit.
+
+Apple Silicon、macOS 12以降。無料・未公証の開発版です。既存のショーを保存し、キットを展開したフォルダをそのまま使ってください。動画素材は不要です。このキットのSyphon **入力は対象外**です。
+
+1. **Install / インストール** — Open the included DMG and drag Syndocal.app into Applications (or install the included PKG). Right-click `/Applications/Syndocal.app` → Open. If macOS still blocks it, use System Settings → Privacy & Security → Open Anyway; for this trusted kit only, double-click `allow-syndocal.command` (equivalent to `xattr -cr /Applications/Syndocal.app`). This helper touches only Syndocal. Launch the app and maximize its window.
+   同梱DMGを開いてSyndocal.appをアプリケーションへ移動（またはPKGでインストール）。右クリック→開く。ブロックされる場合は「プライバシーとセキュリティ」→「このまま開く」、またはこの信頼済みキットの `allow-syndocal.command` を実行し、起動して最大化します。
+2. **Open project / プロジェクトを開く** — In Syndocal, open `syphon-acceptance-project.sdc`. Use a fresh test session and leave lighting/DMX disabled. The only authored output is `Syndocal-Syphon-Test` (1920×1080). Arm video outputs using the existing output ownership controls; start the generator clip if the project opens paused.
+   ファイルを開き、照明/DMXは無効のまま、既存の出力所有権コントロールで映像出力を有効化してください。停止状態ならジェネレーターのクリップを再生します。
+3. **Observe output / 出力確認** — Download free official **Simple Client** from [Syphon Simple releases](https://github.com/Syphon/Simple/releases), open it, and select Syndocal's `Syndocal-Syphon-Test` server. Confirm 1920×1080, a moving gold circle, readable upright labels: **TOP-LEFT (RED)**, **TOP-RIGHT (GREEN)**, **BOTTOM-LEFT (BLUE)**. Save a screenshot showing the selected server and picture to `screenshots/screenshot1.png` in this kit folder.
+   無料の公式Simple Clientを開いてサーバーを選択。解像度、金色の円の動き、上記3隅の色とラベルの向きを確認し、サーバー名と映像のスクリーンショットを保存します。
+4. **Blackout and stop / Blackoutと停止** — Click video Blackout: the client must stay connected and show solid black immediately. Save `screenshots/screenshot2.png`. Clear Blackout: motion must resume. Use Standby/Stop to disarm outputs: the server must disappear without either app crashing. Record each result in `observations.txt`; record FAIL/BLOCKED when appropriate. Do not fill a pass for something you did not observe.
+   映像Blackoutで接続が維持され黒になることを確認・撮影。解除で動きが戻り、Standby/Stopでサーバーが消えることと両アプリの応答を確認し、観察結果を記入してください。未確認は合格にしないでください。
+5. **Return / 返送** — Diagnostics are saved automatically; there is no export button in Kit 1. After stopping, double-click `collect-syphon-acceptance.command`, press Enter after preparing both screenshots and `observations.txt`, and send the Desktop `syphon-friend-result-*.zip` to the owner. The bundle contains macOS/GPU, signature/linkage checks and only the Syphon diagnostic log (`~/Library/Application Support/jp.seraf.ktn.syndocal/logs/syphon-acceptance.json`). Check that its timestamp and build match this run; missing diagnostics/screenshots remain unverified. Review the files before sending. No account credentials or whole user profile are collected.
+   診断は自動保存です（Kit 1にエクスポートボタンはありません）。停止後に収集スクリプトを実行し、2枚の画像と観察結果を準備してEnter。デスクトップのZIPの内容を確認して所有者へ返送してください。診断の時刻・ビルドが今回のものと一致することを確認。不足は未検証扱いです。

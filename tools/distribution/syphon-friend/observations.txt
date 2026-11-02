@@ -1,0 +1,17 @@
+Kit build SHA (see kit-manifest.json):
+Test date/time / テスト日時:
+Mac model / Mac機種:
+
+Replace each NOT TESTED with PASS, FAIL or BLOCKED and describe failures.
+各 NOT TESTED を PASS / FAIL / BLOCKED に変更し、不具合を説明してください。
+
+Output server discovered / 出力サーバー検出: NOT TESTED
+1920x1080 and moving gold circle / 解像度と金色の円の動き: NOT TESTED
+Upright TOP-LEFT RED, TOP-RIGHT GREEN, BOTTOM-LEFT BLUE / 向きとRGB: NOT TESTED
+Blackout publishes solid black, stays connected / Blackoutで接続を維持し黒: NOT TESTED
+Unblackout resumes motion / Blackout解除で動きが戻る: NOT TESTED
+Standby/Stop removes server, both apps responsive / 停止でサーバー消失・応答維持: NOT TESTED
+Diagnostic timestamp and build match this run / 診断の時刻とビルドが一致: NOT TESTED
+Syphon input / 入力: NOT BUILT (skip / 対象外)
+
+Notes / 補足:

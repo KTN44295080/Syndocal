@@ -1,0 +1,3 @@
+collect-syphon-acceptance.command text eol=lf
+syphon-friend/allow-syndocal.command text eol=lf
+syphon-friend/syphon-acceptance-project.sdc text eol=lf

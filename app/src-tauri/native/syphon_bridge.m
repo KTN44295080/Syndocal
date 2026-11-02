@@ -5,6 +5,7 @@
 #import <Syphon/SyphonMetalServer.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 @interface SyndocalSyphonOutput : NSObject
 @property(nonatomic, strong) id<MTLDevice> device;
@@ -41,6 +42,40 @@ static void drain_pending(SyndocalSyphonOutput *output) {
             [output.pending waitUntilCompleted];
         }
         output.pending = nil;
+    }
+}
+
+// Queried at construction only, never on the per-frame publication path.
+// A missing handle is valid for recording a constructor failure.
+int syndocal_syphon_metadata(void *handle, char *json, size_t capacity,
+                            char *error, size_t error_capacity) {
+    @try {
+        @autoreleasepool {
+            if (json == NULL || capacity == 0) {
+                set_error(error, error_capacity, "Syphon metadata buffer is missing");
+                return 0;
+            }
+            SyndocalSyphonOutput *output = handle != NULL
+                ? (__bridge SyndocalSyphonOutput *)handle : nil;
+            NSDictionary *metadata = @{
+                @"macos_version": NSProcessInfo.processInfo.operatingSystemVersionString,
+                @"metal_device_name": (id)output.device.name ?: NSNull.null,
+                @"has_unified_memory": output.device != nil
+                    ? (id)@(output.device.hasUnifiedMemory) : NSNull.null,
+            };
+            NSError *serializationError = nil;
+            NSData *data = [NSJSONSerialization dataWithJSONObject:metadata options:0 error:&serializationError];
+            if (data == nil || data.length >= capacity) {
+                set_error(error, error_capacity, "Syphon metadata could not fit the bounded JSON buffer");
+                return 0;
+            }
+            memcpy(json, data.bytes, data.length);
+            json[data.length] = '\0';
+            return 1;
+        }
+    } @catch (NSException *exception) {
+        set_exception(error, error_capacity, exception);
+        return 0;
     }
 }
 
@@ -149,6 +184,63 @@ int syndocal_syphon_send_rgba(void *handle, uint32_t width, uint32_t height,
     } @catch (NSException *exception) {
         // Keep the handle and any submitted buffer owned. close() must drain it
         // before the Rust physical-output lease can report retirement.
+        set_exception(error, capacity, exception);
+        return 0;
+    }
+}
+
+// Explicit CI probe, never called by the live renderer: read the *published*
+// IOSurface texture back and verify a tiny asymmetric RGBA test pattern.
+int syndocal_syphon_verify_test_pattern(void *handle, const uint8_t *rgba,
+                                       char *error, size_t capacity) {
+    @try {
+        @autoreleasepool {
+            if (handle == NULL || rgba == NULL) {
+                set_error(error, capacity, "Syphon readback probe is missing its owner or pattern");
+                return 0;
+            }
+            SyndocalSyphonOutput *output = (__bridge SyndocalSyphonOutput *)handle;
+            drain_pending(output);
+            id<MTLTexture> texture = [output.server newFrameImage];
+            if (texture == nil || texture.width != 2 || texture.height != 2
+                || texture.pixelFormat != MTLPixelFormatBGRA8Unorm) {
+                set_error(error, capacity, "Syphon readback probe requires the published 2x2 BGRA IOSurface");
+                return 0;
+            }
+            const NSUInteger rowBytes = 256;
+            id<MTLBuffer> buffer = [output.device newBufferWithLength:rowBytes * 2 options:MTLResourceStorageModeShared];
+            id<MTLCommandBuffer> command = [output.queue commandBuffer];
+            id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+            if (buffer == nil || command == nil || blit == nil) {
+                set_error(error, capacity, "Could not allocate the Syphon readback probe");
+                return 0;
+            }
+            [blit copyFromTexture:texture sourceSlice:0 sourceLevel:0
+                    sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(2, 2, 1)
+                        toBuffer:buffer destinationOffset:0 destinationBytesPerRow:rowBytes
+                destinationBytesPerImage:rowBytes * 2];
+            [blit endEncoding];
+            [command commit];
+            [command waitUntilCompleted];
+            if (command.status == MTLCommandBufferStatusError) {
+                set_error(error, capacity, "Syphon readback probe command failed");
+                return 0;
+            }
+            const uint8_t *bgra = buffer.contents;
+            for (NSUInteger y = 0; y < 2; y++) {
+                for (NSUInteger x = 0; x < 2; x++) {
+                    const uint8_t *expected = rgba + (y * 2 + x) * 4;
+                    const uint8_t *actual = bgra + y * rowBytes + x * 4;
+                    if (actual[2] != expected[0] || actual[1] != expected[1]
+                        || actual[0] != expected[2] || actual[3] != expected[3]) {
+                        set_error(error, capacity, "Syphon published IOSurface has incorrect channel order or orientation");
+                        return 0;
+                    }
+                }
+            }
+            return 1;
+        }
+    } @catch (NSException *exception) {
         set_exception(error, capacity, exception);
         return 0;
     }

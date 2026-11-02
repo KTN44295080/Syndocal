@@ -49,6 +49,14 @@ function checkWorkflow(source) {
   assert.ok(blocks.indexOf(validate) < blocks.indexOf(acceptance));
   assert.ok(blocks.indexOf(lifecycle) < blocks.indexOf(evidence));
   assert.ok(blocks.indexOf(evidence) < blocks.indexOf(upload));
+  const pack = step('Package remote friend Syphon acceptance kit');
+  assert.ok(pack.includes('node app/scripts/pack-syphon-friend-kit.mjs'));
+  assert.ok(blocks.indexOf(lifecycle) < blocks.indexOf(pack));
+  const friend = step('Upload remote friend Syphon acceptance kit');
+  assert.ok(friend.includes("if: ${{ success() && !cancelled() && steps.validate.outcome == 'success' && steps.acceptance.outcome == 'success' && steps.pkg_lifecycle.outcome == 'success' }}"));
+  assert.ok(friend.includes('target/qa/macos-artifact/syndocal-macos-friend-syphon-kit-*.zip'));
+  assert.ok(friend.includes('if-no-files-found: error'));
+  assert.ok(blocks.indexOf(pack) < blocks.indexOf(friend));
 }
 test('manual workflow requires validation and acceptance before upload', () => checkWorkflow(workflow));
 for (const [name, oldValue, newValue] of [
@@ -62,8 +70,8 @@ for (const [name, oldValue, newValue] of [
   assert.ok(workflow.includes(oldValue)); assert.throws(() => checkWorkflow(workflow.replace(oldValue, newValue)));
 });
 for (const [name, change] of [
-  ['missing installer acceptance', s => s.replace(" && steps.pkg_lifecycle.outcome == 'success'", '')],
-  ['unconditional upload', s => s.replace(" && steps.acceptance.outcome == 'success'", '')],
+  ['missing installer acceptance', s => s.replaceAll(" && steps.pkg_lifecycle.outcome == 'success'", '')],
+  ['unconditional upload', s => s.replaceAll(" && steps.acceptance.outcome == 'success'", '')],
   ['hidden validation failure', s => s.replace('id: validate', 'id: validate\n        continue-on-error: true')],
   ['missing failure logs', s => s.replace('if: always()', 'if: success()')],
   ['different evidence path', s => s.replaceAll('--report target/qa/macos-artifact/report.json', '--report elsewhere.json')],

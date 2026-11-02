@@ -8,6 +8,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 
 const ERROR_CAPACITY: usize = 512;
+const METADATA_CAPACITY: usize = 4096;
 
 unsafe extern "C" {
     fn syndocal_syphon_create(
@@ -25,6 +26,20 @@ unsafe extern "C" {
         capacity: usize,
     ) -> i32;
     fn syndocal_syphon_close(handle: *mut c_void, error: *mut c_char, capacity: usize) -> i32;
+    fn syndocal_syphon_metadata(
+        handle: *mut c_void,
+        json: *mut c_char,
+        capacity: usize,
+        error: *mut c_char,
+        error_capacity: usize,
+    ) -> i32;
+    #[cfg(test)]
+    fn syndocal_syphon_verify_test_pattern(
+        handle: *mut c_void,
+        rgba: *const u8,
+        error: *mut c_char,
+        capacity: usize,
+    ) -> i32;
 }
 
 pub(crate) struct SyphonSender {
@@ -44,6 +59,12 @@ fn native_error(buffer: &[c_char; ERROR_CAPACITY], fallback: &str) -> String {
 }
 
 impl SyphonSender {
+    pub(crate) fn metadata(
+        &self,
+    ) -> Result<crate::syphon_transport::syphon_diagnostics::NativeMetadata, String> {
+        native_metadata(self.handle.map_or(std::ptr::null_mut(), NonNull::as_ptr))
+    }
+
     pub(crate) fn new(name: &str) -> Result<Self, String> {
         if name.trim().is_empty() || name.len() > 255 || name.chars().any(char::is_control) {
             return Err(
@@ -122,6 +143,34 @@ impl SyphonSender {
     }
 }
 
+#[cfg(not(test))]
+pub(crate) fn unavailable_metadata(
+) -> Result<crate::syphon_transport::syphon_diagnostics::NativeMetadata, String> {
+    native_metadata(std::ptr::null_mut())
+}
+
+fn native_metadata(
+    handle: *mut c_void,
+) -> Result<crate::syphon_transport::syphon_diagnostics::NativeMetadata, String> {
+    let mut json = [0 as c_char; METADATA_CAPACITY];
+    let mut error = [0; ERROR_CAPACITY];
+    // The native side supplies a terminated UTF-8 JSON document or an error.
+    let result = unsafe {
+        syndocal_syphon_metadata(
+            handle,
+            json.as_mut_ptr(),
+            json.len(),
+            error.as_mut_ptr(),
+            error.len(),
+        )
+    };
+    if result != 1 {
+        return Err(native_error(&error, "Syphon metadata query failed"));
+    }
+    let json = unsafe { CStr::from_ptr(json.as_ptr()) }.to_bytes();
+    serde_json::from_slice(json).map_err(|error| format!("Invalid Syphon metadata: {error}"))
+}
+
 impl Drop for SyphonSender {
     fn drop(&mut self) {
         if let Err(error) = self.close() {
@@ -130,5 +179,46 @@ impl Drop for SyphonSender {
             // or free an object which may still own a submitted command buffer.
             eprintln!("Syphon output could not be destroyed: {error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn syphon_native_published_texture_preserves_rgba_and_orientation() {
+        let mut sender = SyphonSender::new("Syndocal-CI-Readback-Test")
+            .expect("CI must have a Metal device and bundled Syphon shader");
+        let metadata = sender.metadata().unwrap();
+        assert!(!metadata.macos_version.is_empty());
+        assert!(metadata
+            .metal_device_name
+            .as_deref()
+            .is_some_and(|name| !name.is_empty()));
+        assert!(metadata.has_unified_memory.is_some());
+        // Top-left red, top-right green, bottom-left blue, bottom-right white.
+        let rgba = [
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        sender.send_rgba(2, 2, &rgba).unwrap();
+        let mut error = [0; ERROR_CAPACITY];
+        let verified = unsafe {
+            syndocal_syphon_verify_test_pattern(
+                sender.handle.unwrap().as_ptr(),
+                rgba.as_ptr(),
+                error.as_mut_ptr(),
+                error.len(),
+            )
+        };
+        assert_eq!(
+            verified,
+            1,
+            "{}",
+            native_error(&error, "Syphon published texture readback failed")
+        );
+        sender.close().unwrap();
+        sender.close().unwrap();
+        assert!(sender.send_rgba(2, 2, &rgba).is_err());
     }
 }

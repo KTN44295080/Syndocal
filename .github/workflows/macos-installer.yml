@@ -114,7 +114,18 @@ jobs:
           set -o pipefail
           cargo check --workspace --all-targets --locked 2>&1 | tee target/qa/macos-artifact/syphon-workspace-check.txt
           cargo test -p syndocal --bin syndocal syphon_ --locked -- --test-threads=1 2>&1 | tee target/qa/macos-artifact/syphon-policy-tests.txt
+          cargo test -p video --features syphon --lib syphon_output_availability_does_not_enable_unsupported_input --locked 2>&1 | tee target/qa/macos-artifact/syphon-input-disabled-tests.txt
           node app/scripts/check-syphon-output-ui.mjs | tee target/qa/macos-artifact/syphon-ui-tests.txt
+          node --test app/scripts/test-syphon-friend-kit.mjs | tee target/qa/macos-artifact/syphon-friend-kit-tests.tap
+          bash -n tools/distribution/collect-syphon-acceptance.command
+          bash -n tools/distribution/syphon-friend/allow-syndocal.command
+
+      - name: Test complete native application suite
+        env:
+          RUSTFLAGS: -D warnings
+        run: |
+          set -o pipefail
+          cargo test -p syndocal --bin syndocal --locked -- --test-threads=1 2>&1 | tee target/qa/macos-artifact/native-full-tests.txt
 
       - name: Test macOS USB-DMX identity and output lifecycle
         run: |
@@ -164,6 +175,8 @@ jobs:
           node app/scripts/check-tauri-admission-inventory.mjs
 
       - name: Build macOS application bundle
+        env:
+          RUSTFLAGS: -D warnings
         run: pnpm --dir app tauri build --ci --bundles app
 
       - name: Bundle macOS FFmpeg runtime and create DMG
@@ -205,6 +218,9 @@ jobs:
         id: pkg_lifecycle
         run: node app/scripts/check-macos-installer.mjs target/release/bundle/pkg/Syndocal_1.2.0-alpha.82_arm64.pkg target/qa/macos-artifact/installer-lifecycle.json target/release/bundle/macos/Syndocal.app
 
+      - name: Package remote friend Syphon acceptance kit
+        run: node app/scripts/pack-syphon-friend-kit.mjs
+
       - name: Upload macOS validation evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -212,6 +228,17 @@ jobs:
           name: syndocal-macos-evidence-${{ github.sha }}-${{ github.run_attempt }}
           path: target/qa/macos-artifact/
           if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload remote friend Syphon acceptance kit
+        if: ${{ success() && !cancelled() && steps.validate.outcome == 'success' && steps.acceptance.outcome == 'success' && steps.pkg_lifecycle.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: syndocal-macos-friend-syphon-kit-${{ github.sha }}
+          path: |
+            target/qa/macos-artifact/syndocal-macos-friend-syphon-kit-*.zip
+            target/qa/macos-artifact/syndocal-macos-friend-syphon-kit-*.zip.sha256
+          if-no-files-found: error
           retention-days: 7
 
       - name: Upload macOS installer
