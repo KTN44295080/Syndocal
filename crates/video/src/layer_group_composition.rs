@@ -8,7 +8,7 @@ pub(super) struct ActiveLayerGroup<'a> {
     chain: Option<ResolvedVideoEffectChain>,
 }
 
-fn group_transform(group: &protocol::VideoLayerGroupSummary) -> Transform2D {
+pub(super) fn group_transform(group: &protocol::VideoLayerGroupSummary) -> Transform2D {
     // Same bounds as a layer's sanitised transform; protocol validation already
     // rejects values outside them, so this only guards unvalidated snapshots.
     let mut transform = group.transform.unwrap_or_default();

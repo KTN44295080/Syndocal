@@ -176,12 +176,15 @@ fn composite_layer(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
         return;
     }
     let sampled = sample(source_x, source_y);
+    blend_sample(sampled, output_y * params.output_width + output_x);
+}
+
+fn blend_sample(sampled: vec4<f32>, index: u32) {
     let source_alpha = (sampled.a / 255.0) * clamp(params.opacity, 0.0, 1.0);
     if (source_alpha <= 0.0) {
         return;
     }
 
-    let index = output_y * params.output_width + output_x;
     let destination = output_pixels[index];
     let source_rgb = sampled.rgb;
     let destination_rgb = unpack_rgb(destination);
@@ -228,4 +231,63 @@ fn composite_layer(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     let destination_alpha = unpack_alpha(destination) / 255.0;
     let output_alpha = (source_alpha + destination_alpha * (1.0 - source_alpha)) * 255.0;
     output_pixels[index] = pack_rgba(output_rgb, output_alpha);
+}
+
+// Resident groups consume a packed GPU buffer directly. This binding is used
+// only by the resident entry point; the original native presenter keeps its
+// three-binding layout and packed-frame lookup unchanged.
+@group(0) @binding(3) var<storage, read> resident_lookup: array<u32>;
+
+// Returns canonical integer nearest-neighbour coordinates. The factorized
+// rotated case uploads only the two coordinate axes and eight transform words.
+fn resident_coordinates(x: u32, y: u32) -> vec2<u32> {
+    if (params.lookup_offset == 0u) {
+        return vec2<u32>(resident_lookup[x], resident_lookup[params.output_width + y]);
+    }
+    let base = params.output_width + params.output_height;
+    let cx = bitcast<f32>(resident_lookup[x]);
+    let cy = bitcast<f32>(resident_lookup[params.output_width + y]);
+    let sine = bitcast<f32>(resident_lookup[base]);
+    let cosine = bitcast<f32>(resident_lookup[base + 1u]);
+    let rotated_x = cx * cosine - cy * sine;
+    let rotated_y = cx * sine + cy * cosine;
+    let local_x = rotated_x / bitcast<f32>(resident_lookup[base + 2u]) + 0.5;
+    let local_y = rotated_y / bitcast<f32>(resident_lookup[base + 3u]) + 0.5;
+    let span_x = bitcast<f32>(resident_lookup[base + 6u]);
+    let span_y = bitcast<f32>(resident_lookup[base + 7u]);
+    if (local_x < 0.0 || local_x >= 1.0 || local_y < 0.0 || local_y >= 1.0 || span_x <= 0.0 || span_y <= 0.0) {
+        return vec2<u32>(NOT_COVERED);
+    }
+    let u = bitcast<f32>(resident_lookup[base + 4u]) + local_x * span_x;
+    let v = bitcast<f32>(resident_lookup[base + 5u]) + local_y * span_y;
+    return vec2<u32>(
+        u32(clamp(floor(u * f32(params.source_width)), 0.0, f32(params.source_width - 1u))),
+        u32(clamp(floor(v * f32(params.source_height)), 0.0, f32(params.source_height - 1u))),
+    );
+}
+
+@compute @workgroup_size(8, 8)
+fn composite_resident_group(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (id.x >= params.output_width || id.y >= params.output_height) { return; }
+    let coordinates = resident_coordinates(id.x, id.y);
+    if (coordinates.x == NOT_COVERED || coordinates.y == NOT_COVERED) { return; }
+    let pixel = source[coordinates.y * params.source_width + coordinates.x];
+    blend_sample(vec4<f32>(unpack_rgb(pixel), unpack_alpha(pixel)), id.y * params.output_width + id.x);
+}
+@compute @workgroup_size(8, 8)
+fn clear_resident_output(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (id.x < params.output_width && id.y < params.output_height) {
+        output_pixels[id.y * params.output_width + id.x] = params.source_format;
+    }
+}
+@compute @workgroup_size(8, 8)
+fn straighten_resident_output(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (id.x >= params.output_width || id.y >= params.output_height) { return; }
+    let index = id.y * params.output_width + id.x;
+    let pixel = output_pixels[index];
+    let alpha = pixel >> 24u;
+    var rgb = vec3<u32>(pixel & 255u, (pixel >> 8u) & 255u, (pixel >> 16u) & 255u);
+    if (alpha == 0u) { rgb = vec3<u32>(0u); }
+    else if (alpha < 255u) { rgb = min((rgb * 255u + vec3<u32>(alpha / 2u)) / alpha, vec3<u32>(255u)); }
+    output_pixels[index] = rgb.x | (rgb.y << 8u) | (rgb.z << 16u) | (alpha << 24u);
 }

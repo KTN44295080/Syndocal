@@ -1,6 +1,7 @@
 // Texture-source variant of gpu_display_composition.wgsl. Only RGBA8-unorm
-// normalized post-FX results are admitted. CPU lookup supplies exact integer
-// coordinates; textureLoad has no filtering, sRGB or premultiplication step.
+// normalized post-FX results are admitted. Axis-aligned CPU lookup supplies
+// exact integer coordinates; rotations use canonical nearest-neighbour sampling.
+// textureLoad has no filtering, sRGB or premultiplication step.
 struct Params {
     output_width: u32,
     output_height: u32,
@@ -16,6 +17,35 @@ const NOT_COVERED: u32 = 0xffffffffu;
 @group(0) @binding(1) var<storage, read_write> output_pixels: array<u32>;
 @group(0) @binding(2) var<uniform> params: Params;
 @group(0) @binding(3) var<storage, read> source_lookup: array<u32>;
+
+
+// Returns canonical integer nearest-neighbour coordinates. The factorized
+// rotated case uploads only the two coordinate axes and eight transform words.
+fn resident_coordinates(x: u32, y: u32) -> vec2<u32> {
+    if (params.padding == 0u) {
+        return vec2<u32>(source_lookup[x], source_lookup[params.output_width + y]);
+    }
+    let base = params.output_width + params.output_height;
+    let cx = bitcast<f32>(source_lookup[x]);
+    let cy = bitcast<f32>(source_lookup[params.output_width + y]);
+    let sine = bitcast<f32>(source_lookup[base]);
+    let cosine = bitcast<f32>(source_lookup[base + 1u]);
+    let rotated_x = cx * cosine - cy * sine;
+    let rotated_y = cx * sine + cy * cosine;
+    let local_x = rotated_x / bitcast<f32>(source_lookup[base + 2u]) + 0.5;
+    let local_y = rotated_y / bitcast<f32>(source_lookup[base + 3u]) + 0.5;
+    let span_x = bitcast<f32>(source_lookup[base + 6u]);
+    let span_y = bitcast<f32>(source_lookup[base + 7u]);
+    if (local_x < 0.0 || local_x >= 1.0 || local_y < 0.0 || local_y >= 1.0 || span_x <= 0.0 || span_y <= 0.0) {
+        return vec2<u32>(NOT_COVERED);
+    }
+    let u = bitcast<f32>(source_lookup[base + 4u]) + local_x * span_x;
+    let v = bitcast<f32>(source_lookup[base + 5u]) + local_y * span_y;
+    return vec2<u32>(
+        u32(clamp(floor(u * f32(params.source_width)), 0.0, f32(params.source_width - 1u))),
+        u32(clamp(floor(v * f32(params.source_height)), 0.0, f32(params.source_height - 1u))),
+    );
+}
 
 fn sample(x: u32, y: u32) -> vec4<f32> {
     // Restore original normalized 8-bit channel values before canonical blend.
@@ -58,8 +88,9 @@ fn composite_layer(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     if (output_x >= params.output_width || output_y >= params.output_height) {
         return;
     }
-    let source_x = source_lookup[output_x];
-    let source_y = source_lookup[params.output_width + output_y];
+    let coordinates = resident_coordinates(output_x, output_y);
+    let source_x = coordinates.x;
+    let source_y = coordinates.y;
     if (source_x == NOT_COVERED || source_y == NOT_COVERED) {
         return;
     }

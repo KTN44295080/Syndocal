@@ -28,9 +28,7 @@ use crate::native_gpu_contract::{
 };
 use crate::native_gpu_result::{EncodedLayerCandidate, GpuAllocationReadUse, GpuLayerLease};
 use crate::native_gpu_snapshot::RecycledCpuSnapshot;
-use crate::{
-    axis_aligned_source_lookup, gpu_composition_layer_plan, CompositionLayerPlan, VideoPixelFormat,
-};
+use crate::{axis_aligned_source_lookup, CompositionLayerPlan, VideoPixelFormat};
 
 /// Packed `Params` uniform of the texture composition shader.
 const LAYER_PARAMS_BYTES: u64 = 32;
@@ -50,6 +48,25 @@ pub(crate) struct NativeCompositionLayer<'a> {
     pub selected_entry: HistoryEntryId,
     pub identity: LayerResultIdentity,
     pub kind: SelectedTextureKind,
+}
+
+/// The caller resolves group FX before admission. Executing group FX needs the
+/// separate resident ISF texture-input integration and is declined here.
+pub(crate) struct NativeCompositionGroup<'a> {
+    pub group: &'a protocol::VideoLayerGroupSummary,
+    pub executing_fx: bool,
+}
+
+#[derive(Debug)]
+struct GroupSampling {
+    lookup: Vec<u32>,
+    params: [u8; 32],
+}
+#[derive(Debug)]
+struct GroupEncoding {
+    members: Vec<usize>,
+    transform: Option<GroupSampling>,
+    outer: GroupSampling,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -73,11 +90,11 @@ pub(crate) struct NativeCompositionPlan {
     pub context: GpuContextId,
     pub frame: NativeFrameId,
     pub extent: (u32, u32),
-    #[cfg(test)]
     pub clear_color: [u8; 4],
     pub layers_bottom_first: Vec<CompositionLayerEncoding>,
     pub allocations: CompositionAllocationPlan,
     native_allocations: NativeAllocationPlan,
+    groups: Vec<GroupEncoding>,
     /// A completed, unmapped snapshot readback of exactly this extent, reused
     /// instead of a new allocation (ADR-01 section 7.2 ring, section 11 C/E).
     reused_readback: Option<Arc<NativeChargedBuffer>>,
@@ -101,12 +118,39 @@ pub(crate) struct CompositionAllocationPlan {
 }
 
 impl NativeCompositionPlan {
+    #[cfg(test)]
     pub(crate) fn preflight(
         context: GpuContextId,
         frame: NativeFrameId,
         extent: (u32, u32),
         clear_color: [u8; 4],
         layers_bottom_first: &[NativeCompositionLayer<'_>],
+        max_texture_dimension_2d: u32,
+        max_storage_buffer_bytes: u64,
+    ) -> Result<Self, CompositionPlanFailure> {
+        Self::preflight_with_groups(
+            context,
+            frame,
+            extent,
+            clear_color,
+            layers_bottom_first,
+            &[],
+            max_texture_dimension_2d,
+            max_storage_buffer_bytes,
+        )
+    }
+
+    /// [`Self::preflight`] with the composition's enabled, unbypassed groups.
+    /// Each active group composes its members into an isolated target, then
+    /// onto the output once, at its bottom-most member's position.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn preflight_with_groups(
+        context: GpuContextId,
+        frame: NativeFrameId,
+        extent: (u32, u32),
+        clear_color: [u8; 4],
+        layers_bottom_first: &[NativeCompositionLayer<'_>],
+        groups: &[NativeCompositionGroup<'_>],
         max_texture_dimension_2d: u32,
         max_storage_buffer_bytes: u64,
     ) -> Result<Self, CompositionPlanFailure> {
@@ -165,10 +209,10 @@ impl NativeCompositionPlan {
             {
                 return Err(decline(NativeGpuDecline::UnsupportedExtent));
             }
-            if !gpu_composition_layer_plan(layer.plan) {
+            if !resident_composition_layer(layer.plan) {
                 return Err(decline(NativeGpuDecline::UnsupportedComposition));
             }
-            let lookup = axis_aligned_source_lookup(
+            let (lookup, rotated) = composition_sampling(
                 &layer.plan.transform,
                 extent,
                 (identity.width, identity.height),
@@ -193,7 +237,7 @@ impl NativeCompositionPlan {
                 layer.plan.opacity.clamp(0.0, 1.0).to_bits(),
                 crate::gpu_compositor::blend_mode_index(&layer.plan.blend_mode),
                 u32::from_le_bytes(clear_color),
-                0,
+                rotated,
             ]
             .into_iter()
             .enumerate()
@@ -208,14 +252,32 @@ impl NativeCompositionPlan {
                 params,
             });
         }
-        let native_allocations =
-            composition_allocations(frame, output_bytes, &layers, AllocationReuse::default())
-                .map_err(decline)?;
+        let groups = prepare_groups(
+            groups,
+            layers_bottom_first,
+            &mut layers,
+            extent,
+            max_storage_buffer_bytes,
+        )
+        .map_err(decline)?;
+        for group in &groups {
+            for sampling in group.transform.iter().chain(std::iter::once(&group.outer)) {
+                lookup_bytes += sampling.lookup.len() as u64 * 4;
+                uniform_bytes += LAYER_PARAMS_BYTES;
+            }
+        }
+        let native_allocations = composition_allocations(
+            frame,
+            output_bytes,
+            &layers,
+            &groups,
+            AllocationReuse::default(),
+        )
+        .map_err(decline)?;
         Ok(Self {
             context,
             frame,
             extent,
-            #[cfg(test)]
             clear_color,
             layers_bottom_first: layers,
             allocations: CompositionAllocationPlan {
@@ -225,6 +287,7 @@ impl NativeCompositionPlan {
                 uniform_bytes,
             },
             native_allocations,
+            groups,
             reused_readback: None,
             reused_output: None,
             reused_cpu_snapshot: RefCell::new(None),
@@ -274,6 +337,7 @@ impl NativeCompositionPlan {
             self.frame,
             self.allocations.premapping_bytes,
             &self.layers_bottom_first,
+            &self.groups,
             reuse,
         ) else {
             return Err(recycled);
@@ -322,6 +386,7 @@ impl NativeCompositionPlan {
             self.frame,
             self.allocations.premapping_bytes,
             &self.layers_bottom_first,
+            &self.groups,
             reuse,
         ) else {
             return Err(readback);
@@ -397,6 +462,10 @@ struct NativeCompositionPipelines {
     layout: wgpu::BindGroupLayout,
     clear: wgpu::ComputePipeline,
     composite: wgpu::ComputePipeline,
+    group_layout: wgpu::BindGroupLayout,
+    group_composite: wgpu::ComputePipeline,
+    group_clear: wgpu::ComputePipeline,
+    group_straighten: wgpu::ComputePipeline,
 }
 
 /// Shared-context compositor. It owns no device; its pipelines are created in
@@ -502,6 +571,7 @@ impl NativeGpuCompositor {
             plan.frame,
             plan.allocations.premapping_bytes,
             &plan.layers_bottom_first,
+            &plan.groups,
             reuse,
         )?;
         plan.reused_output = output;
@@ -575,10 +645,54 @@ impl NativeGpuCompositor {
                     cache: None,
                 })
             };
+            let group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Syndocal resident packed group layout"),
+                entries: &[
+                    storage(0, true),
+                    storage(1, false),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    storage(3, true),
+                ],
+            });
+            let group_pipeline_layout =
+                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Syndocal resident packed group pipelines"),
+                    bind_group_layouts: &[&group_layout],
+                    push_constant_ranges: &[],
+                });
+            let group_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Syndocal resident packed group shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("gpu_display_composition.wgsl").into(),
+                ),
+            });
+            let group_pipeline = |entry| {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("Syndocal resident packed group pipeline"),
+                    layout: Some(&group_pipeline_layout),
+                    module: &group_shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            };
             NativeCompositionPipelines {
                 clear: pipeline("clear_output"),
                 composite: pipeline("composite_layer"),
                 layout,
+                group_composite: group_pipeline("composite_resident_group"),
+                group_clear: group_pipeline("clear_resident_output"),
+                group_straighten: group_pipeline("straighten_resident_output"),
+                group_layout,
             }
         })?;
         Ok(Self {
@@ -811,6 +925,14 @@ struct ComposedLayer {
     _params: NativeChargedBuffer,
 }
 
+struct ComposedGroup {
+    members: Vec<usize>,
+    _buffers: Vec<NativeChargedBuffer>,
+    transform: Option<ComposedLayer>,
+    outer: ComposedLayer,
+    straighten: wgpu::BindGroup,
+}
+
 /// Strong owners retained by G's registry until every dependent submission
 /// completed: the target, readback, layer buffers, bind groups, and the
 /// selected read uses whose views the bind groups sample.
@@ -818,6 +940,7 @@ struct ComposedResources {
     output: Arc<NativeChargedBuffer>,
     readback: Arc<NativeChargedBuffer>,
     layers: Vec<ComposedLayer>,
+    groups: Vec<ComposedGroup>,
     _reads: Vec<GpuAllocationReadUse>,
     _pipelines: Arc<NativeCompositionPipelines>,
 }
@@ -920,6 +1043,38 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
             )?;
             layer_charges.push((lookup, params));
         }
+        let mut group_charges = Vec::with_capacity(plan.groups.len());
+        for group in &plan.groups {
+            let scratch = phase.bind_reserved_allocation(
+                &mut self.reservation,
+                ChargeKind::CompositionBuffer,
+                plan.allocations.premapping_bytes,
+            )?;
+            let transformed = if group.transform.is_some() {
+                Some(phase.bind_reserved_allocation(
+                    &mut self.reservation,
+                    ChargeKind::CompositionBuffer,
+                    plan.allocations.premapping_bytes,
+                )?)
+            } else {
+                None
+            };
+            let mut samplings = Vec::new();
+            for sampling in group.transform.iter().chain(std::iter::once(&group.outer)) {
+                let lookup = phase.bind_reserved_allocation(
+                    &mut self.reservation,
+                    ChargeKind::CompositionBuffer,
+                    sampling.lookup.len() as u64 * 4,
+                )?;
+                let params = phase.bind_reserved_allocation(
+                    &mut self.reservation,
+                    ChargeKind::CompositionBuffer,
+                    LAYER_PARAMS_BYTES,
+                )?;
+                samplings.push((lookup, params));
+            }
+            group_charges.push((scratch, transformed, samplings));
+        }
         let device = phase.device();
         let output = match (plan.reused_output.as_ref(), output_charge) {
             (Some(reused), None) => Arc::clone(reused),
@@ -950,12 +1105,32 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
             _ => unreachable!("readback is either reused or bound above"),
         };
         let mut ids = vec![output.allocation_id(), readback.allocation_id()];
+        let mut group_buffers = Vec::with_capacity(group_charges.len());
+        let mut group_sampling_charges = Vec::with_capacity(group_charges.len());
+        for (scratch, transformed, samplings) in group_charges {
+            let mut buffers = vec![charged_group_buffer(
+                device,
+                plan.allocations.premapping_bytes,
+                scratch,
+            )];
+            if let Some(charge) = transformed {
+                buffers.push(charged_group_buffer(
+                    device,
+                    plan.allocations.premapping_bytes,
+                    charge,
+                ));
+            }
+            ids.extend(buffers.iter().map(NativeChargedBuffer::allocation_id));
+            group_buffers.push(buffers);
+            group_sampling_charges.push(samplings);
+        }
         let mut layers = Vec::with_capacity(layer_charges.len());
-        for ((layer, read), (lookup_charge, params_charge)) in plan
+        for (layer_index, ((layer, read), (lookup_charge, params_charge))) in plan
             .layers_bottom_first
             .iter()
             .zip(&self.reads)
             .zip(layer_charges)
+            .enumerate()
         {
             let lookup_bytes: Vec<u8> = layer
                 .lookup
@@ -978,6 +1153,11 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
                 }),
                 charge: params_charge,
             };
+            let target = plan
+                .groups
+                .iter()
+                .position(|group| group.members.contains(&layer_index))
+                .map_or(&*output, |index| &group_buffers[index][0]);
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Syndocal shared composition G read view"),
                 layout: &self.pipelines.layout,
@@ -988,7 +1168,7 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: output.buffer.as_entire_binding(),
+                        resource: target.buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
@@ -1008,6 +1188,57 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
                 _params: params,
             });
         }
+        let mut groups = Vec::with_capacity(plan.groups.len());
+        for ((group, buffers), charges) in plan
+            .groups
+            .iter()
+            .zip(group_buffers)
+            .zip(group_sampling_charges)
+        {
+            let mut charges = charges.into_iter();
+            let transform = group.transform.as_ref().map(|sampling| {
+                make_group_layer(
+                    device,
+                    &self.pipelines.group_layout,
+                    &buffers[0],
+                    &buffers[1],
+                    sampling,
+                    charges.next().unwrap(),
+                    &mut ids,
+                )
+            });
+            let outer_charges = charges.next().expect("outer sampling charge");
+            let mut outer_sampling = GroupSampling {
+                lookup: group.outer.lookup.clone(),
+                params: group.outer.params,
+            };
+            outer_sampling.params[24..28]
+                .copy_from_slice(&u32::from_le_bytes(plan.clear_color).to_le_bytes());
+            let outer = make_group_layer(
+                device,
+                &self.pipelines.group_layout,
+                buffers.last().unwrap(),
+                &output,
+                &outer_sampling,
+                outer_charges,
+                &mut ids,
+            );
+            let straighten = packed_group_bind_group(
+                device,
+                &self.pipelines.group_layout,
+                &output,
+                &buffers[0],
+                &outer._params,
+                &outer._lookup,
+            );
+            groups.push(ComposedGroup {
+                members: group.members.clone(),
+                _buffers: buffers,
+                transform,
+                outer,
+                straighten,
+            });
+        }
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Syndocal shared composition and one premapping snapshot"),
         });
@@ -1016,8 +1247,13 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
                 label: Some("Syndocal shared premapping clear"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.pipelines.clear);
-            pass.set_bind_group(0, &layers[0].bind_group, &[]);
+            if let Some(group) = groups.first() {
+                pass.set_pipeline(&self.pipelines.group_clear);
+                pass.set_bind_group(0, &group.outer.bind_group, &[]);
+            } else {
+                pass.set_pipeline(&self.pipelines.clear);
+                pass.set_bind_group(0, &layers[0].bind_group, &[]);
+            }
             pass.dispatch_workgroups(self.extent.0.div_ceil(8), self.extent.1.div_ceil(8), 1);
         }
         if plan.pool_epoch.is_some() && plan.reused_output.is_none() {
@@ -1027,6 +1263,7 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
             output,
             readback,
             layers,
+            groups,
             _reads: std::mem::take(&mut self.reads),
             _pipelines: Arc::clone(&self.pipelines),
         });
@@ -1048,16 +1285,70 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
         let Some(layer) = encoding.resources.layers.get(index) else {
             return Err(self.state_fault("more composited layers than planned"));
         };
-        {
-            let mut pass = encoding
-                .encoder
-                .begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("Syndocal shared post-FX layer"),
-                    timestamp_writes: None,
-                });
-            pass.set_pipeline(&self.pipelines.composite);
-            pass.set_bind_group(0, &layer.bind_group, &[]);
+        let dispatch = |encoder: &mut wgpu::CommandEncoder,
+                        pipeline: &wgpu::ComputePipeline,
+                        bind_group: &wgpu::BindGroup| {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Syndocal resident layer or group"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
             pass.dispatch_workgroups(self.extent.0.div_ceil(8), self.extent.1.div_ceil(8), 1);
+        };
+        if let Some(group) = encoding
+            .resources
+            .groups
+            .iter()
+            .find(|group| group.members.contains(&index))
+        {
+            if group.members[0] == index {
+                dispatch(
+                    &mut encoding.encoder,
+                    &self.pipelines.clear,
+                    &encoding.resources.layers[index].bind_group,
+                );
+                for &member in &group.members {
+                    dispatch(
+                        &mut encoding.encoder,
+                        &self.pipelines.composite,
+                        &encoding.resources.layers[member].bind_group,
+                    );
+                }
+                dispatch(
+                    &mut encoding.encoder,
+                    &self.pipelines.group_straighten,
+                    &group.straighten,
+                );
+                if let Some(transform) = &group.transform {
+                    dispatch(
+                        &mut encoding.encoder,
+                        &self.pipelines.group_clear,
+                        &transform.bind_group,
+                    );
+                    dispatch(
+                        &mut encoding.encoder,
+                        &self.pipelines.group_composite,
+                        &transform.bind_group,
+                    );
+                    dispatch(
+                        &mut encoding.encoder,
+                        &self.pipelines.group_straighten,
+                        &transform.bind_group,
+                    );
+                }
+                dispatch(
+                    &mut encoding.encoder,
+                    &self.pipelines.group_composite,
+                    &group.outer.bind_group,
+                );
+            }
+        } else {
+            dispatch(
+                &mut encoding.encoder,
+                &self.pipelines.composite,
+                &layer.bind_group,
+            );
         }
         self.next_layer += 1;
         Ok(())
@@ -1108,6 +1399,269 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
     }
 }
 
+fn charged_group_buffer(
+    device: &wgpu::Device,
+    bytes: u64,
+    charge: AllocationCharge,
+) -> NativeChargedBuffer {
+    NativeChargedBuffer {
+        buffer: device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Syndocal charged isolated group"),
+            size: bytes,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        }),
+        charge,
+    }
+}
+fn packed_group_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    source: &NativeChargedBuffer,
+    target: &NativeChargedBuffer,
+    params: &NativeChargedBuffer,
+    lookup: &NativeChargedBuffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Syndocal resident packed group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: source.buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: target.buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: params.buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: lookup.buffer.as_entire_binding(),
+            },
+        ],
+    })
+}
+fn make_group_layer(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    source: &NativeChargedBuffer,
+    target: &NativeChargedBuffer,
+    sampling: &GroupSampling,
+    charges: (AllocationCharge, AllocationCharge),
+    ids: &mut Vec<GpuAllocationId>,
+) -> ComposedLayer {
+    let lookup_bytes = sampling
+        .lookup
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect::<Vec<_>>();
+    let lookup = NativeChargedBuffer {
+        buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Syndocal group sampling lookup"),
+            contents: &lookup_bytes,
+            usage: wgpu::BufferUsages::STORAGE,
+        }),
+        charge: charges.0,
+    };
+    let params = NativeChargedBuffer {
+        buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Syndocal group sampling params"),
+            contents: &sampling.params,
+            usage: wgpu::BufferUsages::UNIFORM,
+        }),
+        charge: charges.1,
+    };
+    ids.extend([lookup.allocation_id(), params.allocation_id()]);
+    let bind_group = packed_group_bind_group(device, layout, source, target, &params, &lookup);
+    ComposedLayer {
+        bind_group,
+        _lookup: lookup,
+        _params: params,
+    }
+}
+
+/// Preserve the canonical nearest-neighbour sampler, including its original
+/// arithmetic order. Rotation uploads O(width + height) factorized coordinates,
+/// not a full-frame CPU lookup or frame copy. The old axis lookup stays exact.
+fn composition_sampling(
+    transform: &protocol::Transform2D,
+    extent: (u32, u32),
+    source: (u32, u32),
+) -> (Vec<u32>, u32) {
+    if transform.rotation_deg == 0.0 {
+        return (axis_aligned_source_lookup(transform, extent, source), 0);
+    }
+    let mut lookup = Vec::with_capacity(extent.0 as usize + extent.1 as usize + 8);
+    lookup.extend(
+        (0..extent.0).map(|x| ((x as f32 + 0.5) / extent.0 as f32 - 0.5 - transform.x).to_bits()),
+    );
+    lookup.extend(
+        (0..extent.1).map(|y| ((y as f32 + 0.5) / extent.1 as f32 - 0.5 - transform.y).to_bits()),
+    );
+    let angle = -transform.rotation_deg.to_radians();
+    let left = transform.crop_left.clamp(0.0, 1.0);
+    let top = transform.crop_top.clamp(0.0, 1.0);
+    let right = (1.0 - transform.crop_right.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+    let bottom = (1.0 - transform.crop_bottom.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+    lookup.extend(
+        [
+            angle.sin(),
+            angle.cos(),
+            transform.scale_x.max(0.001),
+            transform.scale_y.max(0.001),
+            left,
+            top,
+            right - left,
+            bottom - top,
+        ]
+        .map(f32::to_bits),
+    );
+    (lookup, 1)
+}
+pub(crate) fn resident_composition_layer(plan: &CompositionLayerPlan) -> bool {
+    plan.opacity.is_finite()
+        && plan.color == protocol::VideoColorAdjust::default()
+        && plan.fx == protocol::VideoFxAdjust::default()
+        && [
+            plan.transform.x,
+            plan.transform.y,
+            plan.transform.scale_x,
+            plan.transform.scale_y,
+            plan.transform.rotation_deg,
+            plan.transform.crop_left,
+            plan.transform.crop_top,
+            plan.transform.crop_right,
+            plan.transform.crop_bottom,
+        ]
+        .iter()
+        .all(|v| v.is_finite())
+}
+fn group_sampling(
+    transform: &protocol::Transform2D,
+    extent: (u32, u32),
+    opacity: f32,
+    blend: &protocol::VideoBlendMode,
+) -> GroupSampling {
+    let (lookup, rotated) = composition_sampling(transform, extent, extent);
+    let mut params = [0; 32];
+    for (i, word) in [
+        extent.0,
+        extent.1,
+        extent.0,
+        extent.1,
+        opacity.to_bits(),
+        crate::gpu_compositor::blend_mode_index(blend),
+        0,
+        rotated,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        params[i * 4..i * 4 + 4].copy_from_slice(&word.to_le_bytes());
+    }
+    GroupSampling { lookup, params }
+}
+fn prepare_groups(
+    groups: &[NativeCompositionGroup<'_>],
+    inputs: &[NativeCompositionLayer<'_>],
+    layers: &mut [CompositionLayerEncoding],
+    extent: (u32, u32),
+    max_storage: u64,
+) -> Result<Vec<GroupEncoding>, NativeGpuDecline> {
+    let decline = NativeGpuDecline::UnsupportedComposition;
+    let mut claimed = vec![false; inputs.len()];
+    let mut result = Vec::new();
+    for (group_index, entry) in groups.iter().enumerate() {
+        let group = entry.group;
+        if groups[..group_index]
+            .iter()
+            .any(|entry| entry.group.id == group.id)
+            || group
+                .layer_ids
+                .iter()
+                .enumerate()
+                .any(|(i, id)| group.layer_ids[..i].contains(id))
+        {
+            return Err(decline);
+        }
+        if !group.enabled || group.bypassed {
+            continue;
+        }
+        if entry.executing_fx || !group.opacity.is_finite() || !(0.0..=1.0).contains(&group.opacity)
+        {
+            return Err(decline);
+        }
+        let transform = crate::layer_group_composition::group_transform(group);
+        let members = inputs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, input)| group.layer_ids.contains(&input.plan.layer_id).then_some(i))
+            .collect::<Vec<_>>();
+        if members.iter().any(|i| claimed[*i]) {
+            return Err(decline);
+        }
+        for &i in &members {
+            claimed[i] = true;
+        }
+        if members.is_empty() {
+            continue;
+        }
+        let probe = CompositionLayerPlan {
+            transform,
+            ..inputs[members[0]].plan.clone()
+        };
+        if !resident_composition_layer(&probe) {
+            return Err(decline);
+        }
+        // Match the canonical organizational group and exact singleton shortcut.
+        if group.opacity == 1.0
+            && group.blend_mode == protocol::VideoBlendMode::Normal
+            && transform == protocol::Transform2D::default()
+        {
+            continue;
+        }
+        if members.len() == 1
+            && transform == protocol::Transform2D::default()
+            && inputs[members[0]].plan.blend_mode == protocol::VideoBlendMode::Normal
+        {
+            let opacity = (inputs[members[0]].plan.opacity * group.opacity).clamp(0.0, 1.0);
+            layers[members[0]].params[16..20].copy_from_slice(&opacity.to_bits().to_le_bytes());
+            layers[members[0]].params[20..24].copy_from_slice(
+                &crate::gpu_compositor::blend_mode_index(&group.blend_mode).to_le_bytes(),
+            );
+            continue;
+        }
+        for &i in &members {
+            layers[i].params[24..28].fill(0);
+        }
+        let transformed = (transform != protocol::Transform2D::default())
+            .then(|| group_sampling(&transform, extent, 1.0, &protocol::VideoBlendMode::Normal));
+        let outer = group_sampling(
+            &protocol::Transform2D::default(),
+            extent,
+            group.opacity,
+            &group.blend_mode,
+        );
+        if transformed
+            .iter()
+            .chain(std::iter::once(&outer))
+            .any(|sampling| sampling.lookup.len() as u64 * 4 > max_storage)
+        {
+            return Err(NativeGpuDecline::UnsupportedExtent);
+        }
+        result.push(GroupEncoding {
+            members,
+            transform: transformed,
+            outer,
+        });
+    }
+    Ok(result)
+}
+
 /// Existing allocations a plan reuses instead of charging new ones.
 #[derive(Clone, Copy, Debug, Default)]
 struct AllocationReuse {
@@ -1124,6 +1678,7 @@ fn composition_allocations(
     frame: NativeFrameId,
     output_bytes: u64,
     layers: &[CompositionLayerEncoding],
+    groups: &[GroupEncoding],
     reuse: AllocationReuse,
 ) -> Result<NativeAllocationPlan, NativeGpuDecline> {
     let mut native_allocations = NativeAllocationPlan::new(frame);
@@ -1142,6 +1697,19 @@ fn composition_allocations(
     for layer in layers {
         native_allocations.add_new(ChargeKind::CompositionBuffer, layer.lookup.len() as u64 * 4)?;
         native_allocations.add_new(ChargeKind::CompositionBuffer, LAYER_PARAMS_BYTES)?;
+    }
+    for group in groups {
+        native_allocations.add_new(ChargeKind::CompositionBuffer, output_bytes)?;
+        if group.transform.is_some() {
+            native_allocations.add_new(ChargeKind::CompositionBuffer, output_bytes)?;
+        }
+        for sampling in group.transform.iter().chain(std::iter::once(&group.outer)) {
+            native_allocations.add_new(
+                ChargeKind::CompositionBuffer,
+                sampling.lookup.len() as u64 * 4,
+            )?;
+            native_allocations.add_new(ChargeKind::CompositionBuffer, LAYER_PARAMS_BYTES)?;
+        }
     }
     Ok(native_allocations)
 }

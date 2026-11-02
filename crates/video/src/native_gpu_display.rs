@@ -995,6 +995,7 @@ impl NativeResidentDisplaySession {
         mut request: NativeOutputRequest,
         layers: StackBatch<NativeLayerPreparation>,
         composition_layers: &[CompositionLayerPlan],
+        groups: &[crate::native_gpu_composition::NativeCompositionGroup<'_>],
         clear_rgba8: [u8; 4],
         authority: &impl NativeOutputAuthority,
         cancellation: &dyn VideoRenderCancellation,
@@ -1144,12 +1145,13 @@ impl NativeResidentDisplaySession {
             .unwrap_or(0);
         request.duration_ms = 0;
         let limits = &self.owner.capabilities().limits;
-        let mut composition = match NativeCompositionPlan::preflight(
+        let mut composition = match NativeCompositionPlan::preflight_with_groups(
             request.context,
             request.frame,
             (request.key.width, request.key.height),
             clear_rgba8,
             &selected,
+            groups,
             limits.max_texture_dimension_2d,
             u64::from(limits.max_storage_buffer_binding_size),
         ) {

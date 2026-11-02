@@ -12,7 +12,9 @@ use crate::{
     VideoOutputLastValidKey, VideoOutputMappingIdentity, VideoOutputPresentationContract,
     VideoOutputRenderPlan, VideoRenderInput,
 };
-use protocol::{VideoEffectScope, VideoLayerTransitionRuntimeSnapshot, VideoSnapshot};
+use protocol::{
+    CompositionId, VideoEffectScope, VideoLayerTransitionRuntimeSnapshot, VideoSnapshot,
+};
 
 /// Preparation control for one tick. Before the tick owns brokered GPU work,
 /// presentation revocation cancels it like Stop. Once work is submitted or a
@@ -155,7 +157,17 @@ enum ResidentOutputCompletion {
 
 /// Scope decisions precede decode and FX. Preparation failures stay on the
 /// canonical path, where their exact scope/stage evidence is published.
-fn resident_layer_chains(
+/// Enabled, unbypassed groups of `composition_id`, in project order.
+pub(super) fn resident_layer_groups(
+    snapshot: &VideoSnapshot,
+    composition_id: CompositionId,
+) -> impl Iterator<Item = &protocol::VideoLayerGroupSummary> {
+    snapshot.layer_groups.iter().filter(move |group| {
+        group.composition_id == composition_id && group.enabled && !group.bypassed
+    })
+}
+
+pub(super) fn resident_layer_chains(
     snapshot: &VideoSnapshot,
     context: VideoEffectRenderContext<'_>,
     transitions: &VideoLayerTransitionRuntimeSnapshot,
@@ -170,14 +182,14 @@ fn resident_layer_chains(
         Ok(Some(chain)) => !crate::resolved_chain_executes(&chain),
         Err(_) => false,
     };
+    // Active groups compose on the resident compositor; group FX still
+    // needs the canonical route.
     if !idle(VideoEffectScope::Composition { composition_id })
         || !idle(VideoEffectScope::Output {
             output_id: plan.output_id,
         })
-        || snapshot
-            .layer_groups
-            .iter()
-            .any(|group| group.composition_id == composition_id && group.enabled && !group.bypassed)
+        || resident_layer_groups(snapshot, composition_id)
+            .any(|group| !idle(VideoEffectScope::Group { group_id: group.id }))
         || transitions.buses.iter().any(|active| {
             snapshot
                 .transition_buses
@@ -214,7 +226,7 @@ fn resident_layer_chains(
     }
     let mut chains = Vec::with_capacity(ids.len());
     for layer_plan in &plan.composition.layers {
-        if !crate::gpu_composition_layer_plan(layer_plan) {
+        if !crate::native_gpu_composition::resident_composition_layer(layer_plan) {
             return None;
         }
         let layer = snapshot
@@ -1116,11 +1128,20 @@ impl NativeResidentDisplaySession {
         #[cfg(feature = "qa-native-frame-timing")]
         let isf_trace = crate::native_frame_timing::span(crate::native_frame_timing::Phase::Isf);
         let execution = if compatible {
+            let groups = resident_layer_groups(snapshot, plan.composition.composition_id)
+                .map(
+                    |group| crate::native_gpu_composition::NativeCompositionGroup {
+                        group,
+                        executing_fx: false,
+                    },
+                )
+                .collect::<Vec<_>>();
             self.execute_prepared_layers(
                 renderer,
                 request.clone(),
                 layers,
                 &plan.composition.layers,
+                &groups,
                 [0; 4],
                 &live,
                 cancellation,

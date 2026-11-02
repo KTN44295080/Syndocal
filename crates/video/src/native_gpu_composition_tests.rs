@@ -213,18 +213,23 @@ fn pure_preflight_checks_identity_before_encoding_and_distinguishes_decline() {
             CompositionPlanFailure::Declined(NativeGpuDecline::UnsupportedComposition)
         );
     }
-    for transform in [
-        Transform2D {
-            rotation_deg: 1.0,
-            ..Default::default()
-        },
-        Transform2D {
+    // Rotation composes on the resident compositor; non-finite geometry does not.
+    let mut rotated = plans.clone();
+    rotated[0].transform.rotation_deg = 1.0;
+    assert!(plan(
+        &rotated,
+        &[original],
+        &[SelectedTextureKind::Validated],
+        size,
+        [0; 4]
+    )
+    .is_ok());
+    {
+        let mut unsupported = plans.clone();
+        unsupported[0].transform = Transform2D {
             x: f32::NAN,
             ..Default::default()
-        },
-    ] {
-        let mut unsupported = plans.clone();
-        unsupported[0].transform = transform;
+        };
         assert!(matches!(
             plan(
                 &unsupported,
@@ -1159,10 +1164,12 @@ fn pure_output_pool_existing_alias_does_not_add_allocation_bytes() {
         context: context(),
         sequence: 52,
     };
-    let fresh = composition_allocations(frame(), 748, &[], AllocationReuse::default()).unwrap();
+    let fresh =
+        composition_allocations(frame(), 748, &[], &[], AllocationReuse::default()).unwrap();
     let reused = composition_allocations(
         frame(),
         748,
+        &[],
         &[],
         AllocationReuse {
             readback: Some(readback),
@@ -1181,6 +1188,7 @@ fn pure_output_pool_existing_alias_does_not_add_allocation_bytes() {
     let recycled = composition_allocations(
         frame(),
         748,
+        &[],
         &[],
         AllocationReuse {
             readback: Some(readback),

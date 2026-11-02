@@ -19,6 +19,9 @@ use std::time::{Duration, Instant};
 #[path = "native_gpu_display_route_exit_tests.rs"]
 mod route_exit_tests;
 
+#[path = "native_gpu_display_group_tests.rs"]
+mod group_tests;
+
 const OUTPUT: u64 = 101;
 const EPOCH: u64 = 7;
 const EXTENT: (u32, u32) = (64, 40);
@@ -33,6 +36,8 @@ struct Provider {
     /// Real decoders return the first frame at or after the target: PTS on
     /// this grid, rounded up (the libav sequential-request contract).
     pts_grid: Option<u64>,
+    /// Per-pixel colour and alpha, so sampling and straight-alpha errors show.
+    pattern: bool,
 }
 
 impl VideoFrameProvider for Provider {
@@ -56,7 +61,24 @@ impl VideoFrameProvider for Provider {
             }),
             duration_ms: self.pts_grid.unwrap_or(16),
             format: VideoPixelFormat::Rgba8,
-            data: [shade, 34, layer.id as u8 * 40, 255].repeat(width as usize * height as usize),
+            data: if self.pattern {
+                // Exact capacity: history charges a frame's allocation size.
+                let mut data = Vec::with_capacity(width as usize * height as usize * 4);
+                let id = layer.id as u32;
+                for y in 0..height {
+                    for x in 0..width {
+                        data.extend_from_slice(&[
+                            (x * 7 + y * 3 + id * 50) as u8,
+                            (x * 2 + y * 11) as u8 ^ shade,
+                            (x * 13 + id * 30) as u8,
+                            (96 + (x + y * 5 + id * 40) % 160) as u8,
+                        ]);
+                    }
+                }
+                data
+            } else {
+                [shade, 34, layer.id as u8 * 40, 255].repeat(width as usize * height as usize)
+            },
         })
     }
 
