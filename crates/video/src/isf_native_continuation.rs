@@ -7,7 +7,7 @@
 #[cfg(test)]
 use super::PreparedNativeCpuInvocation;
 use super::{
-    NativeBatchAdmission, NativeBatchRestrictions, NativeCpuRenderFailure,
+    pool, NativeBatchAdmission, NativeBatchRestrictions, NativeCpuRenderFailure,
     NativeProspectiveIdentityError, PreparedNativeBatch, PreparedNativeInputs, PreparedNativeLayer,
 };
 use crate::isf_chain_execution::PreparedChain;
@@ -128,6 +128,10 @@ impl std::fmt::Debug for NativeCpuContinuationFailure<'_> {
 }
 
 impl<'runtime> NativePreparedContinuation<'runtime> {
+    pub(crate) fn group_fx_scratch(&self, extent: (u32, u32)) -> Option<Arc<pool::GroupFxScratch>> {
+        self.inputs.group_fx_scratch(extent)
+    }
+
     pub(crate) fn allocation_plan(&self) -> Result<&NativeAllocationPlan, NativeGpuDecline> {
         self.inputs.allocation_plan()
     }

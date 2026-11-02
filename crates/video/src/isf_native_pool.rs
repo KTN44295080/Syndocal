@@ -3,6 +3,10 @@
 use super::*;
 use std::sync::Weak;
 
+#[path = "isf_native_group_scratch.rs"]
+mod group_scratch;
+pub(crate) use group_scratch::GroupFxScratch;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StackKey {
     width: u32,

@@ -63,10 +63,18 @@ pub(crate) fn resident_group_sampler(device: &wgpu::Device) -> wgpu::Sampler {
 /// composed resources retain until the composition submission retires.
 pub(crate) struct ResidentGroupFxTargets {
     targets: [GpuImage; 2],
-    _charges: [AllocationCharge; 2],
+    _charges: Option<[AllocationCharge; 2]>,
 }
 
 impl ResidentGroupFxTargets {
+    /// The composition phase separately pins the pool owner and its aliases.
+    pub(crate) fn borrowed(targets: [GpuImage; 2]) -> Self {
+        Self {
+            targets,
+            _charges: None,
+        }
+    }
+
     pub(crate) fn new(
         device: &wgpu::Device,
         (width, height): (u32, u32),
@@ -106,7 +114,7 @@ impl ResidentGroupFxTargets {
         };
         Self {
             targets: [ping, pong],
-            _charges: charges,
+            _charges: Some(charges),
         }
     }
 

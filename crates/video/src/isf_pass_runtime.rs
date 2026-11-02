@@ -107,6 +107,24 @@ pub(crate) struct GpuImage {
 
 impl GpuImage {
     fn new(device: &wgpu::Device, width: u32, height: u32, float: bool, label: &str) -> Self {
+        Self::with_usage(
+            device,
+            width,
+            height,
+            float,
+            label,
+            wgpu::TextureUsages::empty(),
+        )
+    }
+
+    fn with_usage(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        float: bool,
+        label: &str,
+        extra_usage: wgpu::TextureUsages,
+    ) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d {
@@ -121,7 +139,8 @@ impl GpuImage {
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::COPY_DST,
+                | wgpu::TextureUsages::COPY_DST
+                | extra_usage,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -1424,6 +1443,26 @@ pub(crate) struct NativeStackResources {
 }
 
 impl NativeStackResources {
+    /// The pool template has two distinct textures; input aliases one of them.
+    /// Never call on an assembled stack whose final has replaced a scratch slot.
+    pub(crate) fn group_scratch_images(&self) -> [GpuImage; 2] {
+        [self.workspace.ping.clone(), self.workspace.pong.clone()]
+    }
+
+    pub(crate) fn group_scratch_compatible(&self, extent: (u32, u32)) -> bool {
+        [&self.workspace.ping, &self.workspace.pong]
+            .iter()
+            .all(|image| {
+                (image.width, image.height) == extent
+                    && image.texture.format() == wgpu::TextureFormat::Rgba8Unorm
+                    && image.texture.usage().contains(
+                        wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::TEXTURE_BINDING
+                            | wgpu::TextureUsages::STORAGE_BINDING,
+                    )
+            })
+    }
+
     pub(crate) fn final_image(&self, stage_count: usize) -> GpuImage {
         if stage_count % 2 == 1 {
             self.workspace.ping.clone()
@@ -1463,19 +1502,21 @@ impl IsfGpuRuntime {
             ));
         }
         self.validate_pass_size(frame.width, frame.height)?;
-        let mut input = GpuImage::new(
+        let mut input = GpuImage::with_usage(
             &self.device,
             frame.width,
             frame.height,
             false,
             "Syndocal pooled ISF input",
+            wgpu::TextureUsages::STORAGE_BINDING,
         );
-        let mut intermediate = GpuImage::new(
+        let mut intermediate = GpuImage::with_usage(
             &self.device,
             frame.width,
             frame.height,
             false,
             "Syndocal pooled ISF intermediate",
+            wgpu::TextureUsages::STORAGE_BINDING,
         );
         input.native_origin = Some(phase.context().id());
         intermediate.native_origin = Some(phase.context().id());

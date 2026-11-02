@@ -530,3 +530,49 @@ fn native_gpu_group_fx_budget_trace_across_follow_crossfade_at_c4_extent() {
         assert_eq!(paths[0], [60, 0, 0], "{case}: steady ticks stay resident");
     }
 }
+
+/// QA diagnostic: the C5 group-FX fixture shape (one group of all three
+/// layers, rotated 10 deg, scale 0.9, Screen 0.85, Posterize) with 1080p
+/// sources on a 2560x1600 Display. Run explicitly with --ignored.
+#[test]
+#[ignore = "QA diagnostic: allocates 2560x1600 frames for three layers"]
+fn native_gpu_group_fx_c5_fixture_shape_trace() {
+    const C4: (u32, u32) = (2560, 1600);
+    let mut session = session_with_compositor(C4);
+    let mut renderer = VideoPreviewRenderer::with_frame_provider(
+        VideoRuntimeConfig::default(),
+        Provider {
+            source_extent: Some((1920, 1080)),
+            ..Provider::default()
+        },
+    );
+    let mut snapshot = scene(3, C4);
+    let mut all = group(&[1, 2, 3], 0.85, VideoBlendMode::Screen);
+    all.transform = Some(Transform2D {
+        rotation_deg: 10.0,
+        scale_x: 0.9,
+        scale_y: 0.9,
+        ..Transform2D::default()
+    });
+    snapshot.layer_groups.push(all);
+    group_fx(&mut snapshot, 9, &[builtin("posterize")]);
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    for index in 0..120u64 {
+        for layer in &mut snapshot.layers {
+            layer.state.position_ms = index * 16;
+        }
+        let started = std::time::Instant::now();
+        let path = match prepare_with(&mut session, &mut renderer, &snapshot, C4, &Permit) {
+            Ok(frame) => format!("{:?}", path_of(frame)),
+            Err(error) => format!("Err({error})"),
+        };
+        let (_, line) = budget_line(&session, C4);
+        println!(
+            "c5 shape tick={index} {:.1}ms path={path} {line}",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+        *counts.entry(path.chars().take(60).collect()).or_default() += 1;
+    }
+    println!("c5 shape paths {counts:?}");
+    stop_and_reap(&mut session, &mut renderer);
+}

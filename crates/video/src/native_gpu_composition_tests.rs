@@ -1175,6 +1175,7 @@ fn pure_output_pool_existing_alias_does_not_add_allocation_bytes() {
             readback: Some(readback),
             output: Some(output),
             cpu_snapshot: None,
+            ..AllocationReuse::default()
         },
     )
     .unwrap();
@@ -1194,6 +1195,7 @@ fn pure_output_pool_existing_alias_does_not_add_allocation_bytes() {
             readback: Some(readback),
             output: Some(output),
             cpu_snapshot: Some(cpu_snapshot),
+            ..AllocationReuse::default()
         },
     )
     .unwrap();

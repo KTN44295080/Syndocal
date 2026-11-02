@@ -17,6 +17,7 @@ use std::sync::{Arc, Weak};
 use wgpu::util::DeviceExt;
 
 use crate::isf_chain_execution::PreparedStage;
+use crate::isf_native_gpu::pool::GroupFxScratch;
 use crate::isf_runtime::{IsfGpuRuntime, ResidentGroupFxTargets};
 use crate::native_gpu_budget::{
     AllocationCharge, ChargeKind, FrameReservation, NativeAllocationPlan,
@@ -32,6 +33,9 @@ use crate::native_gpu_contract::{
 use crate::native_gpu_result::{EncodedLayerCandidate, GpuAllocationReadUse, GpuLayerLease};
 use crate::native_gpu_snapshot::RecycledCpuSnapshot;
 use crate::{axis_aligned_source_lookup, CompositionLayerPlan, VideoPixelFormat};
+
+#[path = "native_gpu_composition_scratch.rs"]
+mod group_scratch;
 
 /// Packed `Params` uniform of the texture composition shader.
 const LAYER_PARAMS_BYTES: u64 = 32;
@@ -141,6 +145,7 @@ pub(crate) struct NativeCompositionPlan {
     reused_cpu_snapshot: RefCell<Option<RecycledCpuSnapshot>>,
     reused_cpu_snapshot_id: Option<GpuAllocationId>,
     pool_epoch: Option<u64>,
+    group_fx_scratch: Option<Arc<GroupFxScratch>>,
 }
 
 /// Checked minimum capacities. G must also account for actual grown capacities,
@@ -332,6 +337,7 @@ impl NativeCompositionPlan {
             reused_cpu_snapshot: RefCell::new(None),
             reused_cpu_snapshot_id: None,
             pool_epoch: None,
+            group_fx_scratch: None,
         })
     }
 
@@ -346,6 +352,7 @@ impl NativeCompositionPlan {
                 .as_ref()
                 .map(|buffer| buffer.allocation_id()),
             cpu_snapshot: self.reused_cpu_snapshot_id,
+            group_fx: self.group_fx_scratch.as_ref().map(|scratch| scratch.ids()),
         }
     }
 
@@ -1198,7 +1205,12 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
                 )?);
             }
         }
-        let fx_charges = if plan.groups.iter().any(|group| group.fx.is_some()) {
+        if let Some(scratch) = &plan.group_fx_scratch {
+            phase.retain_resource(Arc::clone(scratch), &scratch.ids())?;
+        }
+        let fx_charges = if plan.groups.iter().any(|group| group.fx.is_some())
+            && plan.group_fx_scratch.is_none()
+        {
             let mut charge = || {
                 phase.bind_reserved_allocation(
                     &mut self.reservation,
@@ -1281,10 +1293,16 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
                 .chain(&transformed)
                 .map(|buffer| buffer.allocation_id()),
         );
-        let fx_targets = fx_charges.map(|charges| {
-            ids.extend(charges.iter().map(AllocationCharge::id));
-            ResidentGroupFxTargets::new(device, self.extent, charges)
-        });
+        let fx_targets = plan
+            .group_fx_scratch
+            .as_ref()
+            .map(|scratch| scratch.targets())
+            .or_else(|| {
+                fx_charges.map(|charges| {
+                    ids.extend(charges.iter().map(AllocationCharge::id));
+                    ResidentGroupFxTargets::new(device, self.extent, charges)
+                })
+            });
         let mut layers = Vec::with_capacity(layer_charges.len());
         for (layer_index, ((layer, read), (lookup_charge, params_charge))) in plan
             .layers_bottom_first
@@ -2092,6 +2110,7 @@ struct AllocationReuse {
     readback: Option<GpuAllocationId>,
     output: Option<GpuAllocationId>,
     cpu_snapshot: Option<GpuAllocationId>,
+    group_fx: Option<[GpuAllocationId; 2]>,
 }
 
 /// One exact charge per physical allocation, in the order the shared adapter
@@ -2131,8 +2150,14 @@ fn composition_allocations(
     }
     // FX groups share one ping/pong pair; the input is unpacked into pong.
     if groups.iter().any(|group| group.fx.is_some()) {
-        for _ in 0..2 {
-            native_allocations.add_new(ChargeKind::IsfScratch, output_bytes)?;
+        if let Some(ids) = reuse.group_fx {
+            for id in ids {
+                native_allocations.add_existing(id);
+            }
+        } else {
+            for _ in 0..2 {
+                native_allocations.add_new(ChargeKind::IsfScratch, output_bytes)?;
+            }
         }
     }
     for group in groups {

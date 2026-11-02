@@ -14,6 +14,9 @@ use crate::{
 };
 use protocol::{VideoLayerTransitionRuntimeSnapshot, VideoSnapshot};
 
+#[path = "native_gpu_group_scratch_regression_tests.rs"]
+mod group_scratch;
+
 const OUTPUT: u64 = 101;
 const EPOCH: u64 = 7;
 const EXTENT: (u32, u32) = (2560, 1600);

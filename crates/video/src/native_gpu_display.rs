@@ -1213,6 +1213,11 @@ impl NativeResidentDisplaySession {
                 );
             }
         }
+        if composition.needs_group_fx_scratch() {
+            composition
+                .reuse_group_fx_scratch(continuation.group_fx_scratch(composition.extent))
+                .map_err(|reason| format!("native group scratch plan is stale: {reason:?}"))?;
+        }
         allocation
             .merge(composition.allocation_plan())
             .map_err(|reason| format!("native allocation plans cannot merge: {reason:?}"))?;
@@ -1228,6 +1233,9 @@ impl NativeResidentDisplaySession {
             // quotes purely first and defers the tick if it cannot fit either.
             Err(reason) => {
                 composition.release_reused_cpu_snapshot();
+                // No dependent submission exists. Release the scratch loan
+                // before CPU handover invalidates the resident pool bank.
+                drop(composition);
                 let cpu = continuation.into_cpu().map_err(|fault| {
                     format!("native quote decline could not enter CPU continuation: {fault:?}")
                 })?;
@@ -1248,6 +1256,7 @@ impl NativeResidentDisplaySession {
                 continuation,
             } => {
                 composition.release_reused_cpu_snapshot();
+                drop(composition);
                 let cpu = continuation.into_cpu().map_err(|fault| {
                     format!("native admission decline could not enter CPU continuation: {fault:?}")
                 })?;
@@ -1265,6 +1274,7 @@ impl NativeResidentDisplaySession {
             Ok(reservation) => reservation,
             Err(error) => {
                 composition.release_reused_cpu_snapshot();
+                drop(composition);
                 let cpu = admitted.return_unexecuted().into_cpu().map_err(|fault| {
                     format!(
                         "native reserve failure could not return to CPU continuation: {fault:?}"
