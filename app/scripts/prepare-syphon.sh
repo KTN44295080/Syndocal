@@ -38,7 +38,7 @@ xcodebuild \
 test -f "$syphon_stage/products/Syphon.framework/Syphon"
 test -f "$syphon_stage/products/Syphon.framework/Resources/default.metallib"
 ditto "$syphon_stage/products/Syphon.framework" "$syphon_frameworks/Syphon.framework"
-lipo -verify_arch arm64 x86_64 "$syphon_frameworks/Syphon.framework/Syphon"
+lipo "$syphon_frameworks/Syphon.framework/Syphon" -verify_arch arm64 x86_64
 otool -D "$syphon_frameworks/Syphon.framework/Syphon" | grep -F '@rpath/Syphon.framework/'
 printf 'commit=%s\narchive_sha256=%s\ndeployment_target=12.0\narchitectures=arm64 x86_64\n' \
   "$syphon_commit" "$syphon_sha256" > "$syphon_root/source-receipt.txt"

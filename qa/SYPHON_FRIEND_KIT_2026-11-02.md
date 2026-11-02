@@ -47,7 +47,11 @@ diagnostics, collection, fixture, or packaging. Local evidence is retained in
   Current Windows compilation emitted 0 warnings. A fresh unchanged-base warning
   count was not measured, so a baseline-to-candidate warning delta is not claimed.
 - Hosted macOS compile, Metal readback, JXA, app/DMG/PKG and kit generation:
-  pending until the exact checkpoint workflow completes.
+  pending until the exact checkpoint workflow completes. The first run
+  `41408678752` built Syphon.framework successfully, then failed because
+  `lipo -verify_arch` consumed the trailing binary path as an architecture.
+  Preparation now puts the input binary before `-verify_arch`; shell syntax and
+  all 12 workflow contract tests pass. The repaired Mac run remains required.
 - External Simple Client reception, visible orientation/motion/blackout,
   discovery retirement, and the friend's returned evidence remain physical gates.
 - This is a SHA-scoped internal alpha.82 CI candidate. Before intentionally
