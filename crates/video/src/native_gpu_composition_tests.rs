@@ -1016,7 +1016,7 @@ pub(crate) fn submit_shared_frame(
         .chain(candidates)
         .collect::<Vec<_>>();
     let encoded =
-        compositor.encode_composition_and_snapshot(&mut txn, &plan, &sources, composition);
+        compositor.encode_composition_and_snapshot(&mut txn, &plan, &sources, composition, None);
     drop(sources);
     if let Ok(encoded) = &encoded {
         // ISF submit, then exactly the next submission is P's composition.

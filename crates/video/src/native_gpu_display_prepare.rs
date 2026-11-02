@@ -167,6 +167,50 @@ pub(super) fn resident_layer_groups(
     })
 }
 
+/// Prepared executing group FX per active group, in project order. `None`
+/// keeps the frame canonical: an unresolvable chain, a stage fault (published
+/// there), or a stateful/multi-texture stage outside resident admission.
+pub(super) fn resident_group_effects<P: VideoFrameProvider>(
+    renderer: &mut VideoPreviewRenderer<P>,
+    snapshot: &VideoSnapshot,
+    composition_id: CompositionId,
+    cancellation: &dyn VideoRenderCancellation,
+) -> Option<Vec<Option<Arc<crate::native_gpu_composition::ResidentGroupEffect>>>> {
+    let mut effects = Vec::new();
+    for group in resident_layer_groups(snapshot, composition_id) {
+        let chain = crate::resolve_video_effect_chain(
+            snapshot,
+            &VideoEffectScope::Group { group_id: group.id },
+        )
+        .ok()?;
+        let Some(chain) = chain.filter(crate::resolved_chain_executes) else {
+            effects.push(None);
+            continue;
+        };
+        let layer_id = group.layer_ids.first().copied().unwrap_or_default();
+        let prepared = renderer
+            .prepare_effect_chain(
+                std::borrow::Cow::Owned(chain),
+                layer_id,
+                None,
+                Some(cancellation),
+            )
+            .ok()?;
+        if !prepared.faults.is_empty()
+            || !crate::isf_runtime::resident_group_stages(&prepared.stages)
+        {
+            return None;
+        }
+        effects.push(Some(Arc::new(
+            crate::native_gpu_composition::ResidentGroupEffect {
+                stages: prepared.stages,
+                date: crate::isf_date_now(),
+            },
+        )));
+    }
+    Some(effects)
+}
+
 pub(super) fn resident_layer_chains(
     snapshot: &VideoSnapshot,
     context: VideoEffectRenderContext<'_>,
@@ -182,14 +226,12 @@ pub(super) fn resident_layer_chains(
         Ok(Some(chain)) => !crate::resolved_chain_executes(&chain),
         Err(_) => false,
     };
-    // Active groups compose on the resident compositor; group FX still
-    // needs the canonical route.
+    // Active groups, including their stateless group FX, compose on the
+    // resident compositor; `resident_group_effects` declines the rest.
     if !idle(VideoEffectScope::Composition { composition_id })
         || !idle(VideoEffectScope::Output {
             output_id: plan.output_id,
         })
-        || resident_layer_groups(snapshot, composition_id)
-            .any(|group| !idle(VideoEffectScope::Group { group_id: group.id }))
         || transitions.buses.iter().any(|active| {
             snapshot
                 .transition_buses
@@ -747,7 +789,14 @@ impl NativeResidentDisplaySession {
             );
         }
         let request = self.next_request(&plan, context.project_render_epoch, extent)?;
-        let Some(chains) = resident_layer_chains(snapshot, context, transitions, &plan) else {
+        let resident = resident_group_effects(
+            renderer,
+            snapshot,
+            plan.composition.composition_id,
+            cancellation,
+        )
+        .zip(resident_layer_chains(snapshot, context, transitions, &plan));
+        let Some((group_effects, chains)) = resident else {
             return self.prepare_cpu_output(
                 renderer,
                 snapshot,
@@ -1129,10 +1178,11 @@ impl NativeResidentDisplaySession {
         let isf_trace = crate::native_frame_timing::span(crate::native_frame_timing::Phase::Isf);
         let execution = if compatible {
             let groups = resident_layer_groups(snapshot, plan.composition.composition_id)
+                .zip(group_effects)
                 .map(
-                    |group| crate::native_gpu_composition::NativeCompositionGroup {
+                    |(group, fx)| crate::native_gpu_composition::NativeCompositionGroup {
                         group,
-                        executing_fx: false,
+                        fx,
                     },
                 )
                 .collect::<Vec<_>>();

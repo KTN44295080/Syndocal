@@ -111,14 +111,19 @@ impl StackWorkspace {
                     mapped_at_creation: false,
                 })
             }),
-            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("Syndocal ISF sampler"),
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            }),
+            sampler: isf_sampler(device),
         }
     }
+}
+
+/// The one ISF sampler description, shared by stacks and resident group FX.
+pub(super) fn isf_sampler(device: &wgpu::Device) -> wgpu::Sampler {
+    device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("Syndocal ISF sampler"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    })
 }

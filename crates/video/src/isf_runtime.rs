@@ -46,6 +46,9 @@ use resources::{IsfDimension, IsfImportedImage};
 
 #[cfg(test)]
 pub(crate) use pass_runtime::NativeCpuCacheEntry;
+pub(crate) use pass_runtime::{
+    resident_group_sampler, resident_group_stages, resident_group_uniforms, ResidentGroupFxTargets,
+};
 pub(crate) use pass_runtime::{GpuImage as IsfGpuImage, NativeCpuCacheModel, NativeStackResources};
 
 pub(crate) fn native_queue_upload_pitch(adapter: &wgpu::Adapter) -> Option<u64> {

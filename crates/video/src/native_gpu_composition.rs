@@ -16,6 +16,8 @@ use std::sync::{Arc, Weak};
 
 use wgpu::util::DeviceExt;
 
+use crate::isf_chain_execution::PreparedStage;
+use crate::isf_runtime::{IsfGpuRuntime, ResidentGroupFxTargets};
 use crate::native_gpu_budget::{
     AllocationCharge, ChargeKind, FrameReservation, NativeAllocationPlan,
 };
@@ -23,8 +25,9 @@ use crate::native_gpu_context::{
     EncodedGpuPhase, GpuPhaseEncoder, NativeGpuFrameTxn, NativeGpuOwner, PendingPhaseReceipt,
 };
 use crate::native_gpu_contract::{
-    GpuAllocationId, GpuContextId, GpuPhase, GpuSubmissionId, HistoryEntryId, LayerResultIdentity,
-    NativeFrameId, NativeGpuDecline, NativeGpuFault, NativeGpuFaultKind, RetirementId,
+    FrozenChainClocks, GpuAllocationId, GpuContextId, GpuPhase, GpuSubmissionId, HistoryEntryId,
+    LayerResultIdentity, NativeFrameId, NativeGpuDecline, NativeGpuFault, NativeGpuFaultKind,
+    RetirementId,
 };
 use crate::native_gpu_result::{EncodedLayerCandidate, GpuAllocationReadUse, GpuLayerLease};
 use crate::native_gpu_snapshot::RecycledCpuSnapshot;
@@ -50,11 +53,37 @@ pub(crate) struct NativeCompositionLayer<'a> {
     pub kind: SelectedTextureKind,
 }
 
-/// The caller resolves group FX before admission. Executing group FX needs the
-/// separate resident ISF texture-input integration and is declined here.
+/// A prepared group FX chain. Only stateless stages are admitted
+/// (`isf_runtime::resident_group_stages`); the rest stay canonical.
+pub(crate) struct ResidentGroupEffect {
+    pub stages: Vec<PreparedStage>,
+    pub date: [f32; 4],
+}
+
+/// The caller resolves and prepares executing group FX before admission.
 pub(crate) struct NativeCompositionGroup<'a> {
     pub group: &'a protocol::VideoLayerGroupSummary,
-    pub executing_fx: bool,
+    pub fx: Option<Arc<ResidentGroupEffect>>,
+}
+
+/// Group FX runs on the straightened isolated composite, before the group
+/// transform and outer blend, with the canonical stack's exact uniforms.
+struct GroupFxEncoding {
+    effect: Arc<ResidentGroupEffect>,
+    clocks: FrozenChainClocks,
+    /// Planned pass uniforms. Their sizes are fixed here; FRAMEINDEX is
+    /// reserved from the runtime's canonical logical clock at encode.
+    uniforms: Vec<Vec<u8>>,
+}
+
+impl std::fmt::Debug for GroupFxEncoding {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GroupFxEncoding")
+            .field("stages", &self.effect.stages.len())
+            .field("passes", &self.uniforms.len())
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -67,6 +96,13 @@ struct GroupEncoding {
     members: Vec<usize>,
     transform: Option<GroupSampling>,
     outer: GroupSampling,
+    fx: Option<GroupFxEncoding>,
+}
+
+impl GroupEncoding {
+    fn needs_transform_target(&self) -> bool {
+        self.transform.is_some() && self.fx.is_none()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -264,6 +300,9 @@ impl NativeCompositionPlan {
             for sampling in group.transform.iter().chain(std::iter::once(&group.outer)) {
                 lookup_bytes += sampling.lookup.len() as u64 * 4;
                 uniform_bytes += LAYER_PARAMS_BYTES;
+            }
+            for uniform in group.fx.iter().flat_map(|fx| &fx.uniforms) {
+                uniform_bytes += uniform.len() as u64;
             }
         }
         let native_allocations = composition_allocations(
@@ -466,6 +505,11 @@ struct NativeCompositionPipelines {
     group_composite: wgpu::ComputePipeline,
     group_clear: wgpu::ComputePipeline,
     group_straighten: wgpu::ComputePipeline,
+    fx_unpack_layout: wgpu::BindGroupLayout,
+    fx_unpack: wgpu::ComputePipeline,
+    fx_pack_layout: wgpu::BindGroupLayout,
+    fx_pack: wgpu::ComputePipeline,
+    fx_sampler: wgpu::Sampler,
 }
 
 /// Shared-context compositor. It owns no device; its pipelines are created in
@@ -685,6 +729,72 @@ impl NativeGpuCompositor {
                     cache: None,
                 })
             };
+            let uniform = |binding| wgpu::BindGroupLayoutEntry {
+                binding,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            };
+            let fx_unpack_layout =
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("Syndocal resident group FX unpack layout"),
+                    entries: &[
+                        storage(0, true),
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::StorageTexture {
+                                access: wgpu::StorageTextureAccess::WriteOnly,
+                                format: wgpu::TextureFormat::Rgba8Unorm,
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                            },
+                            count: None,
+                        },
+                        uniform(2),
+                    ],
+                });
+            let fx_pack_layout =
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("Syndocal resident group FX pack layout"),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 3,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        storage(4, false),
+                        uniform(5),
+                    ],
+                });
+            let fx_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Syndocal resident group FX bridge shader"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("gpu_display_group_fx.wgsl").into()),
+            });
+            let fx_pipeline = |layout: &wgpu::BindGroupLayout, entry| {
+                let pipeline_layout =
+                    device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("Syndocal resident group FX bridge pipelines"),
+                        bind_group_layouts: &[layout],
+                        push_constant_ranges: &[],
+                    });
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("Syndocal resident group FX bridge pipeline"),
+                    layout: Some(&pipeline_layout),
+                    module: &fx_shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            };
             NativeCompositionPipelines {
                 clear: pipeline("clear_output"),
                 composite: pipeline("composite_layer"),
@@ -693,6 +803,11 @@ impl NativeGpuCompositor {
                 group_clear: group_pipeline("clear_resident_output"),
                 group_straighten: group_pipeline("straighten_resident_output"),
                 group_layout,
+                fx_unpack: fx_pipeline(&fx_unpack_layout, "unpack_group"),
+                fx_pack: fx_pipeline(&fx_pack_layout, "pack_group"),
+                fx_unpack_layout,
+                fx_pack_layout,
+                fx_sampler: crate::isf_runtime::resident_group_sampler(device),
             }
         })?;
         Ok(Self {
@@ -749,12 +864,14 @@ impl NativeGpuCompositor {
     /// Failure after the phase opened is recorded on this phase and sealed by
     /// an empty submit, so the transaction still resolves the earlier ISF
     /// phase independently (ISF-valid/composition-failed keeps ISF history).
+    /// Group FX passes join the same command buffer through `runtime`.
     pub(crate) fn encode_composition_and_snapshot(
         &self,
         txn: &mut NativeGpuFrameTxn<'_>,
         plan: &NativeCompositionPlan,
         inputs: &[SelectedLayerInput<'_>],
         reservation: CompositionReservation,
+        runtime: Option<&mut IsfGpuRuntime>,
     ) -> Result<EncodedPremappingSnapshot, NativeGpuFault> {
         self.check_transaction(txn, plan)?;
         let mismatch = |message| {
@@ -772,6 +889,9 @@ impl NativeGpuCompositor {
         }
         if inputs.len() != plan.layers_bottom_first.len() {
             return Err(mismatch("composition input count differs from its plan"));
+        }
+        if runtime.is_none() && plan.groups.iter().any(|group| group.fx.is_some()) {
+            return Err(mismatch("group FX composition has no ISF runtime"));
         }
         for (layer, input) in plan.layers_bottom_first.iter().zip(inputs) {
             if input.kind() != layer.kind
@@ -801,6 +921,7 @@ impl NativeGpuCompositor {
             encoding: None,
             next_layer: 0,
             copied: false,
+            runtime,
         };
         let encoded = match plan.encode(&mut port) {
             Ok(encoded) => encoded,
@@ -931,6 +1052,15 @@ struct ComposedGroup {
     transform: Option<ComposedLayer>,
     outer: ComposedLayer,
     straighten: wgpu::BindGroup,
+    fx: Option<ComposedGroupFx>,
+}
+
+struct ComposedGroupFx {
+    effect: Arc<ResidentGroupEffect>,
+    uniforms: Vec<NativeChargedBuffer>,
+    unpack: wgpu::BindGroup,
+    /// Untransformed groups pack the FX result back into the isolated target.
+    pack: Option<wgpu::BindGroup>,
 }
 
 /// Strong owners retained by G's registry until every dependent submission
@@ -941,6 +1071,8 @@ struct ComposedResources {
     readback: Arc<NativeChargedBuffer>,
     layers: Vec<ComposedLayer>,
     groups: Vec<ComposedGroup>,
+    /// Groups encode one after another, so FX groups share one ping/pong.
+    fx_targets: Option<ResidentGroupFxTargets>,
     _reads: Vec<GpuAllocationReadUse>,
     _pipelines: Arc<NativeCompositionPipelines>,
 }
@@ -972,6 +1104,7 @@ struct SharedCompositionPort<'a> {
     encoding: Option<PortEncoding>,
     next_layer: usize,
     copied: bool,
+    runtime: Option<&'a mut IsfGpuRuntime>,
 }
 
 impl SharedCompositionPort<'_> {
@@ -1044,10 +1177,15 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
             layer_charges.push((lookup, params));
         }
         // Groups encode one after another, so every group shares one isolated
-        // target and, when any group is transformed, one transform target.
+        // target and, when any group without FX is transformed, one transform
+        // target. An FX group transforms its FX result back into the isolated
+        // target instead.
         let mut scratch_charge = None;
         let mut transformed_charge = None;
-        let transformed = plan.groups.iter().any(|group| group.transform.is_some());
+        let transformed = plan
+            .groups
+            .iter()
+            .any(GroupEncoding::needs_transform_target);
         for (slot, needed) in [
             (&mut scratch_charge, !plan.groups.is_empty()),
             (&mut transformed_charge, transformed),
@@ -1060,6 +1198,18 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
                 )?);
             }
         }
+        let fx_charges = if plan.groups.iter().any(|group| group.fx.is_some()) {
+            let mut charge = || {
+                phase.bind_reserved_allocation(
+                    &mut self.reservation,
+                    ChargeKind::IsfScratch,
+                    plan.allocations.premapping_bytes,
+                )
+            };
+            Some([charge()?, charge()?])
+        } else {
+            None
+        };
         let mut group_charges = Vec::with_capacity(plan.groups.len());
         for group in &plan.groups {
             let mut samplings = Vec::new();
@@ -1076,7 +1226,15 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
                 )?;
                 samplings.push((lookup, params));
             }
-            group_charges.push(samplings);
+            let mut uniforms = Vec::new();
+            for uniform in group.fx.iter().flat_map(|fx| &fx.uniforms) {
+                uniforms.push(phase.bind_reserved_allocation(
+                    &mut self.reservation,
+                    ChargeKind::CompositionBuffer,
+                    uniform.len() as u64,
+                )?);
+            }
+            group_charges.push((samplings, uniforms));
         }
         let device = phase.device();
         let output = match (plan.reused_output.as_ref(), output_charge) {
@@ -1123,6 +1281,10 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
                 .chain(&transformed)
                 .map(|buffer| buffer.allocation_id()),
         );
+        let fx_targets = fx_charges.map(|charges| {
+            ids.extend(charges.iter().map(AllocationCharge::id));
+            ResidentGroupFxTargets::new(device, self.extent, charges)
+        });
         let mut layers = Vec::with_capacity(layer_charges.len());
         for (layer_index, ((layer, read), (lookup_charge, params_charge))) in plan
             .layers_bottom_first
@@ -1189,20 +1351,66 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
                 _params: params,
             });
         }
+        // Canonical group FX consumes the runtime's logical clock once per
+        // executing chain, after the layer chains and in composition order.
+        let mut fx_uniforms = Vec::new();
+        for fx in plan.groups.iter().filter_map(|group| group.fx.as_ref()) {
+            let Some(runtime) = self.runtime.as_deref_mut() else {
+                return Err(composition_fault(
+                    self.context,
+                    self.frame,
+                    NativeGpuFaultKind::StateMismatch,
+                    "group FX composition has no ISF runtime",
+                ));
+            };
+            let clocks = FrozenChainClocks {
+                frame_index: runtime.reserve_resident_group_frame_index(),
+                ..fx.clocks
+            };
+            let uniforms =
+                crate::isf_runtime::resident_group_uniforms(&fx.effect.stages, self.extent, clocks);
+            if uniforms.len() != fx.uniforms.len()
+                || uniforms
+                    .iter()
+                    .zip(&fx.uniforms)
+                    .any(|(a, b)| a.len() != b.len())
+            {
+                return Err(composition_fault(
+                    self.context,
+                    self.frame,
+                    NativeGpuFaultKind::StateMismatch,
+                    "group FX uniforms differ from their plan",
+                ));
+            }
+            fx_uniforms.push(uniforms);
+        }
+        let mut fx_uniforms = fx_uniforms.into_iter();
         let mut groups = Vec::with_capacity(plan.groups.len());
-        for (group, charges) in plan.groups.iter().zip(group_charges) {
+        for (group, (charges, uniform_charges)) in plan.groups.iter().zip(group_charges) {
             let mut charges = charges.into_iter();
             let scratch = scratch.as_ref().expect("groups share one target");
             let mut buffers = vec![Arc::clone(scratch)];
-            if group.transform.is_some() {
+            if group.needs_transform_target() {
                 buffers.push(Arc::clone(
                     transformed
                         .as_ref()
                         .expect("a transformed group has its target"),
                 ));
             }
-            let transform = group.transform.as_ref().map(|sampling| {
-                make_group_layer(
+            let transform = group.transform.as_ref().map(|sampling| match &group.fx {
+                Some(fx) => make_texture_group_layer(
+                    device,
+                    &self.pipelines.layout,
+                    fx_targets
+                        .as_ref()
+                        .expect("FX groups share one ping/pong")
+                        .result_view(fx.effect.stages.len()),
+                    &buffers[0],
+                    sampling,
+                    charges.next().unwrap(),
+                    &mut ids,
+                ),
+                None => make_group_layer(
                     device,
                     &self.pipelines.group_layout,
                     &buffers[0],
@@ -1210,7 +1418,7 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
                     sampling,
                     charges.next().unwrap(),
                     &mut ids,
-                )
+                ),
             });
             let outer_charges = charges.next().expect("outer sampling charge");
             let mut outer_sampling = GroupSampling {
@@ -1236,12 +1444,81 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
                 &outer._params,
                 &outer._lookup,
             );
+            let fx = group.fx.as_ref().map(|fx| {
+                let targets = fx_targets.as_ref().expect("FX groups share one target set");
+                let uniforms = fx_uniforms
+                    .next()
+                    .expect("every FX group reserved its clock")
+                    .iter()
+                    .zip(uniform_charges)
+                    .map(|(contents, charge)| {
+                        let buffer = NativeChargedBuffer {
+                            buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("Syndocal resident group FX pass uniforms"),
+                                contents,
+                                usage: wgpu::BufferUsages::UNIFORM,
+                            }),
+                            charge,
+                        };
+                        ids.push(buffer.allocation_id());
+                        buffer
+                    })
+                    .collect();
+                // The outer sampling's params begin with the full extent.
+                let unpack = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Syndocal resident group FX unpack"),
+                    layout: &self.pipelines.fx_unpack_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: buffers[0].buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(targets.input_view()),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: outer._params.buffer.as_entire_binding(),
+                        },
+                    ],
+                });
+                let pack = group.transform.is_none().then(|| {
+                    device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Syndocal resident group FX pack"),
+                        layout: &self.pipelines.fx_pack_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: wgpu::BindingResource::TextureView(
+                                    targets.result_view(fx.effect.stages.len()),
+                                ),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 4,
+                                resource: buffers[0].buffer.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 5,
+                                resource: outer._params.buffer.as_entire_binding(),
+                            },
+                        ],
+                    })
+                });
+                ComposedGroupFx {
+                    effect: Arc::clone(&fx.effect),
+                    uniforms,
+                    unpack,
+                    pack,
+                }
+            });
             groups.push(ComposedGroup {
                 members: group.members.clone(),
                 _buffers: buffers,
                 transform,
                 outer,
                 straighten,
+                fx,
             });
         }
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1269,6 +1546,7 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
             readback,
             layers,
             groups,
+            fx_targets,
             _reads: std::mem::take(&mut self.reads),
             _pipelines: Arc::clone(&self.pipelines),
         });
@@ -1325,7 +1603,65 @@ impl CompositionEncodingPort for SharedCompositionPort<'_> {
                     &self.pipelines.group_straighten,
                     &group.straighten,
                 );
-                if let Some(transform) = &group.transform {
+                if let Some(fx) = &group.fx {
+                    let (Some(runtime), Some(phase), Some(targets)) = (
+                        self.runtime.as_deref_mut(),
+                        self.phase.as_mut(),
+                        encoding.resources.fx_targets.as_ref(),
+                    ) else {
+                        return Err(composition_fault(
+                            self.context,
+                            self.frame,
+                            NativeGpuFaultKind::StateMismatch,
+                            "group FX lost its runtime, phase or targets",
+                        ));
+                    };
+                    dispatch(&mut encoding.encoder, &self.pipelines.fx_unpack, &fx.unpack);
+                    let uniforms = fx
+                        .uniforms
+                        .iter()
+                        .map(|uniform| &uniform.buffer)
+                        .collect::<Vec<_>>();
+                    let mut pins = Vec::new();
+                    let encoded = runtime.encode_resident_group_fx(
+                        phase.context(),
+                        &mut encoding.encoder,
+                        targets,
+                        &self.pipelines.fx_sampler,
+                        &fx.effect.stages,
+                        &uniforms,
+                        &mut pins,
+                    );
+                    // Pipelines created before a failure are pinned as well.
+                    phase.retain_resource(Arc::new(pins), &[])?;
+                    encoded.map_err(|error| {
+                        composition_fault(
+                            self.context,
+                            self.frame,
+                            NativeGpuFaultKind::StateMismatch,
+                            &format!("resident group FX encoding failed: {error}"),
+                        )
+                    })?;
+                    match (&group.transform, &fx.pack) {
+                        // The same transparent transform step as below, read
+                        // from the FX result texture into the isolated target.
+                        (Some(transform), _) => {
+                            for pipeline in [&self.pipelines.clear, &self.pipelines.composite] {
+                                dispatch(&mut encoding.encoder, pipeline, &transform.bind_group);
+                            }
+                            dispatch(
+                                &mut encoding.encoder,
+                                &self.pipelines.group_straighten,
+                                &group.straighten,
+                            );
+                        }
+                        (None, Some(pack)) => {
+                            dispatch(&mut encoding.encoder, &self.pipelines.fx_pack, pack)
+                        }
+                        (None, None) => unreachable!("an untransformed FX group packs"),
+                    }
+                }
+                if let (Some(transform), None) = (&group.transform, &group.fx) {
                     dispatch(
                         &mut encoding.encoder,
                         &self.pipelines.group_clear,
@@ -1459,6 +1795,21 @@ fn make_group_layer(
     charges: (AllocationCharge, AllocationCharge),
     ids: &mut Vec<GpuAllocationId>,
 ) -> ComposedLayer {
+    let (lookup, params) = group_sampling_buffers(device, sampling, charges, ids);
+    let bind_group = packed_group_bind_group(device, layout, source, target, &params, &lookup);
+    ComposedLayer {
+        bind_group,
+        _lookup: lookup,
+        _params: params,
+    }
+}
+
+fn group_sampling_buffers(
+    device: &wgpu::Device,
+    sampling: &GroupSampling,
+    charges: (AllocationCharge, AllocationCharge),
+    ids: &mut Vec<GpuAllocationId>,
+) -> (NativeChargedBuffer, NativeChargedBuffer) {
     let lookup_bytes = sampling
         .lookup
         .iter()
@@ -1481,7 +1832,43 @@ fn make_group_layer(
         charge: charges.1,
     };
     ids.extend([lookup.allocation_id(), params.allocation_id()]);
-    let bind_group = packed_group_bind_group(device, layout, source, target, &params, &lookup);
+    (lookup, params)
+}
+
+/// A group sampling step whose source is a texture (an FX result): the layer
+/// texture pipelines with the group step's exact lookup and params.
+fn make_texture_group_layer(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    source: &wgpu::TextureView,
+    target: &NativeChargedBuffer,
+    sampling: &GroupSampling,
+    charges: (AllocationCharge, AllocationCharge),
+    ids: &mut Vec<GpuAllocationId>,
+) -> ComposedLayer {
+    let (lookup, params) = group_sampling_buffers(device, sampling, charges, ids);
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Syndocal resident group FX transform"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(source),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: target.buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: params.buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: lookup.buffer.as_entire_binding(),
+            },
+        ],
+    });
     ComposedLayer {
         bind_group,
         _lookup: lookup,
@@ -1596,7 +1983,12 @@ fn prepare_groups(
         if !group.enabled || group.bypassed {
             continue;
         }
-        if entry.executing_fx || !group.opacity.is_finite() || !(0.0..=1.0).contains(&group.opacity)
+        if entry
+            .fx
+            .as_ref()
+            .is_some_and(|fx| !crate::isf_runtime::resident_group_stages(&fx.stages))
+            || !group.opacity.is_finite()
+            || !(0.0..=1.0).contains(&group.opacity)
         {
             return Err(decline);
         }
@@ -1622,14 +2014,17 @@ fn prepare_groups(
         if !resident_composition_layer(&probe) {
             return Err(decline);
         }
-        // Match the canonical organizational group and exact singleton shortcut.
-        if group.opacity == 1.0
+        // Match the canonical organizational group and exact singleton
+        // shortcut; group FX always needs the isolated composite.
+        if entry.fx.is_none()
+            && group.opacity == 1.0
             && group.blend_mode == protocol::VideoBlendMode::Normal
             && transform == protocol::Transform2D::default()
         {
             continue;
         }
-        if members.len() == 1
+        if entry.fx.is_none()
+            && members.len() == 1
             && transform == protocol::Transform2D::default()
             && inputs[members[0]].plan.blend_mode == protocol::VideoBlendMode::Normal
         {
@@ -1658,10 +2053,34 @@ fn prepare_groups(
         {
             return Err(NativeGpuDecline::UnsupportedExtent);
         }
+        // Canonical group FX clocks: the latest member PTS and no duration.
+        let fx = entry.fx.as_ref().map(|effect| {
+            let pts_ms = members
+                .iter()
+                .map(|&i| layers[i].identity.pts_ms)
+                .max()
+                .unwrap_or(0);
+            let clocks = FrozenChainClocks {
+                frame_index: 0,
+                time_seconds_bits: (pts_ms as f32 / 1000.0).to_bits(),
+                time_delta_seconds_bits: 0.0f32.to_bits(),
+                date_bits: effect.date.map(f32::to_bits),
+            };
+            GroupFxEncoding {
+                effect: Arc::clone(effect),
+                clocks,
+                uniforms: crate::isf_runtime::resident_group_uniforms(
+                    &effect.stages,
+                    extent,
+                    clocks,
+                ),
+            }
+        });
         result.push(GroupEncoding {
             members,
             transform: transformed,
             outer,
+            fx,
         });
     }
     Ok(result)
@@ -1707,8 +2126,14 @@ fn composition_allocations(
     if !groups.is_empty() {
         native_allocations.add_new(ChargeKind::CompositionBuffer, output_bytes)?;
     }
-    if groups.iter().any(|group| group.transform.is_some()) {
+    if groups.iter().any(GroupEncoding::needs_transform_target) {
         native_allocations.add_new(ChargeKind::CompositionBuffer, output_bytes)?;
+    }
+    // FX groups share one ping/pong pair; the input is unpacked into pong.
+    if groups.iter().any(|group| group.fx.is_some()) {
+        for _ in 0..2 {
+            native_allocations.add_new(ChargeKind::IsfScratch, output_bytes)?;
+        }
     }
     for group in groups {
         for sampling in group.transform.iter().chain(std::iter::once(&group.outer)) {
@@ -1717,6 +2142,9 @@ fn composition_allocations(
                 sampling.lookup.len() as u64 * 4,
             )?;
             native_allocations.add_new(ChargeKind::CompositionBuffer, LAYER_PARAMS_BYTES)?;
+        }
+        for uniform in group.fx.iter().flat_map(|fx| &fx.uniforms) {
+            native_allocations.add_new(ChargeKind::CompositionBuffer, uniform.len() as u64)?;
         }
     }
     Ok(native_allocations)

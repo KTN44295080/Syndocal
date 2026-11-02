@@ -48,6 +48,11 @@ mod stack_workspace;
 pub(super) use stack_workspace::queue_upload_pitch;
 use stack_workspace::StackWorkspace;
 
+#[path = "isf_resident_group_fx.rs"]
+mod resident_group_fx;
+pub(crate) use resident_group_fx::{
+    resident_group_sampler, resident_group_stages, resident_group_uniforms, ResidentGroupFxTargets,
+};
 #[path = "isf_resident_resources.rs"]
 mod resident_resources;
 #[path = "isf_stack_transaction.rs"]

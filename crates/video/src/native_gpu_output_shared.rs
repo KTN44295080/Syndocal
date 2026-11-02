@@ -869,6 +869,7 @@ impl PendingSharedNativeOutput {
                     composition,
                     &selected,
                     p_reservation,
+                    Some(&mut *runtime),
                 ),
                 Err(error) => Err(error),
             })
