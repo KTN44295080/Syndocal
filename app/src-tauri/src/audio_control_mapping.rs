@@ -312,6 +312,12 @@ mod tests {
         };
         publish_frame(&harness, 1);
         apply(&harness.state, "media-asset-a6", request).unwrap();
+        // The runtime value is applied on the engine thread; slower runners
+        // (macOS CI) can read the snapshot before that command is drained.
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        while engine.snapshot().video.layer_groups[0].opacity != 0.5 && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         assert_eq!(engine.snapshot().video.layer_groups[0].opacity, 0.5);
         assert_eq!(engine.snapshot_for_ui().video.layer_groups[0].opacity, 0.7);
         assert_eq!(

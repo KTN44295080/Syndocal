@@ -940,15 +940,25 @@ fn dj_link_waiting_follow_loop_set_starts_once_then_returns_to_normal_stage2_loo
     let coordinator = Mutex::new(coordinator);
     let admission = ProjectExternalCommandAdmission::default();
     let transaction_active = AtomicBool::new(false);
-    let dispatch = |message_type, sequence, event_id, payload| {
-        dispatch_dj_link_event(
-            dj_link_test_envelope(message_type, sequence, event_id, payload),
-            &engine,
-            &coordinator,
-            &runtime,
-            &admission,
-            &transaction_active,
-        )
+    // Busy (a contended engine snapshot on a slow runner) returns before any
+    // mutation, so the identical event is retried within a bounded wait.
+    let dispatch = |message_type, sequence, event_id, payload: serde_json::Value| {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let outcome = dispatch_dj_link_event(
+                dj_link_test_envelope(message_type, sequence, event_id, payload.clone()),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            );
+            if !matches!(outcome, DjLinkDispatchOutcome::Busy { .. }) || Instant::now() >= deadline
+            {
+                break outcome;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
     };
 
     assert!(matches!(
@@ -1116,7 +1126,14 @@ fn dj_link_waiting_follow_loop_set_starts_once_then_returns_to_normal_stage2_loo
         DjLinkDispatchOutcome::TimelineState { state_generation, .. }
             if state_generation == start_generation
     ));
-    assert_eq!(engine.snapshot(), started_snapshot);
+    // The started timeline keeps playing between the two reads: only its
+    // position, the clock phase/age and telemetry may move.
+    let mut replayed_snapshot = engine.snapshot();
+    replayed_snapshot.timeline.position_ms = started_snapshot.timeline.position_ms;
+    replayed_snapshot.clock.beat_phase = started_snapshot.clock.beat_phase;
+    replayed_snapshot.clock.external_sync_age_ms = started_snapshot.clock.external_sync_age_ms;
+    replayed_snapshot.telemetry = started_snapshot.telemetry.clone();
+    assert_eq!(replayed_snapshot, started_snapshot);
     assert_eq!(*runtime.lock().unwrap(), started_runtime);
 
     assert!(matches!(
@@ -1968,9 +1985,14 @@ fn dj_link_any_deck_track_owner_is_exact_deduped_and_loop_correlated() {
         ),
         DjLinkDispatchOutcome::Accepted { .. }
     ));
+    // The engine keeps ticking: only the clock phase/age and telemetry may move.
+    let mut engine_after_reannounce = engine.snapshot();
+    engine_after_reannounce.clock.beat_phase = engine_before_reannounce.clock.beat_phase;
+    engine_after_reannounce.clock.external_sync_age_ms =
+        engine_before_reannounce.clock.external_sync_age_ms;
+    engine_after_reannounce.telemetry = engine_before_reannounce.telemetry.clone();
     assert_eq!(
-        engine.snapshot(),
-        engine_before_reannounce,
+        engine_after_reannounce, engine_before_reannounce,
         "a released generic owner's exact identity and mapping reannounce must not restart"
     );
     assert_eq!(

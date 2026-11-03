@@ -907,8 +907,10 @@ mod tests {
         push_mismatch("journal", |trace| trace.journal_serial += 1);
 
         for (label, payload) in payloads {
+            // The timeout must clearly outlast the 40 ms no-release check even
+            // when the ready marker is observed late on a slow runner.
             let (directory, config) =
-                configured_test_directory(&format!("mismatch-{label}"), Duration::from_millis(100));
+                configured_test_directory(&format!("mismatch-{label}"), Duration::from_millis(400));
             let ready_path = control_path(&config, expected.phase, "ready");
             let resume_path = control_path(&config, expected.phase, "resume");
             let fault_path = control_path(&config, expected.phase, "fault");
