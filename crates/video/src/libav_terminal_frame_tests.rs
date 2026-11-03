@@ -125,6 +125,8 @@ fn eof_run_keeps_shared_terminal_pixels_during_full_wrap_predecode() {
         clip_end: false,
         wrap_until_ms: 91,
         wrap_cover_ms: 25,
+        rgba_spare: None,
+        rgba_spare_in_decode: false,
     });
     let (tx, rx) = std::sync::mpsc::channel();
     let (result, _) =
@@ -194,6 +196,8 @@ fn eof_wrap_predecode_shares_the_allowance_with_untaken_clip_end_frames() {
         clip_end: false,
         wrap_until_ms: 91,
         wrap_cover_ms: 25,
+        rgba_spare: None,
+        rgba_spare_in_decode: false,
     });
     let (tx, _rx) = std::sync::mpsc::channel();
     let (result, _) =
@@ -215,6 +219,88 @@ fn eof_wrap_predecode_shares_the_allowance_with_untaken_clip_end_frames() {
         "the first request after the wrap is covered: {pts:?}"
     );
     drop(session);
+    drop(decoder);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn wrap_predecode_observes_stride_widening_before_its_stop_decision() {
+    let path = std::env::temp_dir().join(format!("syndocal-wrap-widen-{}.mkv", std::process::id()));
+    let ffmpeg = std::env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
+    let output = std::process::Command::new(ffmpeg)
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=48x32:rate=60:duration=1",
+            "-c:v",
+            "ffv1",
+            "-g",
+            "10",
+            "-y",
+        ])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = request(Some(&path));
+    let mut decoder = LibavFrameDecoder::software_for_tests();
+    let terminal = decoder
+        .decode_tick(&[VideoRenderInput::legacy(request.clone())], false)
+        .pop()
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let mut session = decoder.sessions.pop().unwrap();
+    let control = Arc::new(std::sync::Mutex::new(LibavRunControl {
+        until_ms: 1100,
+        limit: 4,
+        outstanding: 2,
+        finished: false,
+        clip_end: true,
+        wrap_until_ms: 57,
+        wrap_cover_ms: 25,
+        rgba_spare: None,
+        rgba_spare_in_decode: false,
+    }));
+    let owner = Arc::clone(&control);
+    LIBAV_WRAP_FRAME_HOOK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move |count| {
+            if count == 2 {
+                let mut control = lock_run_control(&owner);
+                control.wrap_until_ms = 81;
+                control.wrap_cover_ms = 49;
+            }
+        }))
+    });
+    let wrap = predecode_clip_start(&request, &mut session, &control, &mut 0);
+    LIBAV_WRAP_FRAME_HOOK.with(|hook| *hook.borrow_mut() = None);
+    assert!(
+        lock_run_control(&control).finished,
+        "completion closes the window atomically"
+    );
+    session.wrap = Some(wrap.expect("a widened first post-wrap request must be covered"));
+    let frame = session
+        .take_wrapped(40)
+        .expect("no on-demand rewind for the widened stride");
+    assert_eq!(frame.pts_ms, 50);
+    let mut oracle = LibavFrameDecoder::software_for_tests();
+    let mut first_wrap = request.clone();
+    first_wrap.position_ms = 40;
+    let expected = oracle
+        .decode_input_frame(&VideoRenderInput::legacy(first_wrap))
+        .unwrap()
+        .unwrap();
+    assert_eq!(frame.as_ref(), &expected);
+    assert_eq!(terminal.pts_ms, 983);
+    drop(session);
+    drop(oracle);
     drop(decoder);
     std::fs::remove_file(path).unwrap();
 }

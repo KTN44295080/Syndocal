@@ -30,6 +30,16 @@ mod hardware;
 #[path = "libav_scaler.rs"]
 mod scaler;
 
+#[cfg(feature = "libav")]
+#[path = "libav_rgba_reuse.rs"]
+mod rgba_reuse;
+#[cfg(feature = "libav")]
+use rgba_reuse::ReturnedRgba;
+
+#[cfg(all(feature = "libav", test))]
+#[path = "libav_rgba_reuse_tests.rs"]
+mod rgba_reuse_tests;
+
 #[cfg(all(feature = "libav", test))]
 #[path = "libav_seek_projection_tests.rs"]
 mod seek_projection_tests;
@@ -127,6 +137,7 @@ thread_local! {
 thread_local! {
     static LIBAV_SCALER_CREATION_COUNT: Cell<usize> = const { Cell::new(0) };
     static LIBAV_RGBA_ROW_COPIES: Cell<usize> = const { Cell::new(0) };
+    static LIBAV_WRAP_FRAME_HOOK: RefCell<Option<Box<dyn FnMut(usize)>>> = const { RefCell::new(None) };
 }
 
 pub struct LibavFrameDecoder {
@@ -211,6 +222,8 @@ struct LibavFrameCacheEntry {
     signature: StillImageSignature,
     /// Shared with the renderer, so reusing a frame never copies it.
     frame: Arc<VideoFrame>,
+    #[cfg(feature = "libav")]
+    rgba_returns: rgba_reuse::RetiredRgba,
 }
 
 /// What `prepare_decode` leaves for the frame decode.
@@ -286,10 +299,25 @@ struct LibavRunControl {
     /// the first requests after the loop wrap are covered with the same one
     /// source frame of slack as any other run.
     wrap_until_ms: u64,
-    /// The part of the wrap window without that slack: the first request
-    /// after the wrap is always covered, even when the owner still holds
-    /// clip-end frames that use up its allowance.
+    /// First post-wrap request coverage, without source-frame slack.
     wrap_cover_ms: u64,
+    /// One unused displaced allocation across this control and its session.
+    rgba_spare: Option<ReturnedRgba>,
+    /// A returned allocation checked out to the worker's next projection.
+    /// Kept until its existing post-decode lock, so hand-back never installs
+    /// another unused buffer while the session still owns one.
+    rgba_spare_in_decode: bool,
+}
+
+#[cfg(feature = "libav")]
+impl LibavRunControl {
+    /// Move only an admitted spare under the control lock. The caller keeps
+    /// rejected storage and frees it after releasing the guard.
+    fn accept_returned_rgba(&mut self, returned: &mut Option<ReturnedRgba>) {
+        if self.rgba_spare.is_none() && !self.rgba_spare_in_decode {
+            self.rgba_spare = returned.take();
+        }
+    }
 }
 
 #[cfg(feature = "libav")]
@@ -321,15 +349,28 @@ impl LibavLookahead {
 
     /// Takes the first ready frame at or after `target_ms` (dropping the
     /// ones before it) and returns their number to the run's allowance.
-    fn take_ready(&mut self, target_ms: u64) -> Option<Arc<VideoFrame>> {
+    fn take_ready(
+        &mut self,
+        target_ms: u64,
+        cached: &mut Arc<VideoFrame>,
+        extent: (u32, u32),
+        retired: &mut rgba_reuse::RetiredRgba,
+    ) -> Option<Arc<VideoFrame>> {
         let before = self.ready.len();
         let frame = take_first_at_or_after(&mut self.ready, target_ms)?;
+        let displaced = std::mem::replace(cached, Arc::clone(&frame));
+        let mut returned = retired.retire(displaced, extent);
         if let Some(control) = self.control.as_ref() {
             let mut control = lock_run_control(control);
             control.outstanding = control
                 .outstanding
                 .saturating_sub(before - self.ready.len());
+            // Move an admitted spare under the lock already required by
+            // taking a streamed frame. Rejected pixel storage drops below,
+            // after the guard, and adds no lock acquisition.
+            control.accept_returned_rgba(&mut returned);
         }
+        drop(returned);
         Some(frame)
     }
 }
@@ -449,6 +490,8 @@ struct LibavDecodeSession {
     /// a hint: a run whose frame reaches it reads on to the real clip end, so
     /// the clip start is decoded ahead well before the loop wrap.
     end_ms: Option<u64>,
+    /// Sole unused allocation for this input while no look-ahead is running.
+    rgba_spare: Option<ReturnedRgba>,
 }
 
 /// The clip start decoded ahead by a run that reached the clip end. Rewinding
@@ -673,16 +716,59 @@ impl LibavFrameDecoder {
 
     #[cfg(any(feature = "libav", test))]
     fn replace_layer_cache_entry(&mut self, entry: LibavFrameCacheEntry) {
+        #[cfg(feature = "libav")]
+        let mut entry = entry;
         self.touch_input(entry.key, entry.layer_id);
-        self.entries.retain(|cached| {
-            !render_input_cache_owner_matches(
-                entry.key,
-                entry.layer_id,
-                cached.key,
-                cached.layer_id,
-            )
-        });
+        while let Some(index) = self.entries.iter().position(|cached| {
+            render_input_cache_owner_matches(entry.key, entry.layer_id, cached.key, cached.layer_id)
+        }) {
+            let displaced = self.entries.remove(index);
+            #[cfg(feature = "libav")]
+            if displaced.path == entry.path
+                && displaced.signature == entry.signature
+                && displaced.width == entry.width
+                && displaced.height == entry.height
+            {
+                entry.rgba_returns = displaced.rgba_returns;
+                if !Arc::ptr_eq(&displaced.frame, &entry.frame) {
+                    let returned = entry
+                        .rgba_returns
+                        .retire(displaced.frame, (entry.width, entry.height));
+                    self.return_rgba_allocation(
+                        entry.key,
+                        entry.layer_id,
+                        returned,
+                        (entry.width, entry.height),
+                    );
+                }
+            }
+            #[cfg(not(feature = "libav"))]
+            drop(displaced);
+        }
         self.entries.push(entry);
+    }
+
+    /// Hand an exclusively displaced allocation to its existing input owner.
+    /// No shared Arc is retained. A busy worker receives storage only through
+    /// take_ready, under its existing allowance lock; this path never locks.
+    #[cfg(feature = "libav")]
+    fn return_rgba_allocation(
+        &mut self,
+        key: protocol::VideoRenderInputKey,
+        layer_id: VideoLayerId,
+        mut returned: Option<ReturnedRgba>,
+        extent: (u32, u32),
+    ) {
+        if returned.is_none() {
+            return;
+        }
+        if let Some(index) = self.session_index(key, layer_id) {
+            let session = &mut self.sessions[index];
+            if (session.width, session.height) == extent && session.rgba_spare.is_none() {
+                session.rgba_spare = returned.take();
+            }
+        }
+        drop(returned);
     }
 
     fn evict_input_state(&mut self, key: protocol::VideoRenderInputKey, layer_id: VideoLayerId) {
@@ -1097,6 +1183,8 @@ impl LibavFrameDecoder {
                         position_ms: request.position_ms,
                         signature,
                         frame: Arc::clone(&next),
+                        #[cfg(feature = "libav")]
+                        rgba_returns: Default::default(),
                     });
                     return LibavPrepared::Done(Ok(Some(next)));
                 }
@@ -1118,6 +1206,8 @@ impl LibavFrameDecoder {
                         position_ms: request.position_ms,
                         signature,
                         frame: Arc::clone(&last),
+                        #[cfg(feature = "libav")]
+                        rgba_returns: Default::default(),
                     });
                     return LibavPrepared::Done(Ok(Some(last)));
                 }
@@ -1149,6 +1239,8 @@ impl LibavFrameDecoder {
                     position_ms: request.position_ms,
                     signature,
                     frame: Arc::clone(&frame),
+                    #[cfg(feature = "libav")]
+                    rgba_returns: Default::default(),
                 });
                 return LibavPrepared::Done(Ok(Some(frame)));
             }
@@ -1315,13 +1407,17 @@ impl LibavFrameDecoder {
             let streamed = self.lookaheads[pending_index].receive_streamed();
             self.count_streamed_lookahead_frames(streamed);
             let pending = &mut self.lookaheads[pending_index];
-            if let Some(frame) = pending.take_ready(request.position_ms) {
+            let entry = &mut self.entries[entry_index];
+            if let Some(frame) = pending.take_ready(
+                request.position_ms,
+                &mut entry.frame,
+                (request.width, request.height),
+                &mut entry.rgba_returns,
+            ) {
                 pending.served_pts_ms = frame.pts_ms;
                 // join() restores this value, as for a covered tick.
                 pending.last_request_ms = Some(request.position_ms);
-                let entry = &mut self.entries[entry_index];
                 entry.position_ms = request.position_ms;
-                entry.frame = Arc::clone(&frame);
                 self.touch_input(input.key, request.layer_id);
                 self.session_counters.sequential_continues =
                     self.session_counters.sequential_continues.saturating_add(1);
@@ -1673,6 +1769,8 @@ impl LibavFrameDecoder {
             clip_end: false,
             wrap_until_ms,
             wrap_cover_ms,
+            rgba_spare: None,
+            rgba_spare_in_decode: session.rgba_spare.is_some(),
         }));
         let worker_control = Arc::clone(&control);
         let (frames_sender, frames) = std::sync::mpsc::channel();
@@ -1741,6 +1839,8 @@ impl LibavFrameDecoder {
             clip_end: true,
             wrap_until_ms,
             wrap_cover_ms,
+            rgba_spare: None,
+            rgba_spare_in_decode: session.rgba_spare.is_some(),
         }));
         let worker_control = Arc::clone(&control);
         let (frames_sender, frames) = std::sync::mpsc::channel::<Arc<VideoFrame>>();
@@ -1963,6 +2063,8 @@ impl LibavFrameDecoder {
             position_ms: request.position_ms,
             signature,
             frame: Arc::clone(&frame),
+            #[cfg(feature = "libav")]
+            rgba_returns: Default::default(),
         });
         Ok(Some(frame))
     }
@@ -2279,6 +2381,7 @@ fn open_libav_session_with_stop(
         wrap: None,
         wrap_attempted: false,
         end_ms,
+        rgba_spare: None,
     })
 }
 
@@ -2445,6 +2548,10 @@ fn run_libav_lookahead(
                 .is_ok_and(|frame| frame.pts_ms == base.pts_ms);
         let continues = {
             let mut control = lock_run_control(control);
+            if session.rgba_spare.is_none() {
+                session.rgba_spare = control.rgba_spare.take();
+            }
+            control.rgba_spare_in_decode = session.rgba_spare.is_some();
             // Only a timestamped frame past the base continues the run (a
             // frame without one is labelled base + 1 and is rejected).
             // A frame near the stream's declared end reads on to the real end
@@ -2511,10 +2618,13 @@ fn predecode_clip_start(
     control: &std::sync::Mutex<LibavRunControl>,
     hardware_frames: &mut u64,
 ) -> Option<LibavWrapAhead> {
-    let (until_ms, cover_ms, limit) = {
-        let control = lock_run_control(control);
-        (control.wrap_until_ms, control.wrap_cover_ms, control.limit)
-    };
+    {
+        let mut control = lock_run_control(control);
+        if session.rgba_spare.is_none() {
+            session.rgba_spare = control.rgba_spare.take();
+        }
+        control.rgba_spare_in_decode = session.rgba_spare.is_some();
+    }
     let logical = (
         session.eof_sent,
         session.decoder_drained,
@@ -2541,15 +2651,28 @@ fn predecode_clip_start(
             break false;
         }
         frames.push_back((Arc::clone(&frame), session.last_key_frame));
-        if frame.pts_ms >= until_ms || frames.len() >= limit.max(1) {
-            break true;
-        }
-        // The queue shares the owner's allowance with the clip-end frames it
-        // has not taken yet. Holding both in full put a second allowance of
-        // output-sized frames per layer in memory around every wrap (C5 soak,
-        // 2026-11-03: +185 MiB for three 2560x1600 layers).
-        let outstanding = lock_run_control(control).outstanding;
-        if frame.pts_ms >= cover_ms && frames.len().saturating_add(outstanding) >= limit {
+        #[cfg(test)]
+        LIBAV_WRAP_FRAME_HOOK.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().as_mut() {
+                hook(frames.len());
+            }
+        });
+        // The owner may widen the stride while this worker is decoding.
+        // Read the window and shared allowance together at each decision.
+        let complete = {
+            let mut control = lock_run_control(control);
+            let complete = frame.pts_ms >= control.wrap_until_ms
+                || frames.len() >= control.limit.max(1)
+                || (frame.pts_ms >= control.wrap_cover_ms
+                    && frames.len().saturating_add(control.outstanding) >= control.limit);
+            // A later extension must join this ended run, not widen a window
+            // the worker has already stopped decoding.
+            if complete {
+                control.finished = true;
+            }
+            complete
+        };
+        if complete {
             break true;
         }
         request.position_ms = frame.pts_ms.saturating_add(1);
@@ -2662,6 +2785,7 @@ fn decode_libav_session_frame_inner(
         &mut candidate,
         &session.stop,
         &mut session.last_key_frame,
+        &mut session.rgba_spare,
     )?;
     session.decoder_drained = received.decoder_drained;
     if let Some(frame) = received.frame {
@@ -2669,13 +2793,14 @@ fn decode_libav_session_frame_inner(
         return Ok(Arc::new(frame));
     }
     if session.decoder_drained {
-        let frame = finish_decoded_candidate_with_stop(
+        let frame = finish_decoded_candidate_with_spare(
             request,
             candidate,
             terminal_frame,
             session.hardware,
             hardware_frames,
             &session.stop,
+            &mut session.rgba_spare,
         )?;
         session.last_request_ms = Some(request.position_ms);
         return Ok(frame);
@@ -2713,6 +2838,7 @@ fn decode_libav_session_frame_inner(
             &mut candidate,
             &session.stop,
             &mut session.last_key_frame,
+            &mut session.rgba_spare,
         )?;
         session.decoder_drained = received.decoder_drained;
         if let Some(frame) = received.frame {
@@ -2737,19 +2863,21 @@ fn decode_libav_session_frame_inner(
         &mut candidate,
         &session.stop,
         &mut session.last_key_frame,
+        &mut session.rgba_spare,
     )?;
     session.decoder_drained = received.decoder_drained;
     if let Some(frame) = received.frame {
         session.last_request_ms = Some(request.position_ms);
         return Ok(Arc::new(frame));
     }
-    let frame = finish_decoded_candidate_with_stop(
+    let frame = finish_decoded_candidate_with_spare(
         request,
         candidate,
         terminal_frame,
         session.hardware,
         hardware_frames,
         &session.stop,
+        &mut session.rgba_spare,
     )?;
     session.last_request_ms = Some(request.position_ms);
     Ok(frame)
@@ -2769,6 +2897,7 @@ fn project_decoded_frame(
     hardware: bool,
     hardware_frames: &mut u64,
     stop: &StopState,
+    rgba_spare: &mut Option<ReturnedRgba>,
 ) -> Result<VideoFrame, VideoDecodeError> {
     stop.check()?;
     let transferred = hardware::transfer(request, hardware, decoded)?;
@@ -2785,7 +2914,11 @@ fn project_decoded_frame(
     if scaler.packed_rows_aligned() {
         #[cfg(feature = "qa-native-frame-timing")]
         let alloc_work = demand_timing::work_phase(demand_timing::DecoderWorkPhase::AllocCopy);
-        let mut data = vec![0; rgba_frame_len(request)?];
+        let mut data = rgba_reuse::destination(
+            rgba_spare,
+            (request.width, request.height),
+            rgba_frame_len(request)?,
+        );
         #[cfg(feature = "qa-native-frame-timing")]
         drop(alloc_work);
         if scaler.writes_in_place(&data) {
@@ -2799,6 +2932,11 @@ fn project_decoded_frame(
             stop.check()?;
             return Ok(rgba_video_frame(request, pts_ms, data));
         }
+        // Keep the same initialized allocation for the row-copy fallback.
+        *rgba_spare = Some(ReturnedRgba::from_buffer(
+            data,
+            (request.width, request.height),
+        ));
     }
     #[cfg(feature = "qa-native-frame-timing")]
     let scale_work = demand_timing::work_phase(demand_timing::DecoderWorkPhase::Swscale);
@@ -2809,7 +2947,7 @@ fn project_decoded_frame(
     #[cfg(feature = "qa-native-frame-timing")]
     drop(scale_work);
     stop.check()?;
-    copy_rgba_frame_with_stop(request, &rgba, pts_ms, stop)
+    copy_rgba_frame_with_stop(request, &rgba, pts_ms, stop, rgba_spare)
 }
 
 #[cfg(all(feature = "libav", test))]
@@ -2821,18 +2959,20 @@ fn finish_decoded_candidate(
     hardware_frames: &mut u64,
 ) -> Result<VideoFrame, VideoDecodeError> {
     let terminal_frame = terminal_frame.cloned().map(Arc::new);
-    finish_decoded_candidate_with_stop(
+    finish_decoded_candidate_with_spare(
         request,
         candidate,
         terminal_frame.as_ref(),
         hardware,
         hardware_frames,
         &StopState::new(None),
+        &mut None,
     )
     .map(Arc::unwrap_or_clone)
 }
 
-#[cfg(feature = "libav")]
+/// Existing EOF ownership tests use the no-spare form of the same policy.
+#[cfg(all(feature = "libav", test))]
 fn finish_decoded_candidate_with_stop(
     request: &VideoFrameRequest,
     candidate: Option<DecodedCandidate>,
@@ -2840,6 +2980,27 @@ fn finish_decoded_candidate_with_stop(
     hardware: bool,
     hardware_frames: &mut u64,
     stop: &StopState,
+) -> Result<Arc<VideoFrame>, VideoDecodeError> {
+    finish_decoded_candidate_with_spare(
+        request,
+        candidate,
+        terminal_frame,
+        hardware,
+        hardware_frames,
+        stop,
+        &mut None,
+    )
+}
+
+#[cfg(feature = "libav")]
+fn finish_decoded_candidate_with_spare(
+    request: &VideoFrameRequest,
+    candidate: Option<DecodedCandidate>,
+    terminal_frame: Option<&Arc<VideoFrame>>,
+    hardware: bool,
+    hardware_frames: &mut u64,
+    stop: &StopState,
+    rgba_spare: &mut Option<ReturnedRgba>,
 ) -> Result<Arc<VideoFrame>, VideoDecodeError> {
     stop.check()?;
     match candidate {
@@ -2850,6 +3011,7 @@ fn finish_decoded_candidate_with_stop(
             hardware,
             hardware_frames,
             stop,
+            rgba_spare,
         )
         .map(Arc::new),
         // EOF reuses the exact immutable frame. In particular, a look-ahead
@@ -2872,6 +3034,7 @@ fn receive_target_frame(
     candidate: &mut Option<DecodedCandidate>,
     stop: &StopState,
     key_frame: &mut bool,
+    rgba_spare: &mut Option<ReturnedRgba>,
 ) -> Result<LibavReceiveResult, VideoDecodeError> {
     use ffmpeg_next::error::EAGAIN;
     use ffmpeg_next::util::frame::video::Video;
@@ -2907,6 +3070,7 @@ fn receive_target_frame(
                         hardware,
                         hardware_frames,
                         stop,
+                        rgba_spare,
                     )?;
                     return Ok(LibavReceiveResult {
                         frame: Some(frame),
@@ -2945,7 +3109,7 @@ fn copy_rgba_frame(
     frame: &ffmpeg_next::util::frame::video::Video,
     pts_ms: u64,
 ) -> Result<VideoFrame, VideoDecodeError> {
-    copy_rgba_frame_with_stop(request, frame, pts_ms, &StopState::new(None))
+    copy_rgba_frame_with_stop(request, frame, pts_ms, &StopState::new(None), &mut None)
 }
 
 #[cfg(feature = "libav")]
@@ -2954,6 +3118,7 @@ fn copy_rgba_frame_with_stop(
     frame: &ffmpeg_next::util::frame::video::Video,
     pts_ms: u64,
     stop: &StopState,
+    rgba_spare: &mut Option<ReturnedRgba>,
 ) -> Result<VideoFrame, VideoDecodeError> {
     stop.check()?;
     #[cfg(feature = "qa-native-frame-timing")]
@@ -2966,7 +3131,7 @@ fn copy_rgba_frame_with_stop(
     let data_len = rgba_frame_len(request)?;
     let source = frame.data(0);
     let stride = frame.stride(0);
-    let mut data = vec![0; data_len];
+    let mut data = rgba_reuse::destination(rgba_spare, (request.width, request.height), data_len);
     for row in 0..request.height as usize {
         stop.check()?;
         let source_start = row
@@ -3115,6 +3280,8 @@ mod tests {
                 format: crate::VideoPixelFormat::Rgba8,
                 data: vec![token],
             }),
+            #[cfg(feature = "libav")]
+            rgba_returns: Default::default(),
         }
     }
 
