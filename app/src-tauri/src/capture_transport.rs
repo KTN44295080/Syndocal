@@ -550,6 +550,7 @@ fn driver_error(message: impl Into<String>) -> video::ExternalVideoTransportDriv
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "windows")]
     use std::process::Command;
 
     fn arg_strings(args: &[OsString]) -> Vec<String> {

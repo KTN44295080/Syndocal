@@ -2361,7 +2361,8 @@ impl OutputLeaseKeepaliveFailStopPorts for ProductionKeepaliveFailStopPorts<'_> 
             protocol::MachineOutputRole::Standby,
             #[cfg(any(
                 feature = "ndi",
-                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64"),
+                all(feature = "syphon", target_os = "macos")
             ))]
             None,
         ) {
