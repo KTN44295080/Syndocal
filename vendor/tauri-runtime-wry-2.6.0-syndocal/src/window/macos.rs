@@ -6,6 +6,9 @@ use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
 use objc2_foundation::MainThreadMarker;
 use tao::platform::macos::WindowExtMacOS;
 
+// The pinned objc2-app-kit marks these NSWindow sheet calls safe; keep the
+// upstream blocks so older bindings still compile, without failing -D warnings.
+#[allow(unused_unsafe)]
 impl super::WindowExt for tao::window::Window {
   // based on electron implementation
   // https://github.com/electron/electron/blob/15db63e26df3e3d59ce6281f030624f746518511/shell/browser/native_window_mac.mm#L474
