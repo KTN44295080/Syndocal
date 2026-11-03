@@ -64,6 +64,21 @@ test('rejects ambiguous rpath resolution and system-path traversal', () => {
   assert.throws(() => validateMachO(xs, exe, '12'), /ambiguous/);
   assert.throws(() => validateMachO([image(exe, { dependencies: ['/usr/lib/../../tmp/evil.dylib'] })], exe, '12'));
 });
+test('resolves reviewed framework symlinks and accepts the universal Syphon framework', () => {
+  const binary = 'Contents/Frameworks/Syphon.framework/Versions/A/Syphon';
+  const xs = graph(); xs[0].dependencies.push('@rpath/Syphon.framework/Syphon');
+  xs.push(image(binary, { architectures: ['arm64', 'x86_64'] }));
+  const links = new Map([
+    ['Contents/Frameworks/Syphon.framework/Syphon', 'Contents/Frameworks/Syphon.framework/Versions/Current/Syphon'],
+    ['Contents/Frameworks/Syphon.framework/Versions/Current', 'Contents/Frameworks/Syphon.framework/Versions/A'],
+  ]);
+  assert.equal(validateMachO(xs, exe, '12', links).length, 2);
+  assert.throws(() => validateMachO(xs, exe, '12'), /Unresolved/);
+  xs[2].architectures = ['x86_64'];
+  assert.throws(() => validateMachO(xs, exe, '12', links), /arm64-only/);
+  const universalLib = graph(); universalLib[1].architectures = ['arm64', 'x86_64'];
+  assert.throws(() => validateMachO(universalLib, exe, '12'), /arm64-only/);
+});
 const session = { root: '/owned', mount: '/owned/volume', mountAttempted: true };
 function cleanupFixture() {
   let mounted = true; const calls = [];

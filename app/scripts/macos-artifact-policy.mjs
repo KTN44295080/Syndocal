@@ -76,11 +76,18 @@ function isSystemLibrary(value) {
   const normalized = p.normalize(value);
   return normalized.startsWith('/usr/lib/') || normalized.startsWith('/System/Library/');
 }
-export function validateMachO(images, executable, minimum) {
+// links: reviewed in-framework symlinks, bundle-relative link -> target.
+export function validateMachO(images, executable, minimum, links = new Map()) {
   const byPath = new Map(images.map(image => [image.path, image]));
   requireCondition(byPath.size === images.length && byPath.has(executable), 'Missing/duplicate Mach-O executable');
   for (const image of images) {
-    requireCondition(image.architectures.length === 1 && image.architectures[0] === 'arm64', `Not arm64-only: ${image.path}`);
+    // The pinned Syphon.framework is built universal; any other slice set or
+    // any non-framework image must be arm64-only.
+    const universalFramework = image.path.includes('.framework/')
+      && image.architectures.length === 2 && image.architectures.includes('arm64')
+      && image.architectures.includes('x86_64');
+    requireCondition(universalFramework || (image.architectures.length === 1 && image.architectures[0] === 'arm64'),
+      `Not arm64-only: ${image.path}`);
     requireCondition(compareVersions(image.minimum, minimum) <= 0, `Minimum OS too new: ${image.path}: ${image.minimum}`);
   }
   const visited = new Set(), reachable = new Set(), edges = [];
@@ -101,7 +108,8 @@ export function validateMachO(images, executable, minimum) {
         candidates = [expandPath(dependency, file, executable)];
       }
       requireCondition(candidates.every(insideContents), `Dependency escapes bundle: ${dependency}`);
-      const matches = [...new Set(candidates.filter(candidate => byPath.has(candidate)))];
+      const matches = [...new Set(candidates.map(candidate => resolveLinks(candidate, links))
+        .filter(candidate => byPath.has(candidate)))];
       requireCondition(matches.length === 1, `Unresolved/ambiguous dependency: ${file} -> ${dependency}`);
       edges.push({ from: file, dependency, resolved: matches[0] });
       queue.push({ file: matches[0], inherited: roots });
@@ -109,6 +117,17 @@ export function validateMachO(images, executable, minimum) {
   }
   requireCondition(reachable.size === images.length, 'Unreachable Mach-O payload requires explicit loader support');
   return edges;
+}
+
+function resolveLinks(file, links) {
+  for (let depth = 0; depth < 8; depth++) {
+    const parts = file.split('/');
+    const prefix = parts.findIndex((_, i) => links.has(parts.slice(0, i + 1).join('/')));
+    if (prefix < 0) return file;
+    const link = parts.slice(0, prefix + 1).join('/');
+    file = p.join(links.get(link), ...parts.slice(prefix + 1));
+  }
+  requireCondition(false, `Framework symlink chain too deep: ${file}`);
 }
 
 // Unknown mount metadata must never authorize deletion of the mount directory.

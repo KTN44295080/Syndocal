@@ -14,8 +14,26 @@ export async function inspectInfo(app, expected, run) {
   return { version: info.CFBundleShortVersionString, buildVersion: info.CFBundleVersion,
     identifier: info.CFBundleIdentifier, minimum: info.LSMinimumSystemVersion };
 }
+// Only the standard versioned-framework links (Headers, Resources, the binary,
+// Versions/Current) are accepted: relative, inside their own .framework, and
+// never followed by the walk, which inspects the real Versions/<v> files.
+export async function requireFrameworkSymlink(file) {
+  const parts = file.split(path.sep);
+  const index = parts.findLastIndex((part) => part.endsWith('.framework'));
+  requireCondition(index >= 0 && index < parts.length - 1,
+    `Bundle symlink outside a framework needs explicit containment review: ${file}`);
+  const framework = parts.slice(0, index + 1).join(path.sep);
+  const target = await fs.readlink(file);
+  requireCondition(!path.isAbsolute(target), `Absolute framework symlink: ${file}`);
+  const resolved = path.resolve(path.dirname(file), target);
+  requireCondition(resolved.startsWith(framework + path.sep),
+    `Framework symlink escapes its framework: ${file}`);
+  await fs.lstat(resolved).catch(() => requireCondition(false, `Dangling framework symlink: ${file}`));
+  return resolved;
+}
 export async function inspectMachO(app, minimum, run) {
-  const images = [], pending = [app];
+  const images = [], pending = [app], links = new Map();
+  const relative = (file) => path.relative(app, file).split(path.sep).join('/');
   let entries = 0;
   const magic = new Set([0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe,
     0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca]);
@@ -24,7 +42,10 @@ export async function inspectMachO(app, minimum, run) {
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       requireCondition(++entries <= 4096, 'Bundle entry limit exceeded');
       const file = path.join(directory, entry.name);
-      requireCondition(!entry.isSymbolicLink(), `Bundle symlink needs explicit containment review: ${file}`);
+      if (entry.isSymbolicLink()) {
+        links.set(relative(file), relative(await requireFrameworkSymlink(file)));
+        continue;
+      }
       if (entry.isDirectory()) { pending.push(file); continue; }
       requireCondition(entry.isFile(), `Unexpected bundle entry: ${file}`);
       const handle = await fs.open(file, 'r');
@@ -41,7 +62,8 @@ export async function inspectMachO(app, minimum, run) {
       images.push({ path: path.relative(app, file).split(path.sep).join('/'), architectures, ...commands });
     }
   }
-  return { images, dependencies: validateMachO(images, 'Contents/MacOS/syndocal', minimum) };
+  return { images, links: Object.fromEntries(links),
+    dependencies: validateMachO(images, 'Contents/MacOS/syndocal', minimum, links) };
 }
 export async function inspectSignature(app, run) {
   await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', '--verbose=2', app]);
