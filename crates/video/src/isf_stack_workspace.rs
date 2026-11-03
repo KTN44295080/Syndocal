@@ -4,7 +4,8 @@ use super::GpuImage;
 // Reviewed against wgpu-{core,hal} 25.0.2 (see the lock-version regression).
 // Called once while creating the runtime, never on the rendering hot path.
 pub(in crate::isf_runtime) fn queue_upload_pitch(adapter: &wgpu::Adapter) -> Option<u64> {
-    let pitch = match adapter.get_info().backend {
+    // Typed: off the Vulkan targets every arm is a bare literal or None.
+    let pitch: u64 = match adapter.get_info().backend {
         wgpu::Backend::Vulkan => {
             #[cfg(any(
                 windows,
