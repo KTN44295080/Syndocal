@@ -426,7 +426,7 @@ fn operator_return_mapping_publication_core_preserves_intent_retires_owner_and_a
         panic!("the fresh mapped candidate must be admitted after publication");
     };
     assert_eq!(state_generation, 23);
-    assert_eq!(harness.state.engine.snapshot(), engine_before);
+    assert_engine_snapshot_unchanged(harness.state.engine.snapshot(), &engine_before, "");
     let runtime = harness.state.dj_link_runtime.lock().unwrap();
     assert!(runtime.track_active);
     assert!(!runtime.released);
@@ -558,7 +558,7 @@ fn operator_return_reannouncement_claims_the_same_timeline_without_transport_mut
         panic!("operator return candidate must claim the existing Timeline");
     };
     assert_eq!(state_generation, 10);
-    assert_eq!(engine.snapshot(), engine_before);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &engine_before, "");
     assert!(runtime.track_active);
     assert!(!runtime.released);
     assert_eq!(
@@ -1056,7 +1056,7 @@ fn dj_link_waiting_follow_loop_set_starts_once_then_returns_to_normal_stage2_loo
         DjLinkDispatchOutcome::Rejected { ref code, .. }
             if code == "timeline_waiting_pedal_context_mismatch"
     ));
-    assert_eq!(engine.snapshot(), waiting_snapshot);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &waiting_snapshot, "");
     assert_eq!(*runtime.lock().unwrap(), before_wrong_session);
 
     assert!(matches!(
@@ -1073,7 +1073,7 @@ fn dj_link_waiting_follow_loop_set_starts_once_then_returns_to_normal_stage2_loo
         DjLinkDispatchOutcome::Rejected { ref code, .. }
             if code == "timeline_waiting_pedal_start_requires_active"
     ));
-    assert_eq!(engine.snapshot(), waiting_snapshot);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &waiting_snapshot, "");
 
     let start = dispatch(
         protocol::DjLinkMessageType::TimelineLoopSet,
@@ -1466,7 +1466,7 @@ fn completed_follow_hold_rebases_before_canonical_loop_off_and_resumes_target() 
         DjLinkDispatchOutcome::Rejected { ref code, .. }
             if code == "timeline_loop_state_unchanged"
     ));
-    assert_eq!(engine.snapshot(), before_stale_loop_off_engine);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &before_stale_loop_off_engine, "");
     assert_eq!(*runtime.lock().unwrap(), before_stale_loop_off_runtime);
 
     let retained_loop_duration_ms = retained_hold_bounds
@@ -1643,7 +1643,7 @@ fn dj_link_any_deck_track_owner_is_exact_deduped_and_loop_correlated() {
         ),
         DjLinkDispatchOutcome::Accepted { .. }
     ));
-    assert_eq!(engine.snapshot(), engine_before_reconnect_state);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &engine_before_reconnect_state, "");
     assert!(runtime.lock().unwrap().play_session_id.is_none());
     let active_outcome = dispatch_dj_link_event(
         dj_link_test_envelope(
@@ -1680,7 +1680,7 @@ fn dj_link_any_deck_track_owner_is_exact_deduped_and_loop_correlated() {
         ),
         DjLinkDispatchOutcome::Accepted { .. }
     ));
-    assert_eq!(engine.snapshot(), engine_before_foreign);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &engine_before_foreign, "");
     assert_eq!(*runtime.lock().unwrap(), owner_before_foreign);
 
     let mut unmapped_active = active_payload.clone();
@@ -1703,7 +1703,7 @@ fn dj_link_any_deck_track_owner_is_exact_deduped_and_loop_correlated() {
         ),
         DjLinkDispatchOutcome::NoMapping { .. }
     ));
-    assert_eq!(engine.snapshot(), engine_before_foreign);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &engine_before_foreign, "");
     assert_eq!(*runtime.lock().unwrap(), owner_before_foreign);
 
     let mut foreign_active = active_payload.clone();
@@ -1721,7 +1721,7 @@ fn dj_link_any_deck_track_owner_is_exact_deduped_and_loop_correlated() {
         ),
         DjLinkDispatchOutcome::Rejected { ref code, .. } if code == "track_owner_unreleased"
     ));
-    assert_eq!(engine.snapshot(), engine_before_foreign);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &engine_before_foreign, "");
     assert_eq!(*runtime.lock().unwrap(), owner_before_foreign);
 
     let mut conflicting_sync = active_payload.clone();
@@ -1740,7 +1740,7 @@ fn dj_link_any_deck_track_owner_is_exact_deduped_and_loop_correlated() {
         ),
         DjLinkDispatchOutcome::Rejected { ref code, .. } if code == "track_sync_context_mismatch"
     ));
-    assert_eq!(engine.snapshot(), engine_before_conflict);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &engine_before_conflict, "");
 
     let mut newer_sync = active_payload.clone();
     newer_sync["positionAtSendSec"] = json!(2.0);
@@ -1789,7 +1789,7 @@ fn dj_link_any_deck_track_owner_is_exact_deduped_and_loop_correlated() {
         ),
         DjLinkDispatchOutcome::Rejected { ref code, .. } if code == "position_revision_conflict"
     ));
-    assert_eq!(engine.snapshot(), engine_after_newer_sync);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &engine_after_newer_sync, "");
     assert_eq!(*runtime.lock().unwrap(), runtime_after_newer_sync);
 
     let inactive_loop = json!({
@@ -1815,7 +1815,7 @@ fn dj_link_any_deck_track_owner_is_exact_deduped_and_loop_correlated() {
         ),
         DjLinkDispatchOutcome::Rejected { ref code, .. } if code == "track_loop_context_mismatch"
     ));
-    assert_eq!(engine.snapshot(), engine_before_foreign_loop);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &engine_before_foreign_loop, "");
     assert_eq!(*runtime.lock().unwrap(), runtime_before_foreign_loop);
     assert!(matches!(
         dispatch_dj_link_event(
@@ -1897,7 +1897,7 @@ fn dj_link_any_deck_track_owner_is_exact_deduped_and_loop_correlated() {
         ),
         DjLinkDispatchOutcome::Rejected { ref code, .. } if code == "stale_loop_revision"
     ));
-    assert_eq!(engine.snapshot(), engine_before_stale_loop);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &engine_before_stale_loop, "");
     assert_eq!(*runtime.lock().unwrap(), runtime_before_stale_loop);
 
     let timeline_id = {
@@ -1933,7 +1933,7 @@ fn dj_link_any_deck_track_owner_is_exact_deduped_and_loop_correlated() {
         ),
         "unexpected wrong-release outcome: {wrong_release_outcome:?}"
     );
-    assert_eq!(engine.snapshot(), engine_before_wrong_release);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &engine_before_wrong_release, "");
     assert!(matches!(
         dispatch_dj_link_event(
             dj_link_test_envelope(
@@ -2028,10 +2028,10 @@ fn dj_link_any_deck_track_owner_is_exact_deduped_and_loop_correlated() {
             DjLinkDispatchOutcome::Rejected { ref code, .. }
                 if code == "released_track_reannounce_mismatch"
         ));
-        assert_eq!(
+        assert_engine_snapshot_unchanged(
             engine.snapshot(),
-            engine_before_mismatch,
-            "a released generic identity or mapping mismatch must not reach the engine"
+            &engine_before_mismatch,
+            "a released generic identity or mapping mismatch must not reach the engine",
         );
         assert_eq!(
             *runtime.lock().unwrap(),
@@ -2239,10 +2239,10 @@ fn dj_link_any_deck_fallback_profile_saturates_and_rebases_after_measured_author
         DjLinkDispatchOutcome::Accepted { state_generation }
             if state_generation == runtime_at_floor.state_generation + 1
     ));
-    assert_eq!(
+    assert_engine_snapshot_unchanged(
         engine.snapshot(),
-        engine_at_floor,
-        "the saturated generic 1/64 fallback must consume its intent without an engine mutation"
+        &engine_at_floor,
+        "the saturated generic 1/64 fallback must consume its intent without an engine mutation",
     );
     assert_eq!(
         runtime.lock().unwrap().last_loop_fallback_intent_id,
@@ -2328,7 +2328,7 @@ fn dj_link_any_deck_fallback_profile_saturates_and_rebases_after_measured_author
         DjLinkDispatchOutcome::Rejected { ref code, .. }
             if code == "loop_fallback_base_revision_mismatch"
     ));
-    assert_eq!(engine.snapshot(), engine_after_fresh_measurement);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &engine_after_fresh_measurement, "");
     assert_eq!(*runtime.lock().unwrap(), runtime_after_fresh_measurement);
 
     assert!(matches!(
@@ -2433,7 +2433,7 @@ fn dj_link_generic_active_capacity_is_fail_closed_without_mutation() {
         ),
         DjLinkDispatchOutcome::Rejected { ref code, .. } if code == "play_session_capacity"
     ));
-    assert_eq!(engine.snapshot(), engine_before);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &engine_before, "");
     assert_eq!(*runtime.lock().unwrap(), runtime_before);
 }
 
@@ -2537,7 +2537,7 @@ fn dj_link_generic_unmapped_active_latches_all_mutating_followups() {
             ),
             DjLinkDispatchOutcome::Rejected { ref code, .. } if code == "dj_link_unmapped_active"
         ));
-        assert_eq!(engine.snapshot(), engine_before);
+        assert_engine_snapshot_unchanged(engine.snapshot(), &engine_before, "");
         assert_eq!(*runtime.lock().unwrap(), runtime_before);
     }
 }
@@ -2595,7 +2595,7 @@ fn dj_link_generic_engine_rejection_preserves_runtime_authority_atomically() {
         ),
         DjLinkDispatchOutcome::Rejected { ref code, .. } if code == "engine_publication_rejected"
     ));
-    assert_eq!(engine.snapshot(), engine_before);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &engine_before, "");
     assert_eq!(*runtime.lock().unwrap(), runtime_before);
 }
 
@@ -2756,7 +2756,7 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
             DjLinkDispatchOutcome::Rejected { ref code, .. }
                 if code == "timeline_stage2_not_authorized"
         ));
-        assert_eq!(engine.snapshot(), before);
+        assert_engine_snapshot_unchanged(engine.snapshot(), &before, "");
     }
 
     // RELEASE itself is admitted only from the exact active DJ-owned
@@ -2810,10 +2810,10 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
             ),
             DjLinkDispatchOutcome::Rejected { ref code, .. } if code == expected_code
         ));
-        assert_eq!(
+        assert_engine_snapshot_unchanged(
             engine.snapshot(),
-            before_engine,
-            "{case_name} engine mutation"
+            &before_engine,
+            "{case_name} engine mutation",
         );
         assert_eq!(
             *candidate.lock().unwrap(),
@@ -2852,10 +2852,10 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
             ),
             "{case_name} outcome: {outcome:?}"
         );
-        assert_eq!(
+        assert_engine_snapshot_unchanged(
             engine.snapshot(),
-            before_engine,
-            "{case_name} engine mutation"
+            &before_engine,
+            "{case_name} engine mutation",
         );
         assert_eq!(
             *candidate.lock().unwrap(),
@@ -2915,7 +2915,7 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
         ),
         DjLinkDispatchOutcome::TimelineState { .. }
     ));
-    assert_eq!(engine.snapshot(), before_replay);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &before_replay, "");
     assert_eq!(
         runtime.lock().unwrap().release_event_id,
         before_replay_runtime.release_event_id
@@ -2940,7 +2940,7 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
         DjLinkDispatchOutcome::Rejected { ref code, .. }
             if code == "timeline_release_state_invalid"
     ));
-    assert_eq!(engine.snapshot(), before_invalid_replay_engine);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &before_invalid_replay_engine, "");
 
     let released_generation = released_runtime.state_generation;
     let before_jump = engine.snapshot();
@@ -2985,7 +2985,7 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
         DjLinkDispatchOutcome::Rejected { ref code, .. }
             if code == "invalid_timeline_beat_jump_payload"
     ));
-    assert_eq!(engine.snapshot(), before_engine_rejection);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &before_engine_rejection, "");
     assert_eq!(*runtime.lock().unwrap(), before_runtime_rejection);
 
     // F14 is not a generic scale request: before F13 activates a current
@@ -3008,7 +3008,7 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
         DjLinkDispatchOutcome::Rejected { ref code, .. }
             if code == "timeline_loop_inactive"
     ));
-    assert_eq!(engine.snapshot(), before_engine_loop_rejection);
+    assert_engine_snapshot_unchanged(engine.snapshot(), &before_engine_loop_rejection, "");
     assert_eq!(
         *invalid_loop_runtime.lock().unwrap(),
         before_runtime_loop_rejection
@@ -3166,7 +3166,7 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
                 ),
                 DjLinkDispatchOutcome::Rejected { ref code, .. } if code == expected_code
             ));
-            assert_eq!(engine.snapshot(), before);
+            assert_engine_snapshot_unchanged(engine.snapshot(), &before, "");
         }
     }
 
@@ -3210,7 +3210,7 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
                 ),
                 DjLinkDispatchOutcome::Rejected { ref code, .. } if code == expected_code
             ));
-            assert_eq!(engine.snapshot(), before);
+            assert_engine_snapshot_unchanged(engine.snapshot(), &before, "");
         }
     }
 
@@ -3245,7 +3245,7 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
             ),
             DjLinkDispatchOutcome::Rejected { ref code, .. } if code == "timeline_not_playing"
         ));
-        assert_eq!(engine.snapshot(), before_engine);
+        assert_engine_snapshot_unchanged(engine.snapshot(), &before_engine, "");
         assert_eq!(*runtime.lock().unwrap(), before_runtime);
     }
 }

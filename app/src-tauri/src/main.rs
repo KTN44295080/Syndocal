@@ -136053,6 +136053,8 @@ f 1 2 3
     }
 
     mod dj_track_runtime_tests;
+    mod engine_snapshot_assert;
+    use engine_snapshot_assert::assert_engine_snapshot_unchanged;
     mod dj_track_selector_tests;
 
     #[test]
@@ -136122,7 +136124,7 @@ f 1 2 3
             DjLinkDispatchOutcome::Rejected { code, .. }
                 if code == "engine_publication_rejected"
         ));
-        assert_eq!(engine.snapshot(), engine_before);
+        assert_engine_snapshot_unchanged(engine.snapshot(), &engine_before, "");
         assert_eq!(
             *runtime.lock().unwrap(),
             runtime_before,
@@ -136199,7 +136201,7 @@ f 1 2 3
                 DjLinkDispatchOutcome::Rejected { code, .. }
                     if code == "engine_publication_rejected"
             ));
-            assert_eq!(engine.snapshot(), engine_before);
+            assert_engine_snapshot_unchanged(engine.snapshot(), &engine_before, "");
             assert_eq!(*runtime.lock().unwrap(), runtime_before);
         };
 
@@ -136223,7 +136225,7 @@ f 1 2 3
                     DjLinkDispatchOutcome::Rejected { code, .. }
                         if code == "timeline_stage2_not_authorized"
                 ));
-                assert_eq!(engine.snapshot(), engine_before);
+                assert_engine_snapshot_unchanged(engine.snapshot(), &engine_before, "");
                 assert_eq!(*runtime.lock().unwrap(), runtime_before);
             };
 
