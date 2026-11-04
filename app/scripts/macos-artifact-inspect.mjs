@@ -58,7 +58,10 @@ export async function inspectMachO(app, minimum, run) {
       if (!magic.has(header)) continue;
       requireCondition(images.length < 64, 'Mach-O image limit exceeded');
       const architectures = (await run('/usr/bin/lipo', ['-archs', file])).stdout.trim().split(/\s+/);
-      const commands = parseLoadCommands((await run('/usr/bin/otool', ['-l', file])).stdout);
+      // A universal image lists every slice's load commands; the installer
+      // only loads arm64, so inspect that slice alone.
+      const slice = architectures.length > 1 ? ['-arch', 'arm64'] : [];
+      const commands = parseLoadCommands((await run('/usr/bin/otool', [...slice, '-l', file])).stdout);
       images.push({ path: path.relative(app, file).split(path.sep).join('/'), architectures, ...commands });
     }
   }
