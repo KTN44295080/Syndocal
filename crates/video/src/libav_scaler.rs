@@ -23,7 +23,13 @@ use ffmpeg_next as ffmpeg;
 pub(super) const SLICE_THREAD_MIN_OUTPUT_PIXELS: u64 = 1024 * 1024;
 /// Slice threads for an output-sized conversion. Measured on the C4 fixture
 /// (1920x1080 NV12 to 2560x1600 RGBA, C4R12 `libav_scaler_tests` bench).
+#[cfg(syndocal_sws_frame)]
 pub(super) const SLICE_THREADS: i32 = 4;
+/// FFmpeg before 5.0 (Ubuntu 22.04 ships 4.4) has neither the `threads`
+/// option nor `sws_scale_frame`; conversions there stay single-threaded and
+/// go through `sws_scale` with the same scaler, flags and formats.
+#[cfg(not(syndocal_sws_frame))]
+pub(super) const SLICE_THREADS: i32 = 1;
 /// libswscale's SIMD paths need 16-byte aligned planes; an FFmpeg-allocated
 /// frame always provides that.
 const DESTINATION_ALIGNMENT: usize = 16;
@@ -106,7 +112,9 @@ impl RgbaScaler {
             target_width,
             target_height,
         };
-        let options: [(&std::ffi::CStr, i64); 8] = [
+        #[cfg(not(syndocal_sws_frame))]
+        let _ = threads;
+        let options = [
             (c"srcw", i64::from(source_width)),
             (c"srch", i64::from(source_height)),
             (
@@ -117,6 +125,7 @@ impl RgbaScaler {
             (c"dsth", i64::from(target_height)),
             (c"dst_format", ffi::AVPixelFormat::AV_PIX_FMT_RGBA as i64),
             (c"sws_flags", i64::from(Flags::BILINEAR.bits())),
+            #[cfg(syndocal_sws_frame)]
             (c"threads", i64::from(threads)),
         ];
         for (name, value) in options {
@@ -136,7 +145,13 @@ impl RgbaScaler {
     }
 
     /// Slice threads libswscale actually started for this context.
-    #[cfg(test)]
+    #[cfg(all(test, not(syndocal_sws_frame)))]
+    pub(super) fn threads(&self) -> i64 {
+        1
+    }
+
+    /// Slice threads libswscale actually started for this context.
+    #[cfg(all(test, syndocal_sws_frame))]
     pub(super) fn threads(&self) -> i64 {
         let mut value = 0_i64;
         // SAFETY: the context is live; "threads" is an integer option.
@@ -192,6 +207,25 @@ impl RgbaScaler {
         {
             return Err(ffmpeg::Error::InvalidData);
         }
+        #[cfg(not(syndocal_sws_frame))]
+        {
+            let mut planes = [null_mut(); 4];
+            let mut strides = [0_i32; 4];
+            planes[0] = destination.as_mut_ptr();
+            strides[0] = row as i32;
+            return self.scale_into(source, &planes, &strides);
+        }
+        #[cfg(syndocal_sws_frame)]
+        return self.run_into_frame(source, destination, row);
+    }
+
+    #[cfg(syndocal_sws_frame)]
+    fn run_into_frame(
+        &mut self,
+        source: &Video,
+        destination: &mut [u8],
+        row: usize,
+    ) -> Result<(), ffmpeg::Error> {
         let mut target = Video::empty();
         // SAFETY: `target` is a live, empty AVFrame. Its only buffer reference
         // wraps `destination`, which outlives this call; the no-op free
@@ -230,9 +264,53 @@ impl RgbaScaler {
         if !unsafe { target.is_empty() } {
             return Err(ffmpeg::Error::InvalidData);
         }
-        self.run_frame(source, target)
+        #[cfg(not(syndocal_sws_frame))]
+        {
+            *target = Video::new(Pixel::RGBA, self.target_width, self.target_height);
+            // SAFETY: `target` is a freshly allocated RGBA frame of the
+            // output size; only its plane pointers and strides are read.
+            let (planes, strides) = unsafe {
+                let frame = &*target.as_ptr();
+                (frame.data, frame.linesize)
+            };
+            let planes: [*mut u8; 4] = [planes[0], planes[1], planes[2], planes[3]];
+            let strides: [i32; 4] = [strides[0], strides[1], strides[2], strides[3]];
+            return self.scale_into(source, &planes, &strides);
+        }
+        #[cfg(syndocal_sws_frame)]
+        return self.run_frame(source, target);
     }
 
+    /// `sws_scale` of the whole source into caller-provided RGBA planes.
+    #[cfg(not(syndocal_sws_frame))]
+    fn scale_into(
+        &mut self,
+        source: &Video,
+        planes: &[*mut u8; 4],
+        strides: &[i32; 4],
+    ) -> Result<(), ffmpeg::Error> {
+        // SAFETY: the context was initialized for exactly this source
+        // geometry/format (checked) and an RGBA target of its output size;
+        // `planes`/`strides` describe a live buffer of at least that size.
+        let result = unsafe {
+            let frame = &*source.as_ptr();
+            ffi::sws_scale(
+                self.context.as_ptr(),
+                frame.data.as_ptr() as *const *const u8,
+                frame.linesize.as_ptr(),
+                0,
+                self.source_height as i32,
+                planes.as_ptr(),
+                strides.as_ptr(),
+            )
+        };
+        if result < 0 {
+            return Err(ffmpeg::Error::from(result));
+        }
+        Ok(())
+    }
+
+    #[cfg(syndocal_sws_frame)]
     fn run_frame(&mut self, source: &Video, target: &mut Video) -> Result<(), ffmpeg::Error> {
         // SAFETY: the context was initialized for exactly this source
         // geometry/format (checked) and an RGBA target of its output size;
@@ -259,6 +337,7 @@ impl Drop for RgbaScaler {
     }
 }
 
+#[cfg(syndocal_sws_frame)]
 unsafe extern "C" fn borrowed_destination_free(_opaque: *mut std::ffi::c_void, _data: *mut u8) {}
 
 #[cfg(test)]

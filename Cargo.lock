@@ -5940,6 +5940,7 @@ version = "1.2.0-alpha.83"
 dependencies = [
  "bcdec_rs",
  "ffmpeg-next",
+ "ffmpeg-sys-next",
  "hap-parser",
  "image",
  "mp4",
