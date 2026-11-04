@@ -75,14 +75,20 @@ impl RetiredRgba {
             {
                 *slot = None;
             }
-            if returned.is_none()
-                && slot
-                    .as_ref()
-                    .is_some_and(|frame| Arc::strong_count(frame) == 1)
+            if slot
+                .as_ref()
+                .is_some_and(|frame| Arc::strong_count(frame) == 1)
             {
-                match ReturnedRgba::reclaim_or_return(slot.take().unwrap(), extent) {
-                    Ok(buffer) => returned = Some(buffer),
-                    Err(frame) => *slot = Some(frame),
+                // One exclusive buffer is enough for the next decode; any
+                // further sole-owned candidate is released now instead of
+                // pinning its allocation past what replay history keeps.
+                if returned.is_none() {
+                    match ReturnedRgba::reclaim_or_return(slot.take().unwrap(), extent) {
+                        Ok(buffer) => returned = Some(buffer),
+                        Err(frame) => *slot = Some(frame),
+                    }
+                } else {
+                    *slot = None;
                 }
             }
         }

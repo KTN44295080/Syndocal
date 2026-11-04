@@ -487,3 +487,40 @@ fn retirement_bound_deduplicates_and_releases_overflow_and_retired_owners() {
     drop(decoder);
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn retirement_releases_every_exclusive_candidate_beyond_the_one_returned() {
+    let request = request();
+    let extent = (request.width, request.height);
+    let mut retired = rgba_reuse::RetiredRgba::default();
+    let mut held: Vec<_> = (0..4).map(|token| pixels(&request, token)).collect();
+    let weak: Vec<_> = held.iter().map(Arc::downgrade).collect();
+    for frame in &held {
+        assert!(retired.retire(Arc::clone(frame), extent).is_none());
+    }
+    // A burst (wrap, clip-end) drops every outside reader at once.
+    held.clear();
+    let current = pixels(&request, 9);
+    let current_weak = Arc::downgrade(&current);
+    let keep = Arc::clone(&current);
+    let returned = retired
+        .retire(current, extent)
+        .expect("one buffer is returned");
+    assert!(returned
+        .into_buffer(extent, rgba_frame_len(&request).unwrap())
+        .unwrap()
+        .iter()
+        .all(|byte| *byte == 0));
+    assert!(
+        weak.iter().all(|frame| frame.upgrade().is_none()),
+        "no further sole-owned allocation stays pinned in the retirement slots"
+    );
+    assert_eq!(
+        Arc::strong_count(&keep),
+        2,
+        "the shared current frame is retained"
+    );
+    drop(keep);
+    drop(retired);
+    assert!(current_weak.upgrade().is_none());
+}
