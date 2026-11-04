@@ -54,13 +54,12 @@ diagnostics, collection, fixture, or packaging. Local evidence is retained in
   all 12 workflow contract tests pass. The repaired Mac run remains required.
 - External Simple Client reception, visible orientation/motion/blackout,
   discovery retirement, and the friend's returned evidence remain physical gates.
-- This is a SHA-scoped internal alpha.82 CI candidate. Before intentionally
-  distributing a development artifact to the friend, advance the prerelease
-  ordinal and synchronize/validate release metadata under the completion flow.
+- 2026-11-05: product metadata advanced to `1.2.0-alpha.83` for the friend
+  distribution; the kit is taken from the macOS installer run on that commit.
   No tag, release publication or message to the friend is part of this checkpoint.
-- Integrated C5/30-minute Windows Display performance acceptance is a separate
-  remaining gate after the recent group/extended-ISF changes. This Syphon
-  checkpoint does not establish 60fps or hardware acceptance.
+- Integrated C5/30-minute Windows Display performance acceptance passed at
+  `2eea47b5` (fixture `c5/fixture-3l-groupfx.sdc`). This Syphon checkpoint
+  still does not establish Syphon reception or hardware acceptance.
 
 The older [Syphon implementation handoff](SYPHON_OUTPUT_2026-10-20.md) retains
 the detailed output-runtime and broader Mac acceptance boundaries; its historical

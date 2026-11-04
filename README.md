@@ -2,7 +2,7 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.82**
+- 製品名: **Syndocal 1.2.0-alpha.83**
 - 開発: **Seraf() / KTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
@@ -494,11 +494,11 @@ unaccepted.
 
 ## インストール
 
-次の配布用開発版の修正候補は `1.2.0-alpha.82` です。FX詳細のスクロールと、Art-Net／sACNの複数ユニバース設定を修正しています。シーンの編集時には保存済みシーンの値を表示し、未編集の属性を現在の出力値で上書きしません。拡張はWindowsのEXE/MSI本体およびMacのインストーラーで選択し、I/Oには拡張の設定項目を置きません。起動時の選択画面はありません。MacはApple Silicon向け `.pkg` です。検証状況は [検証記録](qa/NETWORK_DISPATCH_ALPHA82_2026-10-14.md) を参照してください。配布済みalpha.78/79のファイルは変更していません。
+次の配布用開発版の修正候補は `1.2.0-alpha.83` です。グループFXの常駐GPU経路でDisplayの60fps（C5と30分ソーク）を確認し、macOS向けにSyphon出力の友人テスト用キットを追加しています（[記録](qa/SYPHON_FRIEND_KIT_2026-11-02.md)）。alpha.82の内容: FX詳細のスクロールと、Art-Net／sACNの複数ユニバース設定を修正しています。シーンの編集時には保存済みシーンの値を表示し、未編集の属性を現在の出力値で上書きしません。拡張はWindowsのEXE/MSI本体およびMacのインストーラーで選択し、I/Oには拡張の設定項目を置きません。起動時の選択画面はありません。MacはApple Silicon向け `.pkg` です。検証状況は [検証記録](qa/NETWORK_DISPATCH_ALPHA82_2026-10-14.md) を参照してください。配布済みalpha.78/79のファイルは変更していません。
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.82_x64-setup.exe` (NSIS)
+- Windows: `Syndocal_1.2.0-alpha.83_x64-setup.exe` (NSIS)
 - macOS: Apple Silicon向け `.pkg`
 - Linux: `.deb`、AppImage
 

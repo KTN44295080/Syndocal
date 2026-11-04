@@ -216,7 +216,7 @@ jobs:
 
       - name: Test actual macOS installer choices, updates and removal
         id: pkg_lifecycle
-        run: node app/scripts/check-macos-installer.mjs target/release/bundle/pkg/Syndocal_1.2.0-alpha.82_arm64.pkg target/qa/macos-artifact/installer-lifecycle.json target/release/bundle/macos/Syndocal.app
+        run: node app/scripts/check-macos-installer.mjs target/release/bundle/pkg/Syndocal_1.2.0-alpha.83_arm64.pkg target/qa/macos-artifact/installer-lifecycle.json target/release/bundle/macos/Syndocal.app
 
       - name: Package remote friend Syphon acceptance kit
         run: node app/scripts/pack-syphon-friend-kit.mjs
