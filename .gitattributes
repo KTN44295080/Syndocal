@@ -20,3 +20,4 @@ app/src-tauri/installer-hooks.nsh text eol=lf
 tools/distribution/macos-installer/preinstall text eol=lf
 tools/distribution/macos-installer/postinstall text eol=lf
 vendor/ndi-sdk-6.3.2-headers/** -text -whitespace
+app/src-tauri/windows/THIRD_PARTY_NOTICES.rtf text eol=lf

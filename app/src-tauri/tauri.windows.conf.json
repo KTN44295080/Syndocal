@@ -3,7 +3,7 @@
     "features": ["ndi"]
   },
   "bundle": {
-    "licenseFile": "../../THIRD_PARTY_NOTICES.md",
+    "licenseFile": "windows/THIRD_PARTY_NOTICES.rtf",
     "resources": {
       "../../target/release/avcodec-62.dll": "avcodec-62.dll",
       "../../target/release/avdevice-62.dll": "avdevice-62.dll",

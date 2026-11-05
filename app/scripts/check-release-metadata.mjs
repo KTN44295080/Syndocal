@@ -26,6 +26,7 @@ import {
   windowsFfmpegBundleResourceMap,
 } from "./windows-runtime-inventory.mjs";
 import { StrictJsonError, parseStrictJson } from "./strict-json.mjs";
+import { WINDOWS_LICENSE_RTF, WINDOWS_LICENSE_SOURCE, renderWindowsLicenseRtf } from "./windows-license-rtf.mjs";
 import {
   canonicalDecodedUpdaterUrlPath,
   parseTauriMinisignPublicKey,
@@ -209,8 +210,11 @@ function assertOrdinaryBundleNdiCompliance(readManifest) {
   if (JSON.stringify(showAsio.build?.features) !== "[]") {
     throw new Error("Show-ASIO must clear Windows build.features to exclude NDI.");
   }
-  if (windows.bundle?.licenseFile !== "../../THIRD_PARTY_NOTICES.md") {
-    throw new Error("Ordinary Windows installer must display THIRD_PARTY_NOTICES.md as its component license.");
+  // The installers show THIRD_PARTY_NOTICES.md through an ASCII-only RTF
+  // rendering: the Japanese MSI database (code page 932) cannot hold the
+  // required NDI® sign as raw text, so it is carried as an RTF escape.
+  if (windows.bundle?.licenseFile !== "windows/THIRD_PARTY_NOTICES.rtf") {
+    throw new Error("Ordinary Windows installer must display the THIRD_PARTY_NOTICES.md RTF rendering as its component license.");
   }
   const packageManifest = readManifest("app/package.json");
   const workflow = readManifest(".github/workflows/cross-platform.yml");
@@ -233,6 +237,9 @@ function assertOrdinaryBundleNdiCompliance(readManifest) {
     if (!thirdPartyNotices.includes(requiredNotice)) {
       throw new Error(`THIRD_PARTY_NOTICES.md lacks required NDI notice token: ${requiredNotice}`);
     }
+  }
+  if (readManifest(WINDOWS_LICENSE_RTF) !== renderWindowsLicenseRtf(readManifest(WINDOWS_LICENSE_SOURCE))) {
+    throw new Error(`${WINDOWS_LICENSE_RTF} is stale; run node app/scripts/windows-license-rtf.mjs --write`);
   }
 }
 

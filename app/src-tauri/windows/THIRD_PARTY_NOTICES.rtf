@@ -1,0 +1,202 @@
+{\rtf1\ansi\ansicpg1252\deff0\uc1{\fonttbl{\f0\fnil\fcharset0 Calibri;}}
+\viewkind4\pard\sa120\f0\fs18
+# Third-party notices\par
+\par
+Syndocal dynamically links FFmpeg shared libraries for video decoding, including\par
+H.264, H.265, HAP, DXV, ProRes, VP9 and AV1. The normal Windows variant uses\par
+FFmpeg `n8.1.3-9-g29e619e767`, self-built by Syndocal's GitHub Actions workflow\par
+from the BtbN FFmpeg-Builds recipe with the Chromaprint and FFTW3 recipes\par
+removed (inventory version `n8.1.3-9-g29e619e767-20260930-syndocal-r40366564270`;\par
+the DLLs self-report `n8.1.3-9-g29e619e767-20260930`), reporting LGPL version 3\par
+or later. Its measured configure line enables shared libraries and version 3\par
+licensing, and contains neither `--enable-gpl`, `--enable-nonfree` nor\par
+`--enable-chromaprint`; none of the seven DLLs contains a Chromaprint or FFTW\par
+string. The upstream LGPL self-description is not a completed license audit.\par
+Publication is blocked until the actual build inputs/linkage and resulting\par
+license obligations are reconciled;\par
+the collected notices do not grant release clearance or establish exact binary\par
+dependency closure.\par
+\par
+- Project: FFmpeg\par
+- Copyright (c) 2000-2026 the FFmpeg developers\par
+- License: GNU Lesser General Public License version 3 or later\par
+- License texts: `licenses/FFmpeg-LGPL-3.0.txt` and `licenses/GPL-3.0.txt`\par
+  (the LGPLv3 incorporates the GPLv3 terms)\par
+- Dependency license texts and source provenance: `licenses/FFmpeg-DEPENDENCIES.txt`\par
+- Exact Windows binary archive: https://github.com/KTN44295080/Syndocal/releases/download/ffmpeg-sdk-lgpl-n8.1.3-r40366564270/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip\par
+  (prerelease https://github.com/KTN44295080/Syndocal/releases/tag/ffmpeg-sdk-lgpl-n8.1.3-r40366564270,\par
+  which also carries the FFmpeg source archive, the recipe patch, build\par
+  provenance and SHA256SUMS)\par
+- Archive SHA-256: `81587fa070a9fa2da3d8ff3e63beb9654729782bc8e9899ee951baf5fc5d9f1a`\par
+- Exact FFmpeg source: https://github.com/FFmpeg/FFmpeg/archive/29e619e767cde9045a75c29bc9a8278ae7b3a98b.tar.gz\par
+- Build recipes, dependency source revisions and patches: https://github.com/BtbN/FFmpeg-Builds/tree/6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b\par
+  with the Syndocal patch, lock and workflow at https://github.com/KTN44295080/Syndocal/tree/7d0af757f73231fc0c6006d6c21c72c14cb4a31a/tools/ffmpeg-sdk\par
+- Full measured configuration and per-DLL identities:\par
+  `qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json` in the Syndocal source distribution\par
+\par
+FFmpeg includes code derived from the Independent JPEG Group's software.\par
+FFmpeg and its dependencies retain their respective copyrights and licenses;\par
+their collected license texts and notices are reproduced in\par
+`licenses/FFmpeg-DEPENDENCIES.txt`, with the exact-binary provenance limitations\par
+identified there. Syndocal\par
+makes no modifications to these supplied DLLs.\par
+\par
+Source offer: the complete corresponding source of this FFmpeg build is\par
+available at no charge from\par
+https://github.com/KTN44295080/Syndocal/releases/download/ffmpeg-sdk-lgpl-n8.1.3-r40366564270/ffmpeg-sdk-lgpl-n8.1.3-r40366564270-corresponding-source.tar.xz\par
+(891,325,408 bytes, SHA-256\par
+`5322a2327758c1936ce6c55845f2721953bb89b107ee115e998a356f2fe9c48b`). It\par
+contains the FFmpeg source, the patched build recipe and scripts, and the\par
+source of every dependency stage built into the seven DLLs and `ffmpeg.exe`,\par
+with its build-time submodules and vendored rav1e Rust crates. Its component\par
+manifest (names, revisions, licences and hashes) is\par
+`ffmpeg-sdk-lgpl-n8.1.3-r40366564270-corresponding-source.manifest.json` on the\par
+same prerelease. Syndocal keeps this source available there for as long as it\par
+distributes this FFmpeg build. Toolchain runtime libraries are identified there\par
+by version only. A byte-identical rebuild has not been demonstrated.\par
+\par
+FFmpeg is not part of the Syndocal MIT-licensed source code. Recipients may\par
+replace the dynamically linked FFmpeg libraries with a compatible build, as\par
+permitted by the LGPL. The normal Windows payload contains seven DLLs and the\par
+recording ffmpeg.exe from the same pinned LGPL shared SDK identified above.\par
+Recording uses an LGPL-compatible H.264 encoder and built-in AAC; it does not\par
+bundle libx264 or a GPL/nonfree FFmpeg build. The optional ASIO bridge has its\par
+own distribution requirements.\par
+\par
+Windows x86_64 builds include Spout2 2.007.017 through the `spout2-rs` static\par
+binding for local inter-application video texture transport.\par
+\par
+- Project: Spout2\par
+- Source: https://github.com/leadedge/Spout2\par
+- Rust binding: https://crates.io/crates/spout2-rs\par
+- License: BSD 2-Clause\par
+- License text: `licenses/Spout2-BSD-2-Clause.txt`\par
+\par
+Spout2 is linked statically and does not require a separate runtime DLL.\par
+\par
+macOS builds with the default `syphon` feature dynamically link the official\par
+Syphon.framework through Syndocal's Objective-C/Metal output bridge.\par
+\par
+- Project: Syphon Framework\par
+- Source: https://github.com/Syphon/Syphon-Framework\par
+- Pinned revision: `f4761677a45b8034a3c2069ec0f3d2553da81fba`\par
+- Archive SHA-256: `a3766088c46588c42b087f4e5ff7ae7bb0f83292af59a0aeb8bba69eba5311c5`\par
+- Licences: upstream BSD 3-Clause distribution licence and BSD 2-Clause\par
+  source-header notices, including the Metal contributor notices\par
+- Complete licence texts: `licenses/Syphon-BSD.txt`\par
+\par
+`app/scripts/prepare-syphon.sh` verifies the pinned source archive and builds the\par
+framework with Xcode. The macOS application bundles the framework, its Metal\par
+shader library, and the licence texts. No Syphon binary is used on Windows or\par
+Linux. Syphon input is not implemented.\par
+\par
+Syndocal uses `bcdec_rs` 0.2.0 to provide a safe, pure-Rust BC7 software\par
+fallback for HAP R frames when direct GPU BC texture sampling is unavailable or\par
+the frame must pass through a CPU-visible effect path.\par
+\par
+- Project: bcdec_rs\par
+- Source: https://github.com/ScanMountGoat/image_dds/tree/main/bcdec_rs\par
+- License: MIT\par
+- License text: `licenses/bcdec_rs-MIT.txt`\par
+\par
+## Open Fixture Library (bundled fixture profiles)\par
+\par
+Syndocal bundles a converted snapshot of the Open Fixture Library so that\par
+manufacturer fixture profiles are available offline, with no account or\par
+download, on first launch.\par
+\par
+- Source: https://github.com/OpenLightingProject/open-fixture-library\par
+- Snapshot revision: `c08598f45ce5e7cff4089a65bb67b5ba2777ee32` (recorded in the\par
+  bundle's `sourceRevision` field; regenerate with\par
+  `node scripts/build-ofl-library.mjs <checkout> <sha>`)\par
+- License: MIT\par
+- Copyright (c) 2017 Florian & Felix Edelmann and OFL contributors\par
+- License text: `licenses/open-fixture-library-MIT.txt`\par
+\par
+The bundled data is a lossy conversion: each mode is reduced to its ordered\par
+DMX attribute layout (the same representation Syndocal uses for its own custom\par
+profiles). Matrix channel insert blocks are expanded before conversion.\par
+Capability ranges, wheel slot media, and physical data are not carried over -\par
+operators who need the full definition download the manufacturer's GDTF from\par
+GDTF Share.\par
+\par
+## Q Light Controller Plus fixture definitions (bundled fixture profiles)\par
+\par
+Syndocal also bundles a converted snapshot of QLC+'s fixture definitions as a\par
+supplemental offline source. Open Fixture Library has higher precedence: exact\par
+normalized manufacturer/model conflicts are omitted from the QLC+ bundle and\par
+recorded in its conversion audit.\par
+\par
+- Source: https://github.com/mcallegari/qlcplus\par
+- Snapshot revision: `18cf9da9934e5ea0b5026dd43b0f48be1e5b9550` (recorded in the\par
+  bundle's `sourceRevision` field; regenerate after the OFL bundle with\par
+  `node scripts/build-qlc-library.mjs <checkout> <sha>`)\par
+- License: Apache-2.0\par
+- Copyright QLC+ contributors and fixture definition authors\par
+- License text: `licenses/qlcplus-Apache-2.0.txt`\par
+\par
+This is the same lossy ordered-DMX-layout conversion described above. Adjacent\par
+coarse/fine pairs are represented as 16-bit controls; unrecognized channel\par
+semantics remain addressable as numbered generic controls so the source mode's\par
+DMX footprint is preserved exactly.\par
+\par
+## NDI\u174? 6 Runtime and grafton-ndi (Windows ordinary package)\par
+\par
+NDI\u174? is a registered trademark of Vizrt NDI AB. Learn more about NDI\u174? and free\par
+NDI\u174? Tools at https://ndi.video/ and https://ndi.video/tools/.\par
+\par
+The ordinary MIT-licensed Windows package of Syndocal enables the `ndi` Cargo\par
+feature (Windows platform `build.features = ["ndi"]`), delay-loads\par
+`Processing.NDI.Lib.x64.dll` (`/DELAYLOAD:Processing.NDI.Lib.x64.dll`), and\par
+bundles the unmodified Windows x64 NDI 6 runtime DLL alongside its third-party\par
+notice file:\par
+\par
+- Runtime DLL: `Processing.NDI.Lib.x64.dll` (NDI 6 Runtime `6.3.2.0`,\par
+  29,863,120 bytes, SHA-256\par
+  `2b6602075868ba4401f82f417d72424805d69b11ca86078023d0d489ff45dd84`)\par
+- Runtime component third-party notices: `licenses/Processing.NDI.Lib.Licenses.txt`\par
+  (12,347 bytes, SHA-256\par
+  `25fb86f3e3632769542a5edf5de5bd3d7d431da75b1a304529b7647d07e0d555`)\par
+- Rust FFI binding: `grafton-ndi` 0.11.0 (https://crates.io/crates/grafton-ndi,\par
+  Apache-2.0)\par
+- Official NDI SDK licensing documentation:\par
+  https://docs.ndi.video/all/developing-with-ndi/sdk/licensing\par
+- Official NDI SDK Windows installation & redistribution documentation:\par
+  https://docs.ndi.video/all/developing-with-ndi/sdk/installing-the-sdk/windows-installation\par
+- Official NDI SDK License Agreement: http://ndi.link/ndisdk_license\par
+- Official NDI 6 Runtime redistributable: http://ndi.link/NDIRedistV6\par
+\par
+NDI runtime component license terms (NDI SDK License Agreement \u167?3.d and \u167?10,\par
+scoped strictly to the proprietary `Processing.NDI.Lib.x64.dll` runtime binary\par
+and never restricting your MIT License rights in Syndocal's own source code or\par
+binaries):\par
+\par
+1. `Processing.NDI.Lib.x64.dll` is proprietary to Vizrt NDI AB and its\par
+   licensors and is distributed in object-code form only for use with\par
+   Syndocal's NDI video send and receive features.\par
+2. You must not modify the NDI runtime component; reverse engineer,\par
+   disassemble, recompile or attempt to reverse engineer the component or its\par
+   NDI protocols; circumvent its technical limitations; or remove, obscure or\par
+   alter its proprietary notices or labels. You must not redistribute the\par
+   component standalone outside an authorized application distribution.\par
+3. `Processing.NDI.Lib.x64.dll` is provided "AS IS" without warranty of any\par
+   kind from Vizrt NDI AB or its suppliers, and Vizrt NDI AB disclaims all\par
+   warranties and liability for damages arising from the NDI runtime component\par
+   to the maximum extent permitted by law.\par
+4. You must comply with relevant United States export laws and regulations\par
+   when exporting the NDI component or a product containing it.\par
+5. Copyright (C) NDI, Inc. All rights reserved. Copyright (C) 2023-2026\par
+   Vizrt NDI AB. All rights reserved.\par
+6. Third-party developers using Syndocal to develop products using the NDI\par
+   component must comply with the NDI SDK license, maintain current and complete\par
+   NDI compatibility, and include the \u167?3.d terms in their own end-user licenses.\par
+7. The NDI SDK license is governed by Swedish law, without its choice-of-law\par
+   rules, with exclusive jurisdiction in Sweden (\u167?10). These component terms\par
+   do not change the licenses of Syndocal, FFmpeg or other independent components.\par
+\par
+Packaging separation boundary: the local-only GPL-3.0 `show-asio` build\par
+(`app/scripts/build-windows-show-asio.mjs`) is compiled with\par
+`--no-default-features --features libav,spout,show-asio` and never enables the\par
+`ndi` feature, never links or delay-loads `Processing.NDI.Lib.x64.dll`, and\par
+never stages `Processing.NDI.Lib.x64.dll` in its artifact directory.\par
+}

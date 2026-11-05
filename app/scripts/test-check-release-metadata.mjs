@@ -677,6 +677,16 @@ try {
     /THIRD_PARTY_NOTICES\.md lacks required NDI notice token/,
     "missing NDI trademark notice in THIRD_PARTY_NOTICES.md is rejected",
   );
+  staticRejects(
+    (files) => {
+      files.set(
+        "app/src-tauri/windows/THIRD_PARTY_NOTICES.rtf",
+        replaceOnce(readRepoFile("app/src-tauri/windows/THIRD_PARTY_NOTICES.rtf"), String.raw`NDI\u174?`, "NDI"),
+      );
+    },
+    /THIRD_PARTY_NOTICES\.rtf is stale/,
+    "a Windows license RTF that no longer matches THIRD_PARTY_NOTICES.md is rejected",
+  );
   for (const path of ["app/package.json", ".github/workflows/cross-platform.yml"]) {
     staticRejects(
       (files) => {
