@@ -173,6 +173,38 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm --dir app install --frozen-lockfile
 
+      - name: Install pinned NDI 6 Runtime from NDI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The ordinary Windows package bundles the unmodified NDI 6 Runtime
+          # DLL. CI installs it from NDI's official runtime installer (owner
+          # decision 2026-11-05; the DLL is never re-hosted). The installer must
+          # carry a valid Authenticode signature, and the installed DLL must
+          # match the pinned inventory exactly, so a newer NDI release fails
+          # closed here until the pin is reviewed and advanced.
+          $installer = Join-Path $env:RUNNER_TEMP 'NDI-6-Runtime.exe'
+          Invoke-WebRequest -Uri 'https://downloads.ndi.tv/Runtime/NDI%206%20Runtime.exe' -OutFile $installer
+          $signature = Get-AuthenticodeSignature -LiteralPath $installer
+          if ($signature.Status -ne 'Valid') { throw "NDI 6 Runtime installer signature is $($signature.Status)." }
+          Write-Host "NDI 6 Runtime installer signer: $($signature.SignerCertificate.Subject)"
+          $process = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "NDI 6 Runtime installer exited with $($process.ExitCode)." }
+          $inventory = Get-Content -LiteralPath 'qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json' -Raw | ConvertFrom-Json
+          $pin = $inventory.ndi_runtime.dll
+          $dll = Join-Path $env:ProgramFiles ('NDI\NDI 6 Runtime\v6\' + $pin.filename)
+          if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
+            Get-ChildItem -LiteralPath (Join-Path $env:ProgramFiles 'NDI') -Recurse -Filter '*.dll' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
+            throw "NDI 6 Runtime installer did not provide $dll."
+          }
+          $hash = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash
+          $version = (Get-Item -LiteralPath $dll).VersionInfo.FileVersion
+          if (-not [StringComparer]::OrdinalIgnoreCase.Equals($hash, $pin.sha256)) {
+            throw "Installed NDI runtime $version ($hash) does not match the pinned $($pin.version) ($($pin.sha256)); review and advance the inventory pin."
+          }
+          Write-Host "Pinned NDI runtime $($pin.version) installed at $dll"
+
       - name: Stage Windows runtime libraries
         if: runner.os == 'Windows'
         run: pnpm --dir app run prepare:runtime-libs
