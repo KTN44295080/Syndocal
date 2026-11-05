@@ -214,3 +214,28 @@ Checks: `tsc`; `check-perform-layout` (en/ja × 1920/1366/1280);
 localization 100%; native `tauri build --no-bundle` with 0 warnings and one
 responsive `Syndocal` window. The new controls were not exercised in the
 native window.
+
+### Native walkthrough of the fixes (2026-11-06, Claude)
+
+Driven through WebView2 CDP on isolated QA builds from `prepare-exe.py`
+(fresh `jp.seraf.ktn.syndocal.qa.*` profiles, seeded Video-only machine
+role, a copy of `c5/fixture-3l-groupfx.sdc`; one 2560×1600 display at
+DPR 2, 1280×800 CSS). No output was added, armed or blacked out; no DMX,
+and MIDI Learn never listened on a control. Evidence:
+`target/qa/native-walk-20261106/` (`walk-results.json`, screenshots).
+
+| Check | `5caf5253` | `4ea71ddb` |
+| --- | --- | --- |
+| Set up outputs… → New Output open and focused, Output type first; native kinds Display/NDI/Spout; DISPLAY1 listed | pass (958 ms) | pass (972 ms) |
+| New Output still open 6 s later | **fail**: closed by the next snapshot refresh | pass (fixed) |
+| NDI type shows endpoint + composition | pass | pass |
+| Layer groups → create panel + existing group | pass | pass |
+| Selected group name colours | white / black | white / black |
+| Assign Audio / Beat → click Group opacity → menu with Audio, no Learn listen | pass | pass |
+| Profile rows with tooltip (incl. both ellipsized) | 8/8 | 8/8 |
+| Blocked Video BO key | "VIDEO BOOUTPUT OFF" run together | "VIDEO BO  OUTPUT OFF" (fixed) |
+
+Not covered natively: adding a Display output to a second screen (only
+one display attached), the ALL hint (shown only while this machine holds
+the outputs; the blocked reason is shown instead), audio/MIDI hardware
+response, and the W1–W8 timings, which still need the owner checklist.
