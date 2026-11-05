@@ -104,3 +104,11 @@ Pending: hosted macOS compile with `-D warnings`, the in-process
 server→client loopback test (dimensions, channel order, orientation,
 release), app/DMG/PKG and Kit 2 generation; then the friend's Simple Server
 input observation. Kit 2 also repeats every Kit 1 output step.
+
+Hosted macOS run `41953799928` on `98faabbe` passed: workspace check with
+`-D warnings`, the Syphon app suite including the in-process
+server-to-client loopback (2x2 RGB-corner bytes, a second frame reusing the
+same buffer, idempotent close, no server/client alive afterwards), the
+`video` availability test, app/DMG/PKG lifecycle and Kit 2 packaging.
+Kit 2 zip SHA-256 `0d2325ce2de9be16aa8754c914ed525dc2fa7ddfe2aecb386d2feacf13a54c59`.
+External Simple Server reception remains the friend's physical gate.
