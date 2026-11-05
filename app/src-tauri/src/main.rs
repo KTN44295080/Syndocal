@@ -135336,8 +135336,7 @@ f 1 2 3
         let state_ack = loop {
             client.send_json(&request);
             let ack = client.read_ack();
-            if ack.outcome != protocol::DjLinkAckOutcome::Busy || Instant::now() >= deadline
-            {
+            if ack.outcome != protocol::DjLinkAckOutcome::Busy || Instant::now() >= deadline {
                 break ack;
             }
             std::thread::sleep(Duration::from_millis(5));
