@@ -246,3 +246,16 @@ Not covered natively: showing video on the second screen (needs taking
 the outputs through the in-app confirmation), the ALL hint (shown only while this machine holds
 the outputs; the blocked reason is shown instead), audio/MIDI hardware
 response, and the W1–W8 timings, which still need the owner checklist.
+
+Taking the outputs for a picture on DISPLAY2 is **not yet achieved**
+(2026-11-06). On the `4ea71ddb` QA build the main window already held a
+lighting + video lease at startup, so Setup > I/O > Active / Standby >
+Advanced "Arm selected role" (role Video) first failed with "Select one
+exact active output lease"; after Relinquish → Acquire selected-role lease
+(`held_active: video`) → select it → Arm, no error, no in-app dialog and no
+native dialog appeared, and ownership stayed `effective Standby, Ready,
+ProjectSwapDisarmed` with Display 2's window "blocked" (Open/Reopen
+disabled). Whether this is a product defect or a missing step (the C5
+harness uses acquire video → arm → relinquish → acquire both → open
+display) is still to be isolated. Lighting stayed not allowed throughout.
+Driver scripts: `target/qa/native-walk-20261106/scripts/`.
