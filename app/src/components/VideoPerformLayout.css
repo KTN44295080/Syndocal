@@ -155,7 +155,7 @@
 .videoPerformBlackoutHint.blocked { color: var(--theme-warn); min-width: 0; }
 .videoPerformBlackoutHint.blocked > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 .videoPerformBlackoutShort { display: none; }
-.videoPerformMaster button[data-blackout-blocked] .videoPerformBlackoutShort { display: inline; }
+.videoPerformMaster button[data-blackout-blocked] .videoPerformBlackoutShort { display: inline; margin-inline-start: .6em; }
 .videoPerformFieldLabel { white-space: nowrap; }
 @container perform-controls (max-width: 420px) {
   .videoPerformBlackoutRow { grid-template-columns: minmax(0, 1fr); }
@@ -177,7 +177,7 @@
   .videoPerformBlackoutHint { display: none; }
   /* Short panes have no room for the caption: the key itself names the state. */
   .videoPerformMaster button[data-blackout-blocked] .videoPerformBlackoutLabel { display: none; }
-  .videoPerformMaster button[data-blackout-blocked] .videoPerformBlackoutShort { display: inline; }
+  .videoPerformMaster button[data-blackout-blocked] .videoPerformBlackoutShort { display: inline; margin-inline-start: 0; }
 }
 @container perform-controls (max-width: 340px) {
   .videoPerformFieldLabel { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }

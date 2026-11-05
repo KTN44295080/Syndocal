@@ -1,4 +1,4 @@
-import { createEffect, on } from "solid-js";
+import { createEffect, on, onMount } from "solid-js";
 import type { VideoOutputConfigDraft } from "../editorDrafts";
 import type {
   CompositionSummary,
@@ -110,6 +110,10 @@ let handledOutputToolRequest = 0;
 
 export function SetupVideoPanel(props: SetupVideoPanelProps) {
   let outputTool: HTMLDetailsElement | undefined;
+  // Decided once when Setup > Video is shown. A reactive `open` binding would be
+  // re-applied on every project snapshot refresh and close a disclosure the
+  // operator (or Perform's Set up outputs…) had just opened.
+  onMount(() => { if (outputTool && props.outputs.length === 0) outputTool.open = true; });
   createEffect(on(() => props.outputToolRequest ?? 0, (request) => {
     if (request <= handledOutputToolRequest || !outputTool) return;
     handledOutputToolRequest = request;
@@ -150,9 +154,8 @@ export function SetupVideoPanel(props: SetupVideoPanelProps) {
                     />
                   </div>
                 </details>
-                {/* With no outputs yet, creating one is the only next step: start open. */}
-                <details class="ioDisclosure videoSetupToolDisclosure" data-video-setup-tool="outputs"
-                  ref={outputTool} open={props.outputs.length === 0}>
+                {/* With no outputs yet, creating one is the only next step: it starts open (onMount). */}
+                <details class="ioDisclosure videoSetupToolDisclosure" data-video-setup-tool="outputs" ref={outputTool}>
                   <summary>New Output</summary>
                   <div class="ioDisclosureBody">
                     <VideoOutputCreatePanel
