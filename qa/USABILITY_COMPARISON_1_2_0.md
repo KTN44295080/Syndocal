@@ -242,20 +242,25 @@ output succeeded in 505 ms (1 → 2 outputs, "Display output added.", Display 2
 1920x1200 in Projection Surfaces; `target/qa/native-walk-20261106/display2/`).
 Outputs were not taken, so no window opened on it.
 
-Not covered natively: showing video on the second screen (needs taking
-the outputs through the in-app confirmation), the ALL hint (shown only while this machine holds
+Not covered natively: the ALL hint text before this run (shown only while this machine holds
 the outputs; the blocked reason is shown instead), audio/MIDI hardware
 response, and the W1–W8 timings, which still need the owner checklist.
 
-Taking the outputs for a picture on DISPLAY2 is **not yet achieved**
-(2026-11-06). On the `4ea71ddb` QA build the main window already held a
-lighting + video lease at startup, so Setup > I/O > Active / Standby >
-Advanced "Arm selected role" (role Video) first failed with "Select one
-exact active output lease"; after Relinquish → Acquire selected-role lease
-(`held_active: video`) → select it → Arm, no error, no in-app dialog and no
-native dialog appeared, and ownership stayed `effective Standby, Ready,
-ProjectSwapDisarmed` with Display 2's window "blocked" (Open/Reopen
-disabled). Whether this is a product defect or a missing step (the C5
-harness uses acquire video → arm → relinquish → acquire both → open
-display) is still to be isolated. Lighting stayed not allowed throughout.
-Driver scripts: `target/qa/native-walk-20261106/scripts/`.
+**Picture on DISPLAY2: pass** (2026-11-06, `4ea71ddb` QA build, Video-only
+machine role). The main window holds a lighting + video lease at startup;
+a video-only Arm needs a video-only lease. Sequence that worked, same as the
+C5 harness: relinquish → acquire video lease → Arm → native Warning/Yes-No
+"出力制御の確認" (`#32770`, parented to the main window; found with
+EnumWindows — UI Automation did not list it) → Yes → ownership `Video /
+OwnedByMachineRole`, video allowed, **lighting not allowed throughout** →
+relinquish → acquire lighting + video lease (role stays Video) → Open/Reopen
+output for Display 2 → "Window open / 1920x1200", libav 117/117, 288 frames;
+the DISPLAY2 capture shows the moving transformed-group test picture
+(`target/qa/native-walk-20261106/arm-probe/25-display2-later.png`). With the
+outputs held, Perform shows "ALL in the top bar stops both." and an
+unblocked VIDEO BO key. Not a product defect: an operator sees the same
+native dialog. Display open fails with "Exactly one active or recoverable
+lease" until a lighting + video lease is held — the Advanced lease control
+derives its role from the machine role, so choosing Both there would also
+change the machine role; the plain "Enable Output" path takes both outputs
+(DMX included). Driver scripts: `target/qa/native-walk-20261106/scripts/`.
