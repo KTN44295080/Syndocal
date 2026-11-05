@@ -97639,12 +97639,14 @@ mod tests {
             ..DmxOutputConfig::default()
         });
 
+        // A wall-clock bound, not a tick count: a loaded CI runner can take
+        // longer than 20 ticks to publish the snapshot.
         engine.send(EngineCommand::SetAllBlackout(true)).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
         let mut snapshot = engine.snapshot();
-        for _ in 0..20 {
-            if snapshot.blackout && snapshot.video.blackout {
-                break;
-            }
+        while !(snapshot.blackout && snapshot.video.blackout)
+            && std::time::Instant::now() < deadline
+        {
             std::thread::sleep(DMX_TICK_INTERVAL);
             snapshot = engine.snapshot();
         }
@@ -97652,12 +97654,12 @@ mod tests {
         assert!(snapshot.video.blackout);
 
         engine.send(EngineCommand::SetAllBlackout(false)).unwrap();
-        for _ in 0..20 {
-            snapshot = engine.snapshot();
-            if !snapshot.blackout && !snapshot.video.blackout {
-                break;
-            }
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        snapshot = engine.snapshot();
+        while (snapshot.blackout || snapshot.video.blackout) && std::time::Instant::now() < deadline
+        {
             std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
         }
         assert!(!snapshot.blackout);
         assert!(!snapshot.video.blackout);
