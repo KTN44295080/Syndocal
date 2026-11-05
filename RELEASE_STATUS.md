@@ -2,7 +2,7 @@
 
 ## 2026-11-05 alpha.83 group FX performance and Syphon friend kit candidate
 
-Current development metadata is `1.2.0-alpha.83`. Resident group FX passed live C5 and the 30-minute Display soak at `2eea47b5` (60 fps, private growth 117.8 MB of a 134.2 MB bound); the macOS Syphon friend kit is tracked in [the checkpoint](qa/SYPHON_FRIEND_KIT_2026-11-02.md). Alpha.82 is superseded; distributed bytes remain immutable. External Syphon reception and hardware acceptance remain physical gates.
+Current development metadata is `1.2.0-alpha.84`. Resident group FX passed live C5 and the 30-minute Display soak at `2eea47b5` (60 fps, private growth 117.8 MB of a 134.2 MB bound); the macOS Syphon friend kit is tracked in [the checkpoint](qa/SYPHON_FRIEND_KIT_2026-11-02.md). Alpha.82 is superseded; distributed bytes remain immutable. External Syphon reception and hardware acceptance remain physical gates.
 
 ## 2026-10-14 alpha.82 native dispatch repair candidate
 

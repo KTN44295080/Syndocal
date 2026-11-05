@@ -13,12 +13,16 @@ const project = JSON.parse(readFileSync(projectUrl, 'utf8'));
 const collectorSource = readFileSync(collector, 'utf8');
 const validator = collectorSource.match(/\/\/ BEGIN DIAGNOSTIC VALIDATOR[^\n]*\n([\s\S]*?)\/\/ END DIAGNOSTIC VALIDATOR/)[1];
 const commit = 'a'.repeat(40);
-const kit = { schema_version: 1, commit, version: '1.2.0-alpha.83', syphon_input_enabled: false };
-const goodReport = () => ({ schema_version: 1, process_id: 123, app_version: kit.version, build_commit: commit,
-  input_enabled: false, external_client_verified: false, routes: { '1': { output_id: 1, server_name: 'Syndocal-Syphon-Test',
+const kit = { schema_version: 2, commit, version: '1.2.0-alpha.84', syphon_input_enabled: true };
+const goodReport = () => ({ schema_version: 2, process_id: 123, app_version: kit.version, build_commit: commit,
+  input_enabled: true, external_client_verified: false, routes: { '1': { output_id: 1, server_name: 'Syndocal-Syphon-Test',
     native: { macos_version: '15.0', metal_device_name: 'Test Metal', has_unified_memory: true },
     frames_published: 500, last_publish_latency_ms: 0.2, width: 1920, height: 1080, route_state: 'native_closed',
-    native_retired: true, last_error: null, output_ownership: { effective_role: 'Standby' }, observed_unix_ms: Date.now() } } });
+    native_retired: true, last_error: null, output_ownership: { effective_role: 'Standby' }, observed_unix_ms: Date.now() } }, inputs: { '2': {
+      input_id: 2, source_id: 2, selected_server: JSON.stringify({name:'Simple Server',app_name:'Simple Server',uuid:'test-uuid'}),
+      frames_received: 500, width: 640, height: 480, last_receive_latency_ms: 0.3,
+      native_retired: true, route_state: 'native_closed', last_error: null, observed_unix_ms: Date.now()
+    } } });
 const validate = (report, manifest = kit) => JSON.parse(JSON.stringify(runInNewContext(`${validator}\ncheckDiagnostic(report, kit, now)`, { report, kit: manifest, now: Date.now() })));
 
 test('friend project has no file/device/network sources or enabled lighting', () => {
@@ -56,9 +60,12 @@ test('diagnostic checks require exact build, schema, publication, close and plau
   assert.equal(good.test_route_published, true);
   assert.equal(good.test_route_native_retired, true);
   assert.equal(good.test_route_1920x1080, true);
+  assert.equal(good.input_received, true);
+  assert.equal(good.input_no_native_error, true);
+  assert.equal(good.input_native_retired, true);
   for (const change of [
-    r => { r.schema_version = 2; },
-    r => { r.input_enabled = true; },
+    r => { r.schema_version = 1; },
+    r => { r.input_enabled = false; },
     r => { r.build_commit = 'b'.repeat(40); },
     r => { r.app_version = 'other'; },
     r => { r.routes['1'].server_name = 'Other'; },
@@ -94,7 +101,7 @@ test('collector creates an explicitly incomplete package when evidence is missin
     for (const key of ['report_json_valid', 'report_schema_valid', 'matched_build', 'test_route_published', 'test_route_native_retired']) assert.equal(manifest.diagnostic_checks[key], false);
     assert.equal(manifest.screenshots_collected, 0);
     assert.equal(manifest.physical_acceptance, 'requires_owner_review');
-    assert.equal(manifest.syphon_input, 'not_built');
+    assert.equal(manifest.syphon_input, 'requires_owner_review');
     assert.ok(readdirSync(desktop).some(n => n.endsWith('.zip')));
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
@@ -102,7 +109,7 @@ test('collector creates an explicitly incomplete package when evidence is missin
 for (const [name, report, expected] of [
   ['matching report', JSON.stringify(goodReport()), true],
   ['invalid JSON', '{this is invalid JSON', false],
-  ['old schema', JSON.stringify({ ...goodReport(), schema_version: 2 }), false],
+  ['old schema', JSON.stringify({ ...goodReport(), schema_version: 1 }), false],
   ['different build', JSON.stringify({ ...goodReport(), build_commit: 'b'.repeat(40) }), false],
 ]) {
   test(`macOS collector validates and retains ${name}`, { skip: process.platform !== 'darwin' }, () => {
@@ -127,3 +134,51 @@ for (const [name, report, expected] of [
     } finally { rmSync(home, { recursive: true, force: true }); }
   });
 }
+
+
+test('Kit 2 input evidence rejects absent, malformed, stale and failed-close records', () => {
+  for (const change of [
+    r => { r.inputs = {}; },
+    r => { r.inputs['2'].frames_received = 0; },
+    r => { r.inputs['2'].width = 0; },
+    r => { r.inputs['2'].height = 8193; },
+    r => { r.inputs['2'].selected_server = ''; },
+    r => { r.inputs['2'].last_receive_latency_ms = -1; },
+    r => { r.inputs['2'].observed_unix_ms -= 86401000; },
+    r => { r.inputs['2'].observed_unix_ms += 301000; },
+  ]) {
+    const report = goodReport(); change(report);
+    assert.equal(validate(report).input_received, false);
+    assert.equal(validate(report).input_native_retired, false);
+    assert.equal(validate(report).test_route_published, true, 'bad input never changes output evidence');
+  }
+  const open = goodReport(); open.inputs['2'].native_retired = false;
+  assert.equal(validate(open).input_received, true);
+  assert.equal(validate(open).input_native_retired, false);
+  const failed = goodReport(); failed.inputs['2'].last_error = 'close failed';
+  failed.inputs['2'].route_state = 'failed';
+  failed.inputs['2'].native_retired = false;
+  assert.equal(validate(failed).input_native_retired, false);
+  assert.equal(validate(failed).input_no_native_error, false);
+  const old = goodReport(); old.schema_version = 1;
+  assert.equal(validate(old).input_received, false);
+  assert.equal(validate(goodReport(), {...kit, schema_version:3}).matched_build, false);
+  const concurrent = goodReport();
+  concurrent.inputs['3'] = {...concurrent.inputs['2'], input_id:3, native_retired:false, route_state:'constructed'};
+  assert.equal(validate(concurrent).input_received, true);
+  assert.equal(validate(concurrent).input_native_retired, false, 'one closed client cannot hide another live owner');
+  concurrent.inputs['3'].native_retired = true;
+  concurrent.inputs['3'].route_state = 'native_closed_after_error';
+  concurrent.inputs['3'].last_error = 'publisher vanished before recovery';
+  assert.equal(validate(concurrent).input_native_retired, true, 'retirement and expected restart errors are separate evidence');
+});
+
+test('Kit 2 guide and collector include the external input observation and third screenshot', () => {
+  const guide = readFileSync(new URL('../../tools/distribution/syphon-friend/SYPHON-FRIEND-TEST-GUIDE.md', import.meta.url), 'utf8');
+  const observation = readFileSync(new URL('../../tools/distribution/syphon-friend/observations.txt', import.meta.url), 'utf8');
+  assert.match(guide, /Simple Server/);
+  assert.match(guide, /screenshot3\.png/);
+  assert.match(guide, /20 min/);
+  assert.match(observation, /Missing-server error and restart recovery/);
+  assert.match(collectorSource, /for name in screenshot1\.png screenshot2\.png screenshot3\.png/);
+});

@@ -378,6 +378,8 @@ mod show_spout_transport;
 mod spout_transport;
 #[cfg(all(feature = "syphon", target_os = "macos"))]
 mod syphon_native;
+mod syphon_input;
+mod syphon_input_catalog;
 mod syphon_output_policy;
 #[cfg(any(all(feature = "syphon", target_os = "macos"), test))]
 mod syphon_transport;
@@ -570,6 +572,7 @@ mod flat_invoke_args_tests {
 
 use capture_catalog::{list_video_camera_profiles, probe_video_camera_profile};
 use ndi_catalog::list_ndi_sources_v1;
+use syphon_input_catalog::discover_syphon_sources;
 use control_plane_query::{
     get_control_plane_query_capabilities, get_control_plane_query_schema_catalog,
     poll_control_plane_observation_events, query_control_plane_output_ownership,
@@ -74366,6 +74369,12 @@ fn live_source_faults_for_active_routes(
         append_spout_input_faults(active_routes, spout_transport, &mut faults, false)?;
         faults
     };
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    let faults = {
+        let mut faults = faults;
+        append_syphon_input_faults(active_routes, &mut faults, false)?;
+        faults
+    };
     Ok(faults)
 }
 
@@ -74390,7 +74399,35 @@ fn live_source_faults_for_active_routes_nonblocking(
         append_spout_input_faults(active_routes, spout_transport, &mut faults, true)?;
         faults
     };
+    #[cfg(all(feature = "syphon", target_os = "macos"))]
+    let faults = {
+        let mut faults = faults;
+        append_syphon_input_faults(active_routes, &mut faults, true)?;
+        faults
+    };
     Ok(faults)
+}
+
+#[cfg(all(feature = "syphon", target_os = "macos"))]
+fn append_syphon_input_faults(
+    active_routes: &[video::ExternalVideoTransportRoute],
+    faults: &mut Vec<ExternalVideoCaptureFaultStatus>,
+    nonblocking: bool,
+) -> Result<(), String> {
+    for route in active_routes.iter().filter(|route| {
+        route.direction == video::ExternalVideoTransportDirection::Input
+            && route.backend_id == "syphon"
+    }) {
+        if let Some(message) = syphon_input::current_input_fault(route.route_id, nonblocking)? {
+            faults.push(ExternalVideoCaptureFaultStatus {
+                route_id: route.route_id,
+                backend_id: route.backend_id.clone(),
+                label: route.label.clone(),
+                message,
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "ndi")]
@@ -74818,9 +74855,16 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
             return Ok(());
         }
         if route.backend_id == "syphon" {
-            if route.direction != video::ExternalVideoTransportDirection::Output {
+            if route.direction == video::ExternalVideoTransportDirection::Input {
+                #[cfg(all(feature = "syphon", target_os = "macos"))]
+                {
+                    syphon_input::start_route(route)?;
+                    self.recording.start_route(route)?;
+                    return Ok(());
+                }
+                #[cfg(not(all(feature = "syphon", target_os = "macos")))]
                 return Err(video::ExternalVideoTransportDriverError {
-                    message: "Syphon input is not implemented".to_string(),
+                    message: "Syphon input requires a macOS build with the syphon feature".to_owned(),
                 });
             }
             #[cfg(all(feature = "syphon", target_os = "macos"))]
@@ -74910,6 +74954,18 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
             return Ok(());
         }
         if route.backend_id == "syphon" {
+            if route.direction == video::ExternalVideoTransportDirection::Input {
+                #[cfg(all(feature = "syphon", target_os = "macos"))]
+                {
+                    syphon_input::stop_route(route)?;
+                    self.recording.stop_route(route)?;
+                    return Ok(());
+                }
+                #[cfg(not(all(feature = "syphon", target_os = "macos")))]
+                return Err(video::ExternalVideoTransportDriverError {
+                    message: "Syphon input requires a macOS build with the syphon feature".to_owned(),
+                });
+            }
             #[cfg(all(feature = "syphon", target_os = "macos"))]
             {
                 if let Some(admission) = self.authoring_admission.as_ref() {
@@ -89665,9 +89721,6 @@ fn normalize_video_output_config(
 }
 
 fn ensure_video_input_backend_available(kind: &VideoSourceKind) -> Result<(), String> {
-    if matches!(kind, VideoSourceKind::Syphon) {
-        return Err("Syphon input is not implemented".to_string());
-    }
     let Some((backend_id, feature_label)) = video_input_backend(kind) else {
         return Ok(());
     };
@@ -122229,11 +122282,12 @@ f 1 2 3
             video_output_backend(&VideoOutputKind::SyphonServer),
             Some(("syphon", "Syphon output"))
         );
-        assert!(
-            ensure_video_input_backend_available(&VideoSourceKind::Syphon)
-                .unwrap_err()
-                .contains("Syphon input is not implemented")
-        );
+        let input = ensure_video_input_backend_available(&VideoSourceKind::Syphon);
+        if cfg!(all(target_os = "macos", feature = "syphon")) {
+            assert!(input.is_ok());
+        } else {
+            assert!(input.unwrap_err().contains("Syphon input"));
+        }
     }
 
     #[test]
@@ -137308,6 +137362,7 @@ fn main() {
             start_art_rdm_full_discovery,
             list_video_camera_profiles,
             list_ndi_sources_v1,
+            discover_syphon_sources,
             probe_video_camera_profile,
             list_video_display_monitors,
             create_scene_authoritative_v1,

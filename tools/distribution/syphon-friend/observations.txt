@@ -12,6 +12,11 @@ Blackout publishes solid black, stays connected / Blackoutで接続を維持し�
 Unblackout resumes motion / Blackout解除で動きが戻る: NOT TESTED
 Standby/Stop removes server, both apps responsive / 停止でサーバー消失・応答維持: NOT TESTED
 Diagnostic timestamp and build match this run / 診断の時刻とビルドが一致: NOT TESTED
-Syphon input / 入力: NOT BUILT (skip / 対象外)
+Simple Server selected name/app/UUID / 選択サーバー名・アプリ・UUID:
+Input dimensions / 入力解像度:
+Simple Server input visible in preview/output, colors/orientation/motion / 入力映像・色・向き・動き: NOT TESTED
+Missing-server error and restart recovery / サーバー停止時のエラーと再起動復帰: NOT TESTED
+Input layer removed/project closed, both apps responsive / 入力削除・プロジェクト終了と応答: NOT TESTED
+Screenshot 3 saved / 入力スクリーンショット保存: NOT TESTED
 
 Notes / 補足:

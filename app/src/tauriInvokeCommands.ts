@@ -115,6 +115,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "disconnect_midi_feedback",
   "disconnect_remote_client",
   "discover_art_rdm_devices",
+  "discover_syphon_sources",
   "discover_usb_rdm_devices",
   "dmx_input_status",
   "download_gdtf_from_url",

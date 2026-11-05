@@ -91,6 +91,8 @@ pub struct NdiAwareVideoFrameDecoder {
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     spout_inputs: crate::spout_transport::SpoutInputRegistry,
     capture_inputs: crate::capture_transport::CaptureInputRegistry,
+    #[cfg(all(target_os = "macos", feature = "syphon"))]
+    syphon_inputs: crate::syphon_input::Inputs,
 }
 
 impl NdiAwareVideoFrameDecoder {
@@ -110,6 +112,8 @@ impl NdiAwareVideoFrameDecoder {
             #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
             spout_inputs: Arc::new(Mutex::new(HashMap::new())),
             capture_inputs: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(all(target_os = "macos", feature = "syphon"))]
+            syphon_inputs: crate::syphon_input::Inputs::default(),
         }
     }
 
@@ -165,6 +169,26 @@ impl NdiAwareVideoFrameDecoder {
             && !self.injected_frames.contains_key(&request.layer_id)
         {
             return self.decode_ndi_frame_shared(request);
+        }
+        if request.source.kind == VideoSourceKind::Syphon
+            && !self.injected_frames.contains_key(&request.layer_id)
+        {
+            #[cfg(all(target_os = "macos", feature = "syphon"))]
+            return self
+                .syphon_inputs
+                .decode(request)
+                .map(Some)
+                .map_err(|message| video::VideoDecodeError::Decode {
+                    layer_id: request.layer_id,
+                    label: request.label.clone(),
+                    message,
+                });
+            #[cfg(not(all(target_os = "macos", feature = "syphon")))]
+            return Err(video::VideoDecodeError::Decode {
+                layer_id: request.layer_id,
+                label: request.label.clone(),
+                message: "Syphon input requires a macOS build with the syphon feature".to_owned(),
+            });
         }
         if self.is_plain_file(request) {
             return video::VideoFrameDecoder::decode_input_frame_shared(
@@ -269,6 +293,8 @@ impl NdiAwareVideoFrameDecoder {
 impl video::VideoFrameDecoder for NdiAwareVideoFrameDecoder {
     fn retain_layers(&mut self, layer_ids: &[VideoLayerId]) {
         video::VideoFrameDecoder::retain_layers(&mut self.files, layer_ids);
+        #[cfg(all(target_os = "macos", feature = "syphon"))]
+        self.syphon_inputs.retain_layers(layer_ids);
         self.injected_frames
             .retain(|layer_id, _| layer_ids.contains(layer_id));
         #[cfg(feature = "ndi")]
@@ -277,6 +303,12 @@ impl video::VideoFrameDecoder for NdiAwareVideoFrameDecoder {
         if let Ok(mut frames) = self.capture_inputs.lock() {
             frames.retain(|layer_id, _| layer_ids.contains(layer_id));
         }
+    }
+
+    fn release_layer(&mut self, layer_id: VideoLayerId) {
+        video::VideoFrameDecoder::release_layer(&mut self.files, layer_id);
+        #[cfg(all(target_os = "macos", feature = "syphon"))]
+        self.syphon_inputs.release_layer(layer_id);
     }
 
     fn decode_frame(
@@ -289,9 +321,15 @@ impl video::VideoFrameDecoder for NdiAwareVideoFrameDecoder {
             frame.pts_ms = request.position_ms;
             return Ok(Some(frame));
         }
+        if request.source.kind == VideoSourceKind::Syphon {
+            return self
+                .decode_frame_shared(request)
+                .map(|frame| frame.map(|frame| (*frame).clone()));
+        }
         #[cfg(feature = "ndi")]
         if request.source.kind == VideoSourceKind::Ndi {
-            return self.decode_ndi_frame_shared(request)
+            return self
+                .decode_ndi_frame_shared(request)
                 .map(|frame| frame.map(|frame| (*frame).clone()));
         }
         #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
@@ -414,6 +452,14 @@ impl video::VideoFrameDecoder for NdiAwareVideoFrameDecoder {
     ) -> Result<Option<Arc<video::VideoFrame>>, video::VideoDecodeError> {
         if cancellation.is_cancelled() {
             return Err(video::VideoDecodeError::Cancelled);
+        }
+        if input.request.source.kind == VideoSourceKind::Syphon {
+            let frame = self.decode_frame_shared(&input.request)?;
+            return if cancellation.is_cancelled() {
+                Err(video::VideoDecodeError::Cancelled)
+            } else {
+                Ok(frame)
+            };
         }
         if input.request.source.kind == VideoSourceKind::File {
             return video::VideoFrameDecoder::decode_input_frame_shared_with_cancellation(

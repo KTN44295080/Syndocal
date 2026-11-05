@@ -3649,7 +3649,7 @@ fn external_backend_status(id: &str, label: &str, sdk_name: &str) -> VideoBacken
             id: id.to_string(),
             label: label.to_string(),
             state: VideoBackendState::Available,
-            detail: "Syphon Metal output is built in; servers initialize on demand. Syphon input is not implemented.".to_string(),
+            detail: "Syphon Metal input and output are built in; servers and clients initialize on demand.".to_string(),
         };
     }
     VideoBackendStatus {
@@ -8821,21 +8821,12 @@ pub fn build_external_video_io_route_plans(
     }
 }
 
-// Backend availability covers the implemented direction only. Saved Syphon
-// inputs remain readable, but an output-capable build must never activate them.
+// Both Syphon directions use the same platform/feature availability gate.
 fn external_video_input_backend_route_state(
     status: &VideoRuntimeStatus,
     backend_id: &str,
 ) -> ExternalVideoBackendRouteState {
-    let mut backend = external_video_backend_route_state(status, backend_id);
-    if backend_id == "syphon" {
-        let detail = "Syphon input is not implemented";
-        backend.ready = false;
-        backend.state = Some(VideoBackendState::NotBuilt);
-        backend.detail = Some(detail.to_string());
-        backend.issue = Some(detail.to_string());
-    }
-    backend
+    external_video_backend_route_state(status, backend_id)
 }
 
 fn external_video_backend_route_state(
@@ -13111,8 +13102,9 @@ mod tests {
             .unwrap();
         if cfg!(all(feature = "syphon", target_os = "macos")) {
             assert_eq!(syphon.state, VideoBackendState::Available);
-            assert!(syphon.detail.contains("Syphon Metal output is built in"));
-            assert!(syphon.detail.contains("Syphon input is not implemented"));
+            assert!(syphon
+                .detail
+                .contains("Syphon Metal input and output are built in"));
         } else if cfg!(target_os = "macos") {
             assert_eq!(syphon.state, VideoBackendState::NotBuilt);
             assert!(syphon.detail.contains("not linked"));
@@ -13123,25 +13115,23 @@ mod tests {
     }
 
     #[test]
-    fn syphon_output_availability_does_not_enable_unsupported_input() {
-        let status = VideoRuntimeStatus {
-            backends: vec![VideoBackendStatus {
-                id: "syphon".to_string(),
-                label: "Syphon output".to_string(),
-                state: VideoBackendState::Available,
-                detail: "Output bridge is built in".to_string(),
-            }],
-        };
-        let output = external_video_backend_route_state(&status, "syphon");
-        assert!(output.ready);
-        assert!(output.issue.is_none());
-        let input = external_video_input_backend_route_state(&status, "syphon");
-        assert!(!input.ready);
-        assert_eq!(input.state, Some(VideoBackendState::NotBuilt));
-        assert!(input
-            .issue
-            .unwrap()
-            .contains("Syphon input is not implemented"));
+    fn syphon_input_and_output_follow_backend_availability() {
+        for state in [VideoBackendState::Available, VideoBackendState::NotBuilt] {
+            let status = VideoRuntimeStatus {
+                backends: vec![VideoBackendStatus {
+                    id: "syphon".to_string(),
+                    label: "Syphon".to_string(),
+                    state: state.clone(),
+                    detail: "Platform/feature availability".to_string(),
+                }],
+            };
+            let output = external_video_backend_route_state(&status, "syphon");
+            let input = external_video_input_backend_route_state(&status, "syphon");
+            assert_eq!(input.ready, state == VideoBackendState::Available);
+            assert_eq!(input.ready, output.ready);
+            assert_eq!(input.state, Some(state));
+            assert_eq!(input.issue, output.issue);
+        }
     }
 
     #[test]

@@ -79,8 +79,8 @@ for (const marker of [
 ]) required(sidecar, marker, "sidecar crash/rate boundary");
 
 // 2907a2ea added the two project-Open video-authoring lease routes.
-required(ai0, "invokeManifest.length, 513", "source coverage inventory");
-required(routing, "manifest.length, 513", "frontend routing inventory");
+required(ai0, "invokeManifest.length, 514", "source coverage inventory");
+required(routing, "manifest.length, 514", "frontend routing inventory");
 
 if (process.argv.includes("--self-test")) {
   assert.equal(["parity", "reply-loss", "authority", "gap", "rate", "saturation"].length, 6);

@@ -107,14 +107,15 @@ jobs:
           bash app/scripts/prepare-syphon.sh 2>&1 | tee target/qa/macos-artifact/syphon-framework-build.txt
           cp target/syphon/source-receipt.txt target/qa/macos-artifact/syphon-source-receipt.txt
 
-      - name: Compile macOS Syphon and test platform-independent output policy
+      - name: Compile macOS Syphon and test input loopback and output policy
         env:
           RUSTFLAGS: -D warnings
         run: |
           set -o pipefail
           cargo check --workspace --all-targets --locked 2>&1 | tee target/qa/macos-artifact/syphon-workspace-check.txt
           cargo test -p syndocal --bin syndocal syphon_ --locked -- --test-threads=1 2>&1 | tee target/qa/macos-artifact/syphon-policy-tests.txt
-          cargo test -p video --features syphon --lib syphon_output_availability_does_not_enable_unsupported_input --locked 2>&1 | tee target/qa/macos-artifact/syphon-input-disabled-tests.txt
+          cargo test -p syndocal --bin syndocal syphon_native::tests::syphon_native_client_loopback_preserves_dimensions_rgba_orientation_and_closes --locked -- --exact --test-threads=1 2>&1 | tee target/qa/macos-artifact/syphon-client-loopback-tests.txt
+          cargo test -p video --features syphon --lib syphon_input_and_output_follow_backend_availability --locked 2>&1 | tee target/qa/macos-artifact/syphon-input-availability-tests.txt
           node app/scripts/check-syphon-output-ui.mjs | tee target/qa/macos-artifact/syphon-ui-tests.txt
           node --test app/scripts/test-syphon-friend-kit.mjs | tee target/qa/macos-artifact/syphon-friend-kit-tests.tap
           bash -n tools/distribution/collect-syphon-acceptance.command
@@ -216,7 +217,7 @@ jobs:
 
       - name: Test actual macOS installer choices, updates and removal
         id: pkg_lifecycle
-        run: node app/scripts/check-macos-installer.mjs target/release/bundle/pkg/Syndocal_1.2.0-alpha.83_arm64.pkg target/qa/macos-artifact/installer-lifecycle.json target/release/bundle/macos/Syndocal.app
+        run: node app/scripts/check-macos-installer.mjs target/release/bundle/pkg/Syndocal_1.2.0-alpha.84_arm64.pkg target/qa/macos-artifact/installer-lifecycle.json target/release/bundle/macos/Syndocal.app
 
       - name: Package remote friend Syphon acceptance kit
         run: node app/scripts/pack-syphon-friend-kit.mjs

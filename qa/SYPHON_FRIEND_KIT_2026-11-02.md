@@ -65,3 +65,42 @@ The older [Syphon implementation handoff](SYPHON_OUTPUT_2026-10-20.md) retains
 the detailed output-runtime and broader Mac acceptance boundaries; its historical
 statements about unavailable output-authoring UI are superseded by main's
 canonical authoring routes.
+
+## 2026-11-05 Kit 2: Syphon input checkpoint
+
+Owner decision (2026-11-05): Syphon input enters 1.2.0. Product metadata is
+`1.2.0-alpha.84` for the Kit 2 distribution.
+
+- Native bridge adds bounded server discovery (`SyphonServerDirectory`, at
+  most 64 servers, name/app/uuid only), `SyphonMetalClient` creation by exact
+  UUID with an unambiguous name+app fallback after a publisher restart,
+  BGRA8/RGBA8 readback into a reused shared staging buffer, and stop/release
+  that keeps the retained owner on failure.
+- Runtime: one owner thread per input layer, demand-driven (the decoder only
+  pops a one-slot queue and unparks; no polling thread, no lock or wait on the
+  render tick). A missing or vanished server is an actionable source fault
+  and recovers when the publisher returns. Retirement keeps the JoinHandle
+  until native close succeeds.
+- The selected server identity is stored as bounded JSON in the existing
+  `source.name` field; no project-schema change. Malformed or legacy
+  free-form names are rejected with a re-select instruction.
+- Contract change: the Syphon backend detail and
+  `external_video_input_backend_route_state` no longer report input as
+  `NotBuilt` on macOS builds with `feature = "syphon"`; other platforms
+  still reject Syphon input with a specific reason.
+- Diagnostics schema 2 adds per-input records (selected server, frames
+  received, dimensions, latest receive latency, errors, close outcome);
+  the collector checks them, and the guide adds a Simple Server input step
+  with `screenshot3.png`.
+
+Evidence (Windows, isolated copy, pinned MSVC 14.44.35207): full
+`cargo test -p syndocal --bin syndocal` 2359 passed / 0 failed / 25 ignored,
+0 compiler warnings; `video` Syphon availability test passed; `tsc`,
+`check:release`, Syphon input/output UI contracts, frontend routing and the
+friend-kit node suite passed. Implementation by Codex (Sol) until its usage
+limit, then completed and reviewed by Claude.
+
+Pending: hosted macOS compile with `-D warnings`, the in-process
+server→client loopback test (dimensions, channel order, orientation,
+release), app/DMG/PKG and Kit 2 generation; then the friend's Simple Server
+input observation. Kit 2 also repeats every Kit 1 output step.

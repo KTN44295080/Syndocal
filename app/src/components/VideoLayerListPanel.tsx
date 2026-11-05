@@ -10,6 +10,7 @@ import { VideoGeneratorEditor } from "./VideoGeneratorEditor";
 import { defaultVideoGenerators } from "../videoGeneratorHelpers";
 import type { VideoGenerator } from "../types";
 import { VideoIsfEffectPanel } from "./VideoIsfEffectPanel";
+import { syphonEndpointLabel } from "../videoSyphonSources";
 
 interface VideoLayerListPanelProps {
   locale?: string;
@@ -148,7 +149,11 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
                 Video Layer name
                 <input value={layer.label} onChange={(event) => void props.onSetLayerLabel(layer.id, event.currentTarget.value)} />
               </label>
-              <span>{layer.source.path ?? layer.source.name ?? videoSourceKindLabel(layer.source.kind)}</span>
+              <Show when={layer.source.kind === "Syphon"} fallback={<span>{layer.source.path ?? layer.source.name ?? videoSourceKindLabel(layer.source.kind)}</span>}>
+                <Show when={syphonEndpointLabel(layer.source.name ?? "")} fallback={<span>Syphon server selection is invalid. Add the layer again from the server list.</span>}>
+                  {label => <span data-no-localize>{label()}</span>}
+                </Show>
+              </Show>
               <Show when={videoSourceMetadataLabel(layer.source)}>{(metadata) => <small>{metadata()}</small>}</Show>
             </div>
             <div class="videoMixerLayerDeck">

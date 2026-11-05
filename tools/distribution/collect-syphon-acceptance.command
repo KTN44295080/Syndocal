@@ -15,8 +15,8 @@ desktop="$HOME/Desktop"
 [[ -d "$desktop" ]] || { echo 'Desktop folder missing / Desktopフォルダがありません。' >&2; exit 1; }
 result_dir=$(mktemp -d "$desktop/syphon-friend-result-${stamp}-XXXXXX")
 echo "収集先 / Results: $result_dir"
-echo 'screenshots/screenshot1.png に映像、screenshot2.png にBlackoutを保存してください。'
-echo 'Save the output and blackout screenshots as screenshots/screenshot1.png and screenshot2.png in the kit folder.'
+echo 'screenshots/screenshot1.png に映像、screenshot2.png にBlackout、screenshot3.png に入力を保存してください。'
+echo 'Save the output and blackout screenshots as screenshots/screenshot1.png screenshot2.png and screenshot3.png in the kit folder.'
 echo 'observations.txt の結果を記入し、Enterを押してください。 / Complete observations.txt, then press Enter.'
 if [[ -t 0 ]]; then read -r _; fi
 sw_vers > "$result_dir/macos.txt" 2>&1
@@ -46,7 +46,7 @@ if [[ -f "$log" && ! -L "$log" ]]; then
 fi
 mkdir "$result_dir/screenshots"
 screenshots=0
-for name in screenshot1.png screenshot2.png; do
+for name in screenshot1.png screenshot2.png screenshot3.png; do
   source="$kit_dir/screenshots/$name"
   if [[ -f "$source" && ! -L "$source" ]]; then
     bytes=$(stat -f %z "$source")
@@ -69,11 +69,11 @@ if ! /usr/bin/osascript -l JavaScript - "$result_dir" > "$result_dir/diagnostic-
 function checkDiagnostic(report, kit, now) {
   function object(v) { return v !== null && typeof v === 'object' && !Array.isArray(v); }
   function integer(v) { return Number.isSafeInteger(v) && v >= 0; }
-  var validKit = object(kit) && kit.schema_version === 1 && /^[0-9a-f]{40}$/.test(kit.commit) &&
-    typeof kit.version === 'string' && kit.version.length > 0 && kit.syphon_input_enabled === false;
-  var validReport = object(report) && report.schema_version === 1 && integer(report.process_id) && report.process_id > 0 &&
+  var validKit = object(kit) && kit.schema_version === 2 && /^[0-9a-f]{40}$/.test(kit.commit) &&
+    typeof kit.version === 'string' && kit.version.length > 0 && kit.syphon_input_enabled === true;
+  var validReport = object(report) && report.schema_version === 2 && integer(report.process_id) && report.process_id > 0 &&
     typeof report.app_version === 'string' && typeof report.build_commit === 'string' && /^[0-9a-f]{40}$/.test(report.build_commit) &&
-    report.input_enabled === false && report.external_client_verified === false && object(report.routes) && Object.keys(report.routes).length <= 64;
+    report.input_enabled === true && report.external_client_verified === false && object(report.routes) && Object.keys(report.routes).length <= 64 && object(report.inputs) && Object.keys(report.inputs).length <= 64;
   var matchedBuild = validKit && validReport && report.build_commit === kit.commit && report.app_version === kit.version;
   var routes = validReport ? Object.keys(report.routes).map(function (id) { return report.routes[id]; }).filter(function (r) {
     return object(r) && r.server_name === 'Syndocal-Syphon-Test';
@@ -88,12 +88,32 @@ function checkDiagnostic(report, kit, now) {
   // Recency is only a plausibility check, never proof that this was the friend's run.
   var recent = validRoute && route.observed_unix_ms <= now + 300000 && route.observed_unix_ms >= now - 86400000;
   var current = matchedBuild && validRoute && recent;
+  var inputs = validReport ? Object.keys(report.inputs).map(function (id) { return report.inputs[id]; }) : [];
+  var retired = inputs.length > 0 && inputs.every(function (r) {
+    return object(r) && integer(r.input_id) && integer(r.source_id) && r.native_retired === true &&
+      (r.route_state === 'native_closed' || r.route_state === 'native_closed_after_error') &&
+      integer(r.observed_unix_ms) && r.observed_unix_ms <= now + 300000 && r.observed_unix_ms >= now - 86400000;
+  });
+  // The friend records the selected Simple Server identity in observations.
+  var received = inputs.filter(function (r) {
+    return object(r) && integer(r.input_id) && integer(r.source_id) && typeof r.selected_server === 'string' && r.selected_server.length > 0 && r.selected_server.length <= 16384 &&
+      integer(r.frames_received) && r.frames_received > 0 && integer(r.width) && r.width > 0 && r.width <= 8192 &&
+      integer(r.height) && r.height > 0 && r.height <= 8192 && typeof r.last_receive_latency_ms === 'number' &&
+      Number.isFinite(r.last_receive_latency_ms) && r.last_receive_latency_ms >= 0 &&
+      integer(r.observed_unix_ms) && r.observed_unix_ms <= now + 300000 && r.observed_unix_ms >= now - 86400000 &&
+      typeof r.native_retired === 'boolean' && typeof r.route_state === 'string' &&
+      (r.last_error === null || typeof r.last_error === 'string');
+  });
+  var cleanInputs = received.filter(function (r) { return r.last_error === null; });
   return { report_json_valid: object(report), report_schema_valid: !!validReport, kit_manifest_valid: !!validKit,
     matched_build: !!matchedBuild, named_test_route_valid: !!validRoute, timestamp_within_24_hours: !!recent,
     test_route_published: !!(current && route.frames_published > 0),
     test_route_native_retired: !!(current && route.native_retired && route.route_state === 'native_closed'),
     test_route_no_native_error: !!(current && route.last_error === null),
-    test_route_1920x1080: !!(current && route.width === 1920 && route.height === 1080) };
+    test_route_1920x1080: !!(current && route.width === 1920 && route.height === 1080),
+    input_received: !!(matchedBuild && received.length > 0),
+    input_no_native_error: !!(matchedBuild && cleanInputs.length > 0),
+    input_native_retired: !!(matchedBuild && retired && received.length > 0) };
 }
 function run(argv) {
   ObjC.import('Foundation');
@@ -111,13 +131,15 @@ then
   echo '{"validation_execution_failed":true,"report_schema_valid":false,"matched_build":false,"test_route_published":false,"test_route_native_retired":false}' > "$result_dir/diagnostic-checks.json"
 fi
 cat > "$result_dir/collection.json" <<EOF
-{"schema_version":1,"collected_utc":"$stamp","app_identity_verified":$app_identity,"codesign_verified":$signature,"syphon_linkage_verified":$linkage,"framework_present":$framework,"diagnostic_checks":$(cat "$result_dir/diagnostic-checks.json"),"screenshots_collected":$screenshots,"physical_acceptance":"requires_owner_review","syphon_input":"not_built"}
+{"schema_version":1,"collected_utc":"$stamp","app_identity_verified":$app_identity,"codesign_verified":$signature,"syphon_linkage_verified":$linkage,"framework_present":$framework,"diagnostic_checks":$(cat "$result_dir/diagnostic-checks.json"),"screenshots_collected":$screenshots,"physical_acceptance":"requires_owner_review","syphon_input":"requires_owner_review"}
 EOF
 cat > "$result_dir/READ-ME.txt" <<EOF
 Collection is evidence, not an acceptance verdict. Review diagnostic build/time/server,
 nonzero published frame count, ownership, any error, screenshots and observations.
 Missing/false values block the corresponding claim; stale logs do not prove this run.
-Syphon input is not built in Kit 1. Screenshot 2 records Blackout instead.
+Kit 2 adds input evidence. Screenshot 2 records Blackout; screenshot 3 records Simple Server input.
+Review input selected_server, nonzero frames_received, dimensions, latency, errors and native_retired.
+An in-process CI loopback or counters alone do not establish external Simple Server acceptance.
 収集完了は合格ではありません。診断のビルド・時刻・サーバー・フレーム数・所有権・エラー、
 スクリーンショットと観察結果を確認してください。不足や古いログは未検証として扱います。
 EOF

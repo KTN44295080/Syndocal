@@ -31,8 +31,8 @@ try {
     files.push([join(root, 'tools/distribution/syphon-friend', asset), asset]);
   }
   files.push([join(root, 'tools/distribution/collect-syphon-acceptance.command'), 'collect-syphon-acceptance.command']);
-  const receipt = { schema_version: 1, commit: sha, version, architecture: 'arm64',
-    syphon_input_enabled: false, physical_acceptance: 'pending', files: [] };
+  const receipt = { schema_version: 2, kit_generation: 2, commit: sha, version, architecture: 'arm64',
+    syphon_input_enabled: true, physical_acceptance: 'pending', files: [] };
   for (const [source, filename] of files) {
     const bytes = await readFile(source);
     if (!bytes.length) throw new Error(`Empty kit asset: ${filename}`);

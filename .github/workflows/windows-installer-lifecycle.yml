@@ -60,7 +60,7 @@ jobs:
           path: baseline
       - uses: actions/download-artifact@v5
         with:
-          name: syndocal-1.2.0-alpha.83-windows-2022
+          name: syndocal-1.2.0-alpha.84-windows-2022
           run-id: ${{ inputs.current_run_id }}
           github-token: ${{ github.token }}
           path: current

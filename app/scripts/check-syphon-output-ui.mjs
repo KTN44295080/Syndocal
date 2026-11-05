@@ -157,8 +157,7 @@ for (const value of [
   "New outputs follow the current output state and may start sending immediately.",
   "Publishes video to Syphon clients on this Mac and follows the current output state.",
   "Syphon output is available on macOS only. This saved output is preserved; choose another type to use it on this computer.",
-  "Syphon Metal output is built in; servers initialize on demand. Syphon input is not implemented.",
-  "Syphon input is not implemented",
+  "Syphon Metal input and output are built in; servers and clients initialize on demand.",
 ]) {
   assert.equal(translateUiText(value, "en"), value);
   assert.match(translateUiText(value, "ja"), /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u, value);

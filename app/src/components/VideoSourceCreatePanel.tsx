@@ -4,6 +4,7 @@ import type { VideoSourceKind } from "../types";
 import { videoSourceCanBrowseFile, videoSourceInputLabel, videoSourceInputPlaceholder } from "../videoHelpers";
 import { VideoCameraProfilePicker } from "./VideoCameraProfilePicker";
 import { VideoNdiSourcePicker } from "./VideoNdiSourcePicker";
+import { VideoSyphonSourcePicker } from "./VideoSyphonSourcePicker";
 
 interface VideoPreviewImagePanelProps {
   previewUrl: string | null;
@@ -19,7 +20,7 @@ interface VideoSourceCreatePanelProps {
   onBrowseSource: () => void | Promise<void>;
   onImportMultiple: () => void | Promise<void>;
   onAddLayer: () => void | Promise<void>;
-  /** The mounted App's typed bridge for camera and NDI discovery. */
+  /** The mounted App's typed bridge for input discovery. */
   invokeCommand?: FrontendTauriInvoke;
 }
 
@@ -36,17 +37,20 @@ export function VideoPreviewImagePanel(props: VideoPreviewImagePanelProps) {
 export function VideoSourceCreatePanel(props: VideoSourceCreatePanelProps) {
   const [cameraAddAllowed, setCameraAddAllowed] = createSignal(false);
   const [ndiAddAllowed, setNdiAddAllowed] = createSignal(false);
+  const [syphonAddAllowed, setSyphonAddAllowed] = createSignal(false);
 
   const selectSourceKind = (kind: VideoSourceKind) => {
     setCameraAddAllowed(false);
     setNdiAddAllowed(false);
-    if (kind === "Camera" || kind === "Ndi" || props.sourceKind === "Ndi") props.onSetPath("");
+    setSyphonAddAllowed(false);
+    if (kind === "Camera" || kind === "Ndi" || kind === "Syphon" || props.sourceKind === "Ndi" || props.sourceKind === "Syphon") props.onSetPath("");
     props.onSetSourceKind(kind);
   };
 
   const handleAddLayer = async () => {
     if (props.sourceKind === "Camera" && !cameraAddAllowed()) return;
     if (props.sourceKind === "Ndi" && !ndiAddAllowed()) return;
+    if (props.sourceKind === "Syphon" && !syphonAddAllowed()) return;
     await props.onAddLayer();
   };
 
@@ -69,6 +73,7 @@ export function VideoSourceCreatePanel(props: VideoSourceCreatePanelProps) {
         <input value={props.label} onInput={(event) => props.onSetLabel(event.currentTarget.value)} />
       </label>
 
+      <Show when={props.sourceKind === "Syphon"} fallback={
       <Show when={props.sourceKind === "Ndi"} fallback={
         <Show when={props.sourceKind === "Camera"} fallback={
           <>
@@ -102,6 +107,9 @@ export function VideoSourceCreatePanel(props: VideoSourceCreatePanelProps) {
           onAdmissionChange={setNdiAddAllowed}
         />
       </Show>
+      }>
+        <VideoSyphonSourcePicker path={props.path} onSetPath={props.onSetPath} invokeCommand={props.invokeCommand} onAdmissionChange={setSyphonAddAllowed} />
+      </Show>
 
       <button onClick={() => void props.onBrowseSource()} disabled={!videoSourceCanBrowseFile(props.sourceKind)}>
         Browse Source
@@ -113,7 +121,7 @@ export function VideoSourceCreatePanel(props: VideoSourceCreatePanelProps) {
         class="primary"
         data-video-add-layer
         onClick={() => { void handleAddLayer(); }}
-        disabled={(props.sourceKind === "Camera" && !cameraAddAllowed()) || (props.sourceKind === "Ndi" && !ndiAddAllowed())}
+        disabled={(props.sourceKind === "Camera" && !cameraAddAllowed()) || (props.sourceKind === "Ndi" && !ndiAddAllowed()) || (props.sourceKind === "Syphon" && !syphonAddAllowed())}
       >
         Add Video Layer
       </button>
