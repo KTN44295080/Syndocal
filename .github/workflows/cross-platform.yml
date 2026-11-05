@@ -24,151 +24,151 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Windows 10+
-            os: windows-2022
-          - name: Ubuntu 22.04
-            os: ubuntu-22.04
+ DLL. CI installs it from NDI's official runtime installer (owner- name: Windows 10+
+ DLL. CI installs it from NDI's official runtime installer (owner  os: windows-2022
+ DLL. CI installs it from NDI's official runtime installer (owner- name: Ubuntu 22.04
+ DLL. CI installs it from NDI's official runtime installer (owner  os: ubuntu-22.04
 
     steps:
       - name: Check out source
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+ DLL. CI installs it from NDI's official runtime installer (ownerfetch-depth: 0
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
-          # Hosted runners occasionally observe a stale or concurrently
-          # refreshed package index (notably the Google Chrome repository).
-          # Keep the dependency gate strict, but let apt perform its bounded
-          # transport retry before surfacing a real repository failure.
-          sudo apt-get -o Acquire::Retries=3 update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            libasound2-dev \
-            libayatana-appindicator3-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavutil-dev \
-            libclang-dev \
-            libssl-dev \
-            libswscale-dev \
-            libudev-dev \
-            libwebkit2gtk-4.1-dev \
-            libxdo-dev \
-            librsvg2-dev \
-            xvfb \
-            ffmpeg
+ DLL. CI installs it from NDI's official runtime installer (owner# Hosted runners occasionally observe a stale or concurrently
+ DLL. CI installs it from NDI's official runtime installer (owner# refreshed package index (notably the Google Chrome repository).
+ DLL. CI installs it from NDI's official runtime installer (owner# Keep the dependency gate strict, but let apt perform its bounded
+ DLL. CI installs it from NDI's official runtime installer (owner# transport retry before surfacing a real repository failure.
+ DLL. CI installs it from NDI's official runtime installer (ownersudo apt-get -o Acquire::Retries=3 update
+ DLL. CI installs it from NDI's official runtime installer (ownersudo apt-get install -y --no-install-recommends \
+ DLL. CI installs it from NDI's official runtime installer (owner  build-essential \
+ DLL. CI installs it from NDI's official runtime installer (owner  libasound2-dev \
+ DLL. CI installs it from NDI's official runtime installer (owner  libayatana-appindicator3-dev \
+ DLL. CI installs it from NDI's official runtime installer (owner  libavcodec-dev \
+ DLL. CI installs it from NDI's official runtime installer (owner  libavformat-dev \
+ DLL. CI installs it from NDI's official runtime installer (owner  libavutil-dev \
+ DLL. CI installs it from NDI's official runtime installer (owner  libclang-dev \
+ DLL. CI installs it from NDI's official runtime installer (owner  libssl-dev \
+ DLL. CI installs it from NDI's official runtime installer (owner  libswscale-dev \
+ DLL. CI installs it from NDI's official runtime installer (owner  libudev-dev \
+ DLL. CI installs it from NDI's official runtime installer (owner  libwebkit2gtk-4.1-dev \
+ DLL. CI installs it from NDI's official runtime installer (owner  libxdo-dev \
+ DLL. CI installs it from NDI's official runtime installer (owner  librsvg2-dev \
+ DLL. CI installs it from NDI's official runtime installer (owner  xvfb \
+ DLL. CI installs it from NDI's official runtime installer (owner  ffmpeg
 
       - name: Install Windows video SDK
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip'
-          $extractRoot = Join-Path $env:RUNNER_TEMP 'syndocal-ffmpeg-lgpl-8.1.3'
-          # Syndocal self-built LGPL SDK without Chromaprint/FFTW3 (Actions run 40366564270),
-          # hosted as a build-dependency prerelease; see qa/WINDOWS_NATIVE_BUILD.md.
-          $uri = 'https://github.com/KTN44295080/Syndocal/releases/download/ffmpeg-sdk-lgpl-n8.1.3-r40366564270/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip'
-          Invoke-WebRequest -Uri $uri -OutFile $archive
-          $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
-          $expectedHash = '81587FA070A9FA2DA3D8FF3E63BEB9654729782BC8E9899EE951BAF5FC5D9F1A'
-          if (-not [StringComparer]::OrdinalIgnoreCase.Equals($actualHash, $expectedHash)) {
-            throw "Pinned self-built FFmpeg 8.1.3 LGPL shared SDK archive hash mismatch: expected $expectedHash, got $actualHash."
-          }
-          New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
-          Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot -Force
-          $sdk = Join-Path $extractRoot 'ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1'
-          if (-not (Test-Path -LiteralPath $sdk -PathType Container)) {
-            throw "Pinned self-built FFmpeg 8.1.3 LGPL shared SDK archive did not contain the expected root: $sdk"
-          }
-          if (-not (Test-Path -LiteralPath (Join-Path $sdk 'bin\avcodec-62.dll') -PathType Leaf)) {
-            throw "Pinned self-built FFmpeg 8.1.3 LGPL shared runtime is incomplete: $sdk"
-          }
-          "FFMPEG_DIR=$sdk" >> $env:GITHUB_ENV
-          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
-          (Join-Path $sdk 'bin') >> $env:GITHUB_PATH
+ DLL. CI installs it from NDI's official runtime installer (owner$ErrorActionPreference = 'Stop'
+ DLL. CI installs it from NDI's official runtime installer (owner$archive = Join-Path $env:RUNNER_TEMP 'ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip'
+ DLL. CI installs it from NDI's official runtime installer (owner$extractRoot = Join-Path $env:RUNNER_TEMP 'syndocal-ffmpeg-lgpl-8.1.3'
+ DLL. CI installs it from NDI's official runtime installer (owner# Syndocal self-built LGPL SDK without Chromaprint/FFTW3 (Actions run 40366564270),
+ DLL. CI installs it from NDI's official runtime installer (owner# hosted as a build-dependency prerelease; see qa/WINDOWS_NATIVE_BUILD.md.
+ DLL. CI installs it from NDI's official runtime installer (owner$uri = 'https://github.com/KTN44295080/Syndocal/releases/download/ffmpeg-sdk-lgpl-n8.1.3-r40366564270/ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1.zip'
+ DLL. CI installs it from NDI's official runtime installer (ownerInvoke-WebRequest -Uri $uri -OutFile $archive
+ DLL. CI installs it from NDI's official runtime installer (owner$actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+ DLL. CI installs it from NDI's official runtime installer (owner$expectedHash = '81587FA070A9FA2DA3D8FF3E63BEB9654729782BC8E9899EE951BAF5FC5D9F1A'
+ DLL. CI installs it from NDI's official runtime installer (ownerif (-not [StringComparer]::OrdinalIgnoreCase.Equals($actualHash, $expectedHash)) {
+ DLL. CI installs it from NDI's official runtime installer (owner  throw "Pinned self-built FFmpeg 8.1.3 LGPL shared SDK archive hash mismatch: expected $expectedHash, got $actualHash."
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (ownerNew-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
+ DLL. CI installs it from NDI's official runtime installer (ownerExpand-Archive -LiteralPath $archive -DestinationPath $extractRoot -Force
+ DLL. CI installs it from NDI's official runtime installer (owner$sdk = Join-Path $extractRoot 'ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-shared-8.1'
+ DLL. CI installs it from NDI's official runtime installer (ownerif (-not (Test-Path -LiteralPath $sdk -PathType Container)) {
+ DLL. CI installs it from NDI's official runtime installer (owner  throw "Pinned self-built FFmpeg 8.1.3 LGPL shared SDK archive did not contain the expected root: $sdk"
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (ownerif (-not (Test-Path -LiteralPath (Join-Path $sdk 'bin\avcodec-62.dll') -PathType Leaf)) {
+ DLL. CI installs it from NDI's official runtime installer (owner  throw "Pinned self-built FFmpeg 8.1.3 LGPL shared runtime is incomplete: $sdk"
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (owner"FFMPEG_DIR=$sdk" >> $env:GITHUB_ENV
+ DLL. CI installs it from NDI's official runtime installer (owner"LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+ DLL. CI installs it from NDI's official runtime installer (owner(Join-Path $sdk 'bin') >> $env:GITHUB_PATH
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10.9.0
-          run_install: false
+ DLL. CI installs it from NDI's official runtime installer (ownerversion: 10.9.0
+ DLL. CI installs it from NDI's official runtime installer (ownerrun_install: false
 
       - name: Install Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 22.22.1
-          cache: pnpm
-          cache-dependency-path: app/pnpm-lock.yaml
+ DLL. CI installs it from NDI's official runtime installer (ownernode-version: 22.22.1
+ DLL. CI installs it from NDI's official runtime installer (ownercache: pnpm
+ DLL. CI installs it from NDI's official runtime installer (ownercache-dependency-path: app/pnpm-lock.yaml
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.97.1
         with:
-          components: rustfmt
+ DLL. CI installs it from NDI's official runtime installer (ownercomponents: rustfmt
 
       - name: Initialize Windows x64 MSVC environment
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
         with:
-          arch: x64
-          toolset: 14.44
+ DLL. CI installs it from NDI's official runtime installer (ownerarch: x64
+ DLL. CI installs it from NDI's official runtime installer (ownertoolset: 14.44
 
       - name: Pin exact Windows MSVC 14.44.35207 linker
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          SYNDOCAL_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+ DLL. CI installs it from NDI's official runtime installer (ownerSYNDOCAL_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          # GitHub's official windows-2022 image installs VS2022 Enterprise.
-          # Only the edition root differs from the local Community gate; the
-          # exact MSVC version and Hostx64/x64 linker remain fail-closed.
-          $expectedVcTools = 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\'
-          if ($env:SYNDOCAL_RUNNER_ENVIRONMENT -ne 'github-hosted') {
-            throw "The Visual Studio Enterprise edition-root exception is valid only on a GitHub-hosted runner, not '$env:SYNDOCAL_RUNNER_ENVIRONMENT'."
-          }
-          $actualVcTools = $env:VCToolsInstallDir
-          Write-Host "VCToolsInstallDir=$actualVcTools"
-          if ([string]::IsNullOrWhiteSpace($actualVcTools)) {
-            throw 'VCToolsInstallDir is not set; vcvars64.bat -vcvars_ver=14.44 did not initialize the x64 environment.'
-          }
-          $canonicalActual = [IO.Path]::GetFullPath($actualVcTools).TrimEnd('\')
-          $canonicalExpected = [IO.Path]::GetFullPath($expectedVcTools).TrimEnd('\')
-          $toolsetMatches = [StringComparer]::OrdinalIgnoreCase.Equals($canonicalActual, $canonicalExpected)
-          Write-Host "Exact MSVC 14.44.35207 VCToolsInstallDir matches: $toolsetMatches"
-          if (-not $toolsetMatches) {
-            throw "VCToolsInstallDir '$actualVcTools' does not match the required GitHub-hosted Visual Studio 2022 Enterprise MSVC 14.44.35207 toolset."
-          }
-          $expectedLinker = Join-Path $canonicalActual 'bin\Hostx64\x64\link.exe'
-          $linkerExists = Test-Path -LiteralPath $expectedLinker -PathType Leaf
-          Write-Host "Exact MSVC linker exists: $linkerExists ($expectedLinker)"
-          if (-not $linkerExists) {
-            throw "The required MSVC linker is missing: $expectedLinker"
-          }
-          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$expectedLinker" >> $env:GITHUB_ENV
-          "SYNDOCAL_GITHUB_HOSTED_WINDOWS_MSVC=windows-2022-enterprise" >> $env:GITHUB_ENV
-          Write-Host "Pinned CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER for following steps: $expectedLinker"
-          $resolvedLinkers = @(& where.exe link.exe)
-          if ($LASTEXITCODE -ne 0) { throw "where.exe link.exe failed with exit code $LASTEXITCODE." }
-          Write-Host 'where.exe link.exe resolution order:'
-          foreach ($resolved in $resolvedLinkers) { Write-Host "  $resolved" }
-          if ($resolvedLinkers.Count -eq 0 -or [string]::IsNullOrWhiteSpace($resolvedLinkers[0])) {
-            throw 'where.exe link.exe returned no linker.'
-          }
-          $exactLinkerFirst = [StringComparer]::OrdinalIgnoreCase.Equals(
-            [IO.Path]::GetFullPath($resolvedLinkers[0]),
-            [IO.Path]::GetFullPath($expectedLinker)
-          )
-          Write-Host "Exact required linker resolves first: $exactLinkerFirst"
-          if (-not $exactLinkerFirst) {
-            throw "where.exe link.exe resolves '$($resolvedLinkers[0])' first; refusing Cargo without the exact required linker first."
-          }
+ DLL. CI installs it from NDI's official runtime installer (owner$ErrorActionPreference = 'Stop'
+ DLL. CI installs it from NDI's official runtime installer (owner# GitHub's official windows-2022 image installs VS2022 Enterprise.
+ DLL. CI installs it from NDI's official runtime installer (owner# Only the edition root differs from the local Community gate; the
+ DLL. CI installs it from NDI's official runtime installer (owner# exact MSVC version and Hostx64/x64 linker remain fail-closed.
+ DLL. CI installs it from NDI's official runtime installer (owner$expectedVcTools = 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\'
+ DLL. CI installs it from NDI's official runtime installer (ownerif ($env:SYNDOCAL_RUNNER_ENVIRONMENT -ne 'github-hosted') {
+ DLL. CI installs it from NDI's official runtime installer (owner  throw "The Visual Studio Enterprise edition-root exception is valid only on a GitHub-hosted runner, not '$env:SYNDOCAL_RUNNER_ENVIRONMENT'."
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (owner$actualVcTools = $env:VCToolsInstallDir
+ DLL. CI installs it from NDI's official runtime installer (ownerWrite-Host "VCToolsInstallDir=$actualVcTools"
+ DLL. CI installs it from NDI's official runtime installer (ownerif ([string]::IsNullOrWhiteSpace($actualVcTools)) {
+ DLL. CI installs it from NDI's official runtime installer (owner  throw 'VCToolsInstallDir is not set; vcvars64.bat -vcvars_ver=14.44 did not initialize the x64 environment.'
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (owner$canonicalActual = [IO.Path]::GetFullPath($actualVcTools).TrimEnd('\')
+ DLL. CI installs it from NDI's official runtime installer (owner$canonicalExpected = [IO.Path]::GetFullPath($expectedVcTools).TrimEnd('\')
+ DLL. CI installs it from NDI's official runtime installer (owner$toolsetMatches = [StringComparer]::OrdinalIgnoreCase.Equals($canonicalActual, $canonicalExpected)
+ DLL. CI installs it from NDI's official runtime installer (ownerWrite-Host "Exact MSVC 14.44.35207 VCToolsInstallDir matches: $toolsetMatches"
+ DLL. CI installs it from NDI's official runtime installer (ownerif (-not $toolsetMatches) {
+ DLL. CI installs it from NDI's official runtime installer (owner  throw "VCToolsInstallDir '$actualVcTools' does not match the required GitHub-hosted Visual Studio 2022 Enterprise MSVC 14.44.35207 toolset."
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (owner$expectedLinker = Join-Path $canonicalActual 'bin\Hostx64\x64\link.exe'
+ DLL. CI installs it from NDI's official runtime installer (owner$linkerExists = Test-Path -LiteralPath $expectedLinker -PathType Leaf
+ DLL. CI installs it from NDI's official runtime installer (ownerWrite-Host "Exact MSVC linker exists: $linkerExists ($expectedLinker)"
+ DLL. CI installs it from NDI's official runtime installer (ownerif (-not $linkerExists) {
+ DLL. CI installs it from NDI's official runtime installer (owner  throw "The required MSVC linker is missing: $expectedLinker"
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (owner"CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$expectedLinker" >> $env:GITHUB_ENV
+ DLL. CI installs it from NDI's official runtime installer (owner"SYNDOCAL_GITHUB_HOSTED_WINDOWS_MSVC=windows-2022-enterprise" >> $env:GITHUB_ENV
+ DLL. CI installs it from NDI's official runtime installer (ownerWrite-Host "Pinned CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER for following steps: $expectedLinker"
+ DLL. CI installs it from NDI's official runtime installer (owner$resolvedLinkers = @(& where.exe link.exe)
+ DLL. CI installs it from NDI's official runtime installer (ownerif ($LASTEXITCODE -ne 0) { throw "where.exe link.exe failed with exit code $LASTEXITCODE." }
+ DLL. CI installs it from NDI's official runtime installer (ownerWrite-Host 'where.exe link.exe resolution order:'
+ DLL. CI installs it from NDI's official runtime installer (ownerforeach ($resolved in $resolvedLinkers) { Write-Host "  $resolved" }
+ DLL. CI installs it from NDI's official runtime installer (ownerif ($resolvedLinkers.Count -eq 0 -or [string]::IsNullOrWhiteSpace($resolvedLinkers[0])) {
+ DLL. CI installs it from NDI's official runtime installer (owner  throw 'where.exe link.exe returned no linker.'
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (owner$exactLinkerFirst = [StringComparer]::OrdinalIgnoreCase.Equals(
+ DLL. CI installs it from NDI's official runtime installer (owner  [IO.Path]::GetFullPath($resolvedLinkers[0]),
+ DLL. CI installs it from NDI's official runtime installer (owner  [IO.Path]::GetFullPath($expectedLinker)
+ DLL. CI installs it from NDI's official runtime installer (owner)
+ DLL. CI installs it from NDI's official runtime installer (ownerWrite-Host "Exact required linker resolves first: $exactLinkerFirst"
+ DLL. CI installs it from NDI's official runtime installer (ownerif (-not $exactLinkerFirst) {
+ DLL. CI installs it from NDI's official runtime installer (owner  throw "where.exe link.exe resolves '$($resolvedLinkers[0])' first; refusing Cargo without the exact required linker first."
+ DLL. CI installs it from NDI's official runtime installer (owner}
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: syndocal-lgpl-v1-${{ matrix.os }}
+ DLL. CI installs it from NDI's official runtime installer (ownershared-key: syndocal-lgpl-v1-${{ matrix.os }}
 
       - name: Install frontend dependencies
         run: pnpm --dir app install --frozen-lockfile
@@ -177,38 +177,38 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          # The ordinary Windows package bundles the unmodified NDI 6 Runtime
-          # DLL. CI installs it from NDI's official runtime installer (owner
-          # decision 2026-11-05; the DLL is never re-hosted). The installer must
-          # carry a valid Authenticode signature, and the installed DLL must
-          # match the pinned inventory exactly, so a newer NDI release fails
-          # closed here until the pin is reviewed and advanced.
-          $installer = Join-Path $env:RUNNER_TEMP 'NDI-6-Runtime.exe'
-          # NDI's published redistributable link; it redirects to the current
-          # runtime installer. The direct downloads.ndi.tv object path is not
-          # public (AccessDenied). Integrity rests on the Authenticode check
-          # below before execution and the pinned DLL hash after install.
-          $response = Invoke-WebRequest -Uri 'http://ndi.link/NDIRedistV6' -OutFile $installer -PassThru
-          Write-Host "NDI 6 Runtime installer resolved to: $($response.BaseResponse.RequestMessage.RequestUri)"
-          $signature = Get-AuthenticodeSignature -LiteralPath $installer
-          if ($signature.Status -ne 'Valid') { throw "NDI 6 Runtime installer signature is $($signature.Status)." }
-          Write-Host "NDI 6 Runtime installer signer: $($signature.SignerCertificate.Subject)"
-          $process = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-' -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "NDI 6 Runtime installer exited with $($process.ExitCode)." }
-          $inventory = Get-Content -LiteralPath 'qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json' -Raw | ConvertFrom-Json
-          $pin = $inventory.ndi_runtime.dll
-          $dll = Join-Path $env:ProgramFiles ('NDI\NDI 6 Runtime\v6\' + $pin.filename)
-          if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
-            Get-ChildItem -LiteralPath (Join-Path $env:ProgramFiles 'NDI') -Recurse -Filter '*.dll' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
-            throw "NDI 6 Runtime installer did not provide $dll."
-          }
-          $hash = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash
-          $version = (Get-Item -LiteralPath $dll).VersionInfo.FileVersion
-          if (-not [StringComparer]::OrdinalIgnoreCase.Equals($hash, $pin.sha256)) {
-            throw "Installed NDI runtime $version ($hash) does not match the pinned $($pin.version) ($($pin.sha256)); review and advance the inventory pin."
-          }
-          Write-Host "Pinned NDI runtime $($pin.version) installed at $dll"
+ DLL. CI installs it from NDI's official runtime installer (owner$ErrorActionPreference = 'Stop'
+ DLL. CI installs it from NDI's official runtime installer (owner# The ordinary Windows package bundles the unmodified NDI 6 Runtime
+ DLL. CI installs it from NDI's official runtime installer (owner# DLL. CI installs it from NDI's official runtime installer (owner
+ DLL. CI installs it from NDI's official runtime installer (owner# decision 2026-11-05; the DLL is never re-hosted). The installer must
+ DLL. CI installs it from NDI's official runtime installer (owner# carry a valid Authenticode signature, and the installed DLL must
+ DLL. CI installs it from NDI's official runtime installer (owner# match the pinned inventory exactly, so a newer NDI release fails
+ DLL. CI installs it from NDI's official runtime installer (owner# closed here until the pin is reviewed and advanced.
+ DLL. CI installs it from NDI's official runtime installer (owner$installer = Join-Path $env:RUNNER_TEMP 'NDI-6-Runtime.exe'
+ DLL. CI installs it from NDI's official runtime installer (owner# NDI's published redistributable link; it redirects to the current
+ DLL. CI installs it from NDI's official runtime installer (owner# runtime installer. The direct downloads.ndi.tv object path is not
+ DLL. CI installs it from NDI's official runtime installer (owner# public (AccessDenied). Integrity rests on the Authenticode check
+ DLL. CI installs it from NDI's official runtime installer (owner# below before execution and the pinned DLL hash after install.
+ DLL. CI installs it from NDI's official runtime installer (owner$response = Invoke-WebRequest -Uri 'http://ndi.link/NDIRedistV6' -OutFile $installer -PassThru
+ DLL. CI installs it from NDI's official runtime installer (ownerWrite-Host "NDI 6 Runtime installer resolved to: $($response.BaseResponse.RequestMessage.RequestUri)"
+ DLL. CI installs it from NDI's official runtime installer (owner$signature = Get-AuthenticodeSignature -LiteralPath $installer
+ DLL. CI installs it from NDI's official runtime installer (ownerif ($signature.Status -ne 'Valid') { throw "NDI 6 Runtime installer signature is $($signature.Status)." }
+ DLL. CI installs it from NDI's official runtime installer (ownerWrite-Host "NDI 6 Runtime installer signer: $($signature.SignerCertificate.Subject)"
+ DLL. CI installs it from NDI's official runtime installer (owner$process = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-' -Wait -PassThru
+ DLL. CI installs it from NDI's official runtime installer (ownerif ($process.ExitCode -ne 0) { throw "NDI 6 Runtime installer exited with $($process.ExitCode)." }
+ DLL. CI installs it from NDI's official runtime installer (owner$inventory = Get-Content -LiteralPath 'qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json' -Raw | ConvertFrom-Json
+ DLL. CI installs it from NDI's official runtime installer (owner$pin = $inventory.ndi_runtime.dll
+ DLL. CI installs it from NDI's official runtime installer (owner$dll = Join-Path $env:ProgramFiles ('NDI\NDI 6 Runtime\v6\' + $pin.filename)
+ DLL. CI installs it from NDI's official runtime installer (ownerif (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
+ DLL. CI installs it from NDI's official runtime installer (owner  Get-ChildItem -LiteralPath (Join-Path $env:ProgramFiles 'NDI') -Recurse -Filter '*.dll' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
+ DLL. CI installs it from NDI's official runtime installer (owner  throw "NDI 6 Runtime installer did not provide $dll."
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (owner$hash = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash
+ DLL. CI installs it from NDI's official runtime installer (owner$version = (Get-Item -LiteralPath $dll).VersionInfo.FileVersion
+ DLL. CI installs it from NDI's official runtime installer (ownerif (-not [StringComparer]::OrdinalIgnoreCase.Equals($hash, $pin.sha256)) {
+ DLL. CI installs it from NDI's official runtime installer (owner  throw "Installed NDI runtime $version ($hash) does not match the pinned $($pin.version) ($($pin.sha256)); review and advance the inventory pin."
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (ownerWrite-Host "Pinned NDI runtime $($pin.version) installed at $dll"
 
       - name: Stage Windows runtime libraries
         if: runner.os == 'Windows'
@@ -218,17 +218,17 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $inventory = Get-Content -LiteralPath 'qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json' -Raw | ConvertFrom-Json
-          $expected = @($inventory.runtime_dlls | ForEach-Object { $_.filename })
-          if ($expected.Count -ne 7) { throw "Expected exactly seven pinned FFmpeg runtime DLLs in the inventory; found $($expected.Count)." }
-          foreach ($name in $expected) {
-            $candidate = Join-Path 'target/release' $name
-            if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
-              throw "Cold-clean staging did not produce a pinned runtime DLL before dependent tests: $candidate"
-            }
-          }
-          Write-Host "All $($expected.Count) pinned FFmpeg DLLs are staged in target/release before any dependent test runs."
+ DLL. CI installs it from NDI's official runtime installer (owner$ErrorActionPreference = 'Stop'
+ DLL. CI installs it from NDI's official runtime installer (owner$inventory = Get-Content -LiteralPath 'qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json' -Raw | ConvertFrom-Json
+ DLL. CI installs it from NDI's official runtime installer (owner$expected = @($inventory.runtime_dlls | ForEach-Object { $_.filename })
+ DLL. CI installs it from NDI's official runtime installer (ownerif ($expected.Count -ne 7) { throw "Expected exactly seven pinned FFmpeg runtime DLLs in the inventory; found $($expected.Count)." }
+ DLL. CI installs it from NDI's official runtime installer (ownerforeach ($name in $expected) {
+ DLL. CI installs it from NDI's official runtime installer (owner  $candidate = Join-Path 'target/release' $name
+ DLL. CI installs it from NDI's official runtime installer (owner  if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+ DLL. CI installs it from NDI's official runtime installer (owner    throw "Cold-clean staging did not produce a pinned runtime DLL before dependent tests: $candidate"
+ DLL. CI installs it from NDI's official runtime installer (owner  }
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (ownerWrite-Host "All $($expected.Count) pinned FFmpeg DLLs are staged in target/release before any dependent test runs."
 
       - name: Verify Windows ASIO and runtime packaging boundary
         if: runner.os == 'Windows'
@@ -238,46 +238,46 @@ jobs:
         if: runner.os == 'Windows' && vars.NDI_SDK_DIR != '' && vars.CPAL_ASIO_DIR != ''
         shell: pwsh
         env:
-          # These SDKs are deliberately not downloaded by CI: NDI and ASIO
-          # require an explicit, locally licensed runner installation. An
-          # absent repository variable therefore fails the ratchet closed.
-          NDI_SDK_DIR: ${{ vars.NDI_SDK_DIR }}
-          CPAL_ASIO_DIR: ${{ vars.CPAL_ASIO_DIR }}
+ DLL. CI installs it from NDI's official runtime installer (owner# These SDKs are deliberately not downloaded by CI: NDI and ASIO
+ DLL. CI installs it from NDI's official runtime installer (owner# require an explicit, locally licensed runner installation. An
+ DLL. CI installs it from NDI's official runtime installer (owner# absent repository variable therefore fails the ratchet closed.
+ DLL. CI installs it from NDI's official runtime installer (ownerNDI_SDK_DIR: ${{ vars.NDI_SDK_DIR }}
+ DLL. CI installs it from NDI's official runtime installer (ownerCPAL_ASIO_DIR: ${{ vars.CPAL_ASIO_DIR }}
         run: |
-          $required = @('FFMPEG_DIR', 'LIBCLANG_PATH', 'NDI_SDK_DIR', 'CPAL_ASIO_DIR')
-          foreach ($name in $required) {
-            $value = [Environment]::GetEnvironmentVariable($name, 'Process')
-            if ([string]::IsNullOrWhiteSpace($value)) {
-              throw "$name is required for the Windows warning ratchet and is not configured."
-            }
-            if (-not (Test-Path -LiteralPath $value -PathType Container)) {
-              throw "$name must name an existing directory: $value"
-            }
-          }
-          $requiredFiles = @{
-            FFMPEG_DIR = @('include', 'lib', 'bin')
-            LIBCLANG_PATH = @('libclang.dll')
-            NDI_SDK_DIR = @('Include', 'Lib\x64', 'Bin\x64')
-            CPAL_ASIO_DIR = @('common\asio.h', 'common\asiosys.h', 'host\asiodrivers.h')
-          }
-          foreach ($entry in $requiredFiles.GetEnumerator()) {
-            foreach ($relative in $entry.Value) {
-              $candidate = Join-Path ([Environment]::GetEnvironmentVariable($entry.Key, 'Process')) $relative
-              $pathType = if ($relative.Contains('.')) { 'Leaf' } else { 'Container' }
-              if (-not (Test-Path -LiteralPath $candidate -PathType $pathType)) {
-                throw "$($entry.Key) is missing required SDK path: $candidate"
-              }
-            }
-          }
-          Add-Content -Path $env:GITHUB_ENV -Value "NDI_SDK_DIR=$env:NDI_SDK_DIR"
-          Add-Content -Path $env:GITHUB_ENV -Value "CPAL_ASIO_DIR=$env:CPAL_ASIO_DIR"
+ DLL. CI installs it from NDI's official runtime installer (owner$required = @('FFMPEG_DIR', 'LIBCLANG_PATH', 'NDI_SDK_DIR', 'CPAL_ASIO_DIR')
+ DLL. CI installs it from NDI's official runtime installer (ownerforeach ($name in $required) {
+ DLL. CI installs it from NDI's official runtime installer (owner  $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+ DLL. CI installs it from NDI's official runtime installer (owner  if ([string]::IsNullOrWhiteSpace($value)) {
+ DLL. CI installs it from NDI's official runtime installer (owner    throw "$name is required for the Windows warning ratchet and is not configured."
+ DLL. CI installs it from NDI's official runtime installer (owner  }
+ DLL. CI installs it from NDI's official runtime installer (owner  if (-not (Test-Path -LiteralPath $value -PathType Container)) {
+ DLL. CI installs it from NDI's official runtime installer (owner    throw "$name must name an existing directory: $value"
+ DLL. CI installs it from NDI's official runtime installer (owner  }
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (owner$requiredFiles = @{
+ DLL. CI installs it from NDI's official runtime installer (owner  FFMPEG_DIR = @('include', 'lib', 'bin')
+ DLL. CI installs it from NDI's official runtime installer (owner  LIBCLANG_PATH = @('libclang.dll')
+ DLL. CI installs it from NDI's official runtime installer (owner  NDI_SDK_DIR = @('Include', 'Lib\x64', 'Bin\x64')
+ DLL. CI installs it from NDI's official runtime installer (owner  CPAL_ASIO_DIR = @('common\asio.h', 'common\asiosys.h', 'host\asiodrivers.h')
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (ownerforeach ($entry in $requiredFiles.GetEnumerator()) {
+ DLL. CI installs it from NDI's official runtime installer (owner  foreach ($relative in $entry.Value) {
+ DLL. CI installs it from NDI's official runtime installer (owner    $candidate = Join-Path ([Environment]::GetEnvironmentVariable($entry.Key, 'Process')) $relative
+ DLL. CI installs it from NDI's official runtime installer (owner    $pathType = if ($relative.Contains('.')) { 'Leaf' } else { 'Container' }
+ DLL. CI installs it from NDI's official runtime installer (owner    if (-not (Test-Path -LiteralPath $candidate -PathType $pathType)) {
+ DLL. CI installs it from NDI's official runtime installer (owner      throw "$($entry.Key) is missing required SDK path: $candidate"
+ DLL. CI installs it from NDI's official runtime installer (owner    }
+ DLL. CI installs it from NDI's official runtime installer (owner  }
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (ownerAdd-Content -Path $env:GITHUB_ENV -Value "NDI_SDK_DIR=$env:NDI_SDK_DIR"
+ DLL. CI installs it from NDI's official runtime installer (ownerAdd-Content -Path $env:GITHUB_ENV -Value "CPAL_ASIO_DIR=$env:CPAL_ASIO_DIR"
 
       - name: Report unavailable Windows ASIO/NDI warning gates
         if: runner.os == 'Windows' && (vars.NDI_SDK_DIR == '' || vars.CPAL_ASIO_DIR == '')
         shell: pwsh
         run: |
-          Write-Host 'ASIO/NDI SDK variables are not configured on this hosted runner.'
-          Write-Host 'ASIO/NDI warning gates are skipped and remain unverified; default Windows gates remain enforced.'
+ DLL. CI installs it from NDI's official runtime installer (ownerWrite-Host 'ASIO/NDI SDK variables are not configured on this hosted runner.'
+ DLL. CI installs it from NDI's official runtime installer (ownerWrite-Host 'ASIO/NDI warning gates are skipped and remain unverified; default Windows gates remain enforced.'
 
       - name: Check formatting
         # rustfmt 1.97.1 currently emits a platform-specific whole-workspace
@@ -291,82 +291,82 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          Remove-Item Env:CARGO_HOME -ErrorAction SilentlyContinue
-          pnpm --dir app run check:warnings:self-test
+ DLL. CI installs it from NDI's official runtime installer (owner$ErrorActionPreference = 'Stop'
+ DLL. CI installs it from NDI's official runtime installer (ownerRemove-Item Env:CARGO_HOME -ErrorAction SilentlyContinue
+ DLL. CI installs it from NDI's official runtime installer (ownerpnpm --dir app run check:warnings:self-test
 
       - name: Test warning ratchet (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          set -euo pipefail
-          env -u CARGO_HOME pnpm --dir app run check:warnings:self-test
+ DLL. CI installs it from NDI's official runtime installer (ownerset -euo pipefail
+ DLL. CI installs it from NDI's official runtime installer (ownerenv -u CARGO_HOME pnpm --dir app run check:warnings:self-test
 
       - name: Enforce Windows warning ratchets
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          WARNING_RATCHET_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
-          WARNING_RATCHET_HEAD_REF: ${{ github.sha }}
+ DLL. CI installs it from NDI's official runtime installer (ownerWARNING_RATCHET_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+ DLL. CI installs it from NDI's official runtime installer (ownerWARNING_RATCHET_HEAD_REF: ${{ github.sha }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not [string]::IsNullOrWhiteSpace($env:WARNING_RATCHET_BASE_REF) -and $env:WARNING_RATCHET_BASE_REF -match '^0+$') {
-            Write-Host 'Push event supplied an all-zero comparison SHA; use the checked-out HEAD parent instead.'
-            Remove-Item Env:WARNING_RATCHET_BASE_REF -ErrorAction SilentlyContinue
-          }
-          Remove-Item Env:CARGO_HOME -ErrorAction SilentlyContinue
-          pnpm --dir app run check:warnings -- --configuration windows-default-all-targets
-          pnpm --dir app run check:warnings -- --configuration windows-default-release
-          pnpm --dir app run check:warnings -- --configuration windows-workspace-tests
-          pnpm --dir app run check:warnings -- --configuration windows-syndocal-spout
-          pnpm --dir app run check:warnings -- --configuration frontend-typescript-vite-windows
+ DLL. CI installs it from NDI's official runtime installer (owner$ErrorActionPreference = 'Stop'
+ DLL. CI installs it from NDI's official runtime installer (ownerif (-not [string]::IsNullOrWhiteSpace($env:WARNING_RATCHET_BASE_REF) -and $env:WARNING_RATCHET_BASE_REF -match '^0+$') {
+ DLL. CI installs it from NDI's official runtime installer (owner  Write-Host 'Push event supplied an all-zero comparison SHA; use the checked-out HEAD parent instead.'
+ DLL. CI installs it from NDI's official runtime installer (owner  Remove-Item Env:WARNING_RATCHET_BASE_REF -ErrorAction SilentlyContinue
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (ownerRemove-Item Env:CARGO_HOME -ErrorAction SilentlyContinue
+ DLL. CI installs it from NDI's official runtime installer (ownerpnpm --dir app run check:warnings -- --configuration windows-default-all-targets
+ DLL. CI installs it from NDI's official runtime installer (ownerpnpm --dir app run check:warnings -- --configuration windows-default-release
+ DLL. CI installs it from NDI's official runtime installer (ownerpnpm --dir app run check:warnings -- --configuration windows-workspace-tests
+ DLL. CI installs it from NDI's official runtime installer (ownerpnpm --dir app run check:warnings -- --configuration windows-syndocal-spout
+ DLL. CI installs it from NDI's official runtime installer (ownerpnpm --dir app run check:warnings -- --configuration frontend-typescript-vite-windows
 
       - name: Enforce Windows ASIO/NDI warning ratchets when SDKs are configured
         if: runner.os == 'Windows' && vars.NDI_SDK_DIR != '' && vars.CPAL_ASIO_DIR != ''
         shell: pwsh
         env:
-          WARNING_RATCHET_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
-          WARNING_RATCHET_HEAD_REF: ${{ github.sha }}
+ DLL. CI installs it from NDI's official runtime installer (ownerWARNING_RATCHET_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+ DLL. CI installs it from NDI's official runtime installer (ownerWARNING_RATCHET_HEAD_REF: ${{ github.sha }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not [string]::IsNullOrWhiteSpace($env:WARNING_RATCHET_BASE_REF) -and $env:WARNING_RATCHET_BASE_REF -match '^0+$') {
-            Write-Host 'Push event supplied an all-zero comparison SHA; use the checked-out HEAD parent instead.'
-            Remove-Item Env:WARNING_RATCHET_BASE_REF -ErrorAction SilentlyContinue
-          }
-          Remove-Item Env:CARGO_HOME -ErrorAction SilentlyContinue
-          pnpm --dir app run check:warnings -- --configuration windows-syndocal-asio
-          pnpm --dir app run check:warnings -- --configuration windows-syndocal-ndi
-          pnpm --dir app run check:warnings -- --configuration windows-asio-bridge
+ DLL. CI installs it from NDI's official runtime installer (owner$ErrorActionPreference = 'Stop'
+ DLL. CI installs it from NDI's official runtime installer (ownerif (-not [string]::IsNullOrWhiteSpace($env:WARNING_RATCHET_BASE_REF) -and $env:WARNING_RATCHET_BASE_REF -match '^0+$') {
+ DLL. CI installs it from NDI's official runtime installer (owner  Write-Host 'Push event supplied an all-zero comparison SHA; use the checked-out HEAD parent instead.'
+ DLL. CI installs it from NDI's official runtime installer (owner  Remove-Item Env:WARNING_RATCHET_BASE_REF -ErrorAction SilentlyContinue
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (ownerRemove-Item Env:CARGO_HOME -ErrorAction SilentlyContinue
+ DLL. CI installs it from NDI's official runtime installer (ownerpnpm --dir app run check:warnings -- --configuration windows-syndocal-asio
+ DLL. CI installs it from NDI's official runtime installer (ownerpnpm --dir app run check:warnings -- --configuration windows-syndocal-ndi
+ DLL. CI installs it from NDI's official runtime installer (ownerpnpm --dir app run check:warnings -- --configuration windows-asio-bridge
 
       - name: Stop checkout Syndocal before native warning ratchet
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $target = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'target\release\syndocal.exe'))
-          Get-CimInstance Win32_Process | ForEach-Object {
-            $executable = $_.ExecutablePath
-            if (-not [string]::IsNullOrWhiteSpace($executable)) {
-              try { $resolved = [IO.Path]::GetFullPath($executable) } catch { $resolved = $null }
-              if ($resolved -and $resolved.Equals($target, [StringComparison]::OrdinalIgnoreCase)) {
-                Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop
-              }
-            }
-          }
+ DLL. CI installs it from NDI's official runtime installer (owner$target = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'target\release\syndocal.exe'))
+ DLL. CI installs it from NDI's official runtime installer (ownerGet-CimInstance Win32_Process | ForEach-Object {
+ DLL. CI installs it from NDI's official runtime installer (owner  $executable = $_.ExecutablePath
+ DLL. CI installs it from NDI's official runtime installer (owner  if (-not [string]::IsNullOrWhiteSpace($executable)) {
+ DLL. CI installs it from NDI's official runtime installer (owner    try { $resolved = [IO.Path]::GetFullPath($executable) } catch { $resolved = $null }
+ DLL. CI installs it from NDI's official runtime installer (owner    if ($resolved -and $resolved.Equals($target, [StringComparison]::OrdinalIgnoreCase)) {
+ DLL. CI installs it from NDI's official runtime installer (owner      Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop
+ DLL. CI installs it from NDI's official runtime installer (owner    }
+ DLL. CI installs it from NDI's official runtime installer (owner  }
+ DLL. CI installs it from NDI's official runtime installer (owner}
 
       - name: Enforce Windows native release warning ratchet
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          WARNING_RATCHET_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
-          WARNING_RATCHET_HEAD_REF: ${{ github.sha }}
+ DLL. CI installs it from NDI's official runtime installer (ownerWARNING_RATCHET_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+ DLL. CI installs it from NDI's official runtime installer (ownerWARNING_RATCHET_HEAD_REF: ${{ github.sha }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not [string]::IsNullOrWhiteSpace($env:WARNING_RATCHET_BASE_REF) -and $env:WARNING_RATCHET_BASE_REF -match '^0+$') {
-            Write-Host 'Push event supplied an all-zero comparison SHA; use the checked-out HEAD parent instead.'
-            Remove-Item Env:WARNING_RATCHET_BASE_REF -ErrorAction SilentlyContinue
-          }
-          Remove-Item Env:CARGO_HOME -ErrorAction SilentlyContinue
-          pnpm --dir app run check:warnings -- --configuration windows-native-release
+ DLL. CI installs it from NDI's official runtime installer (owner$ErrorActionPreference = 'Stop'
+ DLL. CI installs it from NDI's official runtime installer (ownerif (-not [string]::IsNullOrWhiteSpace($env:WARNING_RATCHET_BASE_REF) -and $env:WARNING_RATCHET_BASE_REF -match '^0+$') {
+ DLL. CI installs it from NDI's official runtime installer (owner  Write-Host 'Push event supplied an all-zero comparison SHA; use the checked-out HEAD parent instead.'
+ DLL. CI installs it from NDI's official runtime installer (owner  Remove-Item Env:WARNING_RATCHET_BASE_REF -ErrorAction SilentlyContinue
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (ownerRemove-Item Env:CARGO_HOME -ErrorAction SilentlyContinue
+ DLL. CI installs it from NDI's official runtime installer (ownerpnpm --dir app run check:warnings -- --configuration windows-native-release
 
       - name: Test Rust workspace
         run: cargo test --workspace --locked -- --test-threads=1
@@ -388,24 +388,24 @@ jobs:
 
       - name: Test installer lifecycle and cleanup boundaries
         run: |
-          node app/scripts/build-msi-extensions.mjs --test
-          node tools/distribution/generate-installer-hooks.mjs
-          node --test app/scripts/test-installer-lifecycle-policy.mjs tools/distribution/test-windows-cleanup.mjs tools/distribution/test-windows-uninstall.mjs
+ DLL. CI installs it from NDI's official runtime installer (ownernode app/scripts/build-msi-extensions.mjs --test
+ DLL. CI installs it from NDI's official runtime installer (ownernode tools/distribution/generate-installer-hooks.mjs
+ DLL. CI installs it from NDI's official runtime installer (ownernode --test app/scripts/test-installer-lifecycle-policy.mjs tools/distribution/test-windows-cleanup.mjs tools/distribution/test-windows-uninstall.mjs
 
       - name: Stop checkout Syndocal before native bundle build
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $target = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'target\release\syndocal.exe'))
-          Get-CimInstance Win32_Process | ForEach-Object {
-            $executable = $_.ExecutablePath
-            if (-not [string]::IsNullOrWhiteSpace($executable)) {
-              try { $resolved = [IO.Path]::GetFullPath($executable) } catch { $resolved = $null }
-              if ($resolved -and $resolved.Equals($target, [StringComparison]::OrdinalIgnoreCase)) {
-                Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop
-              }
-            }
-          }
+ DLL. CI installs it from NDI's official runtime installer (owner$target = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'target\release\syndocal.exe'))
+ DLL. CI installs it from NDI's official runtime installer (ownerGet-CimInstance Win32_Process | ForEach-Object {
+ DLL. CI installs it from NDI's official runtime installer (owner  $executable = $_.ExecutablePath
+ DLL. CI installs it from NDI's official runtime installer (owner  if (-not [string]::IsNullOrWhiteSpace($executable)) {
+ DLL. CI installs it from NDI's official runtime installer (owner    try { $resolved = [IO.Path]::GetFullPath($executable) } catch { $resolved = $null }
+ DLL. CI installs it from NDI's official runtime installer (owner    if ($resolved -and $resolved.Equals($target, [StringComparison]::OrdinalIgnoreCase)) {
+ DLL. CI installs it from NDI's official runtime installer (owner      Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop
+ DLL. CI installs it from NDI's official runtime installer (owner    }
+ DLL. CI installs it from NDI's official runtime installer (owner  }
+ DLL. CI installs it from NDI's official runtime installer (owner}
 
       - name: Reject Chromaprint FFmpeg DLLs before release packaging
         # Regression guard: the former BtbN SDK statically linked GPL Chromaprint
@@ -413,29 +413,29 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          # avformat-62.dll of BtbN autobuild-2026-09-30-13-08 (static Chromaprint + FFTW3).
-          $rejected = 'BCF514A394DC5EC43FE64E4F1624BA63B23E9C25967081EA2D03D95B0DC359EF'
-          $candidates = @(
-            (Join-Path $env:GITHUB_WORKSPACE 'target/release/avformat-62.dll'),
-            (Join-Path $env:FFMPEG_DIR 'bin/avformat-62.dll')
-          )
-          foreach ($path in $candidates) {
-            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Release packaging guard cannot verify missing $path." }
-            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
-            if ([StringComparer]::OrdinalIgnoreCase.Equals($hash, $rejected)) {
-              throw "Refusing release packaging: $path is the GPL Chromaprint/FFTW3 BtbN avformat-62.dll. Use the pinned self-built LGPL SDK."
-            }
-          }
-          $inventory = Get-Content -LiteralPath 'qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json' -Raw | ConvertFrom-Json
-          foreach ($runtime in $inventory.runtime_dlls) {
-            $staged = Join-Path $env:GITHUB_WORKSPACE (Join-Path 'target/release' $runtime.filename)
-            $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($staged))
-            if ($text -match '(?i)chromaprint|fftw') {
-              throw "Refusing release packaging: $staged contains Chromaprint/FFTW strings."
-            }
-          }
-          Write-Host 'Staged FFmpeg DLLs are not the Chromaprint/FFTW3 build.'
+ DLL. CI installs it from NDI's official runtime installer (owner$ErrorActionPreference = 'Stop'
+ DLL. CI installs it from NDI's official runtime installer (owner# avformat-62.dll of BtbN autobuild-2026-09-30-13-08 (static Chromaprint + FFTW3).
+ DLL. CI installs it from NDI's official runtime installer (owner$rejected = 'BCF514A394DC5EC43FE64E4F1624BA63B23E9C25967081EA2D03D95B0DC359EF'
+ DLL. CI installs it from NDI's official runtime installer (owner$candidates = @(
+ DLL. CI installs it from NDI's official runtime installer (owner  (Join-Path $env:GITHUB_WORKSPACE 'target/release/avformat-62.dll'),
+ DLL. CI installs it from NDI's official runtime installer (owner  (Join-Path $env:FFMPEG_DIR 'bin/avformat-62.dll')
+ DLL. CI installs it from NDI's official runtime installer (owner)
+ DLL. CI installs it from NDI's official runtime installer (ownerforeach ($path in $candidates) {
+ DLL. CI installs it from NDI's official runtime installer (owner  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Release packaging guard cannot verify missing $path." }
+ DLL. CI installs it from NDI's official runtime installer (owner  $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+ DLL. CI installs it from NDI's official runtime installer (owner  if ([StringComparer]::OrdinalIgnoreCase.Equals($hash, $rejected)) {
+ DLL. CI installs it from NDI's official runtime installer (owner    throw "Refusing release packaging: $path is the GPL Chromaprint/FFTW3 BtbN avformat-62.dll. Use the pinned self-built LGPL SDK."
+ DLL. CI installs it from NDI's official runtime installer (owner  }
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (owner$inventory = Get-Content -LiteralPath 'qa/FFMPEG_WINDOWS_RUNTIME_INVENTORY.json' -Raw | ConvertFrom-Json
+ DLL. CI installs it from NDI's official runtime installer (ownerforeach ($runtime in $inventory.runtime_dlls) {
+ DLL. CI installs it from NDI's official runtime installer (owner  $staged = Join-Path $env:GITHUB_WORKSPACE (Join-Path 'target/release' $runtime.filename)
+ DLL. CI installs it from NDI's official runtime installer (owner  $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($staged))
+ DLL. CI installs it from NDI's official runtime installer (owner  if ($text -match '(?i)chromaprint|fftw') {
+ DLL. CI installs it from NDI's official runtime installer (owner    throw "Refusing release packaging: $staged contains Chromaprint/FFTW strings."
+ DLL. CI installs it from NDI's official runtime installer (owner  }
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (ownerWrite-Host 'Staged FFmpeg DLLs are not the Chromaprint/FFTW3 build.'
 
       - name: Bundle Windows installers
         if: runner.os == 'Windows'
@@ -449,60 +449,60 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $nsis = Get-ChildItem 'target/release/bundle/nsis/*.exe' | Select-Object -First 1
-          $msi = Get-ChildItem 'target/release/bundle/msi/*.msi' | Select-Object -First 1
-          if (-not $nsis -or -not $msi) { throw 'Expected NSIS and MSI installers.' }
-          tools/distribution/wix/check-msi-extensions.ps1 -InstallerPath $msi.FullName -EvidencePath msi-extension-tables.json
-          tools/distribution/wix/check-msi-prepare.ps1 -InstallerPath $msi.FullName -EvidencePath msi-extension-prepare.json
+ DLL. CI installs it from NDI's official runtime installer (owner$nsis = Get-ChildItem 'target/release/bundle/nsis/*.exe' | Select-Object -First 1
+ DLL. CI installs it from NDI's official runtime installer (owner$msi = Get-ChildItem 'target/release/bundle/msi/*.msi' | Select-Object -First 1
+ DLL. CI installs it from NDI's official runtime installer (ownerif (-not $nsis -or -not $msi) { throw 'Expected NSIS and MSI installers.' }
+ DLL. CI installs it from NDI's official runtime installer (ownertools/distribution/wix/check-msi-extensions.ps1 -InstallerPath $msi.FullName -EvidencePath msi-extension-tables.json
+ DLL. CI installs it from NDI's official runtime installer (ownertools/distribution/wix/check-msi-prepare.ps1 -InstallerPath $msi.FullName -EvidencePath msi-extension-prepare.json
 
-          $installDir = Join-Path $env:RUNNER_TEMP 'SyndocalSmoke'
-          $extractDir = Join-Path $env:RUNNER_TEMP 'SyndocalMsiExtract'
-          $installer = Start-Process $nsis.FullName -ArgumentList '/S', "/D=$installDir" -Wait -PassThru
-          if ($installer.ExitCode -ne 0) { throw "NSIS install failed with code $($installer.ExitCode)." }
-          if (-not (Test-Path "$installDir/syndocal.exe")) { throw 'NSIS did not install syndocal.exe.' }
-          if (-not (Get-ChildItem "$installDir/avcodec-*.dll" -ErrorAction SilentlyContinue)) {
-            throw 'NSIS did not install FFmpeg DLLs beside syndocal.exe.'
-          }
+ DLL. CI installs it from NDI's official runtime installer (owner$installDir = Join-Path $env:RUNNER_TEMP 'SyndocalSmoke'
+ DLL. CI installs it from NDI's official runtime installer (owner$extractDir = Join-Path $env:RUNNER_TEMP 'SyndocalMsiExtract'
+ DLL. CI installs it from NDI's official runtime installer (owner$installer = Start-Process $nsis.FullName -ArgumentList '/S', "/D=$installDir" -Wait -PassThru
+ DLL. CI installs it from NDI's official runtime installer (ownerif ($installer.ExitCode -ne 0) { throw "NSIS install failed with code $($installer.ExitCode)." }
+ DLL. CI installs it from NDI's official runtime installer (ownerif (-not (Test-Path "$installDir/syndocal.exe")) { throw 'NSIS did not install syndocal.exe.' }
+ DLL. CI installs it from NDI's official runtime installer (ownerif (-not (Get-ChildItem "$installDir/avcodec-*.dll" -ErrorAction SilentlyContinue)) {
+ DLL. CI installs it from NDI's official runtime installer (owner  throw 'NSIS did not install FFmpeg DLLs beside syndocal.exe.'
+ DLL. CI installs it from NDI's official runtime installer (owner}
 
-          $process = Start-Process "$installDir/syndocal.exe" -PassThru
-          Start-Sleep -Seconds 8
-          if ($process.HasExited) { throw "Installed Syndocal exited during startup with code $($process.ExitCode)." }
-          Stop-Process -Id $process.Id -Force
+ DLL. CI installs it from NDI's official runtime installer (owner$process = Start-Process "$installDir/syndocal.exe" -PassThru
+ DLL. CI installs it from NDI's official runtime installer (ownerStart-Sleep -Seconds 8
+ DLL. CI installs it from NDI's official runtime installer (ownerif ($process.HasExited) { throw "Installed Syndocal exited during startup with code $($process.ExitCode)." }
+ DLL. CI installs it from NDI's official runtime installer (ownerStop-Process -Id $process.Id -Force
 
-          $adminInstall = Start-Process msiexec.exe -ArgumentList '/a', $msi.FullName, '/qn', "TARGETDIR=$extractDir" -Wait -PassThru
-          if ($adminInstall.ExitCode -ne 0) { throw "MSI extraction failed with code $($adminInstall.ExitCode)." }
-          $msiExe = Get-ChildItem $extractDir -Filter syndocal.exe -Recurse | Select-Object -First 1
-          if (-not $msiExe) { throw 'MSI did not contain syndocal.exe.' }
-          if (-not (Get-ChildItem $msiExe.DirectoryName -Filter 'avcodec-*.dll')) {
-            throw 'MSI did not place FFmpeg DLLs beside syndocal.exe.'
-          }
-          $canonicalExe = Join-Path $env:GITHUB_WORKSPACE 'target/release/syndocal.exe'
-          $productVersion = (Get-Content -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'app/package.json') -Raw | ConvertFrom-Json).version
-          $exeSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $canonicalExe).Hash.ToLowerInvariant()
-          pnpm --dir app run check:windows-release-artifacts --nsis-root $installDir --msi-root $msiExe.DirectoryName --product-version $productVersion --exe-sha256 $exeSha256
+ DLL. CI installs it from NDI's official runtime installer (owner$adminInstall = Start-Process msiexec.exe -ArgumentList '/a', $msi.FullName, '/qn', "TARGETDIR=$extractDir" -Wait -PassThru
+ DLL. CI installs it from NDI's official runtime installer (ownerif ($adminInstall.ExitCode -ne 0) { throw "MSI extraction failed with code $($adminInstall.ExitCode)." }
+ DLL. CI installs it from NDI's official runtime installer (owner$msiExe = Get-ChildItem $extractDir -Filter syndocal.exe -Recurse | Select-Object -First 1
+ DLL. CI installs it from NDI's official runtime installer (ownerif (-not $msiExe) { throw 'MSI did not contain syndocal.exe.' }
+ DLL. CI installs it from NDI's official runtime installer (ownerif (-not (Get-ChildItem $msiExe.DirectoryName -Filter 'avcodec-*.dll')) {
+ DLL. CI installs it from NDI's official runtime installer (owner  throw 'MSI did not place FFmpeg DLLs beside syndocal.exe.'
+ DLL. CI installs it from NDI's official runtime installer (owner}
+ DLL. CI installs it from NDI's official runtime installer (owner$canonicalExe = Join-Path $env:GITHUB_WORKSPACE 'target/release/syndocal.exe'
+ DLL. CI installs it from NDI's official runtime installer (owner$productVersion = (Get-Content -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'app/package.json') -Raw | ConvertFrom-Json).version
+ DLL. CI installs it from NDI's official runtime installer (owner$exeSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $canonicalExe).Hash.ToLowerInvariant()
+ DLL. CI installs it from NDI's official runtime installer (ownerpnpm --dir app run check:windows-release-artifacts --nsis-root $installDir --msi-root $msiExe.DirectoryName --product-version $productVersion --exe-sha256 $exeSha256
 
-          $uninstaller = Join-Path $installDir 'uninstall.exe'
-          if (Test-Path $uninstaller) {
-            $uninstall = Start-Process $uninstaller -ArgumentList '/S' -Wait -PassThru
-            if ($uninstall.ExitCode -ne 0) { throw "NSIS uninstall failed with code $($uninstall.ExitCode)." }
-          }
+ DLL. CI installs it from NDI's official runtime installer (owner$uninstaller = Join-Path $installDir 'uninstall.exe'
+ DLL. CI installs it from NDI's official runtime installer (ownerif (Test-Path $uninstaller) {
+ DLL. CI installs it from NDI's official runtime installer (owner  $uninstall = Start-Process $uninstaller -ArgumentList '/S' -Wait -PassThru
+ DLL. CI installs it from NDI's official runtime installer (owner  if ($uninstall.ExitCode -ne 0) { throw "NSIS uninstall failed with code $($uninstall.ExitCode)." }
+ DLL. CI installs it from NDI's official runtime installer (owner}
 
       - name: Smoke-test Linux AppImage
         if: runner.os == 'Linux'
         run: |
-          appimage=$(find target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -print -quit)
-          test -n "$appimage"
-          chmod +x "$appimage"
-          set +e
-          timeout 8s xvfb-run -a "$appimage" --appimage-extract-and-run
-          exit_code=$?
-          set -e
-          test "$exit_code" -eq 124
+ DLL. CI installs it from NDI's official runtime installer (ownerappimage=$(find target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -print -quit)
+ DLL. CI installs it from NDI's official runtime installer (ownertest -n "$appimage"
+ DLL. CI installs it from NDI's official runtime installer (ownerchmod +x "$appimage"
+ DLL. CI installs it from NDI's official runtime installer (ownerset +e
+ DLL. CI installs it from NDI's official runtime installer (ownertimeout 8s xvfb-run -a "$appimage" --appimage-extract-and-run
+ DLL. CI installs it from NDI's official runtime installer (ownerexit_code=$?
+ DLL. CI installs it from NDI's official runtime installer (ownerset -e
+ DLL. CI installs it from NDI's official runtime installer (ownertest "$exit_code" -eq 124
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: syndocal-1.2.0-alpha.83-${{ matrix.os }}
-          path: target/release/bundle/**
-          if-no-files-found: error
-          retention-days: 14
+ DLL. CI installs it from NDI's official runtime installer (ownername: syndocal-1.2.0-alpha.83-${{ matrix.os }}
+ DLL. CI installs it from NDI's official runtime installer (ownerpath: target/release/bundle/**
+ DLL. CI installs it from NDI's official runtime installer (ownerif-no-files-found: error
+ DLL. CI installs it from NDI's official runtime installer (ownerretention-days: 14
