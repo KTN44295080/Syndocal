@@ -273,6 +273,7 @@ export function GdtfProfileTree(props: GdtfProfileTreeProps) {
                               aria-expanded={expandedFixture()}
                               data-profile-tree-item="fixture"
                               data-profile-fixture-key={fixture.key}
+                              title={fixture.fixture}
                               onClick={() => setFixtureExpanded(fixture.key, !expandedFixture())}
                               onKeyDown={(event) => handleBranchKeyDown(
                                 event,
@@ -305,7 +306,7 @@ export function GdtfProfileTree(props: GdtfProfileTreeProps) {
                                       aria-level="3"
                                       aria-selected={props.selected(fixture, mode)}
                                       aria-pressed={props.selected(fixture, mode)}
-                                      title={mode.description}
+                                      title={mode.description ? `${mode.name} — ${mode.description}` : mode.name}
                                       data-patch-profile-row
                                       data-profile-source={props.source}
                                       data-profile-tree-item="mode"

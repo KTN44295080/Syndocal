@@ -1,3 +1,4 @@
+import { createEffect, on } from "solid-js";
 import type { VideoOutputConfigDraft } from "../editorDrafts";
 import type {
   CompositionSummary,
@@ -19,6 +20,8 @@ type MaybePromise = void | Promise<unknown>;
 type SetupVideoPanelProps = {
   className: string;
   panelRef: (element: HTMLElement) => void;
+  /** Increments when another surface (Perform's Output pane) asks to create an output. */
+  outputToolRequest?: number;
   outputs: VideoOutputSummary[];
   compositions: CompositionSummary[];
   layers: VideoLayerSummary[];
@@ -102,7 +105,20 @@ type SetupVideoPanelProps = {
   onAssignComposition: (outputId: number, compositionId: number) => MaybePromise;
 };
 
+// The panel remounts whenever Setup > Video is shown; a request is honored once.
+let handledOutputToolRequest = 0;
+
 export function SetupVideoPanel(props: SetupVideoPanelProps) {
+  let outputTool: HTMLDetailsElement | undefined;
+  createEffect(on(() => props.outputToolRequest ?? 0, (request) => {
+    if (request <= handledOutputToolRequest || !outputTool) return;
+    handledOutputToolRequest = request;
+    outputTool.open = true;
+    requestAnimationFrame(() => {
+      outputTool?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      outputTool?.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
+    });
+  }));
   return (
     <section class={props.className} ref={(element) => props.panelRef(element)} tabIndex={-1}>
       <div class="panelHeader">
@@ -134,7 +150,9 @@ export function SetupVideoPanel(props: SetupVideoPanelProps) {
                     />
                   </div>
                 </details>
-                <details class="ioDisclosure videoSetupToolDisclosure" data-video-setup-tool="outputs">
+                {/* With no outputs yet, creating one is the only next step: start open. */}
+                <details class="ioDisclosure videoSetupToolDisclosure" data-video-setup-tool="outputs"
+                  ref={outputTool} open={props.outputs.length === 0}>
                   <summary>New Output</summary>
                   <div class="ioDisclosureBody">
                     <VideoOutputCreatePanel

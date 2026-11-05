@@ -6,6 +6,7 @@ import { LiveVideoMonitorPanel } from "./LiveVideoMonitorPanel";
 import { LiveVideoOutputHealthReadout } from "./LiveVideoOutputHealthReadout";
 import { VideoStagePreviewButton } from "./VideoClipGridPanel";
 import { VideoGroupInspector } from "./VideoGroupInspector";
+import { VideoLayerGroupsPanel } from "./VideoLayerGroupsPanel";
 import { patchVideoGroup } from "../videoLayerGroups";
 import { VideoPerformMatrix } from "./VideoPerformMatrix";
 import { VideoPerformQuickFx } from "./VideoPerformQuickFx";
@@ -38,6 +39,8 @@ export interface VideoPerformContext {
   onOpenEditor: () => void;
   /** Opens the full FX editor in Edit > Video on the selected layer; falls back to onOpenEditor. */
   onOpenFxEditor?: (layerId: number | null) => void;
+  /** Opens Setup > Video with New Output expanded (screens, NDI, Spout, Syphon). */
+  onOpenOutputSetup?: () => void;
   layout?: VideoPerformLayoutState;
   /** The existing Clip Inspector, rendered in-flow for the Inspector's Clip tab. */
   renderClipInspector?: () => JSX.Element;
@@ -49,7 +52,7 @@ export interface VideoPerformContext {
   onAddEffect?: (entry: FxCatalogEntry, layerId: number) => void | Promise<void>;
 }
 
-type InspectorTab = "fx" | "clip" | "browser";
+type InspectorTab = "fx" | "clip" | "browser" | "groups";
 type PaneFocus = "matrix" | "output" | "inspector" | null;
 
 const inspectorTabs: { id: InspectorTab; label: string }[] = [
@@ -71,7 +74,7 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
   let blackout!: HTMLButtonElement;
   const blackoutBlockedReason = () => props.masterControls.blackoutBlockedReason ?? null;
   // Video BO is a direct toggle (no confirmation) and stops video only.
-  const blackoutStateText = () => props.masterControls.blackout ? "Video BO on" : "Stops video only. Lighting keeps running.";
+  const blackoutStateText = () => props.masterControls.blackout ? "Video BO on" : "Stops video only. Lighting keeps running. ALL in the top bar stops both.";
   const keyboardEnabled = () => props.performContext?.keyboardEnabled !== false;
   const shortcut = (event: KeyboardEvent) => {
     if (!keyboardEnabled() || event.repeat || event.isComposing || event.defaultPrevented ||
@@ -153,6 +156,10 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
               <button onClick={props.liveMonitors.onRetry}>Retry monitors</button>
             </Show>
           </section>
+          {/* Creating and managing layer groups stays in Perform: the Inspector shows
+              them without a fourth tab, which would crowd its header at 1280 px. */}
+          <button type="button" data-video-perform-open-groups aria-pressed={tab() === "groups"}
+            onClick={() => { setBottomCollapsed(false); setTab(tab() === "groups" ? "fx" : "groups"); }}>Layer groups</button>
           <button data-video-perform-legend-toggle onClick={() => legend.showModal()}>Keyboard shortcuts</button>
         </>}
         actions={<PaneIconButton kind="maximise" active={focused() === "matrix"} controls="video-perform-matrix-body"
@@ -194,7 +201,14 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
           title="Output"
           titleId="video-perform-output-title"
           context={<span data-no-localize>{outputContext()}</span>}
-          tools={<LiveVideoOutputHealthReadout outputs={props.liveMonitors.outputHealth} error={props.liveMonitors.outputHealthError} />}
+          tools={<>
+            <LiveVideoOutputHealthReadout outputs={props.liveMonitors.outputHealth} error={props.liveMonitors.outputHealthError} />
+            <Show when={props.performContext?.onOpenOutputSetup}>
+              <button type="button" class="secondary videoPerformOutputSetup" data-video-perform-open-output-setup
+                title="Add or change screen, NDI, Spout and Syphon outputs in Setup > Video"
+                onClick={() => props.performContext?.onOpenOutputSetup?.()}>Set up outputs…</button>
+            </Show>
+          </>}
           actions={<>
             <PaneIconButton kind="collapse" active={bottomCollapsed()} controls="video-perform-output-body"
               onToggle={() => setBottomCollapsed(!bottomCollapsed())} data={{ "data-video-perform-collapse": "output" }} />
@@ -305,7 +319,9 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
           </>}
         />
         <div class="workspacePaneBody videoPerformInspectorBody" id="video-perform-inspector-body"
-          role="tabpanel" aria-labelledby={`video-perform-inspector-tab-${tab()}`} data-video-perform-inspector-panel={tab()}>
+          role={tab() === "groups" ? "region" : "tabpanel"}
+          aria-labelledby={tab() === "groups" ? undefined : `video-perform-inspector-tab-${tab()}`}
+          aria-label={tab() === "groups" ? "Layer groups" : undefined} data-video-perform-inspector-panel={tab()}>
           <Switch>
             <Match when={tab() === "fx"}>
               <Show when={selectedGroup()} fallback={<VideoPerformQuickFx layer={props.clipSlotBank.layer} layerList={props.layerList}
@@ -322,6 +338,11 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
             <Match when={tab() === "clip"}>
               <div class="videoPerformInspectorClip" data-video-perform-clip-inspector>
                 {props.performContext?.renderClipInspector?.() ?? <p class="emptyState">Select a clip to inspect it.</p>}
+              </div>
+            </Match>
+            <Match when={tab() === "groups"}>
+              <div class="videoPerformInspectorGroups" data-video-perform-groups>
+                <VideoLayerGroupsPanel effects={props.effectScopes} layers={props.layerList.layers} />
               </div>
             </Match>
             <Match when={tab() === "browser"}>
@@ -352,7 +373,7 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
       <p>The P button stages the current layer in Preview; the P key queues column 20.</p>
       <p>Shortcuts pause while editing a value, a dialog is open, or MIDI Learn is active.</p>
       <p>In MIDI, OSC or DMX Learn, select a pink control, then send or move its hardware input. Clips, Take, Stop, blend, transition type and time, effect stages and effect parameters are all learnable.</p>
-      <p>In MIDI Learn, right-click a control to choose its source: MIDI Learn, or a beat division for triggers.</p>
+      <p>In MIDI Learn, right-click a control (or turn on Assign Audio / Beat and click it) to choose its source: MIDI Learn, Audio, or a beat division for triggers.</p>
       <button onClick={() => legend.close()}>Close</button>
     </dialog>
   </section>;

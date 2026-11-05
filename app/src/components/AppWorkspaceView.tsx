@@ -1,4 +1,4 @@
-import { For,mergeProps as mergeThumbnailViewProps,Show } from "solid-js";
+import { createSignal,For,mergeProps as mergeThumbnailViewProps,Show } from "solid-js";
 import type { AppWorkspaceViewModel, FrontendViewInvoke } from "../App";
 import { audioTargetIsEligible,audioTargetIsTrigger } from "../audioControlMapping";
 import {
@@ -102,6 +102,8 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
     nextCue,
     operatorLockMode,
     controlLearnTargetLabel,
+    controlAssignOnClick,
+    setControlAssignOnClick,
     showClockStatus,
     showClockError,
     namedWorkspaces,
@@ -713,6 +715,9 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
     fixtureGroupDeleteUndoAvailable,
     undoDeleteFixtureGroup
   } = props.model;
+  // Perform's Output pane asks Setup > Video to open New Output; each request
+  // is a new number so a repeated click reopens a disclosure the user closed.
+  const [videoOutputToolRequest, setVideoOutputToolRequest] = createSignal(0);
   const customProfileWorkspaceVisible = () => workspaceTab() === "setup"
     && setupSubTab() === "patch" && customWorkbenchOpen();
   // The workbench temporarily owns the workspace; saved split ratios stay intact.
@@ -785,6 +790,8 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
         controlLearnMode={controlLearnMode()}
         controlLearnBusy={controlLearnBusy()}
         controlLearnTargetLabel={controlLearnTargetLabel()}
+        controlAssignOnClick={controlAssignOnClick()}
+        onControlAssignOnClick={setControlAssignOnClick}
         showClockStatus={showClockStatus()}
         showClockError={showClockError()}
         operations={
@@ -1756,6 +1763,7 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
         <SetupVideoPanel
           className={setupPanelClass("panel videoSetupPanel setupPanel", ["video"])}
           panelRef={registerSetupPanel(["video"])}
+          outputToolRequest={videoOutputToolRequest()}
           outputs={snapshot().video.outputs}
           compositions={snapshot().video.compositions}
           layers={snapshot().video.layers}
@@ -1836,6 +1844,11 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
             get controlLearnActive() { return controlLearnMode() !== null; },
             onOpenEditor: () => selectControlMode("mixer"),
             onOpenFxEditor: () => openVideoFxEditor(),
+            onOpenOutputSetup: () => {
+              if (!selectWorkspaceTab("setup")) return;
+              selectSetupMode("video");
+              setVideoOutputToolRequest(videoOutputToolRequest() + 1);
+            },
             layout: {
               get topRatio() { return performTopSplitRatio(); },
               get lowerRatio() { return performLowerSplitRatio(); },

@@ -275,22 +275,28 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
     <section class="videoSetupDisclosure videoOutputCreateSurface" aria-label="New Output">
       <div class="videoSetupDisclosureHeading">New Output</div>
       <div class="videoOutputForm">
-        <div class="videoOutputQuickCreate" data-show-spout-output-activation>
-          <p class="hint videoOutputQuickHint">
-            Same-PC show video uses exactly <strong data-no-localize>Syndocal Background</strong> and <strong data-no-localize>Syndocal Foreground</strong> Spout senders: Background at 1920×1080, Foreground at 3840×2160. Background uses <strong data-no-localize>Background Video2 Camera</strong>; Foreground uses <strong data-no-localize>Foreground Video 1</strong>. Stopped content keeps both senders alive with opaque RGB-black frames.
-          </p>
-          <button
-            class="primary"
-            data-video-output-enable-show-spout
-            onClick={() => void props.onEnableShowSpoutOutputs()}
-          >Enable foreground/background Spout</button>
-          <button
-            class="secondary"
-            data-video-output-reset-show-spout
-            onClick={() => void props.onResetShowSpoutOutputs()}
-          >Reset recognized show Spout outputs</button>
-        </div>
         <div class="videoOutputQuickCreate" data-video-output-quick-create>
+          {/* The output type comes first: NDI, Spout and Syphon are peers of a screen,
+              not advanced settings. */}
+          <label class="videoOutputKindField">
+            Output type
+            <select data-video-output-kind value={props.kind} disabled={addPending()} onInput={(event) => props.onKind(event.currentTarget.value as VideoOutputKind)}>
+              <option value="Display">Display</option>
+              <Show when={props.ndiAvailable} fallback={<Show when={props.kind === "NdiSender"}><option value="NdiSender" disabled>NDI Sender (unavailable)</option></Show>}>
+                <option value="NdiSender">NDI Sender</option>
+              </Show>
+              <Show when={props.spoutAvailable} fallback={<Show when={props.kind === "SpoutSender"}><option value="SpoutSender" disabled>Spout Sender (Windows only)</option></Show>}>
+                <option value="SpoutSender">Spout Sender</option>
+              </Show>
+              <Show when={props.syphonAvailable} fallback={
+                <Show when={props.kind === "SyphonServer"}>
+                  <option value="SyphonServer" disabled>Syphon Server (macOS only)</option>
+                </Show>
+              }>
+                <option value="SyphonServer">Syphon Server</option>
+              </Show>
+            </select>
+          </label>
           <Show when={props.kind === "Display"} fallback={
             <>
               <label>
@@ -303,6 +309,11 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
                     )}</For>
                   </Show>
                 </select>
+              </label>
+              <label class="videoOutputEndpointField">
+                {props.kind === "SyphonServer" ? "Server name" : "Endpoint"}
+                <input data-video-output-endpoint value={props.endpoint} disabled={addPending()}
+                  onInput={(event) => props.onEndpoint(event.currentTarget.value)} />
               </label>
               <p class="hint videoOutputQuickHint">New outputs follow the current output state and may start sending immediately.</p>
               <Show when={props.kind === "NdiSender"}>
@@ -415,6 +426,21 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
           </Show>
         </div>
 
+        <div class="videoOutputQuickCreate" data-show-spout-output-activation>
+          <p class="hint videoOutputQuickHint">
+            Same-PC show video uses exactly <strong data-no-localize>Syndocal Background</strong> and <strong data-no-localize>Syndocal Foreground</strong> Spout senders: Background at 1920×1080, Foreground at 3840×2160. Background uses <strong data-no-localize>Background Video2 Camera</strong>; Foreground uses <strong data-no-localize>Foreground Video 1</strong>. Stopped content keeps both senders alive with opaque RGB-black frames.
+          </p>
+          <button
+            class="primary"
+            data-video-output-enable-show-spout
+            onClick={() => void props.onEnableShowSpoutOutputs()}
+          >Enable foreground/background Spout</button>
+          <button
+            class="secondary"
+            data-video-output-reset-show-spout
+            onClick={() => void props.onResetShowSpoutOutputs()}
+          >Reset recognized show Spout outputs</button>
+        </div>
         <details class="ioDisclosure videoOutputAdvanced" data-video-output-advanced>
           <summary>Advanced output settings</summary>
           <div class="ioDisclosureBody">
@@ -422,25 +448,6 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
               <label>
                 Output label
                 <input value={props.label} onInput={(event) => props.onLabel(event.currentTarget.value)} />
-              </label>
-              <label>
-                Kind
-                <select value={props.kind} onInput={(event) => props.onKind(event.currentTarget.value as VideoOutputKind)}>
-                  <option value="Display">Display</option>
-                  <Show when={props.ndiAvailable} fallback={<Show when={props.kind === "NdiSender"}><option value="NdiSender" disabled>NDI Sender (unavailable)</option></Show>}>
-                    <option value="NdiSender">NDI Sender</option>
-                  </Show>
-                  <Show when={props.spoutAvailable} fallback={<Show when={props.kind === "SpoutSender"}><option value="SpoutSender" disabled>Spout Sender (Windows only)</option></Show>}>
-                    <option value="SpoutSender">Spout Sender</option>
-                  </Show>
-                  <Show when={props.syphonAvailable} fallback={
-                    <Show when={props.kind === "SyphonServer"}>
-                      <option value="SyphonServer" disabled>Syphon Server (macOS only)</option>
-                    </Show>
-                  }>
-                    <option value="SyphonServer">Syphon Server</option>
-                  </Show>
-                </select>
               </label>
             </div>
             <div class="split">
@@ -460,12 +467,6 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
             </Show>
             <Show when={props.kind === "NdiSender"}>
               <NdiAttribution class="hint" output />
-            </Show>
-            <Show when={props.kind !== "Display"}>
-              <label>
-                {props.kind === "SyphonServer" ? "Server name" : "Endpoint"}
-                <input value={props.endpoint} onInput={(event) => props.onEndpoint(event.currentTarget.value)} />
-              </label>
             </Show>
           </div>
         </details>

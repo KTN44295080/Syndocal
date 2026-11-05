@@ -39219,6 +39219,8 @@ button.timelineExternalSourceCard:active,
 }
 
 .videoOutputQuickCreate > .videoOutputQuickHint,
+.videoOutputQuickCreate > .videoOutputKindField,
+.videoOutputQuickCreate > .videoOutputEndpointField,
 .videoOutputQuickCreate > [data-video-output-monitor-status] {
   grid-column: 1 / -1;
   margin: 0;

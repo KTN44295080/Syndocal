@@ -2264,6 +2264,9 @@ function createAppView() {
   const [midiMappings, setMidiMappings] = createSignal<MidiControlMapping[]>([]);
   const [djTrackTriggers, setDjTrackTriggers] = createSignal<DjTrackTriggerMapping[]>([]);
   const [controlLearnMode, setControlLearnModeState] = createSignal<ControlLearnMode | null>(null);
+  // MIDI Learn: a click opens the source choice (Audio, beat division) instead of
+  // waiting for hardware, so assigning audio needs no right-click discovery.
+  const [controlAssignOnClick, setControlAssignOnClick] = createSignal(false);
   const [controlLearnBusy, setControlLearnBusy] = createSignal(false);
   const [controlLearnTargetLabel, setControlLearnTargetLabel] = createSignal<string | null>(null);
   const [midiMapMessage, setMidiMapMessage] = createSignal<MidiControlMessage>("ControlChange");
@@ -18612,8 +18615,9 @@ function createAppView() {
     if (controlLearnBusy()) return;
     clearControlLearnSelection();
     setControlLearnModeState(mode);
+    setControlAssignOnClick(false);
     if (mode === "midi") {
-      setMessage("MIDI Learn: select a pink control, then move or press the MIDI control. Right-click a control to choose a beat division.");
+      setMessage("MIDI Learn: select a pink control, then move or press the MIDI control. Choose Assign Audio / Beat (or right-click a control) to map audio or a beat division.");
       if (midiInputs().length === 0) void refreshMidiInputs();
     } else if (mode === "osc") {
       setMessage("OSC Learn: select a pink control, then send its OSC message.");
@@ -18655,6 +18659,7 @@ function createAppView() {
         : target),
     select: selectControlLearnElement,
     message: setMessage,
+    clickAssigns: () => controlLearnMode() === "midi" && controlAssignOnClick(),
     assign: (request) => {
       // Source choice is a MIDI feature: OSC and DMX bind controllers only, and
       // keep their own context menus.
@@ -28278,6 +28283,8 @@ function createAppView() {
     nextCue,
     operatorLockMode,
     controlLearnTargetLabel,
+    controlAssignOnClick,
+    setControlAssignOnClick,
     showClockStatus,
     showClockError,
     namedWorkspaces,

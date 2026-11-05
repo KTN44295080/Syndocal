@@ -185,3 +185,32 @@ screenshot links resolve to local evidence under
 `target/qa/task101-usability/shots/` (not tracked by Git).
 
 The docs checkpoint is separate from native/hardware and competitor hands-on acceptance. `COMPARE-PINNED-001` keeps its existing schema, original Daslight/TouchDesigner obligations and **Open** status; this VJ comparison adds evidence and pending owner work without closing unrelated requirements or reviving cancelled Synapse performance work.
+
+## Friction fixes applied (2026-11-05)
+
+All six ranked findings were addressed on `main` the same day (browser
+evidence; the native walkthrough above still confirms them on hardware):
+
+1. **W1** — Perform's Output pane has **Set up outputs…**, which opens Setup >
+   Video with New Output expanded and focused; New Output also starts open
+   while a project has no outputs.
+2. **W5** — the MIDI Learn prompt has **Assign Audio / Beat**: with it on, a
+   left click on a pink control opens the Audio / beat-division / MIDI source
+   menu, so no right-click discovery is needed.
+3. **W4** — Perform's header has **Layer groups**, which shows the existing
+   create/manage panel in the Inspector (a fourth Inspector tab clipped the
+   header at 1280×720 and was rejected). A selected group name now uses the
+   latched colours of a selected layer name.
+4. **W6** — **Output type** is the first New Output field (out of Advanced),
+   with the NDI/Spout endpoint or Syphon server name beside the composition;
+   the same-PC show Spout pair follows the screen controls.
+5. **W7** — profile rows show the full manufacturer/fixture/mode as a tooltip.
+6. **W8** — the Video BO hint adds "ALL in the top bar stops both."
+
+Checks: `tsc`; `check-perform-layout` (en/ja × 1920/1366/1280);
+`check-viewport-containment --setup-video-only` (5 sizes);
+`check-control-assign-menu-browser`, `check-midi-learn-browser`,
+`check-midi-learn-controller`; output/NDI/Syphon/group/patch contracts;
+localization 100%; native `tauri build --no-bundle` with 0 warnings and one
+responsive `Syndocal` window. The new controls were not exercised in the
+native window.

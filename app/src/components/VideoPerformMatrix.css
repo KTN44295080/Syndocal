@@ -473,6 +473,8 @@
 .videoPerformGroupStrip label span { min-width: 5ch; font-variant-numeric: tabular-nums; }
 .videoPerformGroupName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 .videoPerformGroupStrip button[aria-pressed="true"] { outline: 2px solid var(--theme-selected); outline-offset: -2px; }
+/* A selected group name uses the same latched colours as a selected layer name, not a dim fill. */
+.videoPerformMatrix .videoPerformGroupStrip .videoPerformGroupName[aria-pressed="true"] { border-color: var(--theme-latched); background: var(--theme-latched); color: var(--theme-on-latched); }
 .videoPerformMatrixRow.grouped .videoPerformLayerName { padding-inline-start: 18px; box-shadow: inset 3px 0 var(--theme-line-strong); }
 
 /* Off-page runtime signals stay available without nesting a scroll area in the matrix. */

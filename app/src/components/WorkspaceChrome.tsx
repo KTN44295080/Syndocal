@@ -94,6 +94,9 @@ type WorkspaceChromeProps = {
   operatorLockMode: OperatorLockMode | null;
   controlLearnMode: ControlLearnMode | null;
   controlLearnBusy: boolean;
+  /** MIDI Learn only: clicking a control opens its Audio / beat-division choice. */
+  controlAssignOnClick?: boolean;
+  onControlAssignOnClick?: (enabled: boolean) => void;
   controlLearnTargetLabel: string | null;
   operations: JSX.Element;
   onWorkspaceTab: (tab: WorkspaceTab) => void;
@@ -996,10 +999,19 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
           >
             <strong>{mode().toUpperCase()} Learn</strong>
             <Show when={props.controlLearnBusy} fallback={
-              <span>Select a pink control, then move or press the hardware control</span>
+              <span>{mode() === "midi" && props.controlAssignOnClick
+                ? "Click a pink control to assign Audio, a beat division or MIDI"
+                : "Select a pink control, then move or press the hardware control"}</span>
             }>
               <span>Listening for input</span>
               <b data-no-localize>{props.controlLearnTargetLabel ?? "selected control"}</b>
+            </Show>
+            <Show when={mode() === "midi" && props.onControlAssignOnClick}>
+              <button type="button" class="secondary controlLearnAssignToggle"
+                data-control-learn-assign-on-click aria-pressed={props.controlAssignOnClick ? "true" : "false"}
+                onClick={() => props.onControlAssignOnClick?.(!props.controlAssignOnClick)}>
+                Assign Audio / Beat
+              </button>
             </Show>
             <kbd>Esc</kbd>
           </div>

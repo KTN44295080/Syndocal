@@ -854,6 +854,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
                   type="button"
                   class="patchProfileRow"
                   data-patch-profile-row
+                  title={`${entry.manufacturer} ${entry.name} · ${entry.modeName}`}
                   data-profile-source={entry.kind}
                   data-profile-footprint={entry.footprint}
                   draggable="true"

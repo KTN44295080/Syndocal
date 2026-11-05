@@ -139,3 +139,15 @@
   font-family: var(--theme-font-ui);
   font-weight: 400;
 }
+
+/* The Learn prompt ignores the pointer so it never covers a target; its one
+   control (MIDI: click assigns Audio / beat division) takes it back. */
+.controlLearnPrompt .controlLearnAssignToggle {
+  flex: 0 0 auto;
+  pointer-events: auto;
+}
+.controlLearnPrompt .controlLearnAssignToggle[aria-pressed="true"] {
+  border-color: #f2b8f8;
+  background: #57365c;
+  color: #fff;
+}

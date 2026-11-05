@@ -1141,6 +1141,8 @@ const localeInvariantText = new Set([
   "PID (hex)", "Port-Address",
   "BO", "DMX BO", "C:\\\\path\\\\fixture.gdtf", "Pan %", "Rev", "s",
   "T", "Tilt %", "TL X", "TL Y", "TR X", "TR Y", "us", "v", "Video L", "W", "wl", "x/",
+  // Official NDI® URLs are shown as selectable text and never translated.
+  "https://ndi.video/", "https://ndi.video/tools/", "https://ndi.link/NDIRedistV6",
 ]);
 const untranslated = new Map();
 const unprotectedUserText = [];

@@ -22,6 +22,9 @@ export function installControlLearnCapture(options: {
   /** Offers the source choice for a control. It returns whether it took the
    * request; when it did not (or is absent) the context menu is left alone. */
   assign?: (request: ControlAssignRequest) => boolean;
+  /** When true, a primary click opens the source choice (Audio, beat division,
+   * MIDI Learn) instead of starting MIDI Learn, so it needs no right-click. */
+  clickAssigns?: () => boolean;
 }, events: Document = document): () => void {
   let pointerTarget: HTMLElement | null = null;
   let disposed = false;
@@ -44,6 +47,14 @@ export function installControlLearnCapture(options: {
     if (options.busy()) return;
     const targets = options.targets(element);
     if (targets.length === 0) { options.message('This control cannot be mapped with the current control action model.'); return; }
+    if (event.type === 'pointerdown' && options.assign && options.clickAssigns?.()) {
+      const pointer = event as MouseEvent;
+      const offered = options.assign({
+        mode, element, targets, x: pointer.clientX, y: pointer.clientY,
+        learn: () => begin(mode, element, targets),
+      });
+      if (offered) { options.select(element); return; }
+    }
     begin(mode, element, targets);
   };
   const begin = (mode: ControlLearnMode, element: HTMLElement, targets: ControlMappingTarget[]) => {
