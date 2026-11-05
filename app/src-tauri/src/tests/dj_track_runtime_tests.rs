@@ -1257,15 +1257,25 @@ fn completed_follow_hold_rebases_before_canonical_loop_off_and_resumes_target() 
     let coordinator = Mutex::new(coordinator);
     let admission = ProjectExternalCommandAdmission::default();
     let transaction_active = AtomicBool::new(false);
-    let dispatch = |message_type, sequence, event_id, payload| {
-        dispatch_dj_link_event(
-            dj_link_test_envelope(message_type, sequence, event_id, payload),
-            &engine,
-            &coordinator,
-            &runtime,
-            &admission,
-            &transaction_active,
-        )
+    // Busy (a contended engine snapshot on a slow runner) returns before any
+    // mutation, so the identical event is retried within a bounded wait.
+    let dispatch = |message_type, sequence, event_id, payload: serde_json::Value| {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let outcome = dispatch_dj_link_event(
+                dj_link_test_envelope(message_type, sequence, event_id, payload.clone()),
+                &engine,
+                &coordinator,
+                &runtime,
+                &admission,
+                &transaction_active,
+            );
+            if !matches!(outcome, DjLinkDispatchOutcome::Busy { .. }) || Instant::now() >= deadline
+            {
+                break outcome;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
     };
 
     assert!(matches!(
@@ -2688,15 +2698,29 @@ fn dj_link_stage2_commands_require_release_authority_and_exact_correlations() {
         protocol::DjLinkMessageType::TimelineLoopSet,
         protocol::DjLinkMessageType::TimelineLoopHalf,
     ];
-    let dispatch = |runtime: &Mutex<DjLinkRuntime>, message_type, sequence, event_id, payload| {
-        dispatch_dj_link_event(
-            dj_link_test_envelope(message_type, sequence, event_id, payload),
-            &engine,
-            &coordinator,
-            runtime,
-            &admission,
-            &transaction_active,
-        )
+    // Busy (a contended engine snapshot on a slow runner) returns before any
+    // mutation, so the identical event is retried within a bounded wait.
+    let dispatch = |runtime: &Mutex<DjLinkRuntime>,
+                    message_type,
+                    sequence,
+                    event_id,
+                    payload: serde_json::Value| {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let outcome = dispatch_dj_link_event(
+                dj_link_test_envelope(message_type, sequence, event_id, payload.clone()),
+                &engine,
+                &coordinator,
+                runtime,
+                &admission,
+                &transaction_active,
+            );
+            if !matches!(outcome, DjLinkDispatchOutcome::Busy { .. }) || Instant::now() >= deadline
+            {
+                break outcome;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
     };
 
     assert!(matches!(
