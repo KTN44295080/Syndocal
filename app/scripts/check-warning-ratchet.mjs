@@ -125,7 +125,13 @@ console.log(`modified files considered: ${modifiedFiles.size}`);
 const result = await runWarningConfiguration(configuration, repoRoot);
 if (result.timedOut) throw new Error(`${configuration.command.executable} warning command timed out after ${configuration.timeoutMs}ms`);
 if (result.outputLimitExceeded) throw new Error(`${configuration.command.executable} output exceeded the bounded capture limit`);
-if (result.exitCode !== 0) throw new Error(`${configuration.command.executable} warning command exited with ${result.exitCode}`);
+if (result.exitCode !== 0) {
+  // The command's output is captured for warning analysis, so a failing build
+  // would otherwise leave no diagnosis in the log. Show a bounded tail.
+  const captured = result.output ?? `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  const tail = String(captured).trimEnd().split(/\r?\n/).slice(-120).join("\n");
+  throw new Error(`${configuration.command.executable} warning command exited with ${result.exitCode}\n--- last captured output lines ---\n${tail}`);
+}
 
 let diagnosticComparison;
 if (configuration.command.executable === "cargo") {
