@@ -76,7 +76,11 @@
                 <Control Id="DJLinkDescription" Type="Text" X="35" Y="127" Width="300" Height="50" Text="DJソフトのトラック情報によるシーン切替とタイムライン同期。" />
                 <Control Id="Line" Type="Line" X="0" Y="234" Width="370" Height="0" />
                 <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="戻る">
+                    {{#if license}}
+                    <Publish Event="NewDialog" Value="LicenseAgreementDlg">NOT Installed</Publish>
+                    {{else}}
                     <Publish Event="NewDialog" Value="WelcomeDlg">NOT Installed</Publish>
+                    {{/if}}
                     <Publish Event="NewDialog" Value="MaintenanceTypeDlg">Installed</Publish>
                 </Control>
                 <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="次へ">
@@ -145,6 +149,19 @@
                      Value="SyndocalExtensionsDlg"
                      Order="2">1</Publish>
             {{/unless}}
+            {{#if license}}
+            <!-- Welcome, license, extensions, then the install folder. -->
+            <Publish Dialog="LicenseAgreementDlg"
+                     Control="Next"
+                     Event="NewDialog"
+                     Value="SyndocalExtensionsDlg"
+                     Order="2">LicenseAccepted = "1"</Publish>
+            <Publish Dialog="InstallDirDlg"
+                     Control="Back"
+                     Event="NewDialog"
+                     Value="SyndocalExtensionsDlg"
+                     Order="2">1</Publish>
+            {{/if}}
         </UI>
 
         <UIRef Id="WixUI_InstallDir" />

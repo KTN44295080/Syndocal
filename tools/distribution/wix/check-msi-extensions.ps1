@@ -16,12 +16,15 @@ function Read-Rows([string]$Query,[int]$Columns) {
 $taskChecks=New-Object 'System.Collections.Generic.List[string]'
 function Assert-Check($Condition,[string]$Name) {if(-not $Condition){throw $Name};$taskChecks.Add($Name)}
 $taskProperties=@{};foreach($taskRow in (Read-Rows 'SELECT Property, Value FROM Property' 2)){$taskProperties[$taskRow[0]]=$taskRow[1]}
-Assert-Check ($taskProperties.ProductVersion -eq '1.2.82' -and $taskProperties.ProductName -eq 'Syndocal') 'MSI product alpha.81'
+# The expected MSI version is the repository's wix version (a pinned literal went stale across releases).
+$taskExpectedVersion=(Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\..\app\src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json).bundle.windows.wix.version
+Assert-Check ($taskExpectedVersion -match '^\d+\.\d+\.\d+$') 'Repository MSI version is a three-part version'
+Assert-Check ($taskProperties.ProductVersion -eq $taskExpectedVersion -and $taskProperties.ProductName -eq 'Syndocal') ('MSI product '+$taskExpectedVersion)
 Assert-Check (-not $taskProperties.ContainsKey('ARPNOREPAIR')) 'Native maintenance Repair remains visible and enabled'
 $taskControl=Read-Rows 'SELECT Dialog_, Control, Type, Property, Text FROM Control' 5
 Assert-Check (@($taskControl | Where-Object {$_[0] -eq 'SyndocalExtensionsDlg' -and $_[1] -eq 'DJLink' -and $_[2] -eq 'CheckBox' -and $_[3] -eq 'SYNDOCAL_DJLINK_SELECTED' -and $_[4] -eq 'DJ Link'}).Count -eq 1) 'Native MSI DJ Link checkbox'
 $taskEvents=Read-Rows 'SELECT Dialog_, Control_, Event, Argument, Condition, Ordering FROM ControlEvent' 6
-foreach($taskTransition in @(@('WelcomeDlg','Next','SyndocalExtensionsDlg'),@('InstallDirDlg','Back','SyndocalExtensionsDlg'),@('MaintenanceTypeDlg','RepairButton','SyndocalExtensionsDlg'),@('SyndocalExtensionsDlg','Next','InstallDirDlg'),@('SyndocalExtensionsDlg','Next','VerifyReadyDlg'))) {
+foreach($taskTransition in @(@('WelcomeDlg','Next','LicenseAgreementDlg'),@('LicenseAgreementDlg','Next','SyndocalExtensionsDlg'),@('SyndocalExtensionsDlg','Back','LicenseAgreementDlg'),@('InstallDirDlg','Back','SyndocalExtensionsDlg'),@('MaintenanceTypeDlg','RepairButton','SyndocalExtensionsDlg'),@('SyndocalExtensionsDlg','Next','InstallDirDlg'),@('SyndocalExtensionsDlg','Next','VerifyReadyDlg'))) {
  Assert-Check (@($taskEvents|Where-Object {$_[0] -eq $taskTransition[0] -and $_[1] -eq $taskTransition[1] -and $_[2] -eq 'NewDialog' -and $_[3] -eq $taskTransition[2]}).Count -eq 1) ('Native MSI navigation '+($taskTransition -join '/'))
 }
 $taskActions=Read-Rows 'SELECT Action, Type, Source, Target FROM CustomAction' 4
