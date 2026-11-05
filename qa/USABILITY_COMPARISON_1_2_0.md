@@ -235,7 +235,14 @@ and MIDI Learn never listened on a control. Evidence:
 | Profile rows with tooltip (incl. both ellipsized) | 8/8 | 8/8 |
 | Blocked Video BO key | "VIDEO BOOUTPUT OFF" run together | "VIDEO BO  OUTPUT OFF" (fixed) |
 
-Not covered natively: adding a Display output to a second screen (only
-one display attached), the ALL hint (shown only while this machine holds
+Second screen (attached later the same day, `4ea71ddb` QA build): Set up
+outputs… listed `DISPLAY1 · 2560x1600 · Editor screen` and `DISPLAY2 ·
+1920x1200`, pre-selected DISPLAY2 (first non-editor screen), and Add display
+output succeeded in 505 ms (1 → 2 outputs, "Display output added.", Display 2
+1920x1200 in Projection Surfaces; `target/qa/native-walk-20261106/display2/`).
+Outputs were not taken, so no window opened on it.
+
+Not covered natively: showing video on the second screen (needs taking
+the outputs through the in-app confirmation), the ALL hint (shown only while this machine holds
 the outputs; the blocked reason is shown instead), audio/MIDI hardware
 response, and the W1–W8 timings, which still need the owner checklist.
