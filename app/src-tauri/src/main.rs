@@ -135320,7 +135320,7 @@ f 1 2 3
             protocol::DjLinkAckOutcome::Accepted,
             "DJ Link state sync was rejected: {sync_ack:?}"
         );
-        client.send_json(&json!({
+        let request = json!({
             "v": protocol::DJ_LINK_PROTOCOL_VERSION,
             "type": "DJ_TIMELINE_STATE_REQUEST",
             "agentId": protocol::DJ_LINK_AGENT_ID,
@@ -135328,10 +135328,24 @@ f 1 2 3
             "sequence": 3,
             "eventId": format!("production-stop-state-{session_id}"),
             "payload": {}
-        }));
+        });
+        // Busy (a contended engine snapshot on a slow runner) is returned
+        // before any state is read or recorded, so the identical request is
+        // retried within a bounded wait, as the other DJ Link tests do.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let state_ack = loop {
+            client.send_json(&request);
+            let ack = client.read_ack();
+            if ack.outcome != protocol::DjLinkAckOutcome::Busy || Instant::now() >= deadline
+            {
+                break ack;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
         assert_eq!(
-            client.read_ack().outcome,
-            protocol::DjLinkAckOutcome::Accepted
+            state_ack.outcome,
+            protocol::DjLinkAckOutcome::Accepted,
+            "DJ Link timeline state request was rejected: {state_ack:?}"
         );
         let state = client.read_json();
         assert_eq!(state["type"], "DJ_TIMELINE_STATE");
