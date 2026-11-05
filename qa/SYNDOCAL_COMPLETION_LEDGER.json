@@ -523,7 +523,7 @@
       "owner": "Comparative acceptance owner",
       "dependency": "Pinned legally permitted free-edition Daslight/TouchDesigner versions/content and existing hardware; paid-only trials and cancelled Synapse performance split to Deferred IDs",
       "nonclaim": "Does not claim parity or superiority from unmeasured/free-excluded tasks, counts or loopback; cancelled Synapse performance is not reopened.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md", "qa/COMPARE_PINNED_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md", "qa/COMPARE_PINNED_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/USABILITY_COMPARISON_1_2_0.md"],
       "status": "Open"
     },
     {

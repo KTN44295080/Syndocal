@@ -1,5 +1,8 @@
 # Syndocal competitive review - 2026-10-16
 
+> Re-measured for 1.2.0 on 2026-11-05: [usability comparison](USABILITY_COMPARISON_1_2_0.md)
+> (browser-preview Syndocal counts, documented-only competitor paths, pending owner native walkthrough).
+
 - Task 9 Part B / Task 8. Shared `main`, base `8959408d79d1b2ca4fcc512f7678f8cf2a829f75`.
 - Docs-only review, committed separately under Task 10 Part A. No product edits, rebuild, version bump,
   installation, sign-in, payment, competitor benchmark or CI wait.
