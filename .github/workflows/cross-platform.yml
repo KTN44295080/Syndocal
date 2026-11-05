@@ -210,6 +210,21 @@ jobs:
           }
           Write-Host "Pinned NDI runtime $($pin.version) installed at $dll"
 
+      - name: Synthesize the NDI 6 SDK from vendored headers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The ordinary package builds with the ndi feature, which needs the
+          # NDI SDK headers and import library. The SDK download requires
+          # registration (owner decision 2026-11-05), so CI uses the vendored
+          # MIT-licensed NDI 6.3.2 headers and an import library generated
+          # from their declarations, bound to the pinned runtime DLL above.
+          $sdk = Join-Path $env:RUNNER_TEMP 'ndi-6-sdk'
+          $runtime = Join-Path $env:ProgramFiles 'NDI\NDI 6 Runtime\v6\Processing.NDI.Lib.x64.dll'
+          & ./app/scripts/synthesize-ndi-sdk.ps1 -OutDir $sdk -RuntimeDll $runtime
+          Add-Content -Path $env:GITHUB_ENV -Value "NDI_SDK_DIR=$sdk"
+
       - name: Stage Windows runtime libraries
         if: runner.os == 'Windows'
         run: pnpm --dir app run prepare:runtime-libs
