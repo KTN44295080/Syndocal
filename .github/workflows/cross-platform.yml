@@ -185,7 +185,12 @@ jobs:
           # match the pinned inventory exactly, so a newer NDI release fails
           # closed here until the pin is reviewed and advanced.
           $installer = Join-Path $env:RUNNER_TEMP 'NDI-6-Runtime.exe'
-          Invoke-WebRequest -Uri 'https://downloads.ndi.tv/Runtime/NDI%206%20Runtime.exe' -OutFile $installer
+          # NDI's published redistributable link; it redirects to the current
+          # runtime installer. The direct downloads.ndi.tv object path is not
+          # public (AccessDenied). Integrity rests on the Authenticode check
+          # below before execution and the pinned DLL hash after install.
+          $response = Invoke-WebRequest -Uri 'http://ndi.link/NDIRedistV6' -OutFile $installer -PassThru
+          Write-Host "NDI 6 Runtime installer resolved to: $($response.BaseResponse.RequestMessage.RequestUri)"
           $signature = Get-AuthenticodeSignature -LiteralPath $installer
           if ($signature.Status -ne 'Valid') { throw "NDI 6 Runtime installer signature is $($signature.Status)." }
           Write-Host "NDI 6 Runtime installer signer: $($signature.SignerCertificate.Subject)"
