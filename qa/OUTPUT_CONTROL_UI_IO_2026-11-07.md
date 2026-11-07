@@ -94,7 +94,7 @@ instance exited; the remaining normal instance has no diagnostic launch flag.
 - An hours-old isolated QA session rejected Enable Output with `invalid_request`
   after Video lease expiry. Standby applied; COM5 was never opened there. Fresh
   final native Enable/automatic ownership and COM5 passed. Stale-session Enable
-  remains a follow-up, not a passing recovery test.
+  was unresolved at this checkpoint; the 2026-11-08 follow-up below resolves it.
 - NDI helper initially over-required changing user timecodes. Final criteria
   require advancing SDK timestamp or timecode, changing pixels and both sizes.
   PowerShell 5 failed module preflight before product execution; final pinned
@@ -103,3 +103,56 @@ instance exited; the remaining normal instance has no diagnostic launch flag.
 Next acceptance: reproduce stale-session Enable, run the matched native 60fps
 campaign, then operator verification of approved physical fixture/MIDI and
 external-client paths. This checkpoint does not close those gates.
+
+## Follow-up: expired Video lease recovery — 2026-11-08
+
+Base `67857a75`. The old QA executable reproduced the exact `invalid_request`
+after a real 62-second wait. Stderr identified `Err(ResourceConflict)` from the
+ordinary Arm lease transition: the pure public query hides expired-active
+claims, but the registry correctly refuses to recover a Video claim as Both.
+The UI therefore had no selectable claim to release.
+
+The Sync panel now shows **Release expired lease** only for an observed expired,
+unmanaged, current-project, exact Video claim. Normal active output has no extra
+control. Cleanup cancels automatic taking, requires confirmed Ready/Standby with
+both resources denied, requeries the same lease/generation/project, binds the
+complete post-Standby output fence before dispatch, and validates the exact
+Video relinquishment receipt. It remains Standby; Enable is a separate action.
+No query mutation, wire/schema change, implicit scope widening, Rust admission
+relaxation or rendering hot-path work was introduced. Independent review passed.
+
+Evidence: `target/qa/output-enable-expiry-20261107/`.
+
+- `repro-result.json` / `native.stderr.log`: original native failure.
+- `recovery-result.json`: current policy against that same native expired claim;
+  lease 2 retired, fresh Both lease 3 acquired, final Standby.
+- Latest `tauri build --no-bundle`: exit 0 in 4m41s, pinned MSVC 14.44.35207.
+  Exact ordinary exe SHA-256
+  `1d8e757ea8e7b1ffee8a51496d1c4ef2aa0399148a373c55313f252f1212d228`.
+  One responsive main window verified and maximized before recovery actions.
+- Latest native UI: opened DISPLAY2 at 1920×1200 with exact Video lease 3,
+  observed real expiry, clicked Release expired lease, confirmed native output
+  window gone and Ready/Standby with both resources denied. Then clicked Enable
+  Output: fresh lease 4, exact Both scope, Ready. No confirmation appeared.
+  `native-{expired-status,after-ui-release,after-ui-enable,final-standby}.json`,
+  `windows-after-release.json`, and native screenshots/trees retain the evidence.
+  This used an empty unsaved project; no original show file was overwritten.
+  COM5 workers remained stopped. End state was Standby with no output window.
+- Regression: `check-output-lease-expiry.mjs` passed success plus changed
+  owner/process/project/scope/generation, failed Standby, every full-fence field,
+  mismatched receipts and native stale rejection. No fallback Enable is allowed.
+  TypeScript, output-runtime, ownership, localization (4199/4199), and Sync browser
+  checks passed; browser exercises real recovery button and no automatic Enable
+  in addition to the existing six viewport/locale cases. `git diff --check` passed.
+- Compiler warnings: previous normal build 0, this normal build 0, delta 0.
+
+Performance audit also clarified the earlier 60fps boundary: current
+`native_display_gpu.rs` still defaults to the legacy route; only
+`SYNDOCAL_QA_NATIVE_GPU=1` requests the resident route. The old UI test did not
+record that environment and used 1920×1200 rather than the formal 2560×1600
+condition, so its 86ms reading is not a matched resident regression. Historical
+`c5/runs/20261105-064710-068533-2eea47b5bdf1/SUMMARY.md` records OFF ~8.20fps /
+ON ~60.006fps and the subsequent run records an ON soak pass; those older
+artifacts do not establish current acceptance. No performance/default policy
+changed here. Next performance step is a fresh receipt-bound C5 OFF/ON smoke
+from this committed checkpoint, followed by the formal campaign if warranted.

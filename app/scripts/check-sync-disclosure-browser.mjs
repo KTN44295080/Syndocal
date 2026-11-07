@@ -25,19 +25,24 @@ import {VideoOutputActionsPanel} from '/src/components/VideoOutputActionsPanel.t
 import {installUiLocalization} from '/src/uiLocalization.ts';
 import '/src/theme.css'; import '/src/styles.css'; import '/src/setupIo.css'; import '/src/components/SyncPanels.css';
 const [locale,setLocale]=createSignal('en');
-let mode='stopped'; const log=[];
+let mode='stopped'; let expiredReleased=false; const log=[];
+const expiryFence={process_incarnation:1,session_incarnation:2,project_epoch:3,project_revision:4,project_checkpoint_hash:'a'.repeat(64),project_publication_generation:5,output_epoch:6,output_generation:7,safety_blackout_epoch:8,safety_blackout_generation:9};
 let ownership={role:'Both',effective_role:'Both',desired_role:'Both',persisted_role:'Both',state:'Ready',generation:1,epoch:1,lighting_allowed:true,video_allowed:true,lighting_reason:'OwnedByMachineRole',video_reason:'OwnedByMachineRole',error:null};
 const invoke=async(command,args)=>{
  log.push({command,args});
  const active=mode!=='stopped'; const fail=mode==='failure';
  if(command==='standby_sync_status') return {running:active,role:active?'standby':null,directory:active?'C:/shared':null,session_id:null,generation:active?3:null,written_at_unix_ms:null,heartbeat_age_ms:active?25:null,heartbeat_stale:fail,takeover_ready:!fail,split_brain:fail,active_primary_sessions:fail?['a','b']:[],project_bytes:active?2400:0,last_applied_generation:active?3:null,last_error:fail?'Shared folder is unavailable':null};
  if(command==='get_output_ownership_status') return {...ownership};
- if(command==='query_output_lease_authority_v1') return {operation_id:'syndocal.output.lease.authority.query.v1',statuses:[{status:'held_active',authority:{lease_id:'lease-0000000000000001',generation:1},resources:['lighting','video']}]};
+ if(command==='query_output_lease_authority_v1') return {operation_id:'syndocal.output.lease.authority.query.v1',statuses:mode==='expired'?[{status:'unavailable'}]:[{status:'held_active',authority:{lease_id:'lease-0000000000000001',generation:1},resources:['lighting','video']}]};
+ if(command==='query_video_authoring_lease_authority_v1') return {operationId:'syndocal.query.output.video.authoring.lease.v1',fence:{...expiryFence},status:expiredReleased?'unavailable':'expired',authority:expiredReleased?null:{lease_id:'lease-0000000000000001',generation:4},resources:expiredReleased?[]:['video'],projectMatches:expiredReleased?null:true,managed:false};
+ if(command==='query_output_control_authority_v1') return {operation_id:'syndocal.query.output.control.authority.v1',fence:{...expiryFence}};
+ if(command==='allocate_output_control_request_id_v1') return 101;
+ if(command==='relinquish_output_lease_v2') {expiredReleased=true;return {type:'receipt',receipt:{operation_id:args.request.operation_id,request_id:101,shape_sha256:'a'.repeat(64),argument_fingerprint:'b'.repeat(64),audit_sequence:1,fence_before:{...expiryFence},fence_after:{...expiryFence},outcome:'no_op',lease_result:{authority:{lease_id:'lease-0000000000000001',generation:5},resources:['video'],phase:'unclaimed',outcome:'relinquished',audit_sequence:1,changes:[{lease_id:'lease-0000000000000001',before_generation:4,after_generation:5,before_phase:'held_active',after_phase:'unclaimed',before_resources:['video'],after_resources:[]}]}}};}
  if(command==='get_show_clock_status') return {running:active,role:active?'standby':null,state:fail?'STALE':active?'LOCKED':'STOPPED',local_address:null,peer_address:active?'192.168.1.2:44666':null,session_id:null,node_id:null,clock_generation:1,fencing_generation:1,accepted_samples:active?55:0,last_sequence:0,offset_us:0,sample_age_us:active?1500:null,output_armed:false,show_clock_gate_armed:false,fence_state:'DISARMED',accepted_actions:0,scheduled_actions:0,last_action_sequence:0,last_action_id:null,last_action_status:null,dropped_datagrams:0,rejected_packets:fail?4:0,last_rejection:null,last_error:fail?'Clock peer is unavailable':null};
  if(command==='ltc_input_status_v1') return {running:active,signal:!fail,timecode:active?'01:02:03:04':null,frame_rate:30,device_name:'Fixture audio',channel_index:0,last_error:fail?'No timecode on the selected channel':null};
  if(command==='list_ltc_input_devices_v1') return [{name:'Fixture audio',channels:2,is_default:true}];
  if(command==='video_output_recording_status') return {takeover:{state:fail?'blocked':'idle',folder:null,reason:fail?'Recording folder is unavailable':null}};
- if(command==='set_output_ownership_role'&&args.role==='Standby') {ownership={...ownership,role:'Standby',effective_role:'Standby',desired_role:'Standby',lighting_allowed:false,video_allowed:false,lighting_reason:'Standby',video_reason:'Standby'};return {...ownership};}
+ if(command==='set_output_ownership_role'&&args.role==='Standby') {ownership={...ownership,role:'Standby',effective_role:'Standby',desired_role:'Standby',persisted_role:'Standby',generation:6,epoch:5,lighting_allowed:false,video_allowed:false,lighting_reason:'Standby',video_reason:'Standby',error:null};return {...ownership};}
  throw Error('Fixture does not allow mutation: '+command);
 };
 window.__syncFixture={setMode:(next)=>{mode=next;},setLocale:(next)=>{setLocale(next);localizer.refresh();},log};
@@ -93,6 +98,13 @@ try {
  for(const text of ['Shared folder is unavailable','Clock peer is unavailable','No timecode on the selected channel','Recording folder is unavailable']) assert.equal(await page.getByText(text,{exact:false}).first().isVisible(),true,`${text}: failure remains visible while setup is closed`);
  await page.screenshot({path:resolve(artifacts,'sync-failures-ja-1280x800.png'),fullPage:true});
  await page.locator('[data-io-control=standby-output]').click();await page.waitForTimeout(80);assert.equal(await page.evaluate(()=>window.__syncFixture.log.filter(x=>x.command==='set_output_ownership_role'&&x.args.role==='Standby').length),1,'normal Standby uses the existing exact role transition');
+ await page.evaluate(()=>{window.__syncFixture.setMode('expired');window.__syncFixture.setLocale('en');});
+ const expiryAction=page.locator('[data-io-expired-video-lease] button');
+ await expiryAction.waitFor({state:'visible'});
+ await expiryAction.click();await expiryAction.waitFor({state:'hidden'});
+ assert.equal(await page.evaluate(()=>window.__syncFixture.log.filter(x=>x.command==='relinquish_output_lease_v2').length),1,'expired claim can be explicitly retired');
+ assert.equal(await page.evaluate(()=>window.__syncFixture.log.filter(x=>x.command==='enable_output_control_v2').length),0,'cleanup does not enable lighting or video');
+ assert.ok(await page.locator('.syncOutputPanel').innerText().then(text=>text.includes('Standby')),'cleanup remains Standby');
  // Real Display action component must track later props, not only its mount snapshot.
  await page.evaluate(()=>{window.__syncFixture.setLocale('en');window.__mountOutputActions();});
  const action=page.locator('[data-action=set-display-window-open]');

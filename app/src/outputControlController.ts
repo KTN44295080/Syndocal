@@ -1453,11 +1453,13 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
 
 type OutputControlExecutionOptions = {
   /**
-   * The only non-Display bypass is the same-call Enable -> blackout release
-   * bridge below.  The Enable receipt is already a strictly validated active
-   * exact-Both proof; the backend still revalidates the lease before release.
+   * Exceptional lanes carry a canonical Display query, an Enable receipt,
+   * or an exact post-Standby expiry observation. Native admission still
+   * revalidates owner, scope, generation and the complete control fence.
    */
-  skipPublicLeaseQuery?: "display-authority" | "enabled-lease-proof";
+  skipPublicLeaseQuery?: "display-authority" | "enabled-lease-proof" | "expired-video-retirement";
+  /** Bind expiry cleanup to the exact post-retirement query, including output state. */
+  expectedFence?: OutputControlFence;
   /**
    * Optional caller fence for an operation whose intent was prepared from a
    * canonical project bundle.  The live OutputControl authority is checked
@@ -1481,6 +1483,9 @@ const executeOutputControlOperation = async (
   const operationId = operationIdForAction(action);
   assertAction(action);
   const authority = assertAuthority(await invoke<unknown>("query_output_control_authority_v1"));
+  if (options.expectedFence && !fencesEqual(authority.fence, options.expectedFence)) {
+    throw new Error("Output authority changed after Standby; refresh before releasing the expired lease.");
+  }
   if (options.expectedProject
     && (authority.fence.project_epoch !== options.expectedProject.project_epoch
       || authority.fence.project_revision !== options.expectedProject.project_revision
@@ -1492,8 +1497,10 @@ const executeOutputControlOperation = async (
       && (action.kind === "add_display" || action.kind === "set_display_window_open");
     const enabledLeaseProofBypass = options.skipPublicLeaseQuery === "enabled-lease-proof"
       && action.kind === "release_blackout";
-    if (!displayBypass && !enabledLeaseProofBypass) {
-      throw new Error("Only canonical Display actions may bypass the public lease query; nothing was applied.");
+    const expiredRetirementBypass = options.skipPublicLeaseQuery === "expired-video-retirement"
+      && action.kind === "relinquish_output_lease" && options.expectedFence !== undefined;
+    if (!displayBypass && !enabledLeaseProofBypass && !expiredRetirementBypass) {
+      throw new Error("This action requires a canonical lease observation; nothing was applied.");
     }
   } else if (action.kind !== "reset_show_spout_outputs" && action.kind !== "replace_video_authoring_lease") {
     const leaseQuery = await queryOutputLeaseAuthority(invoke);
@@ -1768,6 +1775,15 @@ export async function executeOutputLeaseLifecycle(
   action: OutputLeaseLifecycleAction,
 ): Promise<OutputControlReceipt> {
   return executeOutputControlOperation(invoke, action);
+}
+
+/** Thin dispatch seam for the expiry policy's exact post-Standby observation. */
+export async function executeObservedExpiredVideoLeaseRelinquish(
+  invoke: FrontendTauriInvoke, lease: OutputLeaseAuthority, fence: OutputControlFence,
+): Promise<OutputControlReceipt> {
+  return executeOutputControlOperation(invoke, { kind: "relinquish_output_lease", lease }, {
+    skipPublicLeaseQuery: "expired-video-retirement", expectedFence: fence,
+  });
 }
 
 /** Authoring follows current output state; acquiring ownership never arms outputs. */

@@ -625,6 +625,8 @@ const japaneseText: Record<string, string> = {
   "Output lease state is Unavailable.": "出力リース状態は利用できません。",
   Recover: "復旧",
   Relinquish: "解放",
+  "Video lease expired.": "映像の操作権限が期限切れです。",
+  "Release expired lease": "期限切れの権限を解放",
   Renew: "更新",
   "Select one lease": "リースを1つ選択",
   "Selected exact lease": "選択中の正確なリース",

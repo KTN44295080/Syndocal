@@ -25,6 +25,7 @@ import {
   noteOperatorTookOutputs,
 } from "../outputAutoOwnership";
 import { autoOutputSetting, autoOutputStatus, setAutoOutputSetting } from "../outputAutoOwnershipRuntime";
+import { queryExpiredVideoOutputLease, releaseExpiredVideoOutputLease, type ExpiredVideoLease } from "../outputLeaseExpiryRecovery";
 
 type StandbySyncRole = "primary" | "standby";
 
@@ -204,6 +205,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
   const [ownershipStatus, setOwnershipStatus] = createSignal<OutputOwnershipStatus>(emptyOwnershipStatus);
   const [leaseQuery, setLeaseQuery] = createSignal<OutputLeaseAuthorityQuery>(emptyLeaseQuery);
   const [selectedLeaseId, setSelectedLeaseId] = createSignal<string>("");
+  const [expiredVideoLease, setExpiredVideoLease] = createSignal<ExpiredVideoLease | null>(null);
   const [busy, setBusy] = createSignal(false);
   const [actionError, setActionError] = createSignal<string | null>(null);
   // A refused Standby is shown next to the role selector, which keeps showing
@@ -271,25 +273,30 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
     setMachineRole("Standby");
     setLeaseQuery(emptyLeaseQuery);
     setSelectedLeaseId("");
+    setExpiredVideoLease(null);
   };
 
   const pollStatus = (): Promise<void> => {
     if (pollFlight) return pollWaiter ?? pollFlight;
     const generation = ++pollGeneration;
     const isCurrent = () => !disposed && generation === pollGeneration;
-    const rawEndpointFlights = [
+    const coreEndpointFlights = [
       Promise.resolve().then(() => props.invokeCommand<StandbySyncStatus>("standby_sync_status")),
       Promise.resolve().then(() => props.invokeCommand<OutputOwnershipStatus>("get_output_ownership_status")),
       Promise.resolve().then(() => queryOutputLeaseAuthority(props.invokeCommand)),
     ] as const;
+    const rawEndpointFlights = [...coreEndpointFlights, coreEndpointFlights[2].then(query =>
+      query.statuses.some(status => status.status !== "unavailable")
+        ? null : queryExpiredVideoOutputLease(props.invokeCommand))] as const;
     const rawFlight = (async () => {
       const results = await Promise.allSettled(rawEndpointFlights);
       const failure = results.find((result) => result.status === "rejected");
       if (failure?.status === "rejected") throw failure.reason;
-      const [syncResult, ownershipResult, leaseResult] = results as [
+      const [syncResult, ownershipResult, leaseResult, expiredResult] = results as [
         PromiseFulfilledResult<StandbySyncStatus>,
         PromiseFulfilledResult<OutputOwnershipStatus>,
         PromiseFulfilledResult<OutputLeaseAuthorityQuery>,
+        PromiseFulfilledResult<ExpiredVideoLease | null>,
       ];
       if (!isCurrent()) return;
       setStatus(syncResult.value);
@@ -298,6 +305,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
       // Standby reached by any path retires an earlier refusal message.
       if (ownershipResult.value.desired_role === "Standby") setRoleError(null);
       setLeaseQuery(leaseResult.value);
+      setExpiredVideoLease(expiredResult.value);
       const authoritativeBothReady = props.backendAvailable
         && ownershipResult.value.state === "Ready"
         && ownershipResult.value.effective_role === "Both"
@@ -317,6 +325,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
       boundedPromise(() => rawEndpointFlights[0], "Standby status query", STATUS_POLL_INVOKE_TIMEOUT_MS),
       boundedPromise(() => rawEndpointFlights[1], "Output ownership query", STATUS_POLL_INVOKE_TIMEOUT_MS),
       boundedPromise(() => rawEndpointFlights[2], "Output lease query", STATUS_POLL_INVOKE_TIMEOUT_MS),
+      boundedPromise(() => rawEndpointFlights[3], "Expired video lease query", STATUS_POLL_INVOKE_TIMEOUT_MS),
     ] as const;
     let completedFlight: Promise<void>;
     completedFlight = rawFlight.then(
@@ -649,6 +658,24 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
   const recoverLease = () => runSelectedLeaseLifecycle("recover_lease");
   const relinquishLease = () => runSelectedLeaseLifecycle("relinquish_output_lease");
 
+  const releaseExpiredLease = async () => {
+    const expected = expiredVideoLease();
+    if (!expected || busy()) return;
+    noteOperatorStandbyRequested();
+    pollGeneration += 1;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await releaseExpiredVideoOutputLease(props.invokeCommand, expected);
+      setExpiredVideoLease(null);
+    } catch (error) {
+      setActionError(String(error));
+    } finally {
+      await pollStatus();
+      setBusy(false);
+    }
+  };
+
   return (
     <section class="standbySyncDesk syncOutputPanel">
       <header class="ioDeskHeader">
@@ -675,6 +702,12 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
         <div><dt>Lighting output</dt><dd>{ownershipStatus().lighting_allowed ? "Allowed" : "Blocked"}<Show when={!ownershipStatus().lighting_allowed}><span>{ownershipReasonLabel(ownershipStatus().lighting_reason)}</span></Show></dd></div>
         <div><dt>Video output</dt><dd>{ownershipStatus().video_allowed ? "Allowed" : "Blocked"}<Show when={!ownershipStatus().video_allowed}><span>{ownershipReasonLabel(ownershipStatus().video_reason)}</span></Show></dd></div>
       </dl>
+      <Show when={expiredVideoLease()}>
+        <div class="buttonRow" data-io-expired-video-lease>
+          <span>Video lease expired.</span>
+          <button disabled={!props.backendAvailable || busy()} onClick={() => void releaseExpiredLease()}>Release expired lease</button>
+        </div>
+      </Show>
         <Show when={props.backendAvailable ? autoOutputStatusMessage(autoOutputStatus()) : null}>
           {(message) => (
             <p class="textPretty" role="status" aria-live="polite" data-io-control="auto-output-status">{message()}</p>
