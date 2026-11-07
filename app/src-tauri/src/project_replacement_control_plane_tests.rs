@@ -5,7 +5,7 @@ mod project_replacement_control_plane_contract_tests {
     };
     use protocol::control_plane_project::{
         ProjectReplacementActionV1 as Action, ProjectReplacementErrorV1 as Error,
-        ProjectReplacementOutcomeV1 as Outcome, ProjectReplacementRequestV1 as Request,
+        ProjectReplacementRequestV1 as Request,
         ProjectReplacementResponseV1 as Response,
     };
 
@@ -150,7 +150,7 @@ mod project_replacement_control_plane_contract_tests {
                 "local",
                 original,
                 None,
-                || panic!("Invalid current-schema image cannot confirm"),
+
                 |_| panic!("Invalid current-schema image cannot publish"),
             ),
             Response::Rejected {
@@ -185,7 +185,7 @@ mod project_replacement_control_plane_contract_tests {
                 "local",
                 original,
                 None,
-                || panic!("Exhausted generation cannot confirm"),
+
                 |_| panic!("Exhausted generation cannot publish")
             ),
             Response::Rejected {
@@ -230,7 +230,7 @@ mod project_replacement_control_plane_contract_tests {
                     "local",
                     original,
                     None,
-                    || panic!("Operator Lock cannot confirm"),
+
                     |_| panic!("Operator Lock cannot publish")
                 ),
                 Response::Rejected {
@@ -297,7 +297,7 @@ mod project_replacement_control_plane_contract_tests {
     }
 
     #[test]
-    fn project_replacement_control_plane_cancel_is_replayed_without_confirmation_or_publication() {
+    fn project_replacement_control_plane_publication_failure_is_replayed_without_republication() {
         let harness = MediaAssetA6CommandHarness::new();
         let query = ControlPlaneQueryState::new().unwrap();
         let control = ProjectReplacementControlPlaneState::default();
@@ -310,11 +310,10 @@ mod project_replacement_control_plane_contract_tests {
             "local",
             original.clone(),
             None,
-            || false,
-            |_| panic!("Cancellation must not retire/publish"),
+            |_| Err(Error::PublicationFailed),
         );
         assert!(
-            matches!(&response, Response::Receipt(receipt) if receipt.outcome == Outcome::Cancelled)
+            matches!(&response, Response::Rejected { code: Error::PublicationFailed, .. })
         );
         // Retained replay precedes current authority and issued-fence checks.
         harness
@@ -331,7 +330,7 @@ mod project_replacement_control_plane_contract_tests {
             "local",
             original.clone(),
             None,
-            || panic!("A replay cannot confirm again"),
+
             |_| panic!("A replay cannot publish"),
         );
         assert_eq!(replay, response);
@@ -346,7 +345,7 @@ mod project_replacement_control_plane_contract_tests {
                 "local",
                 changed,
                 None,
-                || panic!("Changed shape cannot confirm"),
+
                 |_| panic!("Changed shape cannot publish")
             ),
             Response::Rejected {
@@ -373,7 +372,7 @@ mod project_replacement_control_plane_contract_tests {
                 "external:agent:1",
                 forged,
                 None,
-                || panic!("Unissued fence cannot confirm"),
+
                 |_| panic!("Unissued fence cannot publish")
             ),
             Response::Rejected {
@@ -414,7 +413,7 @@ mod project_replacement_control_plane_contract_tests {
                 "local",
                 original,
                 None,
-                || panic!("Stale fence cannot confirm"),
+
                 |_| panic!("Stale fence cannot publish")
             ),
             Response::Rejected {

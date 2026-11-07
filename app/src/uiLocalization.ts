@@ -58,6 +58,15 @@ const japaneseText: Record<string, string> = {
   "Selected clip": "選択中のクリップ",
   Changed: "変更あり",
   Diagnostics: "診断",
+  "Spout:": "Spout：",
+  "Output state": "出力状態",
+  "Mix into DMX output": "DMX出力にミックス",
+  "Standby sync": "待機機との同期",
+  "Clock diagnostics": "クロックの診断",
+  "60fps target not met.": "60fpsの目標に達していません。",
+  "Connect MIDI feedback to light scene buttons.": "シーンボタンを点灯するにはMIDIフィードバックを接続してください。",
+  "1280x720 / 30fps. Blank source: primary desktop.": "1280×720・30fps。出力元が空欄の場合はメイン画面を使います。",
+  "No DMX controls are mapped.": "DMX操作の割り当てはありません。",
   "Import metrics": "インポート詳細",
   "Import summary": "インポート概要",
   "Includes MIDI / OSC / DMX": "MIDI / OSC / DMX を含む",
@@ -640,8 +649,6 @@ const japaneseText: Record<string, string> = {
   "Input use": "入力用途",
   "Merge raw DMX": "生DMXをマージ",
   "Merge rule": "マージ規則",
-  "No DMX controls are mapped. Raw merge remains available above.":
-    "DMX制御マッピングはありません。上の生DMXマージは引き続き利用できます。",
   "Global show controls": "ショー共通操作",
   "Esc": "Escキー",
   "VID": "映像",
@@ -2193,7 +2200,6 @@ const japaneseText: Record<string, string> = {
   Route: "経路",
   "Apply route": "経路を適用",
   "Applying route…": "経路を適用中…",
-  "Changing the route requires local output authority and confirmation.": "経路の変更には、このPCの出力権限と確認操作が必要です。",
   Source: "ソース",
   Tap: "タップ",
   "2D fixture and projection surface mapping stage": "灯体と投影面の2Dマッピングステージ",
@@ -2674,8 +2680,6 @@ const japaneseText: Record<string, string> = {
   "Feedback output": "フィードバック出力",
   "Messages sent": "送信数",
   "Last message": "最後の送信",
-  "Scene buttons have LED feedback, but no feedback output is connected. Choose the controller's MIDI output under MIDI feedback and press Connect Feedback.": "シーンボタンにはLEDフィードバックがありますが、送り先のMIDI出力が接続されていません。「MIDIフィードバック」でコントローラーのMIDI出力を選び、「フィードバック接続」を押してください。",
-  "If messages are sent but the LEDs stay dark, check the controller mode and that this output is the controller's LED port.": "送信されているのにLEDが点かない場合は、コントローラーのモードと、この出力がLED用のポートかを確認してください。",
   "Add feedback": "フィードバックを追加",
   "Add state": "状態を追加",
   "Clear feedback": "フィードバックを消去",
@@ -3471,8 +3475,6 @@ const japaneseText: Record<string, string> = {
   "Capture rate is above 60fps; output presentation is capped at 60fps.": "キャプチャレートが60fpsを超えています。出力表示は60fpsに制限されます。",
   "profile(s) enumerated": "プロファイルを列挙",
   "profile(s))": "プロファイル）",
-  "Screen capture uses a separate truthful 1280x720 / 30fps path. Leave Display source blank for the primary desktop.":
-    "スクリーンキャプチャは正確な1280x720 / 30fpsの別経路です。メインデスクトップではDisplayソースを空欄にしてください。",
   "Select a camera device": "カメラデバイスを選択",
   "Select a camera profile": "カメラプロファイルを選択",
   "Selected capture": "選択中のキャプチャ",
@@ -3714,8 +3716,7 @@ const japaneseText: Record<string, string> = {
   "Advanced projection correction": "詳細プロジェクション補正",
   "Ordinary fullscreen display output does not need this; use it for projector and corner correction.":
     "通常のフルスクリーンディスプレイ出力には不要です。プロジェクターやコーナー補正に使用します。",
-  "Projection mapping/configuration mutation is unavailable until a canonical path exists. This view is read-only.":
-    "正規の経路が用意されるまでプロジェクションのマッピング／設定変更は利用できません。この表示は読み取り専用です。",
+  "Projection mapping is read-only.": "投影マッピングは読み取り専用です。",
   "Physical window state": "物理ウィンドウ状態",
   "Authored enabled": "作成値の有効化",
   "Window open": "ウィンドウ開",
@@ -3729,8 +3730,6 @@ const japaneseText: Record<string, string> = {
   "Window action failed.": "ウィンドウ操作に失敗しました。",
   "The physical window state is unavailable; no change was applied.":
     "物理ウィンドウ状態を確認できないため、変更は適用されていません。",
-  "A native Windows warning may appear when this output targets the editor display.":
-    "この出力がエディター画面を対象にする場合、Windowsのネイティブ警告が表示されることがあります。",
   "Window ownership is blocked by the current output topology.":
     "現在の出力トポロジーによりウィンドウ所有権がブロックされています。",
   "Output routing is read-only until a canonical v2 route exists.":
@@ -4358,8 +4357,6 @@ const japaneseText: Record<string, string> = {
   "Advanced: RDM tools": "詳細: RDMツール",
   "Advanced: DMX diagnostics and test": "詳細: DMX診断とテスト",
   "DMX input and merge": "DMX入力とマージ",
-  "Choose one mode: raw merge sends incoming levels to the DMX output; control mappings turn selected channels into Syndocal controls.":
-    "モードを1つ選択します。rawマージは受信レベルをDMX出力へ送り、コントロールマッピングは選択チャンネルをSyndocal操作へ割り当てます。",
   "Input mode": "入力モード",
   "Raw merge (HTP/LTP)": "Rawマージ（HTP/LTP）",
   "Merge rule (raw merge only)": "マージ規則（Rawマージのみ）",
@@ -4375,7 +4372,6 @@ const japaneseText: Record<string, string> = {
   "Test frames, raw monitor, telemetry, masters, and clock controls.": "テストフレーム、rawモニター、テレメトリ、マスター、クロック操作です。",
   "MIDI Connections": "MIDI接続",
   "Assign a MIDI control": "MIDI操作を割り当てる",
-  "Select your MIDI input above, then choose a pink button or fader in Control.": "上でMIDI入力を選び、Controlでピンクのボタンやフェーダーを選んでください。",
   "Learn in Control": "ControlでMIDIを学習",
   "Manual mapping (advanced)": "手動マッピング（詳細設定）",
   "Manual MIDI mapping": "手動MIDIマッピング",
@@ -4639,6 +4635,16 @@ const japaneseText: Record<string, string> = {
   "Video live controls": "映像ライブ操作",
   "Video status": "映像状態",
   "µs": "マイクロ秒",
+  "Restore the selected fixture's factory defaults?": "選択した照明機器を工場出荷時の設定に戻しますか？",
+  "The fixture's saved configuration will be erased. This cannot be undone.": "照明機器に保存されている設定が消去されます。この操作は取り消せません。",
+  "Restore factory defaults": "工場出荷時の設定に戻す",
+  "Wait for the application update to finish before replacing the project.": "アプリの更新が完了してからプロジェクトを置き換えてください。",
+  "Close detached editor windows before installing an application update.": "アプリの更新をインストールする前に、別ウィンドウのエディタを閉じてください。",
+  "Save or discard unsaved Timeline and FX edits before installing an application update.": "アプリの更新をインストールする前に、未保存のタイムラインとFXの編集を保存または破棄してください。",
+  "Pending FX edits could not be saved; the update was not installed.": "編集中のFXを保存できなかったため、更新はインストールされませんでした。",
+  "Editor state changed while preparing the update; save or discard edits and try again.": "更新の準備中にエディタの状態が変わりました。編集を保存または破棄してから、もう一度お試しください。",
+  "Wait for the application update to finish before opening another editor window.": "アプリの更新が完了してから、別のエディタウィンドウを開いてください。",
+  "FX edits changed while saving. Save or discard them before continuing.": "保存中にFXの編集内容が変わりました。続行する前に編集を保存または破棄してください。",
   // In-app confirmation dialogs (inAppDialog.ts / inAppDialogCopy.ts).
   "NOTICE": "お知らせ",
   "CAUTION": "注意",

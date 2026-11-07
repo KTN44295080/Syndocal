@@ -1,17 +1,13 @@
-//! Bind confirmation and publication to the same immutable sanitized capture.
+//! Validate and publish the same immutable sanitized capture to a chosen destination.
 use std::path::{Path, PathBuf};
 
 pub(super) fn export_prepared_diagnostic_package(
     bytes: Vec<u8>,
-    confirm: impl FnOnce(&str) -> bool,
     choose_destination: impl FnOnce() -> Option<PathBuf>,
     publish: impl FnOnce(&Path, &[u8]) -> Result<(), String>,
 ) -> Result<Option<PathBuf>, String> {
-    let preview = super::diagnostic_package::diagnostic_package_preview(&bytes)
+    super::diagnostic_package::diagnostic_package_preview(&bytes)
         .map_err(|error| error.to_string())?;
-    if !confirm(&preview) {
-        return Ok(None);
-    }
     let Some(path) = choose_destination() else {
         return Ok(None);
     };

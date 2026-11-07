@@ -22,9 +22,6 @@ export function DmxInputPanel(props: DmxInputPanelProps) {
           {props.status.signal_present ? "Signal" : props.status.running ? "Waiting" : "Stopped"}
         </span>
       </div>
-      <p class="ioDisclosureDescription">
-        Choose one mode: raw merge sends incoming levels to the DMX output; control mappings turn selected channels into Syndocal controls.
-      </p>
       <div class="dmxInputFields">
         <label>
           Protocol
@@ -61,7 +58,7 @@ export function DmxInputPanel(props: DmxInputPanelProps) {
             disabled={props.status.running}
             onInput={(event) => setConfig({ merge_enabled: event.currentTarget.value === "merge" })}
           >
-            <option value="merge">Raw merge (HTP/LTP)</option>
+            <option value="merge">Mix into DMX output</option>
             <option value="control">Control mappings</option>
           </select>
         </label>
@@ -94,7 +91,7 @@ export function DmxInputPanel(props: DmxInputPanelProps) {
           <span class="pill">{props.mappings.length}</span>
         </div>
         {props.mappings.length === 0 ? (
-          <p class="muted">No DMX controls are mapped. Raw merge remains available above.</p>
+          <p class="muted">No DMX controls are mapped.</p>
         ) : (
           <div class="mappingList">
             {props.mappings.map((mapping, index) => (

@@ -55,11 +55,11 @@ export async function exportVisualizerRenderPayloadAction(context: Phase1ActionC
 }
 
 export async function loadUserTemplateAction(context: Phase1ActionContext): Promise<void> {
-  const authority = context.captureProjectAuthorityIdentity();
   if (!await context.confirmDiscardProjectChanges("create a project from a user template")) {
     context.setMessage("Template load canceled.");
     return;
   }
+  const authority = context.captureProjectAuthorityIdentity();
   try {
     const result = await context.invoke<UserTemplateLoadResult | null>("load_user_template", {
       ownerId: context.projectTransactionOwnerId,

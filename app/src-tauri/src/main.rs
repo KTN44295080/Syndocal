@@ -59002,23 +59002,11 @@ fn output_lease_resources_for_control_action(
         | protocol::control_plane_command::OutputControlActionV2::EnableShowSpoutOutputs {
             ..
         }
-        | protocol::control_plane_command::OutputControlActionV2::AddDisplay { .. }
         | protocol::control_plane_command::OutputControlActionV2::AssignVideoOutputComposition {
             ..
         }
-        | protocol::control_plane_command::OutputControlActionV2::SetDisplayWindowOpen { .. }
         | protocol::control_plane_command::OutputControlActionV2::TakeOverStandby { .. } => {
-            match action {
-                protocol::control_plane_command::OutputControlActionV2::AddDisplay { .. } => {
-                    // Display creation is a video operation, but the normal
-                    // one-click Enable path owns the exact Both lease.  Keep
-                    // AddDisplay strict: only that one canonical Both lease
-                    // may authorize the operation; Video-only or ambiguous
-                    // lease candidates fail closed before the native dialog.
-                    vec![OutputLeaseResource::Lighting, OutputLeaseResource::Video]
-                }
-                _ => vec![OutputLeaseResource::Lighting, OutputLeaseResource::Video],
-            }
+            vec![OutputLeaseResource::Lighting, OutputLeaseResource::Video]
         }
         _ => return Err("Output lease authority is not an ordinary output action".to_string()),
     };
@@ -59037,7 +59025,9 @@ pub(crate) fn build_output_lease_authorization_request(
 ) -> Result<(OutputLeaseRequest, u64), String> {
     use protocol::control_plane_command::OutputControlActionV2;
     let resources = match action {
-        OutputControlActionV2::AddExternalOutput { lease, .. }
+        OutputControlActionV2::AddDisplay { lease, .. }
+        | OutputControlActionV2::SetDisplayWindowOpen { lease, .. }
+        | OutputControlActionV2::AddExternalOutput { lease, .. }
         | OutputControlActionV2::ConfigureVideoOutput { lease, .. }
         | OutputControlActionV2::RemoveVideoOutput { lease, .. } => {
             let lease_id = output_lease::OutputLeaseId::decode(&lease.lease_id)
@@ -59099,7 +59089,7 @@ pub(crate) fn build_output_lease_authorization_request(
         OutputControlActionV2::SetDisplayWindowOpen { lease, .. } => {
             let lease_id = output_lease::OutputLeaseId::decode(&lease.lease_id)
                 .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?;
-            // The physical-shell lane uses the same exact-Both recovery
+            // The physical-shell lane uses the same Video-capable recovery
             // semantics as AddDisplay.  A 60-second idle interval therefore
             // cannot strand a legitimate reopen, while foreign/split leases
             // remain rejected by the shared durable registry.
@@ -66134,16 +66124,6 @@ fn export_diagnostic_package(
     let (captured_at_unix_ms, bytes, _) = capture_diagnostic_package(&app,&state,&diagnostic_audit::Before::default(),None)?;
     diagnostic_export_workflow::export_prepared_diagnostic_package(
         bytes,
-        |preview| matches!(
-            rfd::MessageDialog::new()
-                .set_level(rfd::MessageLevel::Info)
-                .set_title("Diagnostic export preview")
-                .set_description(preview)
-                .set_buttons(rfd::MessageButtons::YesNo)
-                .set_parent(&window)
-                .show(),
-            rfd::MessageDialogResult::Yes
-        ),
         || parented_file_dialog(&window)
             .add_filter("Syndocal Diagnostic Package", &["zip"])
             .set_file_name(format!("syndocal-diagnostics-{captured_at_unix_ms}.zip"))
@@ -76711,7 +76691,6 @@ struct DisplayOutputWindowControlRequest<'a> {
     expected_owner_window_label: &'a str,
     expected_owner_incarnation: u64,
     managed_terminal_identity: Option<ManagedExactBothOutputControlTerminalIdentity<'a>>,
-    confirmation_origin: control_plane_runtime::OutputConfirmationOrigin,
 }
 
 struct VideoOutputCompositionAssignmentControlRequest<'a> {
@@ -83203,7 +83182,6 @@ fn set_display_output_window_open_with_output_control_fence(
         expected_owner_principal,
         expected_owner_window_label,
         expected_owner_incarnation,
-        confirmation_origin,
         ..
     } = request;
     let output = state
@@ -83233,7 +83211,7 @@ fn set_display_output_window_open_with_output_control_fence(
         .map_err(|_| "Native video output metrics registry lock was poisoned".to_string())?
         .contains_key(&output_id);
     // Event-loop monitor queries are deliberately outside authority guards.
-    // Recheck after the warning below; an editor move during the OS dialog
+    // Recheck before preparation; an editor move during admission
     // fails closed rather than trusting a frontend-supplied flag.
     let editor_target_before =
         open && validate_editor_monitor_for_window(editor_window)? == monitor.index;
@@ -83270,20 +83248,12 @@ fn set_display_output_window_open_with_output_control_fence(
             return Err("Output control fence changed before Display window operation".to_string());
         }
     }
-    if editor_target_before
-        && !control_plane_runtime::confirm_editor_display_window_open(
-            editor_window,
-            confirmation_origin,
-        )
-    {
-        return Err("Display window open was cancelled".to_string());
-    }
     if editor_target_before && validate_editor_monitor_for_window(editor_window)? != monitor.index {
-        return Err("Editor monitor changed while confirming Display window open".to_string());
+        return Err("Editor monitor changed before Display window open".to_string());
     }
 
-    // The local editor warning was intentionally outside every operation
-    // guard. Revalidate its owner/fence immediately after Yes before this
+    // Monitor queries run outside every operation guard. Revalidate
+    // owner/fence before this
     // route decides whether a managed exact-Both lease needs the private
     // authorization action.
     {
@@ -95138,7 +95108,7 @@ pub(crate) mod tests {
 
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     #[test]
-    fn production_reset_runtime_confirmation_no_and_owner_change_are_terminal_before_authored_reset(
+    fn production_reset_runtime_authorization_denial_and_owner_change_are_terminal_before_authored_reset(
     ) {
         let denied = MediaAssetA6CommandHarness::new();
         install_show_spout_reset_fixture(&denied.state, ShowSpoutResetFixtureKind::CurrentV2);
@@ -95150,7 +95120,7 @@ pub(crate) mod tests {
                 &denied_query,
                 "media-asset-a6",
                 show_spout_reset_request(denied_fence, 990_001),
-                |_| false,
+                &|| Err(protocol::control_plane_command::OutputControlErrorCodeV2::Forbidden),
             );
         assert!(matches!(
             denied_response,
@@ -95167,6 +95137,8 @@ pub(crate) mod tests {
         install_show_spout_reset_fixture(&owner_race.state, ShowSpoutResetFixtureKind::CurrentV2);
         let (race_query, race_fence, _, _) = show_spout_reset_authority(&owner_race.state);
         let race_before = show_spout_reset_signature(&owner_race.state);
+        let authorization_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_for_race = Arc::clone(&authorization_calls);
         let state_for_confirmation = Arc::clone(&owner_race.state);
         let race_response =
             control_plane_runtime::execute_show_spout_reset_without_lease_control_for_test(
@@ -95174,25 +95146,30 @@ pub(crate) mod tests {
                 &race_query,
                 "media-asset-a6",
                 show_spout_reset_request(race_fence, 990_002),
-                move |_| {
-                    register_project_transaction_owner_for_window_label(
-                        &state_for_confirmation,
-                        "media-asset-a6",
-                        "show-spout-reset-race-owner".to_string(),
-                    )
-                    .expect("owner change during native confirmation");
-                    true
+                &move || {
+                    if calls_for_race.fetch_add(1, Ordering::SeqCst) == 1 {
+                        register_project_transaction_owner_for_window_label(
+                            &state_for_confirmation,
+                            "media-asset-a6",
+                            "show-spout-reset-race-owner".to_string(),
+                        )
+                        .expect("owner change during authorization");
+                    }
+                    Ok(())
                 },
             );
         assert!(matches!(
             race_response,
             OutputControlResponseV2::Rejected(
                 protocol::control_plane_command::OutputControlRejectionV2 {
-                    error: protocol::control_plane_command::OutputControlErrorCodeV2::Forbidden,
+                    // The grant succeeded; the physical core rejects the changed owner
+                    // before mutation and its domain failure maps to PublicationFailed.
+                    error: protocol::control_plane_command::OutputControlErrorCodeV2::PublicationFailed,
                     ..
                 }
             )
         ));
+        assert_eq!(authorization_calls.load(Ordering::SeqCst), 3);
         assert_eq!(show_spout_reset_signature(&owner_race.state), race_before);
     }
 
@@ -97287,119 +97264,136 @@ pub(crate) mod tests {
 
     #[test]
     fn display_add_query_exposes_natural_expiry_without_mutation_and_same_add_recovers() {
-        let harness = MediaAssetA6CommandHarness::new();
-        let state = Arc::clone(&harness.state);
-        let process_incarnation = state
-            .output_lease_registry
-            .lock()
-            .expect("display Add query registry lock")
-            .process_session_incarnation();
-        let query_state = ControlPlaneQueryState::for_process_incarnation(process_incarnation)
-            .expect("display Add query process identity");
-        let owner = OutputLeaseOwner::new(
-            MEDIA_ASSET_A6_OWNER,
-            "media-asset-a6",
-            process_incarnation,
-            1,
-        )
-        .expect("display Add query owner");
-        let both =
-            OutputLeaseResources::new(&[OutputLeaseResource::Lighting, OutputLeaseResource::Video])
-                .expect("display Add exact Both resources");
-        let project_identity = output_lease_project_identity(0);
-        {
-            let mut registry = state
+        for video_only in [false, true] {
+            let harness = MediaAssetA6CommandHarness::new();
+            let state = Arc::clone(&harness.state);
+            let process_incarnation = state
                 .output_lease_registry
                 .lock()
-                .expect("display Add acquire lock");
-            let acquire = OutputLeaseRequest::from_action(
+                .expect("display Add query registry lock")
+                .process_session_incarnation();
+            let query_state = ControlPlaneQueryState::for_process_incarnation(process_incarnation)
+                .expect("display Add query process identity");
+            let owner = OutputLeaseOwner::new(
                 MEDIA_ASSET_A6_OWNER,
-                "output-control",
+                "media-asset-a6",
+                process_incarnation,
                 1,
-                OutputLeaseRequestAction::Acquire {
-                    owner: owner.clone(),
-                    resources: both,
-                    project_identity,
-                    ttl_ms: 1,
-                },
             )
-            .expect("display Add acquire request");
-            registry
-                .submit_request(&acquire, 0)
-                .expect("display Add initial Both lease");
-        }
-        std::thread::sleep(Duration::from_millis(2));
+            .expect("display Add query owner");
+            let both = OutputLeaseResources::new(if video_only {
+                &[OutputLeaseResource::Video]
+            } else {
+                &[OutputLeaseResource::Lighting, OutputLeaseResource::Video]
+            })
+            .expect("display Add exact Both resources");
+            let project_identity = output_lease_project_identity(0);
+            {
+                let mut registry = state
+                    .output_lease_registry
+                    .lock()
+                    .expect("display Add acquire lock");
+                let acquire = OutputLeaseRequest::from_action(
+                    MEDIA_ASSET_A6_OWNER,
+                    "output-control",
+                    1,
+                    OutputLeaseRequestAction::Acquire {
+                        owner: owner.clone(),
+                        resources: both,
+                        project_identity,
+                        ttl_ms: 1,
+                    },
+                )
+                .expect("display Add acquire request");
+                registry
+                    .submit_request(&acquire, 0)
+                    .expect("display Add initial Both lease");
+            }
+            std::thread::sleep(Duration::from_millis(2));
 
-        let snapshot_before = state
-            .output_lease_registry_snapshot()
-            .expect("display Add pre-query registry snapshot");
-        let query =
-            query_display_add_lease_authority_for_window("media-asset-a6", &state, &query_state)
-                .expect("naturally expired exact Both lease is discoverable");
-        assert!(matches!(
-            query.status,
-            DisplayAddLeaseAuthorityStatusV1::ExpiredRecoverable
-        ));
-        let authority = query.authority.expect("recoverable authority identity");
-        assert_eq!(authority.lease_id, "lease-0000000000000001");
-        assert_eq!(authority.generation, 1);
-        assert_eq!(
-            query.resources,
-            vec![
-                protocol::control_plane_command::OutputControlTargetRoleV1::Lighting,
-                protocol::control_plane_command::OutputControlTargetRoleV1::Video,
-            ]
-        );
-        assert_eq!(
-            state
+            let snapshot_before = state
                 .output_lease_registry_snapshot()
-                .expect("display Add post-query registry snapshot"),
-            snapshot_before,
-            "read-only recoverable authority query changes no generation or audit truth"
-        );
+                .expect("display Add pre-query registry snapshot");
+            let query =
+                query_display_add_lease_authority_for_window("media-asset-a6", &state, &query_state)
+                    .expect("naturally expired exact Both lease is discoverable");
+            assert!(matches!(
+                query.status,
+                DisplayAddLeaseAuthorityStatusV1::ExpiredRecoverable
+            ));
+            let authority = query.authority.expect("recoverable authority identity");
+            assert_eq!(authority.lease_id, "lease-0000000000000001");
+            assert_eq!(authority.generation, 1);
+            assert_eq!(
+                query.resources,
+                if video_only {
+                    vec![protocol::control_plane_command::OutputControlTargetRoleV1::Video]
+                } else {
+                    vec![
+                        protocol::control_plane_command::OutputControlTargetRoleV1::Lighting,
+                        protocol::control_plane_command::OutputControlTargetRoleV1::Video,
+                    ]
+                }
+            );
+            assert_eq!(
+                state
+                    .output_lease_registry_snapshot()
+                    .expect("display Add post-query registry snapshot"),
+                snapshot_before,
+                "read-only recoverable authority query changes no generation or audit truth"
+            );
 
-        let action = protocol::control_plane_command::OutputControlActionV2::AddDisplay {
-            spec: DisplayOutputSpecV2 {
-                label: "QA Display".to_string(),
-                monitor_identity: "d".repeat(64),
-                monitor_index: 1,
-                width: 1920,
-                height: 1080,
-                fullscreen: true,
-            },
-            lease: authority,
-        };
-        let (request, now_ms) = build_output_lease_authorization_request(
-            &state,
-            MEDIA_ASSET_A6_OWNER,
-            "media-asset-a6",
-            1,
-            2,
-            &action,
-            0,
-        )
-        .expect("build exact recoverable Add request");
-        let (_, receipt) = {
-            let mut registry = state
-                .output_lease_registry
-                .lock()
-                .expect("display Add candidate registry lock");
-            submit_output_lease_candidate_with_classified_commit(
+            let action = protocol::control_plane_command::OutputControlActionV2::AddDisplay {
+                spec: DisplayOutputSpecV2 {
+                    label: "QA Display".to_string(),
+                    monitor_identity: "d".repeat(64),
+                    monitor_index: 1,
+                    width: 1920,
+                    height: 1080,
+                    fullscreen: true,
+                },
+                lease: authority,
+            };
+            let (request, now_ms) = build_output_lease_authorization_request(
                 &state,
-                &mut registry,
-                &request,
-                now_ms,
-                "display Add natural-expiry integration",
-                || Ok(false),
+                MEDIA_ASSET_A6_OWNER,
+                "media-asset-a6",
+                1,
+                2,
+                &action,
+                0,
             )
-            .expect("same Add candidate recovers exact expired Both authority")
-        };
-        assert_eq!(
-            receipt.outcome,
-            Ok(output_lease::OutputLeaseOperationOutcome::Authorized)
-        );
-        assert_eq!(receipt.generation_before, Some(1));
-        assert_eq!(receipt.generation_after, Some(3));
+            .expect("build exact recoverable Add request");
+            let (_, receipt) = {
+                let mut registry = state
+                    .output_lease_registry
+                    .lock()
+                    .expect("display Add candidate registry lock");
+                submit_output_lease_candidate_with_classified_commit(
+                    &state,
+                    &mut registry,
+                    &request,
+                    now_ms,
+                    "display Add natural-expiry integration",
+                    || Ok(false),
+                )
+                .expect("same Add candidate recovers exact expired Both authority")
+            };
+            assert_eq!(
+                receipt.outcome,
+                Ok(output_lease::OutputLeaseOperationOutcome::Authorized)
+            );
+            assert_eq!(receipt.generation_before, Some(1));
+            assert_eq!(receipt.generation_after, Some(3));
+            let public_result = control_plane_runtime::output_control_lease_result_from_registry_receipt(&action, &receipt)
+                .expect("Display recovery must produce a valid public lease receipt");
+            assert_eq!(public_result.resources, if video_only {
+                vec![protocol::control_plane_command::OutputControlTargetRoleV1::Video]
+            } else {
+                vec![protocol::control_plane_command::OutputControlTargetRoleV1::Lighting, protocol::control_plane_command::OutputControlTargetRoleV1::Video]
+            });
+
+        }
     }
 
     #[test]
@@ -97968,7 +97962,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn display_targets_require_exact_detected_dimensions_and_both_lease() {
+    fn display_targets_require_exact_detected_dimensions() {
         let fixtures = [
             ("DISPLAY1", 2560, 1440),
             ("DISPLAY2", 1920, 1080),
@@ -97986,27 +97980,7 @@ pub(crate) mod tests {
             );
         }
 
-        let action = protocol::control_plane_command::OutputControlActionV2::AddDisplay {
-            spec: DisplayOutputSpecV2 {
-                label: "DISPLAY5".to_string(),
-                monitor_identity: "d".repeat(64),
-                monitor_index: 3,
-                width: 1920,
-                height: 1080,
-                fullscreen: true,
-            },
-            lease: protocol::control_plane_command::OutputLeaseAuthorityV1 {
-                lease_id: "lease-0000000000000001".to_string(),
-                generation: 1,
-            },
-        };
-        assert_eq!(
-            output_lease_resources_for_control_action(&action)
-                .expect("Display add resource scope")
-                .as_slice(),
-            &[OutputLeaseResource::Lighting, OutputLeaseResource::Video],
-            "Display add accepts only the exact Both lease from normal Enable"
-        );
+
     }
 
     #[test]
@@ -101299,11 +101273,6 @@ pub(crate) mod tests {
                 action,
             };
             request.validate().expect("canonical Add request");
-            assert!(
-                !control_plane_runtime::output_action_requires_native_danger_confirmation(
-                    &request.action
-                )
-            );
             let (lease_request, lease_now) = build_output_lease_authorization_request(
                 &state,
                 &owner_principal,
@@ -101475,9 +101444,6 @@ pub(crate) mod tests {
                 lease: lease.clone(),
             };
             assert_eq!(action.operation_id(), OUTPUT_DISPLAY_ADD_OPERATION_ID);
-            assert!(
-                !control_plane_runtime::output_action_requires_native_danger_confirmation(&action)
-            );
             let request = OutputControlCommandRequestV2 {
                 operation_id: OUTPUT_DISPLAY_ADD_OPERATION_ID.to_string(),
                 request_id: request_id as u64 + 1,

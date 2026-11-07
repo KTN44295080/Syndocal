@@ -468,7 +468,7 @@ export const StageSelectionPanel = (props: StageSelectionPanelProps) => (
             </div>
           </div>
           <p class="inlineUnavailable" role="status">
-            Projection mapping/configuration mutation is unavailable until a canonical path exists. This view is read-only.
+            Projection mapping is read-only.
           </p>
         </div>
       )}

@@ -129,7 +129,6 @@ interface VideoRuntimeControllerOptions {
     phase: MediaAssetOperationPhase,
   ) => MediaAssetOperationLease;
   setMediaAssetImportReport: (report: MediaAssetImportReport | null) => void;
-  confirmMediaAssetAdoption: (assetId: MediaAssetId, replacementPath: string) => boolean | Promise<boolean>;
   projectTransactionOwnerId: string;
   videoLabel: Accessor<string>;
   setVideoLabel: Setter<string>;
@@ -1228,7 +1227,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     const expectedAuthority = decisionAuthority ?? options.getCurrentProjectAuthority();
     undoGroup?.assertCurrent(expectedAuthority);
     if (!options.isProjectAuthorityCurrent(expectedAuthority)) {
-      throw new Error("Project changed before replacement approval completed. Choose the replacement again.");
+      throw new Error("Project changed before replacement adoption. Choose the replacement again.");
     }
     const preparedStart = await preflightAndBeginMediaAssetOperation(
       expectedAuthority,
@@ -1241,8 +1240,8 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     try {
       undoGroup?.assertCurrent(operationAuthority);
       // A RequireContentMatch decision is a one-shot decision for exact E/R/H.
-      // Even a successful local mapping ACK during the confirmation window is
-      // a different project image, so require a fresh confirmation rather than
+      // Even a successful local mapping ACK while preparing adoption is
+      // a different project image, so require a fresh file selection rather than
       // silently adopting into that newer image.
       if (decisionAuthority && !sameProjectAuthority(decisionAuthority, operationAuthority)) {
         throw new Error("Project changed while replacement approval was being confirmed; choose the replacement again.");
@@ -1332,20 +1331,15 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       }
 
       // Adoption is never inferred from a generic mismatch. The backend must
-      // first return the dedicated decision, then the operator must approve it.
+      // first return the dedicated decision for the file the operator selected.
+      // Adopting its identity is undoable; there is no additional Yes/No prompt.
       if (!replacementPath || !decisionAuthority || firstOutcome?.kind !== "needs_explicit_adoption") {
         if (!options.isProjectAuthorityCurrent(sideEffectAuthority)) return null;
         if (firstOutcome) setRelinkMessage(mediaAssetRelinkOutcomeMessage(firstOutcome));
         return firstOutcome ? { outcome: firstOutcome, terminalAuthority: sideEffectAuthority } : null;
       }
-      if (!await options.confirmMediaAssetAdoption(assetId, replacementPath)) {
-        setRelinkMessageIfAuthorityCurrent(decisionAuthority, "Replacement adoption canceled. The existing content identity was kept.");
-        return options.isProjectAuthorityCurrent(decisionAuthority)
-          ? { outcome: firstOutcome, terminalAuthority: decisionAuthority }
-          : null;
-      }
       if (!options.isProjectAuthorityCurrent(decisionAuthority)) {
-        setRelinkMessage("Project changed before replacement approval completed. Choose the replacement again.");
+        setRelinkMessage("Project changed before replacement adoption. Choose the replacement again.");
         return null;
       }
 

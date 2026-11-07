@@ -2684,7 +2684,7 @@ impl OutputLeaseRegistry {
         Ok(record.state.snapshot())
     }
 
-    /// Authorize the canonical AddDisplay operation against the exact Both
+    /// Authorize Display operations against an exact Video-capable
     /// authority.  Unlike public `authorize_ordinary`, this action resolves a
     /// deadline race on a private candidate: an exact same-owner/project
     /// active lease at its deadline is orphaned and immediately recovered.
@@ -2717,7 +2717,7 @@ impl OutputLeaseRegistry {
             OutputLeaseResource::Lighting,
             OutputLeaseResource::Video,
         ])?;
-        if exact_resources != both {
+        if !exact_resources.as_slice().contains(&OutputLeaseResource::Video) {
             return Err(OutputLeaseError::ResourceConflict);
         }
 
@@ -2730,7 +2730,7 @@ impl OutputLeaseRegistry {
                     .snapshot
                     .resources
                     .as_ref()
-                    .filter(|resources| resources.overlaps(&exact_resources))
+                    .filter(|resources| resources.overlaps(&both))
                     .map(|_| candidate_id)
             })
             .collect::<Vec<_>>();
@@ -3896,7 +3896,7 @@ fn generation_changes(
 /// Dedicated read-only authority for the AddDisplay path. It exposes the
 /// exact expired lease needed for the atomic Add candidate without
 /// changing the public lifecycle query semantics. Any split, foreign,
-/// subset, or multiple overlapping lease is unavailable.
+/// Lighting-only, or multiple overlapping lease is unavailable.
 impl OutputLeaseRegistry {
     pub(crate) fn query_display_add_authority(
         &self,
@@ -3929,7 +3929,8 @@ impl OutputLeaseRegistry {
         let (lease_id, record) = overlapping[0];
         if record.project_identity != project_identity
             || record.state.snapshot.owner.as_ref() != Some(owner)
-            || record.state.snapshot.resources.as_ref() != Some(&both)
+            || !record.state.snapshot.resources.as_ref()
+                .is_some_and(|resources| resources.as_slice().contains(&OutputLeaseResource::Video))
         {
             return Err(OutputLeaseError::ResourceConflict);
         }
@@ -3951,7 +3952,7 @@ impl OutputLeaseRegistry {
             lease_id,
             generation: record.state.snapshot.generation,
             status,
-            resources: both,
+            resources: record.state.snapshot.resources.clone().ok_or(OutputLeaseError::ResourceConflict)?,
         })
     }
 }
@@ -4610,6 +4611,84 @@ mod tests {
             public.recover(public_grant.lease_id, &owner(25, 1), 1, 10, 10),
             Err(OutputLeaseError::InvalidTransition)
         );
+    }
+
+    #[test]
+    fn display_video_only_recovery_preserves_scope_and_rejects_invalid_authority() {
+        let mut leases = registry(52);
+        let current = owner(52, 1);
+        let grant = leases
+            .acquire(current.clone(), video(), "project-52", 0, 10)
+            .unwrap();
+        let before_query = leases.clone();
+        let query = leases
+            .query_display_add_authority(&current, "project-52", 10)
+            .unwrap();
+        assert_eq!(query.resources, video());
+        assert_eq!(
+            query.status,
+            DisplayAddLeaseAuthorityStatus::ExpiredRecoverable
+        );
+        assert_eq!(
+            leases, before_query,
+            "discovery never mutates expiry or audit"
+        );
+        let request = |id, own, generation, resources, project: &str| {
+            OutputLeaseRequest::from_action(
+                "local-ui",
+                "output-control",
+                id,
+                OutputLeaseRequestAction::AuthorizeOrRecoverDisplay {
+                    lease_id: grant.lease_id,
+                    owner: own,
+                    expected_generation: generation,
+                    exact_resources: resources,
+                    project_identity: project.into(),
+                    ttl_ms: 10,
+                },
+            )
+            .unwrap()
+        };
+        for (id, own, generation, resources, project) in [
+            (1, current.clone(), 2, video(), "project-52"),
+            (2, owner(52, 2), 1, video(), "project-52"),
+            (3, current.clone(), 1, both(), "project-52"),
+            (4, current.clone(), 1, lighting(), "project-52"),
+            (5, current.clone(), 1, video(), "another-project"),
+        ] {
+            let before = leases.lease_view(grant.lease_id).unwrap();
+            let receipt = leases
+                .submit_request(&request(id, own, generation, resources, project), 10)
+                .unwrap();
+            assert!(receipt.outcome.is_err());
+            assert_eq!(leases.lease_view(grant.lease_id).unwrap(), before);
+        }
+        let receipt = leases
+            .submit_request(&request(6, current.clone(), 1, video(), "project-52"), 10)
+            .unwrap();
+        assert_eq!(receipt.outcome, Ok(OutputLeaseOperationOutcome::Authorized));
+        assert_eq!(
+            leases
+                .lease_view(grant.lease_id)
+                .unwrap()
+                .snapshot
+                .resources,
+            Some(video())
+        );
+        assert_eq!(receipt.generation_after, Some(3));
+        leases
+            .acquire(current.clone(), lighting(), "project-52", 10, 10)
+            .unwrap();
+        assert_eq!(
+            leases.query_display_add_authority(&current, "project-52", 10),
+            Err(OutputLeaseError::ResourceConflict)
+        );
+        let before = leases.lease_view(grant.lease_id).unwrap();
+        let receipt = leases
+            .submit_request(&request(7, current, 3, video(), "project-52"), 10)
+            .unwrap();
+        assert_eq!(receipt.outcome, Err(OutputLeaseError::ResourceConflict));
+        assert_eq!(leases.lease_view(grant.lease_id).unwrap(), before);
     }
 
     #[test]

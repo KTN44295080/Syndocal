@@ -76,10 +76,9 @@ try {
   // Wording: every string a dialog can show has Japanese text, and every
   // dangerous question names its consequence and starts on Cancel.
   const samples = [
-    copy.discardTimelineEditsDialog(), copy.discardFxDraftDialog(), copy.installUpdateDialog("1.2.3"),
+    copy.discardTimelineEditsDialog(), copy.discardFxDraftDialog(),
     copy.abandonPublicationDialog("save as"), copy.abandonPublicationDialog("user template"),
-    copy.deleteBackupDialog("2026/10/19 12:00:00"), copy.rotateDjLinkTokenDialog(),
-    copy.adoptMediaReplacementDialog(7, "C:\\media\\a.mp4"), copy.revokeAllExternalAccessDialog(),
+    copy.deleteBackupDialog("2026/10/19 12:00:00"), copy.restoreRdmFactoryDefaultsDialog(),
   ];
   const invariant = new Set(["OK"]);
   for (const dialog of samples) {
@@ -102,7 +101,6 @@ try {
       assert.equal(dialog.tone, "danger", `a destructive question starts on Cancel: ${dialog.title}`);
     }
   }
-  assert.equal(localization.translateUiText(copy.installUpdateDialog("1.2.3").title, "ja"), "Syndocal 1.2.3 をインストールしますか？");
   // Standby explanations are plain in-app text (never a dialog) with Japanese for every reason.
   for (const [english, japanese] of [
     ["Standby: this machine is not driving outputs", "スタンバイ: このマシンは出力を制御していません"],

@@ -638,7 +638,7 @@ const sourcePicker = sliceBetween(
 assert.match(sourcePicker, /beginMediaAssetOperation\("Choose video source", "picker"\)/, "single-source Browse exposes its picker phase");
 assert.match(sourcePicker, /mediaOperation\.signal\.aborted[\s\S]*?return;/, "cancelled Browse cannot apply its delayed path");
 assert.match(app, /inspectMediaAssetAvailability\(\{[\s\S]*?verifyHash: true[\s\S]*?onPhase: mediaOperation\.setPhase/, "Media Library Verify uses the reserved availability helper with hash verification and phase reporting");
-assert.match(controller, /policy: "RequireContentMatch"[\s\S]*?firstOutcome\?\.kind !== "needs_explicit_adoption"[\s\S]*?confirmMediaAssetAdoption[\s\S]*?"AdoptReplacement"/, "replacement adoption is gated by exact backend outcome plus explicit confirmation");
+assert.match(controller, /policy: "RequireContentMatch"[\s\S]*?firstOutcome\?\.kind !== "needs_explicit_adoption"[\s\S]*?"AdoptReplacement"/, "replacement adoption is gated by the exact backend outcome for the selected replacement");
 assert.match(controller, /decisionAuthority = first\.terminalAuthority[\s\S]*?!options\.isProjectAuthorityCurrent\(decisionAuthority\)/, "replacement confirmation cannot carry an old asset decision into project C");
 assert.doesNotMatch(controller, /pickerOperation\.setPhase\("hashing"\)/, "Relink cannot announce hashing before its reserved Start/preparing phase");
 const librarySurfaceStyles = cssBlock(styles, ".videoMediaLibrarySurface", "Media Library overlay");

@@ -135,7 +135,7 @@ assert.match(picker, /cameraProbeAllowsAdd/);
 assert.match(picker, /Camera catalog refresh invalidated the previous probe/);
 assert.match(picker, /Camera device changed; test the selected profile/);
 assert.match(picker, /Camera profile changed; test the selected profile/);
-assert.match(panel, /Screen capture uses a separate truthful 1280x720 \/ 30fps path/);
+assert.match(panel, /1280x720 \/ 30fps\. Blank source: primary desktop\./);
 assert.doesNotMatch(picker, /Camera device name \(Windows\)/, "camera must not expose the old free-text fallback");
 assert.doesNotMatch(picker, /value=\{props\.path\}/, "camera surface must not expose a free-text path input");
 assert.match(picker, /Select a camera device/);

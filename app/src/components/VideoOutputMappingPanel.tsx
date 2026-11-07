@@ -85,7 +85,7 @@ export function VideoOutputMappingPanel(props: VideoOutputMappingPanelProps) {
       </div>
       <Show when={props.readOnly}>
         <p class="inlineUnavailable" role="status">
-          Projection mapping/configuration mutation is unavailable until a canonical path exists. This view is read-only.
+          Projection mapping is read-only.
         </p>
       </Show>
       <fieldset disabled={props.readOnly}>

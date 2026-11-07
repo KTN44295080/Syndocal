@@ -19,6 +19,7 @@ export interface VideoOutputSetupWindowState {
   stateLabel: string;
   stateClass: string;
   detail: string;
+  diagnostics?: string;
   actualOpen: boolean | null;
   actionLabel: string;
   actionDisabled: boolean;
@@ -150,12 +151,17 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
               <div class="videoOutputPrimarySummary">
                 <div class="videoOutputStatusSummary" role={windowState().stateClass === "error" ? "alert" : "status"} aria-live="polite">
                   <div>
-                    <span>Physical window state</span>
                     <strong class={`outputWindowStatus state-${windowState().stateClass}`}>
                       {windowState().stateLabel}
                     </strong>
                   </div>
-                  <small>{windowState().detail}</small>
+                  <Show when={windowState().detail}><small>{windowState().detail}</small></Show>
+                  <Show when={windowState().diagnostics}>
+                    <details class="ioDisclosure" data-video-output-diagnostics>
+                      <summary>Diagnostics</summary>
+                      <small>{windowState().diagnostics}</small>
+                    </details>
+                  </Show>
                 </div>
 
                 <div class="videoOutputRouteSummary">
@@ -201,7 +207,6 @@ export function VideoOutputListPanel(props: VideoOutputListPanelProps) {
                   >
                     {routingBusy() ? "Applying route…" : "Apply route"}
                   </button>
-                  <small>Changing the route requires local output authority and confirmation.</small>
                 </div>
 
                 <VideoOutputActionsPanel

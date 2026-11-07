@@ -194,7 +194,7 @@ mod project_backup_restoration_contract_tests {
                 "local",
                 original,
                 Some(&root),
-                || panic!("Invalid backup cannot confirm"),
+
                 |_| panic!("Invalid backup cannot retire or publish"),
             );
             assert_eq!(
@@ -261,7 +261,7 @@ mod project_backup_restoration_contract_tests {
                     "local",
                     original,
                     None,
-                    || panic!("Preflight rejection cannot confirm"),
+
                     |_| panic!("Preflight rejection cannot publish")
                 ),
                 Response::Rejected {

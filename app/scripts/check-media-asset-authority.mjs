@@ -936,7 +936,7 @@ assert.match(controller, /commit_prepared_still_image_layer_authoritative/, "Sti
 assert.match(controller, /commit_prepared_media_assets_authoritative/, "ordinary Import remains authoritative catalog-only");
 assert.match(controller, /prepareFinalizeAndCommitMediaAssetRelink/, "metadata refresh uses authoritative staged relink");
 assert.match(controller, /preflightAndBeginMediaAssetOperation/, "all media routes flush before registering the operation AbortController");
-assert.match(controller, /firstOutcome\?\.kind !== "needs_explicit_adoption"[\s\S]*?confirmMediaAssetAdoption[\s\S]*?"AdoptReplacement"/, "AdoptReplacement is reachable only after the backend's dedicated decision and explicit confirmation");
+assert.match(controller, /firstOutcome\?\.kind !== "needs_explicit_adoption"[\s\S]*?"AdoptReplacement"/, "AdoptReplacement is reachable only after the backend's dedicated decision for the selected replacement");
 assert.match(controller, /decisionAuthority = first\.terminalAuthority[\s\S]*?!options\.isProjectAuthorityCurrent\(decisionAuthority\)[\s\S]*?Choose the replacement again/, "AdoptReplacement cannot cross a project authority replacement during confirmation");
 const adoptionRetryHelper = controller.slice(
   controller.indexOf("const runMediaAssetRelink = async"),

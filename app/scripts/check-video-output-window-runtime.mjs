@@ -37,7 +37,7 @@ const eventFor = (incarnation, actualOpen, extras = {}) => ({
   reason: null,
   ...extras,
 });
-const receiptFor = (request, outcome = "no_op", fenceAfter = request.expected_fence) => ({
+const receiptFor = (request, outcome = "no_op", fenceAfter = request.expected_fence, resources = ["lighting", "video"], status = "held_active") => ({
   type: "receipt",
   receipt: {
     operation_id: request.operation_id,
@@ -49,25 +49,25 @@ const receiptFor = (request, outcome = "no_op", fenceAfter = request.expected_fe
     fence_after: structuredClone(fenceAfter),
     outcome,
     lease_result: {
-      authority: lease(),
-      resources: ["lighting", "video"],
+      authority: lease(status === "held_orphaned" ? 2 : status === "expired_recoverable" ? 3 : 1),
+      resources,
       phase: "held_active",
       outcome: "authorized",
       audit_sequence: 1,
       changes: [{
         lease_id: lease().lease_id,
         before_generation: 1,
-        after_generation: 1,
-        before_resources: ["lighting", "video"],
-        after_resources: ["lighting", "video"],
-        before_phase: "held_active",
+        after_generation: status === "held_orphaned" ? 2 : status === "expired_recoverable" ? 3 : 1,
+        before_resources: resources,
+        after_resources: resources,
+        before_phase: status === "held_orphaned" ? "held_orphaned" : "held_active",
         after_phase: "held_active",
       }],
     },
   },
 });
 
-const createInvokeAdapter = ({ authorityStatus = "held_active", rejection = null, malformedReceipt = false, appliedReceipt = false, changedFenceReceipt = false } = {}) => {
+const createInvokeAdapter = ({ resources = ["lighting", "video"], authorityStatus = "held_active", rejection = null, malformedReceipt = false, appliedReceipt = false, changedFenceReceipt = false } = {}) => {
   const calls = [];
   const invoke = async (command, args) => {
     calls.push({ command, args });
@@ -100,6 +100,7 @@ const createInvokeAdapter = ({ authorityStatus = "held_active", rejection = null
             changedFenceReceipt
               ? { ...structuredClone(args.request.expected_fence), output_generation: args.request.expected_fence.output_generation + 1 }
               : args.request.expected_fence,
+            resources, authorityStatus,
           );
     }
     if (/^(set_video_output_|fade_video_output_opacity|open_video_output_window|sync_|close_|remove_video_output)/.test(command)) {
@@ -137,21 +138,33 @@ for (const status of ["held_orphaned", "expired_recoverable"]) {
   });
   assert.equal(recoverable.calls.filter(({ command }) => command === "set_display_output_window_open_v2").length, 1);
 }
+for (const status of ["held_active", "held_orphaned", "expired_recoverable"]) {
+  for (const open of [true, false]) {
+    const videoOnly = createInvokeAdapter({ authorityStatus: status, resources: ["video"] });
+    const result = await runtime.executeDisplayWindowOutputControl(videoOnly.invoke, actionFor(open), {
+      operationId: runtime.OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID,
+      status, authority: lease(), resources: ["video"],
+    });
+    assert.deepEqual(result.lease_result.resources, ["video"]);
+    assert.equal(videoOnly.calls.filter(({ command }) => command === "set_display_output_window_open_v2").length, 1);
+    assert.ok(!videoOnly.calls.some(({ command }) => /enable_output|acquire|arm/.test(command)), "window operation never enables lighting or changes role");
+  }
+}
 assert.throws(
-  () => runtime.selectExactBothLeaseForDisplayAdd({
+  () => runtime.selectVideoCapableLeaseForDisplay({
     operationId: runtime.OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID,
     status: "unavailable",
     authority: null,
     resources: [],
   }),
-  /Exactly one active or recoverable Both/,
+  /Exactly one active or recoverable Video-capable/,
 );
 assert.throws(
-  () => runtime.selectExactBothLeaseForDisplayAdd({
+  () => runtime.selectVideoCapableLeaseForDisplay({
     operationId: runtime.OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID,
     status: "held_active",
     authority: lease(),
-    resources: ["video"],
+    resources: ["lighting"],
   }),
   /Display Add lease authority response was invalid/,
 );
@@ -164,6 +177,13 @@ await assert.rejects(
   }),
   /changed before execution/,
 );
+
+for (const resources of [["lighting"], ["lighting", "video"]]) {
+  await assert.rejects(runtime.executeDisplayWindowOutputControl(createInvokeAdapter({ resources }).invoke, action, {
+    operationId: runtime.OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID,
+    status: "held_active", authority: lease(), resources: ["video"],
+  }), /lease result was invalid|lease resources changed/, "a Video-only request cannot accept Lighting or widened Both receipts");
+}
 
 const duplicateAdapter = createInvokeAdapter();
 const inFlight = new Map();
@@ -287,4 +307,4 @@ const legacyCalls = [...active.calls, ...duplicateAdapter.calls].filter(({ comma
   /^(set_video_output_|fade_video_output_opacity|open_video_output_window|sync_|close_|remove_video_output)/.test(command));
 assert.deepEqual(legacyCalls, []);
 
-console.log("video output window runtime contract: PASS (controller, exact-Both recovery, receipt rejection, singleflight, incarnation reducer, legacy invoke count 0)");
+console.log("video output window runtime contract: PASS (controller, Video-capable recovery with exact-scope receipts, receipt rejection, singleflight, incarnation reducer, legacy invoke count 0)");

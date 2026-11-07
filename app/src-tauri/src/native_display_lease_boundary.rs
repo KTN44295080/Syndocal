@@ -19,7 +19,7 @@ mod tests {
     };
     use std::cell::Cell;
 
-    fn display_receipt(video_only: bool, stale: bool) -> OutputLeaseRequestReceipt {
+    fn display_receipt(video_only: bool, stale: bool, wrong_scope: bool) -> OutputLeaseRequestReceipt {
         let mut registry = OutputLeaseRegistry::fresh_process(41).unwrap();
         let owner = OutputLeaseOwner::new("display-qa", "main", 41, 1).unwrap();
         let both =
@@ -36,7 +36,7 @@ mod tests {
             1,
             OutputLeaseRequestAction::Acquire {
                 owner: owner.clone(),
-                resources,
+                resources: resources.clone(),
                 project_identity: "project-41".to_string(),
                 ttl_ms: 100,
             },
@@ -52,7 +52,7 @@ mod tests {
                 lease_id: acquired.lease_id.unwrap(),
                 owner,
                 expected_generation: acquired.generation_after.unwrap() + u64::from(stale),
-                exact_resources: both,
+                exact_resources: if wrong_scope { both } else { resources },
                 project_identity: "project-41".to_string(),
                 ttl_ms: 100,
             },
@@ -64,10 +64,10 @@ mod tests {
 
     #[test]
     fn rejected_display_lease_never_runs_a_physical_delta() {
-        let denied = display_receipt(true, false);
+        let denied = display_receipt(true, false, true);
         assert_eq!(denied.outcome, Err(OutputLeaseError::ResourceConflict));
         let calls = Cell::new(0);
-        for receipt in [denied, display_receipt(false, true)] {
+        for receipt in [denied, display_receipt(false, true, false)] {
             assert!(receipt.outcome.is_err());
             let result = commit_if_authorized(&receipt, || {
                 calls.set(calls.get() + 1);
@@ -83,21 +83,23 @@ mod tests {
     }
 
     #[test]
-    fn exact_both_display_authorization_runs_one_delta_and_preserves_its_result() {
-        let authorized = display_receipt(false, false);
-        assert!(authorized.outcome.is_ok());
-        let calls = Cell::new(0);
-        assert_eq!(
-            commit_if_authorized(&authorized, || {
-                calls.set(calls.get() + 1);
+    fn exact_video_capable_display_authorization_runs_one_delta_and_preserves_its_result() {
+        for video_only in [false, true] {
+            let authorized = display_receipt(video_only, false, false);
+            assert!(authorized.outcome.is_ok());
+            let calls = Cell::new(0);
+            assert_eq!(
+                commit_if_authorized(&authorized, || {
+                    calls.set(calls.get() + 1);
+                    Ok(42)
+                }),
                 Ok(42)
-            }),
-            Ok(42)
-        );
-        assert_eq!(calls.get(), 1);
-        assert_eq!(
-            commit_if_authorized::<()>(&authorized, || Err("physical failure".into())),
-            Err("physical failure".into())
-        );
+            );
+            assert_eq!(calls.get(), 1);
+            assert_eq!(
+                commit_if_authorized::<()>(&authorized, || Err("physical failure".into())),
+                Err("physical failure".into())
+            );
+        }
     }
 }

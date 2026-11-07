@@ -12,7 +12,6 @@ use protocol::control_plane_file::{
     ProjectFileAuthorityV1, ProjectFileBackupSummaryV1, ProjectFilePhaseV1, ProjectFileRequestV1,
     ProjectFileStatusV1,
 };
-use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -920,20 +919,6 @@ pub(crate) fn execute_local(
     let request: ProjectFileRequestV1 =
         serde_json::from_value(request).map_err(|_| "project_file_request_invalid")?;
     request.validate().map_err(str::to_string)?;
-    if operation != wire::STATUS_ID
-        && !matches!(
-            MessageDialog::new()
-                .set_level(MessageLevel::Warning)
-                .set_title("Confirm project file operation")
-                .set_description("Publish or acknowledge this project file operation?")
-                .set_buttons(MessageButtons::YesNo)
-                .set_parent(window)
-                .show(),
-            MessageDialogResult::Yes
-        )
-    {
-        return Err("project_file_local_confirmation_cancelled".into());
-    }
     serde_json::to_value(execute(app, window, "local", None, operation, request)?)
         .map_err(|_| "project_file_response_invalid".into())
 }

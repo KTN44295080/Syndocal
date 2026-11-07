@@ -740,10 +740,17 @@ impl SpoutRouteWorker {
                 };
                 let (mut width, mut height) = (256_u32, 256_u32);
                 let mut pixels = vec![0_u8; (width * height * 4) as usize];
+                // SpoutDX ReceiveImage uses two staging textures: its first
+                // post-update read copies into one and reads the other before
+                // that texture has received sender pixels. Prime that pipeline
+                // once per connection/update, without treating valid black
+                // pixels as a missing frame.
+                let mut staging_primed = false;
                 while !worker_stop.load(Ordering::Acquire) {
                     match receiver.receive_image(&mut pixels, width, height, false, false) {
                         Ok(connected) => {
                             if receiver.is_updated() {
+                                staging_primed = false;
                                 (width, height) = receiver.sender_size();
                                 if width == 0 || height == 0 {
                                     width = 256;
@@ -752,7 +759,11 @@ impl SpoutRouteWorker {
                                 pixels.resize((width * height * 4) as usize, 0);
                                 continue;
                             }
-                            if connected && receiver.is_frame_new() {
+                            if !connected {
+                                staging_primed = false;
+                            } else if receiver.is_frame_new() && !staging_primed {
+                                staging_primed = true;
+                            } else if receiver.is_frame_new() {
                                 let format = match receiver.sender_format() {
                                     spout2::dx::format::B8G8R8A8_UNORM => {
                                         video::VideoPixelFormat::Bgra8
@@ -4744,6 +4755,70 @@ mod tests {
         assert_eq!((received.width, received.height), (16, 16));
         assert_eq!(received.format, video::VideoPixelFormat::Rgba8);
         assert_eq!(received.data, pixels);
+    }
+
+    #[test]
+    #[ignore = "requires a Windows GPU and the real Spout2 DirectX transport"]
+    fn input_worker_primes_black_resize_and_same_name_reconnect() {
+        let name = format!(
+            "syndocal-spout-staging-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or(Duration::ZERO)
+                .as_nanos()
+        );
+        let mut sender = spout2::dx::Sender::new(&name).unwrap();
+        sender.set_format(spout2::dx::format::R8G8B8A8_UNORM);
+        let black = vec![0_u8; 16 * 16 * 4];
+        sender.send_image(&black, 16, 16).unwrap();
+        let frames = Arc::new(Mutex::new(HashMap::new()));
+        let worker = SpoutRouteWorker::start_input(17, name.clone(), Arc::clone(&frames)).unwrap();
+        let first_frame = |sender: &mut spout2::dx::Sender, width, height, pixels: &[u8]| {
+            for _ in 0..120 {
+                sender.send_image(pixels, width, height).unwrap();
+                if let Some(frame) = frames.lock().unwrap().get(&17).cloned() {
+                    if (frame.width, frame.height) == (width, height) {
+                        return frame;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(8));
+            }
+            panic!("Spout input did not publish the requested dimensions");
+        };
+
+        // Transparent black is valid content, including all-zero bytes.
+        assert_eq!(first_frame(&mut sender, 16, 16, &black).data, black);
+        eprintln!("Spout staging: valid all-zero black published");
+        let resized_pixels = vec![0x7f_u8; 32 * 8 * 4];
+        assert_eq!(
+            first_frame(&mut sender, 32, 8, &resized_pixels).data,
+            resized_pixels,
+            "the first frame with new dimensions must contain sender pixels"
+        );
+        eprintln!("Spout staging: first resized frame contains exact sender pixels");
+
+        drop(sender);
+        let probe = spout2::dx::Receiver::new(Some(&name)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while probe.sender_list().iter().any(|candidate| candidate == &name) {
+            assert!(Instant::now() < deadline, "test sender did not unregister");
+            std::thread::sleep(Duration::from_millis(8));
+        }
+        // Leave the sender absent across multiple worker polls before
+        // restarting the same name and dimensions with different content.
+        std::thread::sleep(Duration::from_millis(100));
+        frames.lock().unwrap().remove(&17);
+        let mut sender = spout2::dx::Sender::new(&name).unwrap();
+        sender.set_format(spout2::dx::format::R8G8B8A8_UNORM);
+        let restarted_pixels = vec![0x55_u8; 32 * 8 * 4];
+        assert_eq!(
+            first_frame(&mut sender, 32, 8, &restarted_pixels).data,
+            restarted_pixels,
+            "the first frame after same-name reconnect must contain the new sender pixels"
+        );
+        eprintln!("Spout staging: first same-name reconnect frame contains exact sender pixels");
+        let _ = worker.stop();
     }
 
     #[test]

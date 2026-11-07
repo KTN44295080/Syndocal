@@ -1066,6 +1066,8 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
 
       <section
         class={`layout ${touchLayoutClass()}`}
+        inert={applicationUpdateBusy()}
+        aria-busy={applicationUpdateBusy()}
         data-custom-profile-workspace-open={customProfileWorkspaceVisible() ? "true" : undefined}
         style={
           paneWindow || (sharedWorkspaceVisible() && !persistentBandVisible())

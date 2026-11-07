@@ -317,34 +317,9 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
 
   return (
     <section class="showClockPanel" aria-label="ShowClock LAN">
-      <header class="ioDeskHeader">
-        <h2 class="textBalance">ShowClock LAN</h2>
-        <span class="tabularNums" data-show-clock-shell-state={shellStatus().state}>{shellStatus().label}</span>
-      </header>
-      <p class="textPretty standbyIntro">
-        Manually paired UDP clock samples. Standby follows authenticated samples only; physical output remains fenced until the separate local Arm path succeeds.
-      </p>
-      <dl class="standbyStatusGrid showClockStatusGrid tabularNums">
-        <div><dt>Role</dt><dd>{status().role ?? role()}</dd></div>
-        <div><dt>Samples</dt><dd>{status().accepted_samples}</dd></div>
-        <div><dt>Dropped</dt><dd>{status().dropped_datagrams}</dd></div>
-        <div
-          classList={{ showClockRejectedWarning: (status().rejected_packets ?? 0) > 0 }}
-          title={status().last_rejection
-            ? `Last refused: ${status().last_rejection}. Refused packets are ignored; a rising count means another device is sending ShowClock traffic or packets arrive late.`
-            : "Packets with an invalid signature or a replayed/late sequence are ignored and counted here."}
-        >
-          <dt>Rejected</dt><dd>{status().rejected_packets ?? 0}</dd>
-        </div>
-        <div><dt>Offset</dt><dd>{status().offset_us} µs</dd></div>
-        <div><dt>Age</dt><dd>{formatAge(status().sample_age_us)}</dd></div>
-        <div><dt>Generation</dt><dd>{status().clock_generation} / {status().fencing_generation}</dd></div>
-        <div><dt>Sequence</dt><dd>{status().last_sequence}</dd></div>
-        <div><dt>Peer</dt><dd>{status().peer_address ?? "—"}</dd></div>
-        <div><dt>Output</dt><dd>{status().output_armed ? "Armed" : "Fenced"}</dd></div>
-        <div><dt>Fence</dt><dd>{status().fence_state}</dd></div>
-        <div><dt>Actions</dt><dd>{status().scheduled_actions} queued / {status().accepted_actions} accepted</dd></div>
-      </dl>
+      <details class="syncFeatureDisclosure" data-sync-disclosure="show-clock">
+        <summary><h2 class="textBalance">ShowClock LAN</h2><span class="syncFeatureState tabularNums" data-show-clock-shell-state={shellStatus().state}>{status().running || error() ? shellStatus().label : "Stopped"}</span></summary>
+        <div class="syncFeatureBody">
       <details class="advancedOutputControls">
         <summary>Pairing and runtime settings</summary>
         <div class="showClockForm">
@@ -405,10 +380,41 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
           <button onClick={() => void rearm()} disabled={!props.backendAvailable || !status().running || status().role !== "standby" || busy()}>Manual Re-arm</button>
           <label class="checkboxLabel"><input type="checkbox" checked={confirmOutputArm()} disabled={busy()} onChange={(event) => setConfirmOutputArm(event.currentTarget.checked)} /> I confirm local lighting output ownership before Arm</label>
           <button onClick={() => void armOutput()} disabled={!props.backendAvailable || !status().running || status().output_armed || busy()}>Arm local output</button>
-          <p class="textPretty standbyIntro">Re-arm clears prior queued actions. Arm then requires local lighting ownership and LOCKED state; scheduled actions are dispatched through the existing EngineHandle boundary.</p>
         </div>
       </details>
+      <details class="advancedOutputControls syncDiagnostics">
+        <summary>Clock diagnostics</summary>
+      <dl class="standbyStatusGrid showClockStatusGrid tabularNums">
+        <div><dt>Role</dt><dd>{status().role ?? role()}</dd></div>
+        <div><dt>Samples</dt><dd>{status().accepted_samples}</dd></div>
+        <div><dt>Dropped</dt><dd>{status().dropped_datagrams}</dd></div>
+        <div
+          classList={{ showClockRejectedWarning: (status().rejected_packets ?? 0) > 0 }}
+          title={status().last_rejection
+            ? `Last refused: ${status().last_rejection}. Refused packets are ignored; a rising count means another device is sending ShowClock traffic or packets arrive late.`
+            : "Packets with an invalid signature or a replayed/late sequence are ignored and counted here."}
+        >
+          <dt>Rejected</dt><dd>{status().rejected_packets ?? 0}</dd>
+        </div>
+        <div><dt>Offset</dt><dd>{status().offset_us} µs</dd></div>
+        <div><dt>Age</dt><dd>{formatAge(status().sample_age_us)}</dd></div>
+        <div><dt>Generation</dt><dd>{status().clock_generation} / {status().fencing_generation}</dd></div>
+        <div><dt>Sequence</dt><dd>{status().last_sequence}</dd></div>
+        <div><dt>Peer</dt><dd>{status().peer_address ?? "—"}</dd></div>
+        <div><dt>Output</dt><dd>{status().output_armed ? "Armed" : "Fenced"}</dd></div>
+        <div><dt>Fence</dt><dd>{status().fence_state}</dd></div>
+        <div><dt>Actions</dt><dd>{status().scheduled_actions} queued / {status().accepted_actions} accepted</dd></div>
+      </dl>
       <p class="showClockEndpoint tabularNums">Local {status().local_address ?? "—"} · Session {status().session_id ?? sessionId()}</p>
+      </details>
+        </div>
+      </details>
+      <Show when={status().running}>
+        <p class="syncFeatureLiveState" role="status">{status().role} · {status().output_armed ? "Armed" : "Fenced"} · {status().peer_address ?? "—"}</p>
+      </Show>
+      <Show when={(status().rejected_packets ?? 0) > 0}>
+        <p class="inlineWarning syncFeatureLiveState"><span>Rejected</span>: {status().rejected_packets}</p>
+      </Show>
       <Show when={status().last_action_status}>{(message) => <p class="showClockEndpoint">Action: {message()}</p>}</Show>
       <Show when={error() ?? status().last_error}>{(message) => <p class="fieldError textPretty" role="alert" aria-live="polite">{message()}</p>}</Show>
     </section>

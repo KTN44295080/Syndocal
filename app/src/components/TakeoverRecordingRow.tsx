@@ -6,6 +6,7 @@ const TAKEOVER_RECORDING_POLL_MS = 2_000;
 
 interface TakeoverRecordingRowProps {
   backendAvailable: boolean;
+  compact?: boolean;
   invokeCommand: FrontendTauriInvoke;
 }
 
@@ -63,8 +64,7 @@ export function TakeoverRecordingRow(props: TakeoverRecordingRowProps) {
     });
   });
 
-  return (
-    <div class="takeoverRecordingRow" aria-label="Takeover recording">
+  const settings = () => <>
       <label>
         Takeover recording folder
         <div class="standbyDirectoryRow">
@@ -77,9 +77,19 @@ export function TakeoverRecordingRow(props: TakeoverRecordingRowProps) {
           <button onClick={() => void run("clear_folder")} disabled={!props.backendAvailable || busy() || !status()?.folder}>Clear</button>
         </div>
       </label>
-      <small class="textPretty">
-        After Take Over and Arm, the previous Primary's recording continues here once its take has ended.
-      </small>
+      <Show when={!props.compact}>
+        <small class="textPretty">After Take Over and Arm, the previous Primary's recording continues here once its take has ended.</small>
+      </Show>
+  </>;
+
+  return (
+    <div class={props.compact ? "takeoverRecordingRow syncTakeoverRecording" : "takeoverRecordingRow"} aria-label="Takeover recording">
+      <Show when={props.compact} fallback={settings()}>
+        <details class="syncFeatureDisclosure" data-sync-disclosure="takeover-recording">
+          <summary><h3>Takeover recording</h3><span class="syncFeatureState">{takeoverStateLabel(status())}</span></summary>
+          <div class="syncFeatureBody">{settings()}</div>
+        </details>
+      </Show>
       <Show when={status() && status()!.state !== "idle"}>
         <p class={status()!.state === "failed" || status()!.state === "blocked" ? "inlineWarning textPretty" : "textPretty"} role="status" aria-live="polite">
           <strong>{takeoverStateLabel(status())}</strong>

@@ -63,7 +63,8 @@ assert.match(assignmentCore, /SnapshotPublicationFailure::Indeterminate/);
 assert.match(assignmentCore, /project_transaction_publication_faulted/);
 assert.match(assignmentCore, /actual_hash == expected_candidate_checkpoint_hash/);
 assert.match(runtimeSource, /OutputControlActionV2::AssignVideoOutputComposition[\s\S]*assign_video_output_composition_with_output_control_fence/s);
-assert.match(runtimeSource, /OutputControlActionV2::AssignVideoOutputComposition[\s\S]*output_action_requires_native_danger_confirmation/s);
+assert.doesNotMatch(runtimeSource, /output_action_requires_native_danger_confirmation|MessageDialog/);
+assert.match(runtimeSource, /OutputControlActionV2::AssignVideoOutputComposition/);
 assert.match(controlPlaneSource, /"assign_video_output_composition_v2"\s*=>\s*\{[\s\S]*AssignVideoOutputComposition/s);
 const retiredRoute = ["set", "video", "output", "routing"].join("_");
 const registeredTauriRoutes = [...mainSource.matchAll(/#\[tauri::command(?:\(async\))?\]\r?\n(?:async )?fn ([a-z0-9_]+)\(/g)]

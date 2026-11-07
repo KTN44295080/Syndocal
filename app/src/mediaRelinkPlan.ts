@@ -134,7 +134,7 @@ export interface MediaRelinkApplyFailure {
 /**
  * Outcome of applying reviewed proposals. `differentContent` lists files whose
  * hash does not match the recorded asset: a batch never adopts different
- * content, the operator relinks those one at a time with explicit confirmation.
+ * content, the operator selects replacement files for those one at a time.
  */
 export interface MediaRelinkApplyResult {
   relinked: MediaAssetId[];

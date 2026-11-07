@@ -372,7 +372,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             <div class="topbarWorkspaceMenu topbarLockedOperations" data-operator-lock-header>{props.operations}</div>
           </Show>
           <Show when={projectMenuOpen()}>
-            <div class="appProjectMenu" role="menu">
+            <div class="appProjectMenu" role="menu" inert={props.applicationUpdateBusy}>
               <button role="menuitem" aria-keyshortcuts="Control+N Meta+N" onClick={() => runProjectMenuAction(props.onNewProject)}>
                 <span>New</span>
               </button>

@@ -1,4 +1,6 @@
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { confirmDialog } from "../inAppDialog";
+import { restoreRdmFactoryDefaultsDialog } from "../inAppDialogCopy";
 import type { ArtRdmRequest, ArtRdmResponse, SerialPortSummary, UsbRdmRequest } from "../types";
 
 interface ArtRdmPanelProps {
@@ -19,6 +21,10 @@ const parseHexU16 = (value: string) => {
   return Number.isFinite(parsed) ? Math.max(0, Math.min(0xffff, parsed)) : 0;
 };
 
+// E1.20 FACTORY_DEFAULTS erases the responder's saved configuration.
+export const rdmSetDiscardsConfiguration = (command: "Get" | "Set", parameterId: string): boolean =>
+  command === "Set" && parseHexU16(parameterId) === 0x0090;
+
 export function ArtRdmPanel(props: ArtRdmPanelProps) {
   const [gatewayIp, setGatewayIp] = createSignal(props.gatewayIp);
   const [portAddress, setPortAddress] = createSignal(props.portAddress);
@@ -34,12 +40,10 @@ export function ArtRdmPanel(props: ArtRdmPanelProps) {
   const [discovering, setDiscovering] = createSignal(false);
   const [inventoryRunning, setInventoryRunning] = createSignal(false);
   const [inventoryStatus, setInventoryStatus] = createSignal("");
-  const [pendingConfirmation, setPendingConfirmation] = createSignal<"set" | "discovery" | null>(null);
   const [discoveredUids, setDiscoveredUids] = createSignal<string[]>([]);
   const [error, setError] = createSignal("");
   const [response, setResponse] = createSignal<ArtRdmResponse | null>(null);
   let inventoryTimer: number | undefined;
-  let confirmationDialog!: HTMLDialogElement;
 
   onCleanup(() => {
     if (inventoryTimer !== undefined) window.clearInterval(inventoryTimer);
@@ -89,13 +93,10 @@ export function ArtRdmPanel(props: ArtRdmPanelProps) {
     }
   };
 
-  const send = () => {
-    if (command() !== "Set") {
-      void executeSend();
-      return;
-    }
-    setPendingConfirmation("set");
-    confirmationDialog.showModal();
+  const send = async () => {
+    if (rdmSetDiscardsConfiguration(command(), parameterId())
+      && !await confirmDialog(restoreRdmFactoryDefaultsDialog())) return;
+    await executeSend();
   };
 
   const discover = async () => {
@@ -161,18 +162,7 @@ export function ArtRdmPanel(props: ArtRdmPanelProps) {
     }
   };
 
-  const startFullDiscovery = () => {
-    setPendingConfirmation("discovery");
-    confirmationDialog.showModal();
-  };
-
-  const confirmPendingAction = () => {
-    const action = pendingConfirmation();
-    confirmationDialog.close();
-    setPendingConfirmation(null);
-    if (action === "set") void executeSend();
-    if (action === "discovery") void executeFullDiscovery();
-  };
+  const startFullDiscovery = () => { void executeFullDiscovery(); };
 
   return (
     <section class="artRdmPanel" aria-label="RDM console">
@@ -243,29 +233,6 @@ export function ArtRdmPanel(props: ArtRdmPanelProps) {
           </div>
         )}
       </Show>
-      <dialog
-        ref={confirmationDialog}
-        class="rdmConfirmationDialog"
-        aria-labelledby="rdm-confirmation-title"
-        onClose={() => setPendingConfirmation(null)}
-      >
-        <form method="dialog">
-          <h2 id="rdm-confirmation-title" class="textBalance">
-            {pendingConfirmation() === "set" ? "Send RDM SET?" : `Start full RDM discovery over ${transport() === "UsbPro" ? "USB" : "Art-Net"}?`}
-          </h2>
-          <p class="textPretty">
-            {pendingConfirmation() === "set"
-              ? "This writes the selected PID to the physical fixture. Verify the target UID and parameter bytes."
-              : transport() === "UsbPro"
-                ? "This unmutes, searches, and mutes responders over the selected USB Pro port. DMX output on that port must remain disabled until discovery finishes."
-                : "This flushes the gateway TOD and may temporarily interrupt DMX on the selected port while physical discovery runs."}
-          </p>
-          <div class="buttonRow">
-            <button value="cancel">Cancel</button>
-            <button type="button" class="danger" onClick={confirmPendingAction}>Confirm</button>
-          </div>
-        </form>
-      </dialog>
       <p class="hint">{transport() === "ArtNet"
         ? "Read Gateway TOD is non-disruptive. Force Full Discovery flushes the gateway table and may temporarily interrupt that DMX port. ArtRdm requests remain unicast because broadcast is prohibited."
         : "USB Pro RDM opens the selected COM port exclusively. Disable DMX output on that same port first. The widget must run RDM-capable firmware. Discovery uses Label 11 DISC_UNIQUE_BRANCH and may take up to 60 seconds."}</p>

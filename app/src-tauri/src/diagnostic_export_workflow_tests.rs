@@ -21,10 +21,9 @@ fn package() -> Vec<u8> {
 }
 
 #[test]
-fn diagnostic_export_invalid_capture_rejects_before_confirmation_or_destination() {
+fn diagnostic_export_invalid_capture_rejects_before_destination() {
     assert!(export_prepared_diagnostic_package(
         b"invalid capture".to_vec(),
-        |_| panic!("invalid bytes must not be offered for approval"),
         || panic!("invalid bytes must not prompt for a destination"),
         |_, _| panic!("invalid bytes must not be written"),
     )
@@ -32,29 +31,10 @@ fn diagnostic_export_invalid_capture_rejects_before_confirmation_or_destination(
 }
 
 #[test]
-fn diagnostic_export_rejected_preview_never_chooses_or_writes_destination() {
-    let result = export_prepared_diagnostic_package(
-        package(),
-        |preview| {
-            assert!(preview.contains("6 entries"));
-            false
-        },
-        || panic!("rejected preview must not choose a destination"),
-        |_, _| panic!("rejected preview must not write a destination"),
-    )
-    .unwrap();
-    assert!(result.is_none());
-}
-
-#[test]
 fn diagnostic_export_cancelled_file_dialog_never_writes_destination() {
     let events = RefCell::new(Vec::new());
     let result = export_prepared_diagnostic_package(
         package(),
-        |_| {
-            events.borrow_mut().push("preview");
-            true
-        },
         || {
             events.borrow_mut().push("destination");
             None
@@ -63,22 +43,17 @@ fn diagnostic_export_cancelled_file_dialog_never_writes_destination() {
     )
     .unwrap();
     assert!(result.is_none());
-    assert_eq!(*events.borrow(), vec!["preview", "destination"]);
+    assert_eq!(*events.borrow(), vec!["destination"]);
 }
 
 #[test]
-fn diagnostic_export_publishes_exact_approved_capture_without_recapture() {
+fn diagnostic_export_publishes_exact_validated_capture_without_recapture() {
     let bytes = package();
     let expected = bytes.clone();
     let events = RefCell::new(Vec::new());
     let target = PathBuf::from("chosen-diagnostics.zip");
     let result = export_prepared_diagnostic_package(
         bytes,
-        |preview| {
-            assert!(preview.contains(&format!("{} bytes", expected.len())));
-            events.borrow_mut().push("preview");
-            true
-        },
         || {
             events.borrow_mut().push("destination");
             Some(target.clone())
@@ -92,14 +67,13 @@ fn diagnostic_export_publishes_exact_approved_capture_without_recapture() {
     )
     .unwrap();
     assert_eq!(result, Some(target));
-    assert_eq!(*events.borrow(), vec!["preview", "destination", "publish"]);
+    assert_eq!(*events.borrow(), vec!["destination", "publish"]);
 }
 
 #[test]
 fn diagnostic_export_publication_error_is_not_reported_as_success() {
     let result = export_prepared_diagnostic_package(
         package(),
-        |_| true,
         || Some(PathBuf::from("chosen.zip")),
         |_, _| Err("injected storage failure".into()),
     );

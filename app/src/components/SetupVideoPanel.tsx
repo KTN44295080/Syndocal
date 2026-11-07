@@ -94,6 +94,7 @@ type SetupVideoPanelProps = {
     stateLabel: string;
     stateClass: string;
     detail: string;
+    diagnostics?: string;
     actualOpen: boolean | null;
     actionLabel: string;
     actionDisabled: boolean;

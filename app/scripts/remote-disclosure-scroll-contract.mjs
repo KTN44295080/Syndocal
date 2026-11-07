@@ -261,13 +261,21 @@ async function remoteDisclosureScrollInPage() {
   };
 
   // Active/Standby sync and ShowClock LAN are their own I/O connection; the
-  // standby role control must stay reachable inside that workbench.
+  // Standby setup starts closed; opening it must keep the role control
+  // reachable inside the workbench without shrinking the control.
   const readSyncPath = async () => {
     const syncZone = document.querySelector('[data-io-zone="sync"]');
     const workbenchBody = syncZone?.closest('[data-io-workbench-body]');
     const standbyControl = syncZone?.querySelector('[data-io-control="remote-standby-role"]');
+    const standbyDisclosure = syncZone?.querySelector('[data-sync-disclosure="replication"]');
+    const standbySummary = standbyDisclosure?.querySelector(':scope > summary');
     const showClockPanel = syncZone?.querySelector('.showClockPanel');
     if (workbenchBody instanceof HTMLElement) resetScroll(workbenchBody);
+    await settle();
+    const standbyStartsClosed = standbyDisclosure instanceof HTMLDetailsElement && !standbyDisclosure.open;
+    await reveal(standbySummary, workbenchBody);
+    const standbySummaryReachable = visibleWithin(standbySummary, workbenchBody) && hitTestableAtCenter(standbySummary);
+    openDisclosure(standbyDisclosure);
     await settle();
     await reveal(standbyControl, workbenchBody);
     const standbyReachable = visibleWithin(standbyControl, workbenchBody);
@@ -277,6 +285,9 @@ async function remoteDisclosureScrollInPage() {
       syncZoneFound: syncZone instanceof HTMLElement,
       standbyControlFound: standbyControl instanceof HTMLElement,
       showClockPanelFound: showClockPanel instanceof HTMLElement,
+      standbyStartsClosed,
+      standbySummaryReachable,
+      standbyDisclosureOpened: standbyDisclosure?.open === true,
       standbyReachable,
       standbyHitTestable,
       workbenchOwnsVerticalScroll: workbenchStyle?.overflowY === 'auto',
@@ -284,6 +295,9 @@ async function remoteDisclosureScrollInPage() {
         syncZone instanceof HTMLElement &&
         standbyControl instanceof HTMLElement &&
         showClockPanel instanceof HTMLElement &&
+        standbyStartsClosed &&
+        standbySummaryReachable &&
+        standbyDisclosure?.open === true &&
         standbyReachable &&
         standbyHitTestable &&
         workbenchStyle?.overflowY === 'auto',

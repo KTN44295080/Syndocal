@@ -187,14 +187,13 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
       <Show when={props.onStartControlLearn}>
         <section class="ioConnectionDesk" data-midi-direct-learn>
           <h3>Assign a MIDI control</h3>
-          <p>Select your MIDI input above, then choose a pink button or fader in Control.</p>
           <button type="button" class="primary" onClick={() => props.onStartControlLearn?.()} disabled={props.learnBusy || props.selectedMidiInput === null}>Learn in Control</button>
         </section>
       </Show>
       <Show when={props.feedbackConnected || feedbackOutputMissing()}>
         <section class="ioConnectionDesk midiFeedbackStatus" data-midi-feedback-status role="status">
           <Show when={props.feedbackConnected} fallback={
-            <p class="hint">Scene buttons have LED feedback, but no feedback output is connected. Choose the controller's MIDI output under MIDI feedback and press Connect Feedback.</p>
+            <p class="hint">Connect MIDI feedback to light scene buttons.</p>
           }>
             <p>
               <span>Feedback output</span>: <span data-no-localize>{props.feedbackOutputStatus?.name ?? "-"}</span>
@@ -207,7 +206,6 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
                   {props.feedbackOutputStatus?.last_sent_unix_ms != null ? ` (${new Date(props.feedbackOutputStatus.last_sent_unix_ms).toLocaleTimeString()})` : ""}</span></>)}
               </Show>
             </p>
-            <p class="hint">If messages are sent but the LEDs stay dark, check the controller mode and that this output is the controller's LED port.</p>
           </Show>
         </section>
       </Show>

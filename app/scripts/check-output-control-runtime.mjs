@@ -945,7 +945,7 @@ assert.throws(
     resources: ["video"],
   }]), ["lighting", "video"]),
   /Exactly one active output lease/,
-  "Lighting-only/Video-only lease candidates must not authorize Display add",
+  "A Video-only lease does not satisfy a caller explicitly requesting Both",
 );
 assert.throws(
   () => runtime.selectOnlyActiveOutputLease(leaseQuery([{
@@ -1468,42 +1468,16 @@ assert.doesNotMatch(appSource, /displayCode|physical keyboard|prepare_output_con
 assert.doesNotMatch(runtimeSource, /prepare_output_consent|query_output_consent|control_plane_security|consent_token/);
 assert.doesNotMatch(controlPlaneSource, /prepare_output_consent|query_output_consent|PreparedPhysicalConfirmation/);
 assert.doesNotMatch(registrySource, /PreparedPhysicalConfirmation|prepare_output_consent|query_output_consent/);
-const nativeDangerConfirmation = runtimeSource.slice(
-  runtimeSource.indexOf("fn output_action_requires_native_danger_confirmation("),
-  runtimeSource.indexOf("pub(crate) fn issue_output_control_authority_for_window_label("),
-);
-assert.match(
-  nativeDangerConfirmation,
-  /MessageDialog::new\(\)[\s\S]*MessageButtons::YesNo[\s\S]*set_parent\(window\)[\s\S]*MessageDialogResult::Yes/,
-  "advanced output mutations require a parented native Yes-only dialog",
-);
-assert.doesNotMatch(nativeDangerConfirmation, /OutputControlActionV2::ReleaseBlackout/, "ordinary BO clear is a local explicit action, with canonical lease/fence checks retained");
-for (const action of ["Arm", "TakeOverStandby", "AddDisplay", "AssignVideoOutputComposition", "EnableShowArtNetLoopbackRoute", "EnableShowSerialDmxSafetyBlackoutRoute", "StopShowSerialDmxSafetyBlackoutRoute", "SendDsf2026ArtNetAcceptanceProbe", "AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt", "EnableShowSpoutOutputs", "ResetShowSpoutOutputs", "ForceTransferLease"]) {
-  assert.match(nativeDangerConfirmation, new RegExp(`OutputControlActionV2::${action}`));
-}
+assert.doesNotMatch(runtimeSource, /MessageDialog|MessageButtons::YesNo|output_confirmation_gate|confirm_native_dangerous_output_action|confirm_editor_display_window_open/,
+  "reversible output and editor-screen actions must not open a second confirmation");
 const outputExecution = runtimeSource.slice(
-  runtimeSource.indexOf("fn execute_output_control_with_confirmation<F>("),
+  runtimeSource.indexOf("fn execute_output_control_authorized("),
   runtimeSource.indexOf("pub(crate) fn exact_output_control_fence_matches("),
 );
-assert(
-  outputExecution.indexOf("recheck_output_control_terminal")
-    < outputExecution.indexOf("output_confirmation_gate"),
-  "terminal replay must precede native confirmation",
-);
-const normalEnableDispatch = outputExecution.slice(
-  outputExecution.indexOf("OutputControlActionV2::EnableOutput =>"),
-  outputExecution.indexOf("OutputControlActionV2::ReleaseBlackout"),
-);
-assert.doesNotMatch(
-  normalEnableDispatch,
-  /MessageDialog|confirm_native_dangerous_output_action/,
-  "normal one-click Enable must never call the native danger dialog",
-);
-assert.match(
-  outputExecution,
-  /output_confirmation_gate\([\s\S]*?store_output_control_terminal\([\s\S]*?Forbidden/,
-  "native dialog cancel/close must become a terminal rejection before admission and mutation",
-);
+assert.ok(outputExecution.indexOf("recheck_output_control_terminal") >= 0, "terminal replay stays in the canonical execution lane");
+assert.match(outputExecution, /if let Err\(code\) = authorize\(\)/, "removing a dialog must retain native external grant authorization");
+assert.match(outputExecution, /validate_output_control_fence_window/, "output mutations retain exact window/fence admission");
+assert.match(outputExecution, /capture_binding/, "output mutations retain exact owner binding");
 assert.match(standbySource, /data-io-control="enable-output"/);
 assert.match(standbySource, /role="status" aria-live="polite">Output enabled/);
 assert.match(standbySource, /hasOnlyActiveOutputLease\(leaseQuery\(\), \["lighting", "video"\]\)/);
@@ -1539,7 +1513,10 @@ assert.match(
   /async fn execute_output_control_off_event_loop[\s\S]*execute_output_control_for_operation/,
   "the off-event-loop lane reaches the canonical operation dispatcher",
 );
-assert.match(mainSource, /OutputControlActionV2::AddDisplay[\s\S]*vec!\[OutputLeaseResource::Lighting, OutputLeaseResource::Video\]/);
+const displayAuthorizationBuilder = mainSource.slice(mainSource.indexOf("pub(crate) fn build_output_lease_authorization_request("), mainSource.indexOf("    // Do not retain the registry guard", mainSource.indexOf("pub(crate) fn build_output_lease_authorization_request(")));
+assert.match(displayAuthorizationBuilder, /OutputControlActionV2::AddDisplay/);
+assert.match(displayAuthorizationBuilder, /OutputControlActionV2::SetDisplayWindowOpen/);
+assert.match(displayAuthorizationBuilder, /contains\(&OutputLeaseResource::Video\)/);
 assert.match(appSource, /const setBlackout = targetBlackout.setLightingBlackout/);
 assert.match(appSource, /const setAllBlackout = targetBlackout.setAllBlackout/);
 assert.match(appSource, /fullscreen: target\.fullscreen/);

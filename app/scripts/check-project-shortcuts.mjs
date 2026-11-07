@@ -592,6 +592,7 @@ for (const [workspace, mode, domDialogOpen, inAppDialogOpen, expectedCalls] of [
       workspaceTab: () => workspace,
       controlMode: () => mode,
       isInAppDialogOpen: () => inAppDialogOpen,
+      applicationUpdateBusy: () => false,
       document: { querySelector: (selector) => domDialogOpen && selector === "dialog[open]" ? {} : null },
       paneWindow: null,
       HTMLElement: class {},
@@ -601,6 +602,18 @@ for (const [workspace, mode, domDialogOpen, inAppDialogOpen, expectedCalls] of [
     assert.equal(calls, expectedCalls, `${workspace}/${mode} dialog=${domDialogOpen}/in-app=${inAppDialogOpen}: ${code} global dispatch`);
     assert.equal(prevented, false, "modal suppression preserves native dialog default actions");
   }
+}
+
+// While an update owns the editing surface, a shortcut cannot create new
+// drafts after the verified backup, even when no modal is open.
+for (const code of ["KeyN", "KeyO", "KeyS", "Space"]) {
+  let calls = 0;
+  const handler = runInNewContext(mountedHandlerCode, {
+    applicationUpdateBusy: () => true,
+    handleControlKeyDown: () => { calls++; },
+  });
+  handler({ code });
+  assert.equal(calls, 0, `${code}: updater-owned workspace suspends shortcut dispatch`);
 }
 
 // Standby (this machine does not drive outputs): the Blackout shortcuts reach the one

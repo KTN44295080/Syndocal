@@ -57,11 +57,10 @@ try {
     };
   }, dialog);
 
-  // The same assertions for every window: the main window uses the real fixture Remove control; a
-  // pop-out pane window has no such control on screen, so it asks the same in-app question through the
-  // shared service (the module instance the application itself uses) and must draw its own modal.
+  // Every window draws the retained unsaved-Timeline discard question through
+  // the shared dialog service. Undoable fixture removal no longer asks.
   for (const target of [
-    { label: "main", url: `${origin}/?syndocalViewportFixture=patch`, real: true },
+    { label: "main", url: `${origin}/?syndocalViewportFixture=patch`, real: false },
     { label: "pane-setup", url: `${origin}/?syndocalViewportFixture=patch&syndocalPaneWindow=setup`, real: false },
     { label: "pane-stage", url: `${origin}/?syndocalViewportFixture=patch&syndocalPaneWindow=stage`, real: false },
     { label: "pane-timeline", url: `${origin}/?syndocalViewportFixture=timeline&syndocalPaneWindow=timeline`, real: false },
@@ -70,37 +69,28 @@ try {
     await settle(page);
     if (target.label === "main") await page.locator('[data-workspace-option="setup"]').click();
     await settle(page);
-    let trigger;
-    let ask;
-    if (target.real) {
-      // Trigger: the selection panel's Remove (fixtures) question.
-      trigger = page.locator(".mappingSelectionPanel button", { hasText: /^\s*Remove/ }).first();
-      assert.ok(await trigger.count() > 0, `${target.label}: the fixture Remove control is reachable`);
+    const trigger = page.locator("button:visible").first();
+    assert.ok(await trigger.count() > 0, `${target.label}: window shows a control`);
+    await trigger.focus();
+    const ask = async () => {
       await trigger.focus();
-      ask = async () => { await trigger.click(); };
-    } else {
-      trigger = page.locator("button:visible").first();
-      assert.ok(await trigger.count() > 0, `${target.label}: the pane window shows a control`);
-      await trigger.focus();
-      ask = async () => {
-        await trigger.focus();
-        await page.evaluate(async () => {
-          const service = await import("/src/inAppDialog.ts");
-          window.__dialogAnswer = "pending";
-          service.confirmDialog({ title: 'Remove fixture "Pane test"?', message: "You can undo this from the Project menu or with Ctrl/Cmd+Z.", confirmLabel: "Remove", tone: "danger" })
-            .then((answer) => { window.__dialogAnswer = answer; });
-        });
-      };
-    }
+      await page.evaluate(async () => {
+        const service = await import("/src/inAppDialog.ts");
+        const copy = await import("/src/inAppDialogCopy.ts");
+        window.__dialogAnswer = "pending";
+        service.confirmDialog(copy.discardTimelineEditsDialog())
+          .then((answer) => { window.__dialogAnswer = answer; });
+      });
+    };
     await ask();
     await page.waitForSelector(dialog, { timeout: 5000 });
     const shown = await state(page);
     assert.equal(shown.role, "alertdialog", `${target.label}: role`);
     assert.ok(shown.modal && shown.ariaModal === "true", `${target.label}: modal`);
-    assert.equal(shown.tone, "danger", `${target.label}: removing a fixture is a danger question`);
+    assert.equal(shown.tone, "danger", `${target.label}: discarding unsaved work is a danger question`);
     assert.ok(shown.focusOnCancel, `${target.label}: a danger dialog starts on Cancel`);
-    assert.match(shown.title, /Remove fixture "[^"]+"\?|Remove \d+ selected fixtures\?/, `${target.label}: title names the fixture`);
-    assert.match(shown.detail, /undo/i, `${target.label}: message names the consequence`);
+    assert.match(shown.title, /Discard unsaved Timeline edits\?/, `${target.label}: title names the unsaved work`);
+    assert.match(shown.detail, /unsaved.*lost/i, `${target.label}: message names the irreversible loss`);
     assert.ok(shown.inViewport, `${target.label}: dialog fits the viewport`);
     assert.ok(shown.buttons.length === 2 && shown.buttons.every((b) => b.height >= 44 && b.width >= 44), `${target.label}: 44px targets ${JSON.stringify(shown.buttons)}`);
     await page.screenshot({ path: resolve(artifacts, `${target.label}-dialog.png`) });

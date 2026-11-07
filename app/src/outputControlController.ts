@@ -730,14 +730,15 @@ const assertDisplayAddLeaseAuthorityQuery = (value: unknown): DisplayAddLeaseAut
       resources: [],
     };
   }
-  if (value.authority === null || !sameResources(value.resources, ["lighting", "video"])) {
+  if (value.authority === null || (!sameResources(value.resources, ["video"])
+    && !sameResources(value.resources, ["lighting", "video"]))) {
     throw new Error(errorMessage);
   }
   return {
     operationId: OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID,
     status: value.status,
     authority: assertLeaseAuthority(value.authority, errorMessage),
-    resources: ["lighting", "video"],
+    resources: [...value.resources] as OutputLeaseResource[],
   };
 };
 
@@ -894,16 +895,16 @@ export function selectOnlyActiveVideoOutputLease(
 
 /**
  * Stable display-add adapter: the backend's durable Add path receives exactly
- * one Both authority that is either currently active or recoverable from the
+ * one Video-capable authority that is either currently active or recoverable from the
  * same owner/project. The backend performs the orphan recovery and Add in one
  * durable candidate; the renderer never performs an Enable-then-Add sequence.
  */
-export function selectExactBothLeaseForDisplayAdd(
+export function selectVideoCapableLeaseForDisplay(
   query: DisplayAddLeaseAuthorityQuery,
 ): OutputLeaseAuthority {
   const validated = assertDisplayAddLeaseAuthorityQuery(query);
   if (validated.status === "unavailable" || !validated.authority) {
-    throw new Error("Exactly one active or recoverable Both output lease is required; nothing was applied.");
+    throw new Error("Exactly one active or recoverable Video-capable output lease is required; nothing was applied.");
   }
   return { ...validated.authority };
 }
@@ -1215,7 +1216,13 @@ const assertLeaseResult = (value: unknown, action: OutputControlOperationAction)
       if (!(outcome === "authorized" && phase === "held_active" || outcome === "project_orphaned" && phase === "held_orphaned") || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
       break;
     case "add_display":
-      if (outcome !== "authorized" || phase !== "held_active" || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
+    case "set_display_window_open":
+      if (outcome !== "authorized" || phase !== "held_active"
+        || !sameResources(resources, ["video"]) && !sameResources(resources, ["lighting", "video"])
+        || !sameResources(beforeResources, resources)) throw new Error(errorMessage);
+      if (beforeGeneration === null || afterGeneration === null || afterPhase !== "held_active"
+        || !(beforePhase === "held_active" && (afterGeneration === beforeGeneration || afterGeneration === beforeGeneration + 2)
+          || beforePhase === "held_orphaned" && afterGeneration === beforeGeneration + 1)) throw new Error(errorMessage);
       break;
     case "add_external_output":
     case "configure_video_output":
@@ -1223,9 +1230,7 @@ const assertLeaseResult = (value: unknown, action: OutputControlOperationAction)
       if (outcome !== "authorized" || phase !== "held_active"
         || !sameResources(resources, ["video"]) && !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
       break;
-    case "set_display_window_open":
-      if (outcome !== "authorized" || phase !== "held_active" || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
-      break;
+
     case "assign_video_output_composition":
       if (outcome !== "authorized" || phase !== "held_active" || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
       break;
@@ -1411,8 +1416,11 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
       ? resourcesForRole(action.role)
       : ["lighting", "video"] as const;
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
-  } else if (action.kind === "add_display" || action.kind === "set_display_window_open"
-    || action.kind === "set_network_dmx_routes"
+  } else if (action.kind === "add_display" || action.kind === "set_display_window_open") {
+    if (!sameResources(selected[0].resources, ["video"]) && !sameResources(selected[0].resources, ["lighting", "video"])) {
+      throw new Error("Display output control requires a Video-capable lease; nothing was applied.");
+    }
+  } else if (action.kind === "set_network_dmx_routes"
     || action.kind === "enable_show_art_net_loopback_route"
     || action.kind === "enable_show_serial_dmx_safety_blackout_route"
     || action.kind === "stop_show_serial_dmx_safety_blackout_route"
@@ -1630,6 +1638,13 @@ export async function executeVideoClipLaunchOutputControl(
   });
 }
 
+const assertDisplayReceiptScope = (receipt: OutputControlReceipt, query: DisplayAddLeaseAuthorityQuery): OutputControlReceipt => {
+  if (!receipt.lease_result || !sameResources(receipt.lease_result.resources, query.resources)) {
+    throw new Error("Display lease resources changed during execution; physical output state is unknown.");
+  }
+  return receipt;
+};
+
 /**
  * Execute AddDisplay using the dedicated read-only authority query. The
  * backend v2 command owns same-owner orphan recovery and Add atomically, so
@@ -1640,25 +1655,27 @@ export async function executeDisplayAddOutputControl(
   action: OutputDisplayAction,
   authorityQuery: DisplayAddLeaseAuthorityQuery,
 ): Promise<OutputControlReceipt> {
-  const authority = selectExactBothLeaseForDisplayAdd(authorityQuery);
+  const authority = selectVideoCapableLeaseForDisplay(authorityQuery);
   if (authority.lease_id !== action.lease.lease_id || authority.generation !== action.lease.generation) {
     throw new Error("Display Add lease authority changed before execution; nothing was applied.");
   }
-  return executeOutputControlOperation(invoke, action, { skipPublicLeaseQuery: "display-authority" });
+  const receipt = await executeOutputControlOperation(invoke, action, { skipPublicLeaseQuery: "display-authority" });
+  return assertDisplayReceiptScope(receipt, authorityQuery);
 }
 
 /** Execute the live Display window action through the Add-equivalent
- * active-or-recoverable exact-Both authority lane. */
+ * active-or-recoverable Video-capable authority lane. */
 export async function executeDisplayWindowOutputControl(
   invoke: FrontendTauriInvoke,
   action: OutputDisplayWindowAction,
   authorityQuery: DisplayAddLeaseAuthorityQuery,
 ): Promise<OutputControlReceipt> {
-  const authority = selectExactBothLeaseForDisplayAdd(authorityQuery);
+  const authority = selectVideoCapableLeaseForDisplay(authorityQuery);
   if (authority.lease_id !== action.lease.lease_id || authority.generation !== action.lease.generation) {
     throw new Error("Display window lease authority changed before execution; nothing was applied.");
   }
-  return executeOutputControlOperation(invoke, action, { skipPublicLeaseQuery: "display-authority" });
+  const receipt = await executeOutputControlOperation(invoke, action, { skipPublicLeaseQuery: "display-authority" });
+  return assertDisplayReceiptScope(receipt, authorityQuery);
 }
 
 /** Normal one-step output path; no lease selection or six-digit code is shown. */

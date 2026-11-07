@@ -1,0 +1,54 @@
+/* Sync defaults to local output controls. Optional clocks and replication
+   disclose their setup without shrinking controls or hiding live failures. */
+.syncOperatorSurface .syncOutputPanel {
+  grid-area: auto;
+  border: 0;
+  padding: 0;
+  overflow: visible;
+}
+.syncOutputPanel .ioDeskHeader { min-height: 32px; }
+.syncOutputPanel .outputEnablePrimary { display: flex; gap: 8px; }
+.syncOutputPanel .outputEnablePrimary button { flex: 1; min-height: 44px; }
+.syncOutputStatus {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.syncOutputStatus > div {
+  min-width: 0;
+  border: 1px solid var(--theme-line);
+  padding: 8px;
+}
+.syncOutputStatus dt { color: var(--theme-dim); margin-bottom: 5px; }
+.syncOutputStatus dd { margin: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.syncOutputStatus dd span { color: var(--theme-dim); }
+.syncFeatureDisclosure { min-width: 0; border-top: 1px solid var(--theme-line); }
+.syncFeatureDisclosure > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding: 8px;
+  cursor: pointer;
+  font-weight: 700;
+  list-style: none;
+}
+.syncFeatureDisclosure > summary::before { content: "+"; flex: 0 0 auto; }
+.syncFeatureDisclosure[open] > summary::before { content: "−"; }
+.syncFeatureDisclosure > summary > :first-child { flex: 1; }
+.syncFeatureDisclosure > summary > h2,
+.syncFeatureDisclosure > summary > h3 { margin: 0; }
+.syncFeatureDisclosure > summary:focus-visible { outline: 2px solid var(--theme-focus, var(--theme-line-strong)); outline-offset: -2px; }
+.syncFeatureState { font-size: var(--fs-text); color: var(--theme-dim); font-weight: 400; }
+.syncFeatureDisclosure[open] > summary { background: var(--theme-raised); }
+.syncFeatureBody { display: grid; min-width: 0; gap: 8px; padding: 8px; }
+.syncFeatureDisclosure:not([open]) > .syncFeatureBody { display: none; }
+.syncFeatureLiveState { margin: 0 8px 8px; overflow-wrap: anywhere; }
+.syncOperatorSurface .ltcInputPanel { border: 0; padding: 0; }
+.syncOutputPanel .autoOutputOwnership { display: grid; gap: 6px; }
+.syncOutputPanel > .advancedOutputControls { margin-bottom: 8px; }
+@media (max-width: 700px) { .syncOutputStatus { grid-template-columns: 1fr; } }
+
+.syncTakeoverRecording { min-width: 0; }

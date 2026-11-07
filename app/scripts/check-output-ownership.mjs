@@ -1266,58 +1266,17 @@ assert.deepEqual(
   "canonical R4/S0 output-route inventory must remain bytewise sorted",
 );
 
-const nativeDangerConfirmation = sliceBetween(
-  outputRuntime,
-  "fn output_action_requires_native_danger_confirmation(",
-  "pub(crate) fn issue_output_control_authority_for_window_label(",
-  "native dangerous OutputControl confirmation helper",
-);
-assert.match(
-  nativeDangerConfirmation,
-  /MessageDialog::new\(\)[\s\S]*MessageButtons::YesNo[\s\S]*set_parent\(window\)[\s\S]*MessageDialogResult::Yes/,
-  "advanced OutputControl must use a parented Yes-only native confirmation",
-);
-assert.doesNotMatch(nativeDangerConfirmation, /OutputControlActionV2::ReleaseBlackout/, "ordinary BO clear uses the local explicit action and exact lease/fence");
-for (const dangerousAction of [
-  "Arm",
-  "TakeOverStandby",
-  "AddDisplay",
-  "AssignVideoOutputComposition",
-  "ForceTransferLease",
-]) {
-  assert.match(
-    nativeDangerConfirmation,
-    new RegExp(`OutputControlActionV2::${dangerousAction}`),
-    `${dangerousAction} must require native confirmation`,
-  );
-}
+assert.doesNotMatch(outputRuntime, /MessageDialog|MessageButtons::YesNo|output_confirmation_gate|confirm_native_dangerous_output_action|confirm_editor_display_window_open/,
+  "output actions retain their explicit local controls without a second OS approval");
 const outputControlExecution = sliceBetween(
   outputRuntime,
-  "fn execute_output_control_with_confirmation<F>(",
+  "fn execute_output_control_authorized(",
   "pub(crate) fn exact_output_control_fence_matches(",
   "OutputControl execution lane",
 );
-assert(
-  outputControlExecution.indexOf("recheck_output_control_terminal")
-    < outputControlExecution.indexOf("output_confirmation_gate"),
-  "terminal replay must be checked before a native confirmation can be shown",
-);
-const enableDispatch = sliceBetween(
-  outputControlExecution,
-  "OutputControlActionV2::EnableOutput =>",
-  "OutputControlActionV2::ReleaseBlackout",
-  "normal Enable dispatch",
-);
-assert.doesNotMatch(
-  enableDispatch,
-  /MessageDialog|confirm_native_dangerous_output_action/,
-  "normal Enable must not invoke the dangerous native confirmation helper",
-);
-assert.match(
-  outputRuntime,
-  /output_confirmation_gate\([\s\S]*?store_output_control_terminal\([\s\S]*?Forbidden/,
-  "cancel/close must become a terminal rejection before admission or mutation",
-);
+assert.match(outputControlExecution, /if let Err\(code\) = authorize\(\)/, "external native grant authorization remains mandatory");
+assert.match(outputControlExecution, /recheck_output_control_terminal/, "terminal replay stays exact");
+assert.match(outputControlExecution, /validate_output_control_fence_window/, "window fence remains mandatory");
 
 // Only this exact read-only delegation may borrow the transport owners without
 // being classified as a physical sink. Do not allowlist the command name: an

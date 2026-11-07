@@ -326,14 +326,10 @@ try {
   assert.equal(await ux("return u.log.previews.at(-1).active"), false, "A shows the live chain on Preview");
   await click('[data-fx-audition-side="B"]'); await settle();
   assert.equal(await ux("return u.log.previews.at(-1).active"), true);
-  // Take needs a second explicit click.
+  // Explicit Take commits once; Preview edits never require another Yes/No step.
   await click("[data-fx-audition-take]"); await settle();
-  assert.equal(await ux("return u.log.commits.length"), 0, "the first Take click only arms the confirmation");
-  assert.match(await text("[data-fx-audition-take-confirm]"), /confirm/i);
-  await click("[data-fx-audition-take-cancel]"); await settle();
-  assert.equal(await ux("return u.log.commits.length"), 0);
-  await click("[data-fx-audition-take]"); await click("[data-fx-audition-take-confirm]"); await settle();
-  assert.equal(await ux("return u.log.commits.length"), 1, "the confirmed Take commits once");
+  assert.equal(await ux("return u.log.commits.length"), 1, "one explicit Take commits once");
+  assert.equal(await evaluate("document.querySelector('[data-fx-audition-take-confirm]') === null"), true, "no redundant confirmation control");
   assert.equal(await ux("return u.audition.state()"), null, "Take ends the audition");
   assert.equal(await evaluate("document.querySelector('[data-fx-audition-bar]').dataset.fxAuditionActive"), "false");
 
@@ -685,7 +681,7 @@ try {
   assert.equal(await evaluate("document.documentElement.scrollWidth<=window.innerWidth"), true, "image UI remains inside viewport");
 
   assert.deepEqual(errors, [], JSON.stringify(errors));
-  console.log(`FX UX browser: parameters (labels, units, ranges, colour picker, reset), presets, Randomize, Preview-only audition with A/B and confirmed Take, rejection cards and problems dialog in EN/JA and two themes; tempo-synced beat/bar units (live BPM, zero clock-driven writes, range limit, Hz capture, audition draft), drag-and-drop stage reorder in the Perform FX tab and the Full FX editor, and always-visible category chips; evidence ${evidenceDir}`);
+  console.log(`FX UX browser: parameters (labels, units, ranges, colour picker, reset), presets, Randomize, Preview-only audition with A/B and one-click explicit Take, rejection cards and problems dialog in EN/JA and two themes; tempo-synced beat/bar units (live BPM, zero clock-driven writes, range limit, Hz capture, audition draft), drag-and-drop stage reorder in the Perform FX tab and the Full FX editor, and always-visible category chips; evidence ${evidenceDir}`);
 } finally {
   socket?.close();
   for (const call of pending.values()) clearTimeout(call.timer);

@@ -3,12 +3,9 @@ import type { ConfirmDialogOptions } from "./inAppDialog";
 /**
  * Wording for the in-app confirmation dialogs. English source text only: each
  * string has a Japanese entry in uiLocalization.ts, applied by the dialog host.
- * Every dialog names its consequence ("Program goes black immediately."), and
+ * Only irreversible data loss asks for confirmation. Every dialog names its consequence, and
  * every dangerous one is `tone: "danger"` so initial focus lands on Cancel.
  */
-
-const undoFromMenu = "You can undo this from the Project menu or with Ctrl/Cmd+Z.";
-const undoFromHistory = "This can be undone from Project History.";
 
 export const discardTimelineEditsDialog = (): ConfirmDialogOptions => ({
   title: "Discard unsaved Timeline edits?",
@@ -24,15 +21,6 @@ export const discardFxDraftDialog = (): ConfirmDialogOptions => ({
   confirmLabel: "Discard Changes",
   cancelLabel: "Keep Editing",
   tone: "danger",
-});
-
-export const installUpdateDialog = (version: string): ConfirmDialogOptions => ({
-  title: `Install Syndocal ${version}?`,
-  message: [
-    "A verified project backup is created before the download.",
-    "The signed installer may close and restart Syndocal.",
-  ],
-  confirmLabel: "Install",
 });
 
 export const abandonPublicationDialog = (description: string): ConfirmDialogOptions => ({
@@ -52,27 +40,9 @@ export const deleteBackupDialog = (createdAt: string): ConfirmDialogOptions => (
   tone: "danger",
 });
 
-export const rotateDjLinkTokenDialog = (): ConfirmDialogOptions => ({
-  title: "Rotate the DJ Link token?",
-  message: "The current token stops working. The new token is shown only once, so copy it right away.",
-  confirmLabel: "Rotate token",
-  tone: "danger",
-});
-
-export const adoptMediaReplacementDialog = (assetId: number | string, replacementPath: string): ConfirmDialogOptions => ({
-  title: `Adopt replacement content for media asset ${assetId}?`,
-  message: [
-    replacementPath,
-    "This file's content differs from what the project recorded for this asset (the hash does not match).",
-    "This changes the saved content identity and updates every reference to this asset.",
-  ],
-  confirmLabel: "Adopt replacement",
-  tone: "danger",
-});
-
-export const revokeAllExternalAccessDialog = (): ConfirmDialogOptions => ({
-  title: "Revoke all external access?",
-  message: "Every external principal is revoked and all authority grants are closed.",
-  confirmLabel: "Revoke all",
+export const restoreRdmFactoryDefaultsDialog = (): ConfirmDialogOptions => ({
+  title: "Restore the selected fixture's factory defaults?",
+  message: "The fixture's saved configuration will be erased. This cannot be undone.",
+  confirmLabel: "Restore factory defaults",
   tone: "danger",
 });

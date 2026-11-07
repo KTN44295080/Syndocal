@@ -310,12 +310,9 @@ import { bundledLibraryProfileRequest } from "./bundledLibrary";
 import { confirmDialog, isInAppDialogOpen } from "./inAppDialog";
 import {
   abandonPublicationDialog,
-  adoptMediaReplacementDialog,
   deleteBackupDialog,
   discardFxDraftDialog,
   discardTimelineEditsDialog,
-  installUpdateDialog,
-  rotateDjLinkTokenDialog,
 } from "./inAppDialogCopy";
 import { InAppDialogHost } from "./components/InAppDialogHost";
 import { createLiveAudioInputStatusRequestGate } from "./liveAudioInputStatusSync";
@@ -706,7 +703,7 @@ import {
   parseVideoOutputWindowStateEvent,
   queryDisplayAddLeaseAuthority,
   queryOutputLeaseAuthority,
-  selectExactBothLeaseForDisplayAdd,
+  selectVideoCapableLeaseForDisplay,
   resolveVideoOutputWindowActualOpen,
   VIDEO_OUTPUT_WINDOW_STATE_EVENT,
   type VideoOutputWindowPhysicalState,
@@ -3895,14 +3892,20 @@ function createAppView() {
     placement: PaneWindowPlacement | null = null,
     options?: { instanceId?: string },
   ): Promise<boolean> => {
+    if (applicationUpdateBusy()) {
+      setMessage("Wait for the application update to finish before opening another editor window.");
+      return Promise.resolve(false);
+    }
     if (!isTauriRuntime()) return openBrowserPaneWindow(pane);
     return (async () => {
       if (!await paneWindowEventsReady) {
         setMessage("Pane window events are unavailable.");
         return false;
       }
+      if (applicationUpdateBusy()) return false;
       let result = false;
       await enqueuePaneWindowOperation(pane, async () => {
+        if (applicationUpdateBusy()) return;
         result = await openPaneWindowCore(pane, placement, options?.instanceId);
       });
       return result;
@@ -9319,27 +9322,20 @@ function createAppView() {
       return {
         stateLabel: "Output error",
         stateClass: "error",
-        detail: `${performance.last_error}${performanceDetail}`,
+        detail: performance.last_error,
+        diagnostics: `${performance.last_error}${performanceDetail}`,
         actualOpen,
         actionLabel: actualOpen ? "Close output window" : "Open/Reopen output",
         actionDisabled: false,
         error: actionError,
       };
     }
-    const baseStateLabel = actualOpen ? "Window open" : "Window closed";
-    const stateLabel = performance
-      ? `${baseStateLabel} / ${performance.width}x${performance.height} / ${(performance.average_frame_us / 1000).toFixed(1)}ms / ${
-          performance.frame_budget_pass === true
-            ? "60 PASS"
-            : performance.frame_budget_pass === false
-              ? "60 FAIL"
-              : "sampling"
-        } / ${validationFrameCount}/${validationFrameTarget}`
-      : baseStateLabel;
+    const stateLabel = actualOpen ? "Window open" : "Window closed";
     return {
       stateLabel,
       stateClass: actualOpen ? "open" : "closed",
-      detail: `${actualOpen ? "Live window open" : "Live window closed"}${
+      detail: performance?.frame_budget_pass === false ? "60fps target not met." : physical?.retirement_reason ?? "",
+      diagnostics: `${actualOpen ? "Live window open" : "Live window closed"}${
         physical?.retirement_reason ? ` / ${physical.retirement_reason}` : ""
       }${ownershipReason ? ` / ${ownershipReason}` : ""}${performanceDetail}`,
       actualOpen,
@@ -11454,7 +11450,12 @@ function createAppView() {
     if (!update?.available || !update.version || applicationUpdateBusy()) {
       return;
     }
-    if (!await confirmDialog(installUpdateDialog(update.version))) {
+    if (paneWindow || poppedPanes().length > 0 || Object.values(pendingPaneWindowOperations()).some(Boolean)) {
+      setMessage("Close detached editor windows before installing an application update.");
+      return;
+    }
+    if (timelineEditorDirty() || (sceneEffectDraftDirty() && sceneEffectDraftSignature() === null)) {
+      setMessage("Save or discard unsaved Timeline and FX edits before installing an application update.");
       return;
     }
     setApplicationUpdateBusy(true);
@@ -11463,11 +11464,23 @@ function createAppView() {
     setMessage(`Downloading signed Syndocal ${update.version} update...`);
     let updateBackup: ProjectPublicationStatusV1 | null = null;
     try {
+      if (!await flushSceneEffectDraft()) {
+        throw new Error("Pending FX edits could not be saved; the update was not installed.");
+      }
+      if (timelineEditorDirty() || sceneEffectDraftDirty() || sceneEffectOperationsPending() > 0) {
+        throw new Error("Save or discard unsaved Timeline and FX edits before installing an application update.");
+      }
       // Update admission consumes the exact unacknowledged Backup Success
       // receipt. The updater must not manufacture a second, raw backup.
       updateBackup = await startProjectPublication("backup", `before update ${update.version}`, true);
       if (updateBackup.state !== "succeeded") {
         throw new Error(updateBackup.error ?? `Update backup is ${updateBackup.state}.`);
+      }
+      // UI editing is inert while busy; this final check also catches an edit
+      // already in flight when the update took ownership of the workspace.
+      if (timelineEditorDirty() || sceneEffectDraftDirty() || sceneEffectOperationsPending() > 0
+        || poppedPanes().length > 0 || Object.values(pendingPaneWindowOperations()).some(Boolean)) {
+        throw new Error("Editor state changed while preparing the update; save or discard edits and try again.");
       }
       await invoke<void>("install_application_update", {
         expectedVersion: update.version,
@@ -11963,7 +11976,12 @@ function createAppView() {
       : "Discard unsaved changes?",
     uiLocale(),
   );
-  const confirmDiscardProjectChanges = (actionLabel: string): Promise<boolean> => {
+  const confirmDiscardProjectChanges = async (actionLabel: string): Promise<boolean> => {
+    if (applicationUpdateBusy()) {
+      setMessage("Wait for the application update to finish before replacing the project.");
+      return false;
+    }
+    if (!await prepareSceneEffectDraftForProjectBoundary()) return false;
     if (!projectDirty() && !timelineEditorDirty()) {
       return Promise.resolve(true);
     }
@@ -16525,11 +16543,11 @@ function createAppView() {
     applyLoadedProjectResult(result, result.current_project_path);
 
   const loadProject = async () => {
-    const authority = captureProjectAuthorityIdentity();
     if (!await confirmDiscardProjectChanges("load another project")) {
       setMessage("Project load canceled.");
       return;
     }
+    const authority = captureProjectAuthorityIdentity();
     try {
       const result = await invoke<ProjectLoadResult | null>("load_project", {
         ownerId: projectTransactionOwnerId,
@@ -16564,11 +16582,11 @@ function createAppView() {
   });
 
   const loadProjectPath = async (path: string) => {
-    const authority = captureProjectAuthorityIdentity();
     if (!await confirmDiscardProjectChanges(`open ${path}`)) {
       setMessage("Project open canceled.");
       return;
     }
+    const authority = captureProjectAuthorityIdentity();
     try {
       const result = await invoke<ProjectLoadResult>("load_project_path", {
         path,
@@ -16707,11 +16725,11 @@ function createAppView() {
   });
 
   const loadProjectBackup = async (backup: ProjectBackupSummary) => {
-    const authority = captureProjectAuthorityIdentity();
     if (!await confirmDiscardProjectChanges("restore a project backup")) {
       setMessage("Project backup restore canceled.");
       return;
     }
+    const authority = captureProjectAuthorityIdentity();
     try {
       const result = await invoke<ProjectLoadResult>("load_project_backup", {
         backupId: backup.id,
@@ -18954,7 +18972,6 @@ function createAppView() {
       setMessage("Stop the shared Remote listener before rotating the DJ Link token.");
       return;
     }
-    if (!await confirmDialog(rotateDjLinkTokenDialog())) return;
     const operationGeneration = ++djLinkTokenOperationGeneration;
     djLinkMachineRequestGeneration += 1;
     setDjLinkTokenOperationBusy(true);
@@ -21145,9 +21162,6 @@ function createAppView() {
         setLastMediaAssetImportReport(report);
       }
     },
-    confirmMediaAssetAdoption: (assetId, replacementPath) => confirmDialog(
-      adoptMediaReplacementDialog(assetId, replacementPath),
-    ),
     projectTransactionOwnerId,
     videoLabel,
     setVideoLabel,
@@ -22045,7 +22059,7 @@ function createAppView() {
   // Perform MIDI/OSC/DMX targets and beat-division triggers run the same functions the
   // on-screen pad, Take button, selects and FX controls call.
   let audioRuntimeRequestId = 0;
-  const performInputSuspended = () => Boolean(paneWindow) || controlLearnMode() !== null || controlLearnBusy()
+  const performInputSuspended = () => applicationUpdateBusy() || Boolean(paneWindow) || controlLearnMode() !== null || controlLearnBusy()
     || isInAppDialogOpen() || Boolean(document.querySelector("[role='dialog'], dialog[open], [aria-modal='true']"));
   const performDispatcher = createPerformControlDispatcher({
     layers: () => snapshot().video.layers,
@@ -22098,7 +22112,7 @@ function createAppView() {
       audioMappingTargetExists(mapping, snapshot().video.layers, videoEffectCatalog())),
     observation: audioMappingSource.current,
     projectEpoch: () => captureProjectAuthorityIdentity().project_epoch,
-    suspended: () => !isTauriRuntime() || controlLearnMode() !== null || controlLearnBusy()
+    suspended: () => applicationUpdateBusy() || !isTauriRuntime() || controlLearnMode() !== null || controlLearnBusy()
       || isInAppDialogOpen() || document.querySelector("[role='dialog'], dialog[open], [aria-modal='true']") !== null,
     dispatch: input => performDispatcher.dispatch(input),
     dispatchRuntime: (batch, current) => performDispatcher.dispatchAudioRuntime(batch, current),
@@ -23555,7 +23569,7 @@ function createAppView() {
       await executeVideoOutputLeaseSetup(invoke, { kind: "acquire_lease", role: "both" });
       displayAddAuthority = await queryDisplayAddLeaseAuthority(invoke);
     }
-    const lease = selectExactBothLeaseForDisplayAdd(displayAddAuthority);
+    const lease = selectVideoCapableLeaseForDisplay(displayAddAuthority);
     await executeDisplayAddOutputControl(
       invoke,
       {
@@ -23965,7 +23979,7 @@ function createAppView() {
       });
       try {
         const authorityQuery = await queryDisplayAddLeaseAuthority(invoke);
-        const lease = selectExactBothLeaseForDisplayAdd(authorityQuery);
+        const lease = selectVideoCapableLeaseForDisplay(authorityQuery);
         await executeDisplayWindowOutputControl(
           invoke,
           { kind: "set_display_window_open", output_id: outputId, open, lease },
@@ -25388,7 +25402,15 @@ function createAppView() {
     if (untrack(sceneEffectDraftSignature) === null) {
       return options.discardUnsavable ? true : confirmDiscardSceneEffectDraft();
     }
-    void saveSceneEffectDraft({ auto: true });
+    return saveSceneEffectDraft({ auto: true });
+  };
+  const prepareSceneEffectDraftForProjectBoundary = async (): Promise<boolean> => {
+    const savable = sceneEffectDraftSignature() !== null;
+    if (!await flushSceneEffectDraft()) return false;
+    if (savable && sceneEffectDraftDirty()) {
+      setMessage("FX edits changed while saving. Save or discard them before continuing.");
+      return false;
+    }
     return true;
   };
   // The stored FX changed underneath a clean form (Undo/Redo, MIDI/OSC,
@@ -26838,6 +26860,7 @@ function createAppView() {
   });
 
   const handleAppKeyDown = (event: KeyboardEvent) => {
+    if (applicationUpdateBusy()) return;
     // A modal dialog (an in-app confirmation, the protected-close and discard
     // questions, the Perform legend, ...) owns native Tab/Enter/Space/Escape while
     // it is open. None of its keys may fall through to global GO, workspace,
@@ -26922,6 +26945,7 @@ function createAppView() {
   let nativeCloseApproved = false;
   let nativeCloseApprovalResetTimer: number | undefined;
   let protectedCloseCompletionInFlight = false;
+  let protectedCloseFxFlushInFlight = false;
   const PROTECTED_CLOSE_REFRESH_TIMEOUT_MS = 2_000;
   let protectedCloseRefreshInFlight = false;
   let protectedCloseRefreshTimeoutId: number | undefined;
@@ -27255,9 +27279,30 @@ function createAppView() {
           event.preventDefault();
           return;
         }
+        if (protectedCloseFxFlushInFlight) {
+          event.preventDefault();
+          return;
+        }
+        let fxCloseDeferred = false;
+        if (sceneEffectDraftDirty()) {
+          event.preventDefault();
+          fxCloseDeferred = true;
+          protectedCloseFxFlushInFlight = true;
+          try {
+            if (!await prepareSceneEffectDraftForProjectBoundary()) return;
+          } catch (error) {
+            setMessage(String(error));
+            return;
+          } finally {
+            protectedCloseFxFlushInFlight = false;
+          }
+        }
         // Nothing unsaved: close now. Playback or an armed output is stopped
         // by the backend main-window close shutdown, not by a question.
-        if (!closeProtectionRequired()) return;
+        if (!closeProtectionRequired()) {
+          if (fxCloseDeferred) scheduleApprovedNativeClose();
+          return;
+        }
         event.preventDefault();
         const freshSnapshot = await refreshSnapshotForProtectedClose();
         if (closeRequestListenerDisposed) return;

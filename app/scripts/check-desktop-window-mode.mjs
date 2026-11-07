@@ -328,7 +328,14 @@ const assertCorrelatedTimelineCloseControlFlow = (candidate, label) => {
     (expression) => ts.isPrefixUnaryExpression(expression)
       && expression.operator === ts.SyntaxKind.ExclamationToken
       && isCallNamed(unwrapExpression(expression.operand), "closeProtectionRequired"),
-  ) && blockReturnsImmediately(statement.thenStatement));
+  ) && (() => {
+    const body = blockStatements(statement.thenStatement);
+    return body.length === 2
+      && isIfCondition(body[0], (expression) => isIdentifierNamed(expression, "fxCloseDeferred"))
+      && blockStatements(body[0].thenStatement).length === 1
+      && isCallStatement(blockStatements(body[0].thenStatement)[0], "scheduleApprovedNativeClose")
+      && statementIsReturn(body[1]) && body[1].expression === undefined;
+  })());
   const preventBeforeRefreshIndex = statements.findIndex((statement) => isPreventDefaultStatement(statement));
   const refreshIndex = statements.findIndex((statement) => getVariableAwaitingCall(statement, "freshSnapshot", "refreshSnapshotForProtectedClose"));
   assert.ok(approvalIndex === 0, `${label}: an approved close must bypass every remaining CloseRequested branch first`);
@@ -505,7 +512,7 @@ assert.throws(
   /exactly one authoritative/,
   "an earlier duplicate fake publish must not satisfy the authoritative publish ordering while the real publish stays misplaced after the bare return",
 );
-const cleanCloseGuard = "        if (!closeProtectionRequired()) return;\n";
+const cleanCloseGuard = "        if (!closeProtectionRequired()) {\n          if (fxCloseDeferred) scheduleApprovedNativeClose();\n          return;\n        }\n";
 const noCleanCloseGuard = replaceCloseRequestedOnce(app, cleanCloseGuard, "", "removed clean-close guard");
 assert.throws(
   () => assertCorrelatedTimelineCloseControlFlow(noCleanCloseGuard, "removed clean-close guard"),
@@ -1120,9 +1127,9 @@ assert.ok(
   "protected close must use the dedicated console-style visual hierarchy",
 );
 assert.ok(
-  app.includes('const confirmDiscardProjectChanges = (actionLabel: string): Promise<boolean> => {') &&
+  app.includes('const confirmDiscardProjectChanges = async (actionLabel: string): Promise<boolean> => {') &&
     !app.slice(
-      app.indexOf('const confirmDiscardProjectChanges = (actionLabel: string): Promise<boolean> => {'),
+      app.indexOf('const confirmDiscardProjectChanges = async (actionLabel: string): Promise<boolean> => {'),
       app.indexOf('  const applyEngineSnapshot ='),
     ).includes("window.confirm") &&
     appWorkspaceView.includes("data-project-discard-dialog") &&

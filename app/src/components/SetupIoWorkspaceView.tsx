@@ -1,4 +1,5 @@
 import { Show } from "solid-js";
+import "./SyncPanels.css";
 import type { SetupIoWorkspaceViewModel, FrontendViewInvoke } from "../App";
 import {
 channelFunctionDetail,

@@ -650,15 +650,13 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
   const relinquishLease = () => runSelectedLeaseLifecycle("relinquish_output_lease");
 
   return (
-    <section class="standbySyncDesk">
+    <section class="standbySyncDesk syncOutputPanel">
       <header class="ioDeskHeader">
-        <h2 class="textBalance">Active / Standby</h2>
-        <span class="tabularNums">{statusLabel()}</span>
+        <h2 class="textBalance">Output ownership</h2>
+        <Show when={outputEnabled()} fallback={<span class="tabularNums">{ownershipStatus().effective_role} · {ownershipStateLabel(ownershipStatus().state)}</span>}>
+          <span class="outputEnableSuccess" role="status" aria-live="polite">Output enabled</span>
+        </Show>
       </header>
-
-      <p class="textPretty standbyIntro">
-        Replicate complete show checkpoints through a dedicated shared folder. Output ownership stays local to this machine; Standby is fenced before it follows.
-      </p>
 
       <div class="buttonRow outputEnablePrimary">
         <button
@@ -670,8 +668,27 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
         >
           Enable Output
         </button>
-        <small>Enable both lighting and video output in one step.</small>
+        <button data-io-control="standby-output" onClick={() => void changeMachineRole("Standby")}
+          disabled={!props.backendAvailable || busy() || (ownershipStatus().effective_role === "Standby" && ownershipStatus().state === "Ready")}>Standby</button>
       </div>
+      <dl class="syncOutputStatus tabularNums" aria-label="Output state">
+        <div><dt>Lighting output</dt><dd>{ownershipStatus().lighting_allowed ? "Allowed" : "Blocked"}<Show when={!ownershipStatus().lighting_allowed}><span>{ownershipReasonLabel(ownershipStatus().lighting_reason)}</span></Show></dd></div>
+        <div><dt>Video output</dt><dd>{ownershipStatus().video_allowed ? "Allowed" : "Blocked"}<Show when={!ownershipStatus().video_allowed}><span>{ownershipReasonLabel(ownershipStatus().video_reason)}</span></Show></dd></div>
+      </dl>
+        <Show when={props.backendAvailable ? autoOutputStatusMessage(autoOutputStatus()) : null}>
+          {(message) => (
+            <p class="textPretty" role="status" aria-live="polite" data-io-control="auto-output-status">{message()}</p>
+          )}
+        </Show>
+      <Show when={roleError()}>
+        <p class="fieldError textPretty" role="alert" data-io-control="machine-output-role-error">{roleError()}</p>
+      </Show>
+      <Show when={ownershipStatus().error}>
+        <p class="fieldError textPretty" role="alert" aria-live="polite">{ownershipStatus().error}</p>
+      </Show>
+
+      <details class="advancedOutputControls">
+        <summary>Advanced output and lease controls</summary>
       <div class="autoOutputOwnership">
         <label>
           <input
@@ -684,18 +701,9 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
           {" "}{AUTO_OUTPUT_SETTING_LABEL}
         </label>
         <small class="textPretty">{AUTO_OUTPUT_SETTING_HINT}</small>
-        <Show when={props.backendAvailable ? autoOutputStatusMessage(autoOutputStatus()) : null}>
-          {(message) => (
-            <p class="textPretty" role="status" aria-live="polite" data-io-control="auto-output-status">{message()}</p>
-          )}
-        </Show>
-      </div>
-      <Show when={outputEnabled()}>
-        <p class="outputEnableSuccess" role="status" aria-live="polite">Output enabled</p>
-      </Show>
 
-      <details class="advancedOutputControls">
-        <summary>Advanced output and lease controls</summary>
+      </div>
+
       <div class="split">
         <label>
           Machine output role
@@ -711,9 +719,6 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
             <option value="Both">Both</option>
             <option value="Standby">Standby</option>
           </select>
-          <Show when={roleError()}>
-            <span class="fieldError textPretty" role="alert" data-io-control="machine-output-role-error">{roleError()}</span>
-          </Show>
         </label>
         <div class="standbyModeSummary" aria-live="polite">
           <small>Output ownership</small>
@@ -746,21 +751,10 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
           <dd>{ownershipStatus().persisted_role ?? "Not persisted"}</dd>
         </div>
         <div>
-          <dt>Lighting output</dt>
-          <dd>{ownershipStatus().lighting_allowed ? "Allowed" : "Blocked"} — {ownershipReasonLabel(ownershipStatus().lighting_reason)}</dd>
-        </div>
-        <div>
-          <dt>Video output</dt>
-          <dd>{ownershipStatus().video_allowed ? "Allowed" : "Blocked"} — {ownershipReasonLabel(ownershipStatus().video_reason)}</dd>
-        </div>
-        <div>
           <dt>Generation / epoch</dt>
           <dd>{ownershipStatus().generation} / {ownershipStatus().epoch}</dd>
         </div>
       </dl>
-      <Show when={ownershipStatus().error}>
-        <p class="fieldError textPretty" role="alert" aria-live="polite">{ownershipStatus().error}</p>
-      </Show>
 
       <section class="standbyLeasePanel" aria-label="Output lease authority">
         <header class="ioDeskHeader">
@@ -771,9 +765,6 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
               : `${heldLeases().length} held`}
           </span>
         </header>
-        <p class="textPretty">
-          Advanced lease controls expose backend-issued authorities; normal Enable Output creates one exact lighting + video lease atomically.
-        </p>
         <Show when={heldLeases().length > 0} fallback={<p class="inlineWarning">Output lease state is Unavailable.</p>}>
           <div class="standbyStatusGrid tabularNums">
             <For each={heldLeases()}>{(lease) => (
@@ -815,6 +806,9 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
       </section>
       </details>
 
+      <details class="syncFeatureDisclosure" data-sync-disclosure="replication">
+        <summary><h3>Standby sync</h3><span class="syncFeatureState tabularNums">{statusLabel()}</span></summary>
+        <div class="syncFeatureBody">
       <label>
         Shared Folder
         <div class="standbyDirectoryRow">
@@ -828,7 +822,6 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
         </div>
       </label>
 
-      <TakeoverRecordingRow backendAvailable={props.backendAvailable} invokeCommand={props.invokeCommand} />
 
       <div class="split">
         <label>
@@ -873,6 +866,11 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
           <div><dt>Applied</dt><dd>{status().last_applied_generation ?? "—"}</dd></div>
         </dl>
       </Show>
+
+        </div>
+      </details>
+
+      <TakeoverRecordingRow compact backendAvailable={props.backendAvailable} invokeCommand={props.invokeCommand} />
 
       <Show when={status().split_brain}>
         <p class="inlineWarning textPretty">

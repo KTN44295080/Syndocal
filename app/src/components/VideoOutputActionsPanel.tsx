@@ -14,29 +14,26 @@ type VideoOutputActionsPanelProps = {
 
 /** The only routine action exposed for a Display output in Setup. */
 export function VideoOutputActionsPanel(props: VideoOutputActionsPanelProps) {
-  if (props.output.kind !== "Display") return null;
-  const actionUnavailable = props.blocked || props.actualOpen === null;
-  const label = props.busy
+  const actionUnavailable = () => props.blocked || props.actualOpen === null;
+  const label = () => props.busy
     ? props.actualOpen ? "Closing output window…" : "Opening output…"
     : props.actualOpen ? "Close output window" : "Open/Reopen output";
   return (
+    <Show when={props.output.kind === "Display"}>
     <div class="videoOutputActionDock" data-action="display-window">
       <button
         type="button"
         class="primary"
         data-action="set-display-window-open"
-        disabled={actionUnavailable || props.busy}
+        disabled={actionUnavailable() || props.busy}
         aria-busy={props.busy}
         onClick={() => {
           if (props.actualOpen === null) return;
           void props.onToggleWindow(props.output.id, !props.actualOpen);
         }}
       >
-        {label}
+        {label()}
       </button>
-      <small>
-        A native Windows warning may appear when this output targets the editor display.
-      </small>
       <Show when={props.error}>
         {(error) => (
           <div class="videoOutputActionError" role="alert" aria-live="assertive">
@@ -46,5 +43,6 @@ export function VideoOutputActionsPanel(props: VideoOutputActionsPanelProps) {
         )}
       </Show>
     </div>
+    </Show>
   );
 }

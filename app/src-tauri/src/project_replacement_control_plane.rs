@@ -12,7 +12,6 @@ use protocol::control_plane_project::{
     ProjectReplacementOutcomeV1, ProjectReplacementReceiptV1, ProjectReplacementRequestV1,
     ProjectReplacementResponseV1 as Response,
 };
-use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, WebviewWindow};
@@ -268,7 +267,6 @@ pub(super) fn execute_core(
     caller: &str,
     request: ProjectReplacementRequestV1,
     backup_directory: Option<&Path>,
-    confirm: impl FnOnce() -> bool,
     publish: impl FnOnce(PreparedProjectLoad) -> Result<ProjectReplacementAuthorityV1, Error>,
 ) -> Response {
     if request.validate().is_err() {
@@ -343,9 +341,6 @@ pub(super) fn execute_core(
                         }
                         let outcome = (|| {
                             let prepared = prepare(&request, backup_directory)?;
-                            if !confirm() {
-                                return Ok(ProjectReplacementOutcomeV1::Cancelled);
-                            }
                             super::preflight_project_replacement_invocation(state)
                                 .map_err(|error| classify(&error))?;
                             publish(prepared).map(ProjectReplacementOutcomeV1::Applied)
@@ -483,12 +478,6 @@ pub(crate) fn execute_local(
         "local",
         request,
         backup_directory.as_deref(),
-        || {
-            matches!(MessageDialog::new().set_level(MessageLevel::Warning)
-            .set_title("Confirm project replacement")
-            .set_description("Replace the current project and stop its outputs? Save pending edits first.")
-            .set_buttons(MessageButtons::YesNo).set_parent(window).show(), MessageDialogResult::Yes)
-        },
         |prepared| publish(&state, prepared),
     )
 }
@@ -552,7 +541,6 @@ pub(crate) fn execute_external(
             &caller,
             request,
             backup_directory.as_deref(),
-            || true,
             |prepared| publish(&state, prepared),
         ))
     })

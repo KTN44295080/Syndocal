@@ -76,13 +76,11 @@ export function LtcInputPanel(props: LtcInputPanelProps) {
 
   return (
     <section class="ioConnectionDesk ltcInputPanel" data-ltc-input>
-      <header class="ioDeskHeader">
-        <h3 class="textBalance">LTC input</h3>
-        <span class={`ioConnectionState ${running() && status()?.signal ? "ok" : "idle"}`}>
+      <details class="syncFeatureDisclosure" data-sync-disclosure="ltc-input">
+        <summary><h3 class="textBalance">LTC input</h3><span class={`ioConnectionState ${running() && status()?.signal ? "ok" : "idle"}`}>
           <i aria-hidden="true" />{running() ? (status()?.signal ? "Signal" : "No signal") : "Stopped"}
-        </span>
-      </header>
-      <p class="hint">The Timeline follows SMPTE timecode (LTC) on one channel of an audio input.</p>
+        </span></summary>
+        <div class="syncFeatureBody">
       <div class="ltcInputControls">
         <label>
           Audio input
@@ -124,6 +122,9 @@ export function LtcInputPanel(props: LtcInputPanelProps) {
           <button data-io-control="ltc-input-stop" disabled={busy()} onClick={() => void run("stop_ltc_input_v1")}>Stop LTC</button>
         </Show>
       </div>
+        </div>
+      </details>
+      <Show when={running()}>
       <p class="ltcInputState" role="status" aria-live="polite">
         <span>{stateText()}</span>
         <Show when={running() && status()?.timecode}>
@@ -133,8 +134,9 @@ export function LtcInputPanel(props: LtcInputPanelProps) {
           {" · "}<span data-no-localize>{status()?.frame_rate} fps</span>
         </Show>
       </p>
-      <Show when={error()}>
-        <p class="fieldError textPretty" role="alert">{error()}</p>
+      </Show>
+      <Show when={error() ?? status()?.last_error}>
+        <p class="fieldError textPretty" role="alert">{error() ?? status()?.last_error}</p>
       </Show>
     </section>
   );

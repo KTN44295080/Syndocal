@@ -39,7 +39,6 @@ use protocol::control_plane_command::{
     TIMELINE_LOOP_RUNTIME_SHAPE_DOMAIN_V1, TIMELINE_TRANSPORT_RUNTIME_DOMAIN_V1,
     TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID, TIMELINE_TRANSPORT_SET_PLAYING_SHAPE_DOMAIN_V1,
 };
-use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use sha2::{Digest, Sha256};
 use tauri::WebviewWindow;
 
@@ -77,261 +76,15 @@ const SAFETY_BLACKOUT_DOMAIN: &str = "safety.blackout.engage";
 /// sidecar tranche; this bound prevents an in-process memory sink.
 const MAX_SAFETY_AUDIT_RECORDS: usize = 65_536;
 
-/// Advanced output transitions require an OS-owned confirmation that is
-/// parented to the exact local Tauri window.  The ordinary Enable action is a
-/// deliberate one-click local action and must never open this dialog.
-/// Ordinary BO clear also uses its local click plus exact lease/fence.
-pub(crate) fn output_action_requires_native_danger_confirmation(
-    action: &OutputControlActionV2,
-) -> bool {
-    matches!(
-        action,
-        OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. }
-            | OutputControlActionV2::EnableShowSerialDmxSafetyBlackoutRoute { .. }
-            | OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute { .. }
-            | OutputControlActionV2::EnableUsbDmxUniverseRoute { .. }
-            | OutputControlActionV2::StopUsbDmxUniverseRoute { .. }
-            | OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. }
-            | OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { .. }
-            | OutputControlActionV2::EnableShowSpoutOutputs { .. }
-            | OutputControlActionV2::ResetShowSpoutOutputs {}
-            | OutputControlActionV2::Arm { .. }
-            | OutputControlActionV2::TakeOverStandby { .. }
-            | OutputControlActionV2::AssignVideoOutputComposition { .. }
-            | OutputControlActionV2::ForceTransferLease { .. }
-    )
-}
-
-fn native_output_confirmation_copy_for_locale(locale: &str) -> (&'static str, &'static str) {
-    if locale.eq_ignore_ascii_case("ja") || locale.to_ascii_lowercase().starts_with("ja-") {
-        (
-            "出力制御の確認",
-            "この詳細操作は、ライブ出力の所有権または出力状態を変更します。続行しますか？",
-        )
-    } else {
-        (
-            "Confirm output control",
-            "This advanced output operation changes live ownership or output state. Continue?",
-        )
-    }
-}
-
-fn native_output_confirmation_copy_for_editor_target(
-    editor_target: bool,
-) -> (&'static str, &'static str) {
-    let (title, description) = native_output_confirmation_copy();
-    if !editor_target {
-        return (title, description);
-    }
-    if title == "出力制御の確認" {
-        (
-            "エディタ画面への出力確認",
-            "現在の操作画面と同じディスプレイへ映像を出力します。操作画面を覆う可能性があります。続行しますか？",
-        )
-    } else {
-        (
-            "Confirm editor display output",
-            "This output targets the same display as the editor and may cover the control surface. Continue?",
-        )
-    }
-}
-
-fn native_dsf2026_artnet_acceptance_probe_confirmation_copy_for_locale(
-    locale: &str,
-) -> (&'static str, &'static str) {
-    if locale.eq_ignore_ascii_case("ja") || locale.to_ascii_lowercase().starts_with("ja-") {
-        (
-            "DSF2026 Art-Netプローブの確認",
-            "127.0.0.1:6454へ、530バイトの固定ArtDmx U0データグラムを1回だけ送信します。payload[0]とpayload[4]は255、payload[499]は0です。作成済みルートは無効のステージ状態を維持します。これはOSのUDP受付だけを確認し、受信側および物理出力は未確認です。続行しますか？",
-        )
-    } else {
-        (
-            "Confirm DSF2026 Art-Net probe",
-            "Send one fixed 530-byte ArtDmx U0 datagram to 127.0.0.1:6454: payload[0] and payload[4] are 255; payload[499] is 0. The authored route stays staged disabled. This proves OS UDP acceptance only; receiver and physical output remain unverified. Continue?",
-        )
-    }
-}
-
-fn native_dsf2026_artnet_acceptance_probe_confirmation_copy() -> (&'static str, &'static str) {
-    #[cfg(target_os = "windows")]
-    {
-        use windows::Win32::Globalization::GetUserDefaultLocaleName;
-
-        let mut locale = [0u16; 85];
-        let length = unsafe { GetUserDefaultLocaleName(&mut locale) };
-        if length > 1 {
-            if let Ok(locale) = String::from_utf16(&locale[..length as usize - 1]) {
-                return native_dsf2026_artnet_acceptance_probe_confirmation_copy_for_locale(
-                    &locale,
-                );
-            }
-        }
-        native_dsf2026_artnet_acceptance_probe_confirmation_copy_for_locale("en")
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        native_dsf2026_artnet_acceptance_probe_confirmation_copy_for_locale(
-            std::env::var("LANG").as_deref().unwrap_or("en"),
-        )
-    }
-}
-
-fn native_dsf2026_artnet_acceptance_probe_reconcile_confirmation_copy_for_locale(
-    locale: &str,
-) -> (&'static str, &'static str) {
-    if locale.eq_ignore_ascii_case("ja") || locale.to_ascii_lowercase().starts_with("ja-") {
-        (
-            "DSF2026 Art-Netプローブの照合確認",
-            "この操作はArt-Netを送信しません。127.0.0.1:6454への530バイトArtDmx U0プローブについて、受信側と物理出力を独立して確認した後、不観測の結果を恒久的に消費済みとして記録します。再試行や別のプローブを再び許可しません。OSのUDP受付は受信側および物理出力を証明しません。続行しますか？",
-        )
-    } else {
-        (
-            "Confirm DSF2026 Art-Net probe reconciliation",
-            "This action sends no Art-Net. After independently checking the receiver and physical output for the 530-byte ArtDmx U0 probe to 127.0.0.1:6454, it records the unobservable result as permanently consumed. It never re-enables retry or another probe. OS UDP acceptance does not prove receiver or physical output. Continue?",
-        )
-    }
-}
-
-fn native_dsf2026_artnet_acceptance_probe_reconcile_confirmation_copy(
-) -> (&'static str, &'static str) {
-    #[cfg(target_os = "windows")]
-    {
-        use windows::Win32::Globalization::GetUserDefaultLocaleName;
-
-        let mut locale = [0u16; 85];
-        let length = unsafe { GetUserDefaultLocaleName(&mut locale) };
-        if length > 1 {
-            if let Ok(locale) = String::from_utf16(&locale[..length as usize - 1]) {
-                return native_dsf2026_artnet_acceptance_probe_reconcile_confirmation_copy_for_locale(
-                    &locale,
-                );
-            }
-        }
-        native_dsf2026_artnet_acceptance_probe_reconcile_confirmation_copy_for_locale("en")
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        native_dsf2026_artnet_acceptance_probe_reconcile_confirmation_copy_for_locale(
-            std::env::var("LANG").as_deref().unwrap_or("en"),
-        )
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn native_output_confirmation_copy() -> (&'static str, &'static str) {
-    use windows::Win32::Globalization::GetUserDefaultLocaleName;
-
-    let mut locale = [0u16; 85];
-    let length = unsafe { GetUserDefaultLocaleName(&mut locale) };
-    if length > 1 {
-        if let Ok(locale) = String::from_utf16(&locale[..length as usize - 1]) {
-            return native_output_confirmation_copy_for_locale(&locale);
-        }
-    }
-    native_output_confirmation_copy_for_locale("en")
-}
-
-#[cfg(not(target_os = "windows"))]
-fn native_output_confirmation_copy() -> (&'static str, &'static str) {
-    native_output_confirmation_copy_for_locale(std::env::var("LANG").as_deref().unwrap_or("en"))
-}
-
-fn confirm_native_dangerous_output_action(
-    window: &WebviewWindow,
-    action: &OutputControlActionV2,
-) -> bool {
-    if !output_action_requires_native_danger_confirmation(action) {
-        return true;
-    }
-    let editor_target = match action {
-        OutputControlActionV2::AddDisplay { spec, .. } => {
-            super::validate_editor_monitor_for_window(window)
-                .ok()
-                .is_some_and(|index| index == spec.monitor_index)
-        }
-        // SetDisplayWindowOpen is LocalExplicitAction.  Its narrow
-        // editor-target warning is performed by the physical-window core,
-        // after it has resolved the persisted target; non-editor close/open
-        // intentionally has no modal here.
-        OutputControlActionV2::SetDisplayWindowOpen { .. } => false,
-        _ => false,
-    };
-    let (title, description) = match action {
-        OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. } => {
-            native_dsf2026_artnet_acceptance_probe_confirmation_copy()
-        }
-        OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { .. } => {
-            native_dsf2026_artnet_acceptance_probe_reconcile_confirmation_copy()
-        }
-        _ => native_output_confirmation_copy_for_editor_target(editor_target),
-    };
-    matches!(
-        MessageDialog::new()
-            .set_level(MessageLevel::Warning)
-            .set_title(title)
-            .set_description(description)
-            .set_buttons(MessageButtons::YesNo)
-            .set_parent(window)
-            .show(),
-        MessageDialogResult::Yes
-    )
-}
-
-/// Native-only origin, selected by the local command or the authenticated,
+/// Native-only execution origin, selected by the local command or the authenticated,
 /// immutable bridge executor. It is never part of a renderer/wire request.
+/// Local output actions use their explicit click and the same authority checks;
+/// reversible output changes do not open an additional confirmation dialog.
 #[derive(Clone, Copy)]
 pub(crate) enum OutputConfirmationOrigin {
     LocalDesktop,
     AuthenticatedExternalMcp,
     AuthenticatedExternalVideoBlackout,
-}
-
-impl OutputConfirmationOrigin {
-    fn confirm_editor_target<F>(self, confirmation: F) -> bool
-    where
-        F: FnOnce() -> bool,
-    {
-        match self {
-            Self::LocalDesktop => confirmation(),
-            Self::AuthenticatedExternalMcp | Self::AuthenticatedExternalVideoBlackout => true,
-        }
-    }
-}
-
-/// Local desktop opens over the editor require the parented Warning/Yes-No
-/// dialog. Authenticated external execution retains domain admission without
-/// waiting for an additional human confirmation in this deeper physical seam.
-pub(crate) fn confirm_editor_display_window_open(
-    window: &WebviewWindow,
-    origin: OutputConfirmationOrigin,
-) -> bool {
-    origin.confirm_editor_target(|| {
-        let (title, description) = native_output_confirmation_copy_for_editor_target(true);
-        matches!(
-            MessageDialog::new()
-                .set_level(MessageLevel::Warning)
-                .set_title(title)
-                .set_description(description)
-                .set_buttons(MessageButtons::YesNo)
-                .set_parent(window)
-                .show(),
-            MessageDialogResult::Yes
-        )
-    })
-}
-
-fn output_confirmation_gate<F>(
-    action: &OutputControlActionV2,
-    confirmation: &F,
-) -> Result<(), OutputControlErrorCodeV2>
-where
-    F: Fn(&OutputControlActionV2) -> bool,
-{
-    if output_action_requires_native_danger_confirmation(action) && !confirmation(action) {
-        Err(OutputControlErrorCodeV2::Forbidden)
-    } else {
-        Ok(())
-    }
 }
 
 /// Label-only variant used by the asynchronous Tauri query wrapper. The
@@ -371,14 +124,14 @@ pub(crate) fn execute_output_control(
             request,
         );
     }
-    execute_output_control_with_confirmation(
+    execute_output_control_authorized(
         app,
         window,
         state,
         query_state,
         request,
         OutputConfirmationOrigin::LocalDesktop,
-        |action| confirm_native_dangerous_output_action(window, action),
+        &|| Ok(()),
     )
 }
 
@@ -405,11 +158,11 @@ pub(crate) fn execute_external_output_control(
         | OutputControlActionV2::ReplaceVideoAuthoringLease { .. }
         | OutputControlActionV2::RelinquishOutputLease { .. }
         | OutputControlActionV2::ForceTransferLease { .. } => execute_output_lease_lifecycle_authorized(
-            app, window, state, query_state, operation_id, request, |_| true, authorize,
+            app, window, state, query_state, operation_id, request, authorize,
         ),
         OutputControlActionV2::ResetShowSpoutOutputs {} =>
             execute_show_spout_reset_without_lease_control_authorized(
-                state, query_state, window.label(), request, |_| true, authorize,
+                state, query_state, window.label(), request, authorize,
             ),
         _ => execute_output_control_authorized(
             app,
@@ -418,7 +171,6 @@ pub(crate) fn execute_external_output_control(
             query_state,
             request,
             OutputConfirmationOrigin::AuthenticatedExternalMcp,
-            |_| true,
             authorize,
         ),
     }
@@ -439,7 +191,7 @@ pub(crate) fn execute_external_video_blackout(
     }
     execute_output_control_authorized(
         app, window, state, query_state, request,
-        OutputConfirmationOrigin::AuthenticatedExternalVideoBlackout, |_| true, authorize,
+        OutputConfirmationOrigin::AuthenticatedExternalVideoBlackout, authorize,
     )
 }
 
@@ -453,46 +205,18 @@ fn execute_show_spout_reset_without_lease_control(
     query_state: &ControlPlaneQueryState,
     request: OutputControlCommandRequestV2,
 ) -> OutputControlResponseV2 {
-    execute_show_spout_reset_without_lease_control_with_confirmation(
-        state,
-        query_state,
-        window.label(),
-        request,
-        |action| confirm_native_dangerous_output_action(window, action),
-    )
-}
-
-/// Production body for the payloadless local Reset. Keeping the native dialog
-/// as an injected closure lets tests exercise the real receipt/fence/audit
-/// path deterministically without fabricating a WebviewWindow. The public
-/// Tauri seam above is the only non-test caller and always supplies the
-/// parented OS Yes/No confirmation.
-fn execute_show_spout_reset_without_lease_control_with_confirmation<F>(
-    state: &AppState,
-    query_state: &ControlPlaneQueryState,
-    window_label: &str,
-    request: OutputControlCommandRequestV2,
-    confirmation: F,
-) -> OutputControlResponseV2
-where
-    F: Fn(&OutputControlActionV2) -> bool,
-{
     execute_show_spout_reset_without_lease_control_authorized(
-        state, query_state, window_label, request, confirmation, &|| Ok(()),
+        state, query_state, window.label(), request, &|| Ok(()),
     )
 }
 
-fn execute_show_spout_reset_without_lease_control_authorized<F>(
+fn execute_show_spout_reset_without_lease_control_authorized(
     state: &AppState,
     query_state: &ControlPlaneQueryState,
     window_label: &str,
     request: OutputControlCommandRequestV2,
-    confirmation: F,
     authorize: &dyn Fn() -> Result<(), OutputControlErrorCodeV2>,
-) -> OutputControlResponseV2
-where
-    F: Fn(&OutputControlActionV2) -> bool,
-{
+) -> OutputControlResponseV2 {
     if let Err(code) = authorize() {
         return output_control_rejection(&request, code);
     }
@@ -581,14 +305,6 @@ where
             key,
             shape_sha256,
             output_control_rejection(&request, OutputControlErrorCodeV2::StaleFence),
-        );
-    }
-    if output_confirmation_gate(&request.action, &confirmation).is_err() {
-        return retain_output_control_rejection(
-            state,
-            key,
-            shape_sha256,
-            output_control_rejection(&request, OutputControlErrorCodeV2::Forbidden),
         );
     }
     if capture_binding(state, window_label).ok().as_ref() != Some(&binding) {
@@ -692,58 +408,30 @@ where
 }
 
 #[cfg(all(test, feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-pub(crate) fn execute_show_spout_reset_without_lease_control_for_test<F>(
+pub(crate) fn execute_show_spout_reset_without_lease_control_for_test(
     state: &AppState,
     query_state: &ControlPlaneQueryState,
     window_label: &str,
     request: OutputControlCommandRequestV2,
-    confirmation: F,
-) -> OutputControlResponseV2
-where
-    F: Fn(&OutputControlActionV2) -> bool,
-{
-    execute_show_spout_reset_without_lease_control_with_confirmation(
-        state,
-        query_state,
-        window_label,
-        request,
-        confirmation,
-    )
-}
-
-fn execute_output_control_with_confirmation<F>(
-    app: &tauri::AppHandle,
-    window: &WebviewWindow,
-    state: &AppState,
-    query_state: &ControlPlaneQueryState,
-    request: OutputControlCommandRequestV2,
-    confirmation_origin: OutputConfirmationOrigin,
-    confirmation: F,
-) -> OutputControlResponseV2
-where
-    F: Fn(&OutputControlActionV2) -> bool,
-{
-    execute_output_control_authorized(
-        app, window, state, query_state, request, confirmation_origin, confirmation, &|| Ok(()),
-    )
-}
-
-fn execute_output_control_authorized<F>(
-    app: &tauri::AppHandle,
-    window: &WebviewWindow,
-    state: &AppState,
-    query_state: &ControlPlaneQueryState,
-    request: OutputControlCommandRequestV2,
-    confirmation_origin: OutputConfirmationOrigin,
-    confirmation: F,
     authorize: &dyn Fn() -> Result<(), OutputControlErrorCodeV2>,
-) -> OutputControlResponseV2
-where
-    F: Fn(&OutputControlActionV2) -> bool,
-{
-    // Capture before confirmation/lock waits, but acquire publication only
+) -> OutputControlResponseV2 {
+    execute_show_spout_reset_without_lease_control_authorized(
+        state, query_state, window_label, request, authorize,
+    )
+}
+
+fn execute_output_control_authorized(
+    app: &tauri::AppHandle,
+    window: &WebviewWindow,
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    request: OutputControlCommandRequestV2,
+    confirmation_origin: OutputConfirmationOrigin,
+    authorize: &dyn Fn() -> Result<(), OutputControlErrorCodeV2>,
+) -> OutputControlResponseV2 {
+    // Capture before lock waits, but acquire publication only
     // after dropping domain locks. Denying lifecycle boundaries invalidate
-    // queued Arm/Enable, including durable replay, without waiting on a dialog.
+    // queued Arm/Enable, including durable replay, without waiting on other work.
     let role_ticket = matches!(&request.action,
         OutputControlActionV2::EnableOutput | OutputControlActionV2::Arm { .. })
         .then(|| state.output_role_ordering.capture());
@@ -925,7 +613,7 @@ where
         );
     }
     {
-        let _preconfirmation_external_admission =
+        let _preadmission_external_admission =
             match lock_project_external_command_admission(state) {
                 Ok(guard) => guard,
                 Err(_) => {
@@ -937,7 +625,7 @@ where
                     );
                 }
             };
-        let mut preconfirmation_coordinator = match lock_project_coordinator(state) {
+        let mut preadmission_coordinator = match lock_project_coordinator(state) {
             Ok(coordinator) => coordinator,
             Err(_) => {
                 return retain_output_control_rejection(
@@ -948,14 +636,14 @@ where
                 );
             }
         };
-        if reconcile_project_checkpoint_for_coordinator(state, &mut preconfirmation_coordinator)
+        if reconcile_project_checkpoint_for_coordinator(state, &mut preadmission_coordinator)
             .is_err()
             || !exact_output_control_fence_matches(
                 state,
-                &preconfirmation_coordinator,
+                &preadmission_coordinator,
                 &request.expected_fence,
             )
-            || ensure_no_pending_project_transaction(&preconfirmation_coordinator).is_err()
+            || ensure_no_pending_project_transaction(&preadmission_coordinator).is_err()
         {
             return retain_output_control_rejection(
                 state,
@@ -966,7 +654,7 @@ where
         }
         if ensure_project_operator_video_clip_slot_runtime_allowed(
             state,
-            &preconfirmation_coordinator,
+            &preadmission_coordinator,
             &binding.principal,
         )
         .is_err()
@@ -979,21 +667,8 @@ where
             );
         }
     }
-    // Replay is resolved before prompting so a lost-reply retry returns the
-    // durable terminal receipt without showing the native dialog again.  A
-    // cancelled/closed dialog exits before admission, lease work, or engine
-    // publication; the fence and window are revalidated immediately after it.
+    // Revalidate the owner across lock handoff before admission and mutation.
     drop(owner_rotation);
-    if let Err(code) = output_confirmation_gate(&request.action, &confirmation) {
-        let response = output_control_rejection(&request, code);
-        state.runtime_control_plane.store_output_control_terminal(
-            key,
-            shape_sha256,
-            response.clone(),
-            Instant::now(),
-        );
-        return response;
-    }
     // Owner rotation is an ABA guard for capture/revalidation, not a mutex
     // around native shell creation, GPU setup, engine ACK, or durable commit.
     // Holding it across that physical lane makes the synchronous authority
@@ -1501,7 +1176,6 @@ where
                 expected_owner_window_label: &binding.window_label,
                 expected_owner_incarnation: binding.owner_incarnation,
                 managed_terminal_identity: Some(managed_terminal_identity),
-                confirmation_origin,
             },
         ),
         OutputControlActionV2::AssignVideoOutputComposition {
@@ -2316,47 +1990,26 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
     expected_operation_id: &'static str,
     request: OutputControlCommandRequestV2,
 ) -> OutputControlResponseV2 {
-    execute_output_lease_lifecycle_with_confirmation(
+    execute_output_lease_lifecycle_authorized(
         app,
         window,
         state,
         query_state,
         expected_operation_id,
         request,
-        |action| confirm_native_dangerous_output_action(window, action),
+        &|| Ok(()),
     )
 }
 
-fn execute_output_lease_lifecycle_with_confirmation<F>(
+fn execute_output_lease_lifecycle_authorized(
     app: &tauri::AppHandle,
     window: &WebviewWindow,
     state: &AppState,
     query_state: &ControlPlaneQueryState,
     expected_operation_id: &'static str,
     request: OutputControlCommandRequestV2,
-    confirmation: F,
-) -> OutputControlResponseV2
-where
-    F: Fn(&OutputControlActionV2) -> bool,
-{
-    execute_output_lease_lifecycle_authorized(
-        app, window, state, query_state, expected_operation_id, request, confirmation, &|| Ok(()),
-    )
-}
-
-fn execute_output_lease_lifecycle_authorized<F>(
-    app: &tauri::AppHandle,
-    window: &WebviewWindow,
-    state: &AppState,
-    query_state: &ControlPlaneQueryState,
-    expected_operation_id: &'static str,
-    request: OutputControlCommandRequestV2,
-    confirmation: F,
     authorize: &dyn Fn() -> Result<(), OutputControlErrorCodeV2>,
-) -> OutputControlResponseV2
-where
-    F: Fn(&OutputControlActionV2) -> bool,
-{
+) -> OutputControlResponseV2 {
     if let Err(code) = authorize() {
         return output_control_rejection(&request, code);
     }
@@ -2495,7 +2148,7 @@ where
             output_control_rejection(&request, OutputControlErrorCodeV2::Forbidden),
         );
     }
-    let confirmation_lease = if managed_lifecycle_lease_id.is_none() {
+    let preflight_lease = if managed_lifecycle_lease_id.is_none() {
         match build_output_lease_lifecycle_request(state, &binding, &request) {
             Ok(request) => Some(request),
             Err(_) => {
@@ -2510,8 +2163,8 @@ where
     } else {
         None
     };
-    if let Some((confirmation_lease_request, confirmation_lease_now_ms)) =
-        confirmation_lease.as_ref()
+    if let Some((preflight_lease_request, preflight_lease_now_ms)) =
+        preflight_lease.as_ref()
     {
         let registry = match state.output_lease_registry.lock() {
             Ok(registry) => registry,
@@ -2525,7 +2178,7 @@ where
             }
         };
         if let Err(error) =
-            registry.preflight_request(confirmation_lease_request, *confirmation_lease_now_ms)
+            registry.preflight_request(preflight_lease_request, *preflight_lease_now_ms)
         {
             return retain_output_control_rejection(
                 state,
@@ -2536,7 +2189,7 @@ where
         }
     }
     {
-        let _preconfirmation_external_admission =
+        let _preadmission_external_admission =
             match lock_project_external_command_admission(state) {
                 Ok(guard) => guard,
                 Err(_) => {
@@ -2548,7 +2201,7 @@ where
                     );
                 }
             };
-        let mut preconfirmation_coordinator = match lock_project_coordinator(state) {
+        let mut preadmission_coordinator = match lock_project_coordinator(state) {
             Ok(coordinator) => coordinator,
             Err(_) => {
                 return retain_output_control_rejection(
@@ -2559,17 +2212,17 @@ where
                 );
             }
         };
-        if reconcile_project_checkpoint_for_coordinator(state, &mut preconfirmation_coordinator)
+        if reconcile_project_checkpoint_for_coordinator(state, &mut preadmission_coordinator)
             .is_err()
             || !exact_output_control_fence_matches(
                 state,
-                &preconfirmation_coordinator,
+                &preadmission_coordinator,
                 &request.expected_fence,
             )
-            || ensure_no_pending_project_transaction(&preconfirmation_coordinator).is_err()
+            || ensure_no_pending_project_transaction(&preadmission_coordinator).is_err()
             || ensure_project_operator_video_clip_slot_runtime_allowed(
                 state,
-                &preconfirmation_coordinator,
+                &preadmission_coordinator,
                 &binding.principal,
             )
             .is_err()
@@ -2583,16 +2236,6 @@ where
         }
     }
     drop(owner_rotation);
-    if let Err(code) = output_confirmation_gate(&request.action, &confirmation) {
-        let response = output_control_rejection(&request, code);
-        state.runtime_control_plane.store_output_control_terminal(
-            key,
-            shape_sha256,
-            response.clone(),
-            Instant::now(),
-        );
-        return response;
-    }
     let _owner_rotation = match state.project_transaction_owner_rotation.lock() {
         Ok(guard) => guard,
         Err(_) => {
@@ -6967,112 +6610,6 @@ mod tests {
     }
 
     #[test]
-    fn native_danger_confirmation_copy_follows_the_os_locale() {
-        assert_eq!(
-            native_output_confirmation_copy_for_locale("ja-JP"),
-            (
-                "出力制御の確認",
-                "この詳細操作は、ライブ出力の所有権または出力状態を変更します。続行しますか？",
-            )
-        );
-        assert_eq!(
-            native_output_confirmation_copy_for_locale("en-US"),
-            (
-                "Confirm output control",
-                "This advanced output operation changes live ownership or output state. Continue?",
-            )
-        );
-    }
-
-    #[test]
-    fn dsf2026_probe_confirmation_copy_states_the_exact_os_only_boundary() {
-        for locale in ["en-US", "ja-JP"] {
-            let (title, body) =
-                native_dsf2026_artnet_acceptance_probe_confirmation_copy_for_locale(locale);
-            assert!(title.contains("DSF2026"));
-            for required in [
-                "127.0.0.1:6454",
-                "530",
-                "payload[0]",
-                "payload[4]",
-                "payload[499]",
-            ] {
-                assert!(
-                    body.contains(required),
-                    "{locale} confirmation omitted {required}"
-                );
-            }
-            assert!(
-                body.contains("staged disabled") || body.contains("無効のステージ状態"),
-                "{locale} confirmation must state the disabled staged-route boundary"
-            );
-            assert!(
-                body.contains("physical output remain unverified")
-                    || body.contains("物理出力は未確認"),
-                "{locale} confirmation must not overclaim physical acceptance"
-            );
-        }
-    }
-
-    #[test]
-    fn dsf2026_probe_reconcile_confirmation_copy_is_explicitly_no_send() {
-        for locale in ["en-US", "ja-JP"] {
-            let (title, body) =
-                native_dsf2026_artnet_acceptance_probe_reconcile_confirmation_copy_for_locale(
-                    locale,
-                );
-            assert!(title.contains("DSF2026"));
-            assert!(
-                body.contains("sends no Art-Net") || body.contains("Art-Netを送信しません"),
-                "{locale} reconciliation copy must promise no packet"
-            );
-            assert!(body.contains("127.0.0.1:6454"));
-            assert!(body.contains("530"));
-            assert!(
-                body.contains("permanently consumed") || body.contains("恒久的に消費済み"),
-                "{locale} reconciliation must state that an unobservable result is consumed"
-            );
-            assert!(
-                body.contains("never re-enables retry")
-                    || body.contains("再試行や別のプローブを再び許可しません"),
-                "{locale} reconciliation must never promise another send"
-            );
-            assert!(
-                body.contains("physical output") || body.contains("物理出力"),
-                "{locale} reconciliation must require physical verification"
-            );
-        }
-    }
-
-    #[test]
-    fn editor_display_confirmation_copy_is_distinct_from_ordinary_output_copy() {
-        let ordinary = native_output_confirmation_copy_for_editor_target(false);
-        let editor = native_output_confirmation_copy_for_editor_target(true);
-        assert_ne!(ordinary, editor);
-        assert!(editor.0.contains("editor") || editor.0.contains("エディタ"));
-        assert!(editor.1.contains("display") || editor.1.contains("ディスプレイ"));
-    }
-
-    #[test]
-    fn editor_display_confirmation_respects_native_origin_and_local_cancellation() {
-        let calls = std::cell::Cell::new(0);
-        for answer in [false, true] {
-            assert_eq!(
-                OutputConfirmationOrigin::LocalDesktop.confirm_editor_target(|| {
-                    calls.set(calls.get() + 1);
-                    answer
-                }),
-                answer,
-            );
-        }
-        assert_eq!(calls.get(), 2);
-        assert!(OutputConfirmationOrigin::AuthenticatedExternalMcp.confirm_editor_target(|| {
-            panic!("authenticated external Display open must not invoke the OS dialog")
-        }));
-        assert_eq!(calls.get(), 2);
-    }
-
-    #[test]
     fn renderer_display_action_cannot_supply_confirmation_origin_or_bypass() {
         let action = OutputControlActionV2::SetDisplayWindowOpen {
             output_id: 1,
@@ -7093,132 +6630,7 @@ mod tests {
     }
 
     #[test]
-    fn native_danger_confirmation_gate_is_exact_and_terminal_replay_is_dialog_free() {
-        let calls = std::sync::atomic::AtomicUsize::new(0);
-        let deny = |_: &OutputControlActionV2| {
-            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            false
-        };
-        assert!(output_confirmation_gate(&OutputControlActionV2::EnableOutput, &deny).is_ok());
-        for target in [
-            protocol::control_plane_command::OutputControlTargetRoleV1::Lighting,
-            protocol::control_plane_command::OutputControlTargetRoleV1::Video,
-            protocol::control_plane_command::OutputControlTargetRoleV1::Both,
-        ] {
-            for enabled in [false, true] {
-                assert!(output_confirmation_gate(
-                    &OutputControlActionV2::SetBlackout {
-                        target,
-                        enabled,
-                        lease: OutputLeaseAuthorityV1 {
-                            lease_id: "lease-0000000000000001".to_string(),
-                            generation: 1,
-                        },
-                    },
-                    &deny
-                )
-                .is_ok());
-            }
-        }
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
-
-        assert!(output_confirmation_gate(
-            &OutputControlActionV2::ReleaseBlackout {
-                lease: OutputLeaseAuthorityV1 {
-                    lease_id: "lease-0000000000000001".to_string(),
-                    generation: 1
-                }
-            },
-            &deny
-        )
-        .is_ok());
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
-
-        let dangerous = OutputControlActionV2::Arm {
-            role: protocol::control_plane_command::OutputControlTargetRoleV1::Both,
-            lease: OutputLeaseAuthorityV1 {
-                lease_id: "lease-0000000000000001".to_string(),
-                generation: 1,
-            },
-        };
-        assert_eq!(
-            output_confirmation_gate(&dangerous, &deny),
-            Err(OutputControlErrorCodeV2::Forbidden)
-        );
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-
-        let show_artnet_route = OutputControlActionV2::EnableShowArtNetLoopbackRoute {
-            lease: OutputLeaseAuthorityV1 {
-                lease_id: "lease-0000000000000001".to_string(),
-                generation: 1,
-            },
-        };
-        assert_eq!(
-            output_confirmation_gate(&show_artnet_route, &deny),
-            Err(OutputControlErrorCodeV2::Forbidden),
-            "the Art-Net loopback show route can never bypass the local native R4 confirmation"
-        );
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
-
-        let show_serial_stop = OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute {
-            lease: OutputLeaseAuthorityV1 {
-                lease_id: "lease-0000000000000001".to_string(),
-                generation: 1,
-            },
-        };
-        assert_eq!(
-            output_confirmation_gate(&show_serial_stop, &deny),
-            Err(OutputControlErrorCodeV2::Forbidden),
-            "the USB-DMX stop action is canonical dangerous output control and cannot bypass the local native confirmation"
-        );
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
-
-        let dsf2026_probe = OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe {
-            lease: OutputLeaseAuthorityV1 {
-                lease_id: "lease-0000000000000001".to_string(),
-                generation: 1,
-            },
-        };
-        assert_eq!(
-            output_confirmation_gate(&dsf2026_probe, &deny),
-            Err(OutputControlErrorCodeV2::Forbidden),
-            "the fixed DSF2026 one-shot probe can never bypass local native R4 confirmation"
-        );
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 4);
-
-        let dsf2026_reconcile =
-            OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt {
-                lease: OutputLeaseAuthorityV1 {
-                    lease_id: "lease-0000000000000001".to_string(),
-                    generation: 1,
-                },
-            };
-        assert_eq!(
-            output_confirmation_gate(&dsf2026_reconcile, &deny),
-            Err(OutputControlErrorCodeV2::Forbidden),
-            "the no-send DSF2026 reconciliation still requires local native R4 confirmation"
-        );
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 5);
-
-        let show_spout_reset = OutputControlActionV2::ResetShowSpoutOutputs {};
-        assert_eq!(
-            output_confirmation_gate(&show_spout_reset, &deny),
-            Err(OutputControlErrorCodeV2::Forbidden),
-            "payloadless show Spout Reset still requires the parented native Yes confirmation"
-        );
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 6);
-
-        let accept_calls = std::sync::atomic::AtomicUsize::new(0);
-        let accept = |_: &OutputControlActionV2| {
-            accept_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            true
-        };
-        assert!(output_confirmation_gate(&dangerous, &accept).is_ok());
-        assert_eq!(accept_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-
-        // A cancelled operation is retained as a terminal Forbidden result;
-        // an exact retry therefore returns without invoking confirmation or
-        // entering any engine/lease mutation path.
+    fn output_control_terminal_rejection_replay_is_exact() {
         let state = RuntimeControlPlaneState::default();
         let binding = test_binding("dialog-replay", "main", 3);
         let key = test_output_key(
@@ -7245,11 +6657,6 @@ mod tests {
         let cancelled = test_output_rejection(&key, OutputControlErrorCodeV2::Forbidden);
         state.store_output_control_terminal(key.clone(), shape.clone(), cancelled.clone(), now);
 
-        let retry_calls = std::sync::atomic::AtomicUsize::new(0);
-        let retry_confirmation = |_: &OutputControlActionV2| {
-            retry_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            panic!("terminal retry must not prompt");
-        };
         state
             .reserve_output_control_request_identity(
                 &binding,
@@ -7267,8 +6674,6 @@ mod tests {
             state.recheck_output_control_terminal(&key, &shape, now),
             Some(OutputControlLaneReservation::Terminal(response)) if response == cancelled
         ));
-        let _ = retry_confirmation;
-        assert_eq!(retry_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -7621,69 +7026,6 @@ mod tests {
             result.changes[0].after_phase,
             Some(OutputLeaseReceiptPhaseV2::HeldOrphaned)
         );
-    }
-
-    #[test]
-    fn output_authoring_never_requests_an_additional_confirmation() {
-        use protocol::control_plane_command::{
-            DisplayOutputSpecV2, ExternalVideoOutputSpecV2, VideoOutputConfigurationV2,
-        };
-        let lease = OutputLeaseAuthorityV1 {
-            lease_id: "lease-0000000000000001".to_string(),
-            generation: 1,
-        };
-        let actions = [
-            OutputControlActionV2::AddDisplay {
-                spec: DisplayOutputSpecV2 {
-                    label: "Display".to_string(),
-                    monitor_identity: "a".repeat(64),
-                    monitor_index: 0,
-                    width: 1920,
-                    height: 1080,
-                    fullscreen: true,
-                },
-                lease: lease.clone(),
-            },
-            OutputControlActionV2::AddExternalOutput {
-                spec: ExternalVideoOutputSpecV2 {
-                    kind: protocol::VideoOutputKind::SpoutSender,
-                    label: "Video".to_string(),
-                    width: 1920,
-                    height: 1080,
-                    endpoint_name: "Syndocal Main".to_string(),
-                    composition_id: 1,
-                },
-                lease: lease.clone(),
-            },
-            OutputControlActionV2::ConfigureVideoOutput {
-                output_id: 1,
-                spec: VideoOutputConfigurationV2 {
-                    kind: protocol::VideoOutputKind::SpoutSender,
-                    label: "Video".to_string(),
-                    width: 1280,
-                    height: 720,
-                    fullscreen: false,
-                    monitor_index: None,
-                    monitor_identity: None,
-                    endpoint_name: Some("Syndocal Main".to_string()),
-                },
-                lease: lease.clone(),
-            },
-            OutputControlActionV2::RemoveVideoOutput {
-                output_id: 1,
-                lease,
-            },
-        ];
-        for action in actions {
-            action.validate().unwrap();
-            let calls = std::cell::Cell::new(0);
-            let result = output_confirmation_gate(&action, &|_| {
-                calls.set(calls.get() + 1);
-                false
-            });
-            assert_eq!(result, Ok(()));
-            assert_eq!(calls.get(), 0, "authoring must use the original explicit click");
-        }
     }
 
     #[test]

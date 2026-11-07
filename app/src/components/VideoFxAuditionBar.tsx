@@ -1,4 +1,4 @@
-import { createEffect, createSignal, on, Show } from "solid-js";
+import { Show } from "solid-js";
 import type { FxAuditionSession } from "../createFxAuditionSession";
 import { translateUiText } from "../uiLocalization";
 import "./VideoFxAuditionBar.css";
@@ -24,13 +24,11 @@ export interface VideoFxAuditionBarProps {
   locale?: string;
 }
 
-/** Preview-only audition controls. Program changes only through the confirmed Take. */
+/** Preview-only audition controls. Program changes only through the explicit Take action. */
 export function VideoFxAuditionBar(props: VideoFxAuditionBarProps) {
-  const [confirmTake, setConfirmTake] = createSignal(false);
   const state = () => props.session?.active(props.layerId) ?? null;
   const locale = () => props.locale === "ja" ? "ja" : "en";
   const t = (text: string) => translateUiText(text, locale());
-  createEffect(on(() => [props.layerId, state()?.draft, state()?.side, state()?.stale], () => setConfirmTake(false), { defer: true }));
   const problem = () => {
     const value = state();
     const error = props.session?.error();
@@ -63,13 +61,8 @@ export function VideoFxAuditionBar(props: VideoFxAuditionBarProps) {
             </div>
             <div class="videoFxAuditionActions">
               <button type="button" data-fx-audition-undo disabled={!props.session!.canUndo()} onClick={() => void props.session!.undo()}>Undo audition edit</button>
-              <Show when={confirmTake()} fallback={
-                <button type="button" class="primary" data-fx-audition-take disabled={Boolean(value().stale) || props.session!.busy()} onClick={() => setConfirmTake(true)}>Take to Program</button>
-              }>
-                <button type="button" class="danger" data-fx-audition-take-confirm disabled={Boolean(value().stale) || props.session!.busy()}
-                  onClick={() => { setConfirmTake(false); void props.session!.take(); }}>Confirm: apply to Program now</button>
-                <button type="button" data-fx-audition-take-cancel onClick={() => setConfirmTake(false)}>Cancel</button>
-              </Show>
+              <button type="button" class="primary" data-fx-audition-take disabled={Boolean(value().stale) || props.session!.busy()}
+                onClick={() => void props.session!.take()}>Take to Program</button>
               <button type="button" data-fx-audition-discard disabled={props.session!.busy()} onClick={() => void props.session!.discard()}>Discard</button>
             </div>
             <Show when={problem()}><p class="videoFxAuditionProblem" role="alert" data-no-localize>{problem()}</p></Show>

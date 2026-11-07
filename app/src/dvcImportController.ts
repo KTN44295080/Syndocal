@@ -35,11 +35,11 @@ export function createDvcImportController<AppliedResult>(
     if (options.daslightProjectImportBusy()) {
       return;
     }
-    const authority = options.captureProjectAuthorityIdentity();
     if (!await options.confirmDiscardProjectChanges("import a Daslight Project (.dvc)")) {
       options.setMessage("Daslight Project import canceled.");
       return;
     }
+    const authority = options.captureProjectAuthorityIdentity();
     options.setDaslightProjectImportBusy(true);
     options.setMessage("Importing Daslight Project...", "daslight-project-import-busy");
     try {

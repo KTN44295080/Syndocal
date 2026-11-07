@@ -264,3 +264,11 @@ lease" until a lighting + video lease is held — the Advanced lease control
 derives its role from the machine role, so choosing Both there would also
 change the machine role; the plain "Enable Output" path takes both outputs
 (DMX included). Driver scripts: `target/qa/native-walk-20261106/scripts/`.
+
+**Superseded control limitation (2026-11-07):** the subsequent
+[output-control/Sync/I/O checkpoint](OUTPUT_CONTROL_UI_IO_2026-11-07.md)
+allows Display Add/Open/Close with the exact Video-only lease and removes the
+routine native output/editor-display confirmation. The new native QA run used
+the UI while lighting stayed blocked; the workaround above is historical.
+The checkpoint records virtual MIDI, zero-only COM5 and NDI/Spout results,
+and the still-failing 60fps boundary.

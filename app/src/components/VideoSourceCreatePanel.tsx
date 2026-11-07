@@ -87,7 +87,7 @@ export function VideoSourceCreatePanel(props: VideoSourceCreatePanelProps) {
             </label>
             <Show when={props.sourceKind === "ScreenCapture"}>
               <p class="fieldHint" data-screen-capture-contract>
-                Screen capture uses a separate truthful 1280x720 / 30fps path. Leave Display source blank for the primary desktop.
+                1280x720 / 30fps. Blank source: primary desktop.
               </p>
             </Show>
           </>

@@ -368,15 +368,16 @@ const queryDisplayAdd = (response) => controllerRuntime.queryDisplayAddLeaseAuth
     return response;
   },
 );
-for (const status of ["held_active", "expired_recoverable", "held_orphaned"]) {
+for (const resources of [["video"], ["lighting", "video"]]) for (const status of ["held_active", "expired_recoverable", "held_orphaned"]) {
   const parsed = await queryDisplayAdd({
     operationId: displayAddOperationId,
     status,
     authority: displayAddAuthority,
-    resources: ["lighting", "video"],
+    resources,
   });
   assert.equal(parsed.status, status);
-  assert.deepEqual(controllerRuntime.selectExactBothLeaseForDisplayAdd(parsed), displayAddAuthority);
+  assert.deepEqual(parsed.resources, resources);
+  assert.deepEqual(controllerRuntime.selectVideoCapableLeaseForDisplay(parsed), displayAddAuthority);
 }
 const unavailable = await queryDisplayAdd({
   operationId: displayAddOperationId,
@@ -385,11 +386,12 @@ const unavailable = await queryDisplayAdd({
   resources: [],
 });
 assert.equal(unavailable.authority, null);
-assert.throws(() => controllerRuntime.selectExactBothLeaseForDisplayAdd(unavailable), /active or recoverable Both/);
+assert.throws(() => controllerRuntime.selectVideoCapableLeaseForDisplay(unavailable), /active or recoverable Video-capable/);
 for (const invalid of [
   { operationId: displayAddOperationId, status: "unknown", authority: displayAddAuthority, resources: ["lighting", "video"] },
   { operationId: displayAddOperationId, status: "held_active", authority: null, resources: ["lighting", "video"] },
   { operationId: displayAddOperationId, status: "held_active", authority: displayAddAuthority, resources: [] },
+  { operationId: displayAddOperationId, status: "held_active", authority: displayAddAuthority, resources: ["lighting"] },
   { operationId: displayAddOperationId, status: "held_active", authority: displayAddAuthority, resources: ["video", "lighting"] },
   { operationId: displayAddOperationId, status: "unavailable", authority: displayAddAuthority, resources: [] },
   { operationId: displayAddOperationId, status: "unavailable", authority: null, resources: ["lighting", "video"] },
@@ -534,7 +536,7 @@ const runtimeAddAction = (lease = runtimeLease) => ({
   },
   lease,
 });
-const runtimeAddReceipt = (requestId) => ({
+const runtimeAddReceipt = (requestId, resources = ["lighting", "video"]) => ({
   type: "receipt",
   receipt: {
     operation_id: "syndocal.output.display.add.v2",
@@ -547,7 +549,7 @@ const runtimeAddReceipt = (requestId) => ({
     outcome: "applied",
     lease_result: {
       authority: { ...runtimeLease, generation: runtimeLease.generation + 1 },
-      resources: ["lighting", "video"],
+      resources,
       phase: "held_active",
       outcome: "authorized",
       audit_sequence: 8,
@@ -555,9 +557,9 @@ const runtimeAddReceipt = (requestId) => ({
         lease_id: runtimeLease.lease_id,
         before_generation: runtimeLease.generation,
         after_generation: runtimeLease.generation + 1,
-        before_resources: ["lighting", "video"],
-        after_resources: ["lighting", "video"],
-        before_phase: "held_active",
+        before_resources: resources,
+        after_resources: resources,
+        before_phase: "held_orphaned",
         after_phase: "held_active",
       }],
     },
@@ -603,6 +605,23 @@ assert.deepEqual(
 );
 assert(!runtimeCalls.includes("query_output_lease_authority_v1"), "Add must not invoke the old public lease query");
 assert(!runtimeCalls.includes("enable_output_control_v2"), "Add must not invoke a separate Enable mutation");
+
+for (const resources of [["video"], ["lighting", "video"]]) {
+  const calls = [];
+  const invoke = async (command, args) => {
+    calls.push(command);
+    if (command === "query_output_control_authority_v1") return runtimeAuthorityResponse;
+    if (command === "allocate_output_control_request_id_v1") return allocatedRequestId++;
+    if (command === "add_display_output_v2") return runtimeAddReceipt(args.request.request_id, resources);
+    throw new Error(`Unexpected Display invoke ${command}`);
+  };
+  const result = await controllerRuntime.executeDisplayAddOutputControl(invoke, runtimeAddAction(), {
+    operationId: displayAddOperationId, status: "expired_recoverable", authority: runtimeLease, resources,
+  });
+  assert.deepEqual(result.lease_result.resources, resources);
+  assert.equal(calls.filter(command => command === "add_display_output_v2").length, 1);
+  assert.ok(!calls.some(command => /enable_output|acquire|arm/.test(command)));
+}
 
 const rejectedAddRun = async (queryResponse, action = runtimeAddAction()) => {
   const calls = [];
@@ -683,7 +702,7 @@ assert.match(addFunctionSource, /queryDisplayAddLeaseAuthority\(invoke\)/);
 assert.match(addFunctionSource, /if \(displayAddAuthority\.status === "unavailable"\) \{\s*await executeVideoOutputLeaseSetup\(invoke, \{ kind: "acquire_lease", role: "both" \}\);\s*displayAddAuthority = await queryDisplayAddLeaseAuthority\(invoke\);\s*\}/);
 assert.doesNotMatch(addFunctionSource, /window\.confirm\(|inAppDialog|confirmDialog/);
 assert.doesNotMatch(addFunctionSource, /kind: "(?:arm|enable_output|force_transfer_lease|relinquish_output_lease)"/);
-assert.match(addFunctionSource, /selectExactBothLeaseForDisplayAdd\(displayAddAuthority\)/);
+assert.match(addFunctionSource, /selectVideoCapableLeaseForDisplay\(displayAddAuthority\)/);
 assert.match(addFunctionSource, /executeDisplayAddOutputControl\(/);
 const executeDisplayAddIndex = addFunctionSource.indexOf("await executeDisplayAddOutputControl(");
 const refreshDisplayAddIndex = addFunctionSource.indexOf("await refreshSnapshotAndVideoOutputRenderPlans();");
@@ -706,7 +725,7 @@ const appDisplayAddRuntime = await import(`data:text/javascript;base64,${Buffer.
   `export function makeDisplayAdd(deps) {
     const { isTauriRuntime, tauriBackendUnavailableMessage, videoDisplayTargetSummary,
       queryDisplayAddLeaseAuthority, executeVideoOutputLeaseSetup,
-      selectExactBothLeaseForDisplayAdd, executeDisplayAddOutputControl, invoke,
+      selectVideoCapableLeaseForDisplay, executeDisplayAddOutputControl, invoke,
       setVideoOutputLabel, snapshot, appStatus, refreshSnapshotAndVideoOutputRenderPlans,
       finishDisplayAddPostCommitRefresh } = deps;
     ${addFunctionSource}
@@ -749,7 +768,7 @@ const runAppDisplayAdd = async ({ initiallyAvailable, acquireError, remainsUnava
       if (acquireError) throw acquireError;
       available = !remainsUnavailable;
     },
-    selectExactBothLeaseForDisplayAdd: controllerRuntime.selectExactBothLeaseForDisplayAdd,
+    selectVideoCapableLeaseForDisplay: controllerRuntime.selectVideoCapableLeaseForDisplay,
     executeDisplayAddOutputControl: controllerRuntime.executeDisplayAddOutputControl,
     invoke,
     setVideoOutputLabel: () => {},
@@ -781,7 +800,7 @@ assert.equal(conflictingAppAdd.addInvokes, 0);
 assert.equal(conflictingAppAdd.refreshCalls, 0);
 assert.deepEqual(conflictingAppAdd.events, ["query_display_add_lease_authority_v1", "acquire_both"], "acquire conflict must not trigger transfer, retry, or Add");
 const unavailableAppAdd = await runAppDisplayAdd({ initiallyAvailable: false, remainsUnavailable: true });
-assert.match(String(unavailableAppAdd.error), /Exactly one active or recoverable Both output lease is required/);
+assert.match(String(unavailableAppAdd.error), /Exactly one active or recoverable Video-capable output lease is required/);
 assert.equal(unavailableAppAdd.addInvokes, 0);
 assert.deepEqual(unavailableAppAdd.events, ["query_display_add_lease_authority_v1", "acquire_both", "query_display_add_lease_authority_v1"], "failed authority refresh must not retry acquisition or dispatch Add");
 
@@ -806,6 +825,7 @@ const standbyDisplayInvoke = async (command, args) => {
     };
     result.receipt.lease_result.authority = { ...runtimeLease };
     result.receipt.lease_result.changes[0].after_generation = runtimeLease.generation;
+    result.receipt.lease_result.changes[0].before_phase = "held_active";
     return result;
   }
   throw new Error(`unexpected standby Display Add invoke: ${command}`);
@@ -892,7 +912,7 @@ await assert.rejects(
   "mutation failure must reject the outer Add callback",
 );
 assert.equal(fixtureRefreshCalls, 0, "mutation failure must not run post-commit refresh classification");
-assert.match(controllerSource, /export function selectExactBothLeaseForDisplayAdd\(/);
+assert.match(controllerSource, /export function selectVideoCapableLeaseForDisplay\(/);
 assert.match(controllerSource, /export async function queryDisplayAddLeaseAuthority\(/);
 assert.match(controllerSource, /query_display_add_lease_authority_v1/);
 assert.match(controllerSource, /operationId/);
@@ -900,7 +920,7 @@ assert.match(controllerSource, /hasExactKeys\(value, \["operationId", "status", 
 assert.match(controllerSource, /export async function executeDisplayAddOutputControl\(/);
 assert.match(controllerSource, /skipPublicLeaseQuery: "display-authority"/);
 assert.match(controllerSource, /value\.status !== "held_active"[\s\S]*value\.status !== "expired_recoverable"[\s\S]*value\.status !== "held_orphaned"/);
-assert.match(controllerSource, /Exactly one active or recoverable Both output lease is required/);
+assert.match(controllerSource, /Exactly one active or recoverable Video-capable output lease is required/);
 assert.match(controllerSource, /action\.kind === "add_display"[\s\S]*selected\[0\]\.status !== "held_orphaned"/);
 assert.match(panelSource, /const initialVideoDisplayMonitor/);
 assert.match(panelSource, /monitors\.find\(\(monitor\) => !monitor\.isEditorMonitor\)/);
@@ -908,7 +928,7 @@ assert.doesNotMatch(panelSource, /find\(\(monitor\) => monitor\.primary\)/);
 assert.doesNotMatch(panelSource, /props\.monitorId\)/);
 assert.match(panelSource, /selectedMonitorIdentity\(\) \?\? ""/);
 assert.match(panelSource, /value=\{monitor\.identity\}/);
-assert.match(appSource, /selectExactBothLeaseForDisplayAdd\(displayAddAuthority\)/);
+assert.match(appSource, /selectVideoCapableLeaseForDisplay\(displayAddAuthority\)/);
 const invokeTuple = [...invokeSource.matchAll(/^\s+"([^"]+)",$/gm)].map((match) => match[1]);
 const invokeManifest = JSON.parse(manifestSource);
 assert.deepEqual(invokeTuple, [...invokeTuple].sort(), "frontend invoke tuple must remain sorted");
