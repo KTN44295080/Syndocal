@@ -79,8 +79,10 @@ delta 0). Dry-run `dry-run/dry-run-20261108-011459-510693.json` passed with no
 pending conditions; ordinary windows on the monitor and the historical normal
 EXE hash mismatch remained reported warnings, not exemptions from live checks.
 
-Campaign: `runs/20261108-011514-686804-1f20dd12bdbe`, exit 1,
-overall **INCOMPLETE**. Fixed ABBAAB, 60-second windows, 15-second warm-up.
+Campaign: `runs/20261108-011514-686804-1f20dd12bdbe`, overall **INCOMPLETE**.
+The shell returned 1; the runner's numeric exit was not captured separately
+(the current runner maps INCOMPLETE to 3). Fixed ABBAAB, 60-second windows,
+15-second warm-up. Later live commands propagate the native exit explicitly.
 
 | Session | Observation | Result |
 | --- | --- | --- |
@@ -168,6 +170,11 @@ process and CDP free. Post-campaign OS checks found no Syndocal/owned sidecar or
 route, runtime settings or physical-lighting configuration changed.
 
 ## Current acceptance boundary
+
+The later fresh-artifact thirty-minute attempt is recorded in
+[the soak checkpoint](NATIVE_60FPS_SOAK_2026-11-08.md): 30 valid minutes,
+29 passing, minute 13 failed the native work maximum. This comparison PASS
+does not supersede that FAIL or authorize default-route adoption.
 
 The current committed product now has a valid receipt-bound C5 A/B comparison
 with resident ON passing all required windows. Default OFF remains unchanged
