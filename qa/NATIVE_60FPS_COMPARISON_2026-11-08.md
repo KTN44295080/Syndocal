@@ -6,6 +6,11 @@ default Display route or product performance thresholds. The owned changes are
 this note and the reproducible measurement-harness correction alongside it.
 The unrelated untracked Vite directories remain untouched.
 
+Latest result: the prepared-screen rerun **passed C5** with all three ON windows
+and all six lifecycle checks valid. The earlier incomplete attempts below remain
+retained. The default OFF route still misses 60fps; this is candidate comparison
+acceptance, not default-route adoption or release acceptance.
+
 ## Fixed conditions
 
 - Canonical `c5/fixture-3l-groupfx.sdc`, SHA-256
@@ -64,7 +69,7 @@ testing; the corrected invocation ran all 46 checks. Independent review found
 no blocking issue in the stable correction or proceeding directly to formal
 ABBAAB with a new artifact/profile. Reverse patch application check passed.
 
-## Formal ABBAAB result: INCOMPLETE
+## First formal ABBAAB attempt: INCOMPLETE
 
 Fresh artifact `build-1f20dd12bdbe-normal-2611080105` verified the same committed
 source/runtime inventory and protected normal executable. EXE SHA-256:
@@ -117,19 +122,63 @@ whitelist/flag boundaries, redaction and one execution per adapter invocation;
 both JavaScript files passed syntax checks. Independent review confirmed the
 typed contract and fail-closed boundary.
 
+## Prepared-screen ABBAAB rerun: PASS
+
+After the operator explicitly reported readiness, Codex/Discord were minimized
+by the operator and the PC remained hands off. Dry-run
+`dry-run/dry-run-20261108-185859-431663.json` passed without a monitor-clear
+warning or pending condition. The same exact receipted executable/runtime was
+reused under the existing clean-profile rule; no profile, ledger or receipt was
+deleted or relabeled. HEAD had advanced to `3b924896` for QA documentation and
+the saved harness patch only; the measured product commit remains `1f20dd12`.
+
+Campaign: `runs/20261108-185915-695037-1f20dd12bdbe`, 18:59–19:12 JST,
+runner **exit 0, C5 PASS**. ABBAAB, six completed sessions, three valid windows
+per path, fixed 60-second windows and 15-second warm-up, no observed occluder or
+invalid condition, no missing gate, all cleanup proved. Harness hashes in
+`campaign.json` bind the reviewed process-exit and structured-query corrections.
+
+| ON session | Deliveries / required | Actual duration s | fps | Whole-window p95 ms | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| s02 | 3601 / 3599 | 60.0164 | 60.0002 | 17.3 | PASS, G1–G8 |
+| s03 | 3601 / 3600 | 60.0244 | 59.9923 | 17.3 | PASS, G1–G8 |
+| s06 | 3601 / 3600 | 60.0194 | 59.9972 | 17.3 | PASS, G1–G8 |
+
+Each rate satisfies the unchanged N ≥ floor(60×T) − 1 rule; the displayed rate
+slightly below 60 in two windows does not represent a relaxed 59.5fps threshold.
+ON descriptive mean is 59.997 fps, work mean approximately 6.462 ms and maximum
+preparation p95 8.755 ms. Preparation is a proxy, not a complete critical-cycle
+measurement. All ON work gates passed, error deltas and cadence-deficit increase
+were zero, and G6–G8 proved the intended resident path, receipt identity and
+bounded async behavior. One ON Presented interval exceeded 20 ms (maximum
+30.6 ms); do not describe this campaign as having zero late intervals.
+
+OFF windows were valid reference observations at 6.3469, 6.7808 and 7.1812 fps
+(descriptive mean 6.770); all failed rate/cadence/work-budget. Those values differ
+from the morning's OFF readings; this campaign alone does not establish a cause
+for that variation. OFF and ON share this campaign's receipted executable,
+fixture, monitor, observer and frozen protocol.
+
+All six Stop receipts fulfilled; maximum Stop 325.42 ms. Every session proved
+Standby/Ready with video/lighting denied, no live Display/health/routes/sources,
+lease relinquishment, principal revocation, credential removal, sidecar exit,
+graceful app exit without a dialog, no forced termination, no leftover owned
+process and CDP free. Post-campaign OS checks found no Syndocal/owned sidecar or
+9285 listener. Protected normal EXE hash is unchanged. No product code, default
+route, runtime settings or physical-lighting configuration changed.
+
 ## Current acceptance boundary
 
-A hands-off, unobstructed formal rerun is pending the operator's screen
-preparation. The current formal profile is reusable for another ordinary C5
-campaign only because every prior session stopped cleanly; the existing
-preflight records that reuse as a warning. Its earlier INCOMPLETE campaign means
-this profile does **not** qualify for same-profile soak reuse. A later soak needs
-a fresh artifact/profile with only retained full C5 PASS history. No ledger
-deletion, receipt copying, weakened validity rule or automatic refocusing.
+The current committed product now has a valid receipt-bound C5 A/B comparison
+with resident ON passing all required windows. Default OFF remains unchanged
+and fails the mandatory performance target. Adoption and release remain open.
 
-The computer-use policy prohibits automating the Codex/ChatGPT UI, so the operator
-must minimize it and keep the Display unoccluded during the rerun. No active
-native output, owned sidecar or diagnostic listener remains at this checkpoint.
+The earlier INCOMPLETE campaign is still present in this profile's history,
+so it does **not** qualify for same-profile soak reuse despite the later PASS.
+A later thirty-minute soak needs a fresh artifact/profile with only retained
+full C5 PASS history. No ledger deletion, receipt copying, weakened validity rule
+or automatic refocusing. The first safe continuation is prepare a fresh normal
+artifact, pass its formal ABBAAB, then reuse that exact artifact for soak.
 
 Application presentation is distinct from physical scanout. C5/soak do not close
 the separate native lifecycle/fault/clock-oracle, venue soak or release gates.
