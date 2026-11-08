@@ -13,6 +13,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+#[path = "native_frame_spike_timing.rs"]
+mod spike;
+pub use spike::{begin_spike_frame, SpikeFrame, SpikeMetricSample, SpikeStage};
+
 pub const MAX_PARENTS: usize = 3072;
 pub const MAX_CHILDREN: usize = 64;
 const MAX_ATTEMPTS: usize = 8;
@@ -232,6 +236,7 @@ struct Control {
     clock_calibration_uncertainty_us: u64,
     stop_us: u64,
     buffer: Option<Buffer>,
+    spikes: Option<spike::SpikeBuffer>,
 }
 
 static CONTROL: Mutex<Control> = Mutex::new(Control {
@@ -241,6 +246,7 @@ static CONTROL: Mutex<Control> = Mutex::new(Control {
     clock_calibration_uncertainty_us: 0,
     stop_us: 0,
     buffer: None,
+    spikes: None,
 });
 static CLOCK: OnceLock<Instant> = OnceLock::new();
 static ACTIVE: AtomicU64 = AtomicU64::new(0);
@@ -252,6 +258,18 @@ static UNPREPARED: AtomicU64 = AtomicU64::new(0);
 // Written once at startup, before any render/decode thread is started. Stop
 // changes ACTIVE only: an admitted parent's spans must still finish afterwards.
 static PROCESS_ENABLED: AtomicBool = AtomicBool::new(false);
+static SPIKE_ENABLED: AtomicBool = AtomicBool::new(false);
+#[cfg(not(test))]
+thread_local! { static SPIKES: RefCell<Option<spike::SpikeBuffer>> = const { RefCell::new(None) }; }
+#[cfg(test)]
+static SPIKE_TLS_INITIALIZATIONS: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+thread_local! {
+    static SPIKES: RefCell<Option<spike::SpikeBuffer>> = {
+        SPIKE_TLS_INITIALIZATIONS.fetch_add(1, Ordering::Relaxed);
+        RefCell::new(None)
+    };
+}
 #[cfg(test)]
 static BUFFER_INITIALIZATIONS: AtomicU64 = AtomicU64::new(0);
 #[cfg(not(test))]
@@ -279,10 +297,18 @@ pub(crate) fn enable_for_tests() {
 
 // Startup-only configuration: no environment lookup or file access in the loop.
 const OUTPUT_ENV: &str = "SYNDOCAL_QA_FRAME_TIMING_OUT";
+const SPIKE_OUTPUT_ENV: &str = "SYNDOCAL_QA_NATIVE_SPIKE_OUT";
 static AUTOMATIC: OnceLock<Option<AutomaticCapture>> = OnceLock::new();
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CaptureKind {
+    Full,
+    SlowWork,
+}
 
 struct AutomaticCapture {
     output: PathBuf,
+    kind: CaptureKind,
     start_claimed: AtomicBool,
     started: AtomicBool,
     export_attempted: AtomicBool,
@@ -300,6 +326,7 @@ impl AutomaticCapture {
         }
         Ok(Self {
             output,
+            kind: CaptureKind::Full,
             start_claimed: AtomicBool::new(false),
             started: AtomicBool::new(false),
             export_attempted: AtomicBool::new(false),
@@ -324,7 +351,15 @@ impl AutomaticCapture {
             return Ok(false);
         }
         // Check completion/ACK before consuming the one permitted attempt.
-        let snapshot = snapshot().map_err(str::to_string)?;
+        match self.kind {
+            CaptureKind::Full => self.export_snapshot(snapshot().map_err(str::to_string)?),
+            CaptureKind::SlowWork => {
+                self.export_snapshot(spike_snapshot().map_err(str::to_string)?)
+            }
+        }
+    }
+
+    fn export_snapshot(&self, snapshot: impl Serialize) -> Result<bool, String> {
         if self.export_attempted.swap(true, Ordering::AcqRel) {
             return Ok(false);
         }
@@ -350,13 +385,41 @@ fn automatic_from_value(value: Option<OsString>) -> Result<Option<AutomaticCaptu
 }
 
 pub fn configure_from_environment() -> Result<(), String> {
-    let configured = automatic_from_value(std::env::var_os(OUTPUT_ENV))?;
-    let enabled = configured.is_some();
+    let configured = automatic_from_values(
+        std::env::var_os(OUTPUT_ENV),
+        std::env::var_os(SPIKE_OUTPUT_ENV),
+    )?;
+    let enabled = configured
+        .as_ref()
+        .is_some_and(|c| c.kind == CaptureKind::Full);
+    let spikes = configured
+        .as_ref()
+        .is_some_and(|c| c.kind == CaptureKind::SlowWork);
     AUTOMATIC
         .set(configured)
         .map_err(|_| "Native frame timing startup configuration was already read".to_string())?;
     PROCESS_ENABLED.store(enabled, Ordering::Relaxed);
+    SPIKE_ENABLED.store(spikes, Ordering::Relaxed);
     Ok(())
+}
+
+fn automatic_from_values(
+    full: Option<OsString>,
+    slow: Option<OsString>,
+) -> Result<Option<AutomaticCapture>, String> {
+    if full.is_some() && slow.is_some() {
+        return Err("Full native timing and slow-work capture are mutually exclusive".into());
+    }
+    if slow.is_some() {
+        automatic_from_value(slow).map(|capture| {
+            capture.map(|mut c| {
+                c.kind = CaptureKind::SlowWork;
+                c
+            })
+        })
+    } else {
+        automatic_from_value(full)
+    }
 }
 
 /// Cold first-iteration boundary; the initial frame hands the same primitive
@@ -441,6 +504,7 @@ pub fn start() -> Result<u64, &'static str> {
         clock_calibration_uncertainty_us: after - before,
         stop_us: 0,
         buffer: None,
+        spikes: None,
     };
     ORIGIN_US.store(origin, Ordering::Relaxed);
     UNPREPARED.store(0, Ordering::Relaxed);
@@ -451,6 +515,9 @@ pub fn start() -> Result<u64, &'static str> {
 
 /// Cold allocation/ownership handoff; call before the render loop, never per frame.
 pub fn prepare_thread() -> Result<(), &'static str> {
+    if SPIKE_ENABLED.load(Ordering::Relaxed) {
+        return prepare_spike_thread();
+    }
     if !process_enabled() {
         return Ok(());
     }
@@ -513,6 +580,10 @@ impl Drop for ThreadRetirementGuard {
 
 /// Move only primitive storage after the existing renderer/presenter owners drop.
 pub fn retire_thread() {
+    if SPIKE_ENABLED.load(Ordering::Relaxed) {
+        retire_spike_thread();
+        return;
+    }
     if !process_enabled() {
         return;
     }
@@ -530,6 +601,99 @@ pub fn retire_thread() {
         }
         OWNER.store(false, Ordering::Release);
     }
+}
+
+fn prepare_spike_thread() -> Result<(), &'static str> {
+    let generation = ACTIVE.load(Ordering::Acquire);
+    if generation == 0 {
+        return Ok(());
+    }
+    if SPIKES.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .is_some_and(|b| b.generation() == generation)
+    }) {
+        return Ok(());
+    }
+    if OWNER
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("another trace thread still owns the finite buffer");
+    }
+    let result = (|| {
+        let mut control = CONTROL.lock().map_err(|_| "trace control poisoned")?;
+        if control.generation != generation || ACTIVE.load(Ordering::Acquire) != generation {
+            return Err("capture stopped during thread preparation");
+        }
+        let buffer = control
+            .spikes
+            .take()
+            .unwrap_or_else(|| spike::SpikeBuffer::new(generation));
+        SPIKES.with(|cell| *cell.borrow_mut() = Some(buffer));
+        Ok(())
+    })();
+    if result.is_err() {
+        OWNER.store(false, Ordering::Release);
+    }
+    result
+}
+
+fn retire_spike_thread() {
+    if let Some(buffer) = SPIKES.with(|cell| cell.borrow_mut().take()) {
+        if let Ok(mut control) = CONTROL.lock() {
+            if control.generation == buffer.generation() {
+                // The initial-frame thread hands this buffer to the render
+                // worker. Final retirement is checked after Stop/ACK below.
+                control.spikes = Some(buffer);
+            }
+        }
+        OWNER.store(false, Ordering::Release);
+    }
+}
+
+#[derive(Serialize)]
+struct SpikeCaptureSnapshot {
+    schema: &'static str,
+    diagnostic_only: bool,
+    generation: u64,
+    start_monotonic_us: u64,
+    start_unix_us: u64,
+    clock_calibration_uncertainty_us: u64,
+    stop_us: u64,
+    unprepared_frames: u64,
+    samples: spike::SpikeSnapshot,
+}
+
+fn spike_snapshot() -> Result<SpikeCaptureSnapshot, &'static str> {
+    let mut control = CONTROL.lock().map_err(|_| "trace control poisoned")?;
+    if ACTIVE.load(Ordering::Acquire) != 0 {
+        return Err("capture is still running");
+    }
+    if !ACK.load(Ordering::Acquire) {
+        return Err("Stop has not been acknowledged");
+    }
+    if OWNER.load(Ordering::Acquire) {
+        return Err("trace owner has not retired");
+    }
+    let generation = control.generation;
+    let buffer = control
+        .spikes
+        .as_mut()
+        .ok_or("slow-work capture has no retired buffer")?;
+    buffer.retire(generation);
+    let samples = buffer.snapshot();
+    Ok(SpikeCaptureSnapshot {
+        schema: "native-work-spikes-1",
+        diagnostic_only: true,
+        generation,
+        start_monotonic_us: control.start_us,
+        start_unix_us: control.start_unix_us,
+        clock_calibration_uncertainty_us: control.clock_calibration_uncertainty_us,
+        stop_us: control.stop_us,
+        unprepared_frames: UNPREPARED.load(Ordering::Relaxed),
+        samples,
+    })
 }
 
 pub fn stop_capture() -> Result<(), &'static str> {
@@ -1305,6 +1469,9 @@ fn export_parent(p: &Parent, control: &Control) -> ParentSnapshot {
 
 /// Allocations/formatting/serialization occur only on this cold, post-ACK path.
 pub fn snapshot() -> Result<Snapshot, &'static str> {
+    if SPIKE_ENABLED.load(Ordering::Relaxed) {
+        return Err("slow-work capture is not a full native trace");
+    }
     let control = CONTROL.lock().map_err(|_| "trace control poisoned")?;
     if ACTIVE.load(Ordering::Acquire) != 0 {
         return Err("capture is still running");
@@ -1353,6 +1520,10 @@ pub fn snapshot() -> Result<Snapshot, &'static str> {
 pub(crate) static TIMING_TEST_SERIAL: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
+#[path = "native_frame_spike_integration_tests.rs"]
+mod spike_tests;
+
+#[cfg(test)]
 mod tests {
     use super::TIMING_TEST_SERIAL as SERIAL;
     use super::*;
@@ -1373,6 +1544,7 @@ mod tests {
                 ])
                 .env(CHILD, "1")
                 .env_remove(OUTPUT_ENV)
+                .env_remove(SPIKE_OUTPUT_ENV)
                 .status()
                 .unwrap();
             assert!(status.success());

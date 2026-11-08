@@ -1,0 +1,391 @@
+--- a/target/qa/steroids-60fps-design-20261025/c5/run-c5.py
++++ b/target/qa/steroids-60fps-design-20261025/c5/run-c5.py
+@@ -821,7 +821,7 @@
+     ck.add('exe.commit_in_main_history', 'PASS' if anc else 'FAIL', {'receipt_commit': commit, 'HEAD': head})
+     if anc and commit != head:
+         ck.add('exe.commit_is_head', 'WARN', 'HEAD moved after the build; C5 measures the receipt commit, not HEAD')
+-    want_variant = 'timing' if args.diagnostic_trace else 'normal'
++    want_variant = 'timing' if args.diagnostic_trace or getattr(args, 'diagnostic_spikes', None) is not None else 'normal'
+     ck.add('exe.variant', 'PASS' if r.get('variant') == want_variant else 'FAIL', {'receipt': r.get('variant'), 'required': want_variant})
+     if not re.fullmatch(r'jp\.seraf\.ktn\.syndocal\.qa\.c5x[a-zA-Z0-9]+', r.get('identifier', '')):
+         return None
+@@ -866,6 +866,11 @@
+
+ def schedule_ok(args):
+     sched = args.schedule.upper()
++    spikes = getattr(args, 'diagnostic_spikes', None)
++    if spikes is not None:
++        return (spikes in ('on', 'off') and sched == 'B' and args.windows_per_session == 1
++                and 0 < args.window_seconds <= 1800 and args.warmup_seconds == 15 and args.control == 'mcp'
++                and not args.smoke and not args.diagnostic_trace and not getattr(args, 'soak', False))
+     if getattr(args, 'soak', False):
+         return (sched == 'B' and args.windows_per_session == SOAK_WINDOWS and args.window_seconds == 60
+                 and args.warmup_seconds == 15 and args.control == 'mcp' and not args.smoke and not args.diagnostic_trace)
+@@ -875,8 +880,10 @@
+
+ def preflight(args, real):
+     ck = Checks()
+-    ck.add('protocol.duration', 'PASS' if (0 < args.window_seconds <= 30 if args.diagnostic_trace else
+-                                           (0 < args.window_seconds <= 60 if args.smoke else args.window_seconds == 60)) else 'FAIL', args.window_seconds)
++    duration_ok = (0 < args.window_seconds <= 1800 if getattr(args, 'diagnostic_spikes', None) is not None else
++                   (0 < args.window_seconds <= 30 if args.diagnostic_trace else
++                    (0 < args.window_seconds <= 60 if args.smoke else args.window_seconds == 60)))
++    ck.add('protocol.duration', 'PASS' if duration_ok else 'FAIL', args.window_seconds)
+     ck.add('protocol.warmup', 'PASS' if args.warmup_seconds >= 15 else 'FAIL', args.warmup_seconds)
+     ck.add('protocol.confirm_timeout', 'PASS' if 0 < args.confirm_timeout <= 50 else 'FAIL', args.confirm_timeout)
+     ck.add('protocol.options', 'PASS' if args.windows_per_session > 0 and args.cooldown_seconds >= 0
+@@ -940,6 +947,9 @@
+                 'queue_high_water_growth_bound': SOAK_QUEUE_GROWTH, 'missing_product_fields': SOAK_MISSING_FIELDS})
+     if args.diagnostic_trace:
+         ck.add('diagnostic_trace_window', 'PASS' if args.window_seconds <= 30 else 'FAIL', 'trace capacity 3072 parents: windows must be <= 30 s; results are NOT gating')
++    if getattr(args, 'diagnostic_spikes', None) is not None:
++        ck.add('diagnostic_spikes', 'PASS' if schedule_ok(args) and (WORK / 'spike-diagnostic.py').is_file() else 'FAIL',
++               'one MCP ON window <=1800 s, timing exe, fixed 16 records; diagnostic on/off control, never C5/soak acceptance')
+     if args.smoke:
+         ck.add('smoke', 'PASS' if args.control == 'mcp' and not args.diagnostic_trace and len(sched) <= 2 else 'FAIL',
+                'short live smoke of the control route; SMOKE-NOT-GATING, never C5 evidence')
+@@ -1089,7 +1099,9 @@
+            'windows': args.windows_per_session, 'windowMs': args.window_seconds * 1000, 'warmupMs': args.warmup_seconds * 1000,
+            'soak': args.soak, 'interWindowMs': 0 if args.soak else 2000, 'pollIntervalMs': 500, 'statusIntervalMs': 5000, 'renewIntervalMs': 10000,
+            'confirmTimeoutMs': args.confirm_timeout * 1000, 'gateTimeoutMs': 15 * 60 * 1000,
+-           'frameTimingOut': str(sdir / 'frame-timing.json') if args.diagnostic_trace else None}
++           'frameTimingOut': str(sdir / 'frame-timing.json') if args.diagnostic_trace else None,
++           'spikeDiagnostic': getattr(args, 'diagnostic_spikes', None),
++           'frameSpikeOut': str(sdir / 'frame-spikes.json') if getattr(args, 'diagnostic_spikes', None) == 'on' else None}
+     if args.control == 'mcp':
+         cfg.update({'control': 'mcp', 'repo': str(REPO), 'mcpControlModule': str(MCP_CONTROL), 'cleanupDeadlineMs': 60000,
+                     'mcpLabel': f'c5-{run_dir.name[:22]}-{sdir.name}'.replace(' ', '')})
+@@ -1585,9 +1597,10 @@
+         'one_completed_mcp_on_session': len(sessions) == 1 and sessions[0]['path'] == 'on' and sessions[0]['completed'] and not sessions[0]['error'],
+         'fixed_soak_protocol': meta.get('schedule') == 'B' and meta.get('windows_per_session') == SOAK_WINDOWS
+             and meta.get('control') == 'mcp' and meta.get('window_seconds') == 60 and meta.get('warmup_seconds') == 15
+-            and not meta.get('smoke') and not meta.get('diagnostic_trace') and cfg.get('soak') is True
++            and not meta.get('smoke') and not meta.get('diagnostic_trace') and not meta.get('diagnostic_spikes') and cfg.get('soak') is True
+             and cfg.get('windows') == SOAK_WINDOWS and cfg.get('windowMs') == 60000 and cfg.get('warmupMs') == 15000
+-            and cfg.get('control') == 'mcp' and cfg.get('interWindowMs') == 0 and cfg.get('renewIntervalMs') == 10000 and not cfg.get('frameTimingOut'),
++            and cfg.get('control') == 'mcp' and cfg.get('interWindowMs') == 0 and cfg.get('renewIntervalMs') == 10000
++            and not cfg.get('frameTimingOut') and not cfg.get('frameSpikeOut') and not cfg.get('spikeDiagnostic'),
+         'thirty_ordered_windows': [w['window'] for w in raw] == list(range(1, SOAK_WINDOWS + 1)),
+         'every_window_valid': len(ws) == SOAK_WINDOWS and all(all(w['validity'].values()) for w in ws),
+         'every_window_passing': len(ws) == SOAK_WINDOWS and all(w['verdict'] == 'PASS' for w in ws),
+@@ -1729,7 +1742,7 @@
+         rest = {k: v for k, v in protocol.items() if k != 'all_session_cleanup'}
+         if meta.get('smoke'):
+             return 'SMOKE-NOT-GATING'
+-        if meta.get('diagnostic_trace'):
++        if meta.get('diagnostic_trace') or meta.get('diagnostic_spikes') is not None:
+             return 'DIAGNOSTIC-NOT-GATING'
+         return 'FAIL' if on['verdict'] == 'FAIL' or not cleanup_ok else \
+             ('PASS' if all(rest.values()) and on['verdict'] == 'PASS' else 'INCOMPLETE')
+@@ -1757,6 +1770,8 @@
+               'paths': pv, 'c5_verdict': overall, 'sessions': sessions, 'analyzed_at': now_iso()}
+     if soak is not None:
+         result.update({'mode': 'soak', 'soak': soak, 'soak_verdict': overall, 'c5_verdict_excluding_known_exit_defect': None})
++    if meta.get('diagnostic_spikes') is not None:
++        result['spike_diagnostic'] = analyze_spike_capture(run_dir, meta['diagnostic_spikes'], sessions)
+     (run_dir / 'c5-result.json').write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding='utf-8')
+     lines = [f"# C5 result — {overall}", '', f"Commit `{meta.get('commit')}`, exe `{meta.get('exe_sha256')}`, schedule `{meta.get('schedule')}`, refresh {meta.get('refresh_hz')} Hz.", '',
+              'Rolling percentiles are diagnostics only. Whole-window intervals come from the product histogram (S1-S0); UNKNOWN gates prevent C5 PASS.', '',
+@@ -1809,12 +1824,34 @@
+     lines += ['', '## Evidence', ''] + [f'- **{k}**: {v}' for k, v in EVIDENCE_SOURCES.items()]
+     lines += ['', '## Gates still UNKNOWN', ''] + ([f'- {x}' for x in unknown_why] or ['- none'])
+     lines += ['', '## Campaign protocol', ''] + [f'- {k}: {v}' for k, v in protocol.items()]
++    if result.get('spike_diagnostic'):
++        d = result['spike_diagnostic']
++        lines += ['', '## Slow-work diagnostic (NOT acceptance)', '',
++                  f"Mode {d['mode']}; capture structurally consistent: {d['ok']}; errors: {d['errors']}",
++                  'Retention keeps the first 16 selected records; overflow_count reports later matches without retaining their details.',
++                  'work_us is the exact pacing-excluded G3 sample. start/sample delimit wall time; present_with_pacing includes the pacing subset.',
++                  'Coarse wall buckets are not GPU execution time and must not be summed as a proof of the critical cycle.', '']
++        for capture in d['captures']:
++            data = capture['data']; samples = data.get('samples') or {}
++            lines += [f"Capture `{capture['file']}`; counters {samples.get('counters')}; retained bytes {samples.get('retained_bytes')}.", '',
++                      '| Iteration | G3 sample seq | Last Presented request | work us | pacing us | extent / permit / retirement / prepare / present-with-pacing / metrics-lock ms |',
++                      '| --- | --- | --- | --- | --- | --- |']
++            records = samples.get('records')
++            for sample in records if isinstance(records, list) else []:
++                if not isinstance(sample, dict): continue
++                buckets = ' / '.join(str(round(sample.get(k, 0) / 1000, 3)) for k in
++                          ('extent_us', 'permit_us', 'retirement_configure_us', 'prepare_us', 'present_with_pacing_us', 'metrics_lock_wait_us')
++                          if isinstance(sample.get(k, 0), (int, float)))
++                lines.append(f"| {sample.get('iteration')} | {sample.get('work_sample_sequence')} | {sample.get('last_presented_request_sequence')} | {sample.get('work_us')} us | {sample.get('pacing_us')} us | {buckets} |")
+     (run_dir / 'SUMMARY.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+     return result
+
+
+ # ---------------------------------------------------------------- main
+ def exit_code(r):
++    if r.get('campaign', {}).get('diagnostic_spikes') is not None:
++        clean = bool(r['sessions']) and all(s['completed'] and not s['error'] and s['lifecycle']['ok'] for s in r['sessions'])
++        return 0 if clean and r.get('spike_diagnostic', {}).get('ok') is True else 1
+     if r['c5_verdict'] == 'SMOKE-NOT-GATING':
+         # A smoke only proves the unattended route: every session completed and
+         # was cleaned up (the known exit defect is tolerated and reported).
+@@ -1822,6 +1859,13 @@
+                                          for s in r['sessions'])
+         return 0 if ok else 1
+     return 0 if r['c5_verdict'] in ('PASS', 'DIAGNOSTIC-NOT-GATING') else (1 if r['c5_verdict'] == 'FAIL' else 3)
++
++
++def analyze_spike_capture(run_dir, mode, sessions):
++    spec = importlib.util.spec_from_file_location('spike_diagnostic', WORK / 'spike-diagnostic.py')
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module.analyze(run_dir, mode, sessions)
+
+
+ def main():
+@@ -1833,7 +1877,7 @@
+     ap.add_argument('--fixture', default=str(DEFAULT_FIXTURE), help='frozen fixture path; default fixture-3l.sdc; grouped workload: fixture-3l-groupfx.sdc')
+     ap.add_argument('--schedule', help='A=OFF baseline, B=ON candidate; default ABBAAB (B for --soak)')
+     ap.add_argument('--windows-per-session', type=int, help='default 1 (30 for --soak)')
+-    ap.add_argument('--window-seconds', type=int, default=60)
++    ap.add_argument('--window-seconds', type=int)
+     ap.add_argument('--warmup-seconds', type=int, default=15)
+     ap.add_argument('--confirm-timeout', type=int, default=50, help='seconds per owner confirmation (< 60 s lease TTL)')
+     ap.add_argument('--cooldown-seconds', type=int, default=20)
+@@ -1841,15 +1885,18 @@
+     ap.add_argument('--cdp-port', type=int, default=9285)
+     ap.add_argument('--no-owner-gate', action='store_true', help='do not wait for Enter before Arm (dialogs still need the owner)')
+     ap.add_argument('--diagnostic-trace', action='store_true', help='timing exe + SYNDOCAL_QA_FRAME_TIMING_OUT, <=30 s windows, non-gating')
++    ap.add_argument('--diagnostic-spikes', nargs='?', const='on', choices=('on', 'off'),
++                    help='timing exe, one MCP ON window <=1800 s; capture on/off observer control; always non-gating')
+     ap.add_argument('--control', choices=CONTROL_MODES,
+                     help='dialog (default): owner answers the two product confirmations; mcp: unattended authenticated external-MCP route')
+     ap.add_argument('--idle-wait-seconds', type=int, default=900, help='--control mcp: bounded wait per session for an idle machine (nothing is killed)')
+     ap.add_argument('--smoke', action='store_true', help='--control mcp only: short (<=60 s) non-gating live check of the control route')
+     ap.add_argument('--soak', action='store_true', help='one MCP ON session: 15 s warmup + 30 consecutive 60 s windows, no gaps; additional final-candidate gate')
+     args = ap.parse_args()
+-    args.schedule = args.schedule if args.schedule is not None else ('B' if args.soak else 'ABBAAB')
++    args.schedule = args.schedule if args.schedule is not None else ('B' if args.soak or args.diagnostic_spikes is not None else 'ABBAAB')
+     args.windows_per_session = args.windows_per_session if args.windows_per_session is not None else (SOAK_WINDOWS if args.soak else 1)
+-    args.control = args.control if args.control is not None else ('mcp' if args.soak else 'dialog')
++    args.control = args.control if args.control is not None else ('mcp' if args.soak or args.diagnostic_spikes is not None else 'dialog')
++    args.window_seconds = args.window_seconds if args.window_seconds is not None else (1800 if args.diagnostic_spikes is not None else 60)
+     if args.analyze:
+         r = analyze(args.analyze); print(json.dumps({'c5_verdict': r['c5_verdict'], 'c5_verdict_excluding_known_exit_defect': r['c5_verdict_excluding_known_exit_defect'],
+                                                     'paths': r['paths'], **({'mode': 'soak', 'soak_verdict': r['soak_verdict']} if 'soak' in r else {})}, indent=1))
+@@ -1884,10 +1931,12 @@
+     meta = {'commit': exe['receipt']['commit'], 'exe': exe['exe'], 'exe_sha256': exe['receipt']['exeSha256'], 'identifier': exe['receipt']['identifier'],
+             'schedule': args.schedule.upper(), 'windows_per_session': args.windows_per_session, 'window_seconds': args.window_seconds,
+             'warmup_seconds': args.warmup_seconds, 'refresh_hz': mode['refresh_hz'], 'display_mode': mode, 'diagnostic_trace': args.diagnostic_trace,
++            'diagnostic_spikes': args.diagnostic_spikes,
+             'control': args.control, 'smoke': args.smoke, 'soak': args.soak,
+             **selected_fixture(args), 'git_status_before': git('status', '--short').stdout.splitlines(),
+             'harness_sha256': {p.name: sha(p) for p in (pathlib.Path(__file__), SESSION_JS, BACKEND_MODULE)
+-                               + ((MCP_CONTROL, MCP_STDIO, MCP_SERVER) if args.control == 'mcp' else ())},
++                               + ((MCP_CONTROL, MCP_STDIO, MCP_SERVER) if args.control == 'mcp' else ())
++                               + ((WORK / 'spike-diagnostic.py',) if args.diagnostic_spikes is not None else ())},
+             'head_before': git('rev-parse', 'HEAD').stdout.strip(), 'protected_exe_before': sha(PROTECTED_EXE) if PROTECTED_EXE.is_file() else None,
+             'preflight': ck.items, 'owner_lines': ck.owner_lines, 'started': now_iso()}
+     (run_dir / 'campaign.json').write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding='utf-8')
+--- a/target/qa/steroids-60fps-design-20261025/c5/session-c5.mjs
++++ b/target/qa/steroids-60fps-design-20261025/c5/session-c5.mjs
+@@ -435,8 +435,16 @@
+ }
+
+ function validateSoakConfig() {
++  if (cfg.spikeDiagnostic != null && !(['on', 'off'].includes(cfg.spikeDiagnostic)
++      && cfg.control === 'mcp' && cfg.path === 'on' && cfg.windows === 1
++      && cfg.windowMs > 0 && cfg.windowMs <= 1800000 && cfg.warmupMs === 15000
++      && !cfg.soak && !cfg.frameTimingOut && (cfg.spikeDiagnostic === 'on') === !!cfg.frameSpikeOut)) {
++    throw Error('invalid non-gating spike diagnostic config');
++  }
++  if (cfg.frameSpikeOut && cfg.spikeDiagnostic !== 'on') throw Error('spike capture requires explicit diagnostic mode');
+   if (cfg.soak && !(cfg.control === 'mcp' && cfg.path === 'on' && cfg.windows === 30 && cfg.windowMs === 60000
+-      && cfg.warmupMs === 15000 && cfg.interWindowMs === 0 && !cfg.frameTimingOut && cfg.renewIntervalMs === 10000)) {
++      && cfg.warmupMs === 15000 && cfg.interWindowMs === 0 && !cfg.frameTimingOut && !cfg.frameSpikeOut
++      && !cfg.spikeDiagnostic && cfg.renewIntervalMs === 10000)) {
+     throw Error('invalid soak config: MCP ON, 15 s warmup, 30 x 60 s, no gaps, trace OFF, 10 s renewal required');
+   }
+ }
+@@ -558,6 +566,7 @@
+   for (const k of Object.keys(env)) if (k.startsWith('SYNDOCAL_QA_') || k === 'RUST_LOG') delete env[k];
+   if (cfg.path === 'on') env.SYNDOCAL_QA_NATIVE_GPU = '1';
+   if (cfg.frameTimingOut) env.SYNDOCAL_QA_FRAME_TIMING_OUT = cfg.frameTimingOut;
++  if (cfg.frameSpikeOut) env.SYNDOCAL_QA_NATIVE_SPIKE_OUT = cfg.frameSpikeOut;
+   report.machineRoleSeed = await seedVideoOnlyMachineRole(path.dirname(cfg.descriptor));
+   note('machine_role_seeded', { file: report.machineRoleSeed.file, before: report.machineRoleSeed.before, role: report.machineRoleSeed.after.role });
+   const out = await fs.open(path.join(dir, 'app-stdout.log'), 'w'), err = await fs.open(path.join(dir, 'app-stderr.log'), 'w');
+@@ -570,7 +579,7 @@
+     });
+   } finally { await out.close(); await err.close(); }
+   report.pid = child.pid;
+-  await write('launch.json', { pid: child.pid, exe: cfg.exe, fixture: cfg.fixture, path: cfg.path, nativeGpuEnv: env.SYNDOCAL_QA_NATIVE_GPU ?? null, frameTimingOut: env.SYNDOCAL_QA_FRAME_TIMING_OUT ?? null, rustLog: env.RUST_LOG ?? null, cdpPort: cfg.cdpPort, cwd: cfg.cwd, at: new Date().toISOString() });
++  await write('launch.json', { pid: child.pid, exe: cfg.exe, fixture: cfg.fixture, path: cfg.path, nativeGpuEnv: env.SYNDOCAL_QA_NATIVE_GPU ?? null, frameTimingOut: env.SYNDOCAL_QA_FRAME_TIMING_OUT ?? null, frameSpikeOut: env.SYNDOCAL_QA_NATIVE_SPIKE_OUT ?? null, rustLog: env.RUST_LOG ?? null, cdpPort: cfg.cdpPort, cwd: cfg.cwd, at: new Date().toISOString() });
+   note('launched', { pid: child.pid });
+   const { openNativeBackendSession } = await import(pathToFileURL(cfg.backendModule));
+   const until = Date.now() + 45000;
+--- /dev/null
++++ b/target/qa/steroids-60fps-design-20261025/c5/spike-diagnostic.py
+@@ -0,0 +1,95 @@
++"""Cold, read-only validation of bounded diagnostic capture; never a C5 gate."""
++import json
++import pathlib
++
++
++def nat(v):
++    return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 0xffffffffffffffff
++
++
++def validate_capture(data):
++    errors = []
++    if not isinstance(data, dict):
++        return ['capture is not an object']
++    if data.get('schema') != 'native-work-spikes-1' or data.get('diagnostic_only') is not True:
++        errors.append('unrecognized diagnostic schema')
++    for key in ('generation', 'start_monotonic_us', 'start_unix_us', 'clock_calibration_uncertainty_us', 'stop_us', 'unprepared_frames'):
++        if not nat(data.get(key)):
++            errors.append('invalid ' + key)
++    if data.get('unprepared_frames') != 0:
++        errors.append('unprepared frames')
++    s = data.get('samples')
++    if not isinstance(s, dict):
++        return errors + ['missing samples']
++    if not nat(s.get('generation')) or s.get('generation') != data.get('generation') or not nat(data.get('generation')) or data['generation'] == 0:
++        errors.append('generation mismatch')
++    if not nat(s.get('retained_bytes')) or not 0 < s['retained_bytes'] <= 16384:
++        errors.append('retained-byte bound')
++    if not nat(s.get('record_capacity')) or not nat(s.get('work_threshold_us')) or s.get('record_capacity') != 16 or s.get('work_threshold_us') != 33333:
++        errors.append('capacity/threshold mismatch')
++    if s.get('retired') is not True or s.get('current_iteration') is not None or s.get('unfinished_iteration') is not None:
++        errors.append('owner did not retire completely')
++    c = s.get('counters')
++    keys = ('attempted_iterations', 'completed_iterations', 'excluded_count', 'fast_count', 'matched_count',
++            'partial_count', 'unobserved_count', 'overflow_count', 'invalid_count', 'incomplete_count')
++    if not isinstance(c, dict) or not all(nat(c.get(k)) for k in keys):
++        return errors + ['missing/malformed counters']
++    if not c['attempted_iterations'] or c['attempted_iterations'] != c['completed_iterations']:
++        errors.append('incomplete iteration coverage')
++    if any(c[k] for k in ('partial_count', 'unobserved_count', 'invalid_count', 'incomplete_count')):
++        errors.append('partial or invalid diagnostic observations')
++    if c['completed_iterations'] != c['excluded_count'] + c['fast_count'] + c['matched_count']:
++        errors.append('iteration accounting mismatch')
++    records = s.get('records')
++    if not isinstance(records, list):
++        return errors + ['missing records']
++    if len(records) != min(c['matched_count'], 16) or c['overflow_count'] != c['matched_count'] - len(records):
++        errors.append('retention accounting mismatch')
++    last_iteration = last_work = 0
++    fields = ('iteration', 'output_id', 'last_presented_request_sequence', 'frames_presented', 'work_sample_sequence',
++              'validation_epoch', 'start_us', 'sample_us', 'work_us', 'pacing_us', 'extent_us', 'permit_us',
++              'retirement_configure_us', 'prepare_us', 'present_with_pacing_us', 'metrics_lock_wait_us')
++    for r in records:
++        if not isinstance(r, dict) or not all(nat(r.get(k)) for k in fields):
++            errors.append('malformed slow record'); continue
++        if r.get('admitted') is not True or r.get('work_observed') is not True or r.get('partial') is not False or r['work_us'] <= 33333:
++            errors.append('record is not an admitted slow work sample')
++        if not last_iteration < r['iteration'] <= c['attempted_iterations'] or not last_work < r['work_sample_sequence']:
++            errors.append('non-monotonic sample identity')
++        last_iteration, last_work = r['iteration'], r['work_sample_sequence']
++        # Stop closes admission; an already admitted frame may finish afterwards.
++        # ACK/owner retirement proves completion, without inventing an ACK clock.
++        if not nat(data.get('stop_us')) or r['start_us'] > data['stop_us'] or r['sample_us'] < r['start_us']:
++            errors.append('invalid work boundary')
++        if r['present_with_pacing_us'] < r['pacing_us']:
++            errors.append('pacing exceeds enclosing present interval')
++        if abs((r['sample_us'] - r['start_us']) - (r['work_us'] + r['pacing_us'])) > 2:
++            errors.append('work boundary does not share the metric clock')
++    return errors
++
++
++def analyze(run_dir, mode, sessions):
++    run_dir = pathlib.Path(run_dir)
++    errors = []
++    report = {'mode': mode, 'diagnostic_only': True, 'ok': False, 'errors': errors, 'captures': []}
++    if mode not in ('on', 'off') or len(sessions) != 1:
++        errors.append('one explicit diagnostic on/off session required'); return report
++    for session in sessions:
++        sdir = run_dir / session['session']
++        output = sdir / 'frame-spikes.json'
++        try:
++            launch = json.loads((sdir / 'launch.json').read_text(encoding='utf-8'))
++            expected = str(output.resolve()) if mode == 'on' else None
++            if not {'frameSpikeOut', 'frameTimingOut', 'nativeGpuEnv'}.issubset(launch) or launch.get('frameSpikeOut') != expected or launch.get('frameTimingOut') is not None or launch.get('nativeGpuEnv') != '1':
++                errors.append('launch environment mismatch')
++            if mode == 'off':
++                if output.exists(): errors.append('OFF control unexpectedly wrote a capture')
++                continue
++            data = json.loads(output.read_text(encoding='utf-8'))
++            errors.extend(validate_capture(data))
++            if isinstance(data, dict) and isinstance(data.get('samples'), dict):
++                report['captures'].append({'file': str(output), 'data': data})
++        except (OSError, ValueError, TypeError) as e:
++            errors.append('capture unavailable: ' + str(e))
++    report['ok'] = not errors
++    return report
+--- /dev/null
++++ b/target/qa/steroids-60fps-design-20261025/c5/selftest-spike-diagnostic.py
+@@ -0,0 +1,72 @@
++"""Synthetic mode/JSON/exit regressions; no app launch or device access."""
++import copy, importlib.util, json, pathlib, subprocess, tempfile
++from types import SimpleNamespace
++
++D = pathlib.Path(__file__).resolve().parent
++def load(name, file):
++    spec = importlib.util.spec_from_file_location(name, D / file)
++    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
++    return module
++m = load('runner', 'run-c5.py'); d = load('spikes', 'spike-diagnostic.py')
++base = SimpleNamespace(diagnostic_spikes='on', schedule='B', windows_per_session=1, window_seconds=1800,
++                       warmup_seconds=15, control='mcp', smoke=False, diagnostic_trace=False, soak=False)
++assert m.schedule_ok(base)
++for mode in ('on', 'off'):
++    a = copy.copy(base); a.diagnostic_spikes = mode; a.window_seconds = 10
++    assert m.schedule_ok(a)
++for key, value in [('schedule','ABBAAB'),('windows_per_session',2),('window_seconds',1801),('window_seconds',0),
++                   ('warmup_seconds',14),('control','dialog'),('smoke',True),('diagnostic_trace',True),('soak',True),('diagnostic_spikes',True)]:
++    a = copy.copy(base); setattr(a,key,value); assert not m.schedule_ok(a), (key,value)
++counters = dict(attempted_iterations=100002, completed_iterations=100002, excluded_count=1, fast_count=100000,
++                matched_count=1, partial_count=0, unobserved_count=0, overflow_count=0, invalid_count=0, incomplete_count=0)
++record = dict(iteration=100001, output_id=1, last_presented_request_sequence=99900, work_sample_sequence=99901,
++              frames_presented=99900, validation_epoch=2, start_us=1000000, sample_us=1045604, work_us=35604,
++              pacing_us=10000, extent_us=10, permit_us=20, retirement_configure_us=30, prepare_us=6000,
++              present_with_pacing_us=10000, metrics_lock_wait_us=29500, work_observed=True, admitted=True, partial=False)
++capture = dict(schema='native-work-spikes-1', diagnostic_only=True, generation=1, start_monotonic_us=10,
++               start_unix_us=100000000, clock_calibration_uncertainty_us=1, stop_us=2000000, unprepared_frames=0,
++               samples=dict(generation=1,retained_bytes=4096,record_capacity=16,work_threshold_us=33333,counters=counters,
++                            retired=True,current_iteration=None,unfinished_iteration=None,records=[record]))
++assert d.validate_capture(capture)==[]
++after_stop=copy.deepcopy(capture); after_stop['stop_us']=1000001
++assert d.validate_capture(after_stop)==[], 'admitted frame may finish after Stop'
++late_begin=copy.deepcopy(capture); late_begin['stop_us']=999999
++assert d.validate_capture(late_begin), 'admission after Stop must be rejected'
++for path,value in [(('schema',),'future'),(('diagnostic_only',),False),(('unprepared_frames',),1),
++                   (('samples','generation'),True),(('samples','retained_bytes'),16385),(('samples','retired'),False),
++                   (('samples','current_iteration'),1),(('samples','work_threshold_us'),40000),
++                   (('samples','counters','invalid_count'),1),(('samples','counters','overflow_count'),1),
++                   (('samples','counters','attempted_iterations'),True)]:
++    bad=copy.deepcopy(capture); owner=bad
++    for key in path[:-1]: owner=owner[key]
++    owner[path[-1]]=value; assert d.validate_capture(bad), path
++for key,value in [('admitted',False),('work_observed',False),('partial',True),('work_us',33333),
++                  ('iteration',0),('work_sample_sequence',0),('sample_us',1045608),('pacing_us',20000),('work_us',2**64)]:
++    bad=copy.deepcopy(capture); bad['samples']['records'][0][key]=value
++    assert d.validate_capture(bad), key
++with tempfile.TemporaryDirectory(prefix='syndocal-spike-analysis-') as tmp:
++    root=pathlib.Path(tmp); s=root/'s01-B-on';s.mkdir(); output=s/'frame-spikes.json'
++    (s/'launch.json').write_text(json.dumps(dict(frameSpikeOut=str(output.resolve()),frameTimingOut=None,nativeGpuEnv='1')),encoding='utf-8')
++    output.write_text(json.dumps(capture),encoding='utf-8')
++    sessions=[dict(session=s.name,completed=True,error=None,lifecycle=dict(ok=True))]
++    report=d.analyze(root,'on',sessions); assert report['ok']
++    result=dict(campaign=dict(diagnostic_spikes='on'),c5_verdict='DIAGNOSTIC-NOT-GATING',sessions=sessions,spike_diagnostic=report)
++    assert m.exit_code(result)==0
++    result['sessions'][0]['lifecycle']['ok']=False; assert m.exit_code(result)==1
++    result['sessions'][0]['lifecycle']['ok']=True
++    result['spike_diagnostic']['ok']=False; assert m.exit_code(result)==1
++    assert not d.analyze(root,'off',sessions)['ok']
++with tempfile.TemporaryDirectory(prefix='syndocal-spike-admission-') as tmp:
++    root=pathlib.Path(tmp); session=root/'must-not-be-written'
++    driver=dict(spikeDiagnostic='on',control='mcp',path='on',windows=1,windowMs=10000,
++                warmupMs=15000,soak=False,frameTimingOut=None,frameSpikeOut=str(root/'spikes.json'),sessionDir=str(session))
++    for key,value in [('spikeDiagnostic','future'),('control','dialog'),('path','off'),('windows',2),
++                      ('windowMs',0),('windowMs',1800001),('warmupMs',1),('soak',True),
++                      ('frameTimingOut',str(root/'full.json')),('frameSpikeOut',None),('spikeDiagnostic',None)]:
++        bad=copy.deepcopy(driver); bad[key]=value
++        config=root/'invalid.json';config.write_text(json.dumps(bad),encoding='utf-8')
++        run=subprocess.run(['node',str(D/'session-c5.mjs'),str(config)],capture_output=True,text=True,timeout=10)
++        assert run.returncode!=0 and ('invalid non-gating spike diagnostic config' in run.stderr or
++                                     'spike capture requires explicit diagnostic mode' in run.stderr), (key,value,run.stderr)
++        assert not session.exists(), 'invalid config reached session writes'
++print(json.dumps({'selftest':'PASS','synthetic_only':True,'scope':'diagnostic on/off admission, unchanged gating exclusions, bounded JSON/clock/identity validation, failure exit'}))

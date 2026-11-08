@@ -706,12 +706,33 @@ fn record_metrics(
     error: Option<String>,
     validation: Option<NativeVideoOutputValidationIdentity>,
     boundary: Option<String>,
+    #[cfg(feature = "qa-native-frame-timing")] mut spike: Option<
+        &mut video::native_frame_timing::SpikeFrame,
+    >,
 ) {
+    #[cfg(feature = "qa-native-frame-timing")]
+    let lock_started = spike.as_ref().and_then(|frame| frame.lock_clock());
     if let Ok(mut metrics) = metrics.lock() {
+        #[cfg(feature = "qa-native-frame-timing")]
+        let sample_instant = Instant::now();
+        #[cfg(feature = "qa-native-frame-timing")]
+        let elapsed = sample_instant.saturating_duration_since(started);
+        #[cfg(not(feature = "qa-native-frame-timing"))]
+        let elapsed = started.elapsed();
+        #[cfg(feature = "qa-native-frame-timing")]
+        let sample_us = spike
+            .as_ref()
+            .map_or(0, |frame| frame.sample_clock(sample_instant));
+        #[cfg(feature = "qa-native-frame-timing")]
+        let lock_wait = lock_started.map_or(Duration::ZERO, |started| {
+            sample_instant.saturating_duration_since(started)
+        });
+        #[cfg(feature = "qa-native-frame-timing")]
+        let before_count = metrics.lifetime_frame_count;
         metrics.record_resident(
             extent.0,
             extent.1,
-            started.elapsed(),
+            elapsed,
             resources.session.presented_frames(),
             resources.session.hard_blackout_frames_presented(),
             resources.session.path_evidence(),
@@ -720,6 +741,24 @@ fn record_metrics(
             validation,
             boundary,
         );
+        #[cfg(feature = "qa-native-frame-timing")]
+        if let Some(frame) = spike.as_mut() {
+            let (last_presented_request_sequence, frames_presented) = metrics
+                .resident_presentation
+                .as_ref()
+                .map(|p| (p.path.last_presented_request_sequence, p.frames_presented))
+                .unwrap_or_default();
+            frame.finish(video::native_frame_timing::SpikeMetricSample {
+                sample_us,
+                elapsed,
+                metrics_lock_wait: lock_wait,
+                admitted: before_count.checked_add(1) == Some(metrics.lifetime_frame_count),
+                validation_epoch: metrics.validation_epoch,
+                last_presented_request_sequence,
+                frames_presented,
+                work_sample_sequence: metrics.lifetime_frame_count,
+            });
+        }
     }
 }
 
@@ -1010,6 +1049,8 @@ pub(crate) fn start(
             .map(|error| error.message().to_string()),
         validation,
         boundary,
+        #[cfg(feature = "qa-native-frame-timing")]
+        None,
     );
     #[cfg(feature = "qa-native-frame-timing")]
     {
@@ -1209,8 +1250,12 @@ fn run(
     let mut pipelined_evidence = None;
     while !stop.load(Ordering::Acquire) {
         let started = Instant::now();
+        #[cfg(feature = "qa-native-frame-timing")]
+        let mut spike = video::native_frame_timing::begin_spike_frame(output_id, started);
         let mut paced = Duration::ZERO;
         let extent = window_extent.physical_size()?;
+        #[cfg(feature = "qa-native-frame-timing")]
+        spike.mark(video::native_frame_timing::SpikeStage::Extent);
         let mut validation = None;
         let mut boundary = None;
         let mut observed_follow = None;
@@ -1234,6 +1279,8 @@ fn run(
                 Some(format!(
                     "Native resident physical extent is non-presentable ({extent:?})"
                 )),
+                #[cfg(feature = "qa-native-frame-timing")]
+                Some(&mut spike),
             );
             #[cfg(feature = "qa-native-frame-timing")]
             drop(frame_trace);
@@ -1251,6 +1298,8 @@ fn run(
                     None,
                     None,
                     Some(error),
+                    #[cfg(feature = "qa-native-frame-timing")]
+                    Some(&mut spike),
                 );
                 if stop.load(Ordering::Acquire) {
                     break;
@@ -1271,6 +1320,8 @@ fn run(
                 break;
             }
         };
+        #[cfg(feature = "qa-native-frame-timing")]
+        spike.mark(video::native_frame_timing::SpikeStage::Permit);
         let result = (|| -> Result<FrameProgress, FrameFault> {
             let resources = lease.resources();
             resources.session.poll_present_retirements()?;
@@ -1282,6 +1333,8 @@ fn run(
                 resources.session.configure(extent.0, extent.1)?;
                 resources.configured_extent = Some(extent);
             }
+            #[cfg(feature = "qa-native-frame-timing")]
+            spike.mark(video::native_frame_timing::SpikeStage::RetirementConfigure);
             let render_started = Instant::now();
             #[cfg(feature = "qa-native-frame-timing")]
             let prepare_trace =
@@ -1313,6 +1366,8 @@ fn run(
                 resources.session.has_pipelined_output(),
                 &mut pipelined_evidence,
             );
+            #[cfg(feature = "qa-native-frame-timing")]
+            spike.mark(video::native_frame_timing::SpikeStage::Prepare);
             if !matches!(prepared, Ok(PreparedOutput::Presentable(_))) {
                 // A tick that ends before or without a session preparation
                 // never presents the output it may have left in flight.
@@ -1344,6 +1399,11 @@ fn run(
                 .map_err(FrameFault::Operation)
             })
         })();
+        #[cfg(feature = "qa-native-frame-timing")]
+        {
+            spike.mark(video::native_frame_timing::SpikeStage::Present);
+            spike.set_pacing(paced);
+        }
         if let Ok(FrameProgress::Interrupted(interruption)) = &result {
             boundary = Some(interruption.reason().into());
         }
@@ -1360,6 +1420,8 @@ fn run(
                 .map(|error| error.message().to_string()),
             validation,
             boundary,
+            #[cfg(feature = "qa-native-frame-timing")]
+            Some(&mut spike),
         );
         if let Ok(FrameProgress::Interrupted(interruption)) = &result {
             if interruption.ends_session() {
