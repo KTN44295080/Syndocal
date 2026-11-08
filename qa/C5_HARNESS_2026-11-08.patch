@@ -1,0 +1,208 @@
+--- a/target/qa/steroids-60fps-design-20261025/c5/run-c5.py
++++ b/target/qa/steroids-60fps-design-20261025/c5/run-c5.py
+@@ -189,11 +189,16 @@
+
+
+ def process_identity(pid):
+-    h = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
++    h = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)
+     if not h:
+         return None
+     try:
+-        return identity_from_handle(h, pid)
++        ident = identity_from_handle(h, pid)
++        # An exited process object can remain queryable while another owner
++        # retains a handle. Only a signaled handle proves that it has exited;
++        # a missing image path alone must never clear a live/unknown process.
++        ident['wait_result'] = k32.WaitForSingleObject(h, 0)
++        return ident
+     finally:
+         k32.CloseHandle(h)
+
+@@ -227,6 +232,14 @@
+         return {'pid': pid, 'terminated': ok, 'exit_observed': wait_result == 0}
+     finally:
+         k32.CloseHandle(h)
++
++
++def observe_launch_cleanup(launched):
++    observed = process_identity(launched['pid'])
++    result = {'app_exit_observation': observed}
++    if observed and observed.get('created') == launched['created'] and observed.get('wait_result') != 0:
++        result['fallback_terminate'] = terminate_exact(launched['pid'], launched['path'], launched['created'])
++    return result
+
+
+ def display_mode():
+@@ -1141,9 +1154,7 @@
+         sampler.stop_evt.set(); sampler.join(5)
+         events.close(); err.close()
+         if launched and launched.get('path'):
+-            alive = process_identity(launched['pid'])
+-            if alive and alive.get('created') == launched['created']:
+-                outcome['fallback_terminate'] = terminate_exact(launched['pid'], launched['path'], launched['created'])
++            outcome.update(observe_launch_cleanup(launched))
+         leftovers = [p for p in foreign_syndocal() if p.get('path') and os.path.normcase(p['path']) == os.path.normcase(exe['exe'])]
+         # A matching executable path is NOT ownership proof. Never kill a PID
+         # discovered only after the fact; retain it as a failed cleanup observation.
+--- /dev/null
++++ b/target/qa/steroids-60fps-design-20261025/c5/selftest-process-cleanup.py
+@@ -0,0 +1,55 @@
++"""Real Windows child-process lifetime and synthetic unknown-state regressions."""
++import importlib.util, json, pathlib, subprocess, sys
++from unittest.mock import patch
++
++D = pathlib.Path(__file__).resolve().parent
++spec = importlib.util.spec_from_file_location('runner', D / 'run-c5.py')
++m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
++checks = []
++
++# Retain the Popen handle after exit, reproducing a queryable dead process
++# object. Its image path may be unavailable although creation time survives.
++p = subprocess.Popen([sys.executable, '-I', '-c', 'pass'])
++try:
++    p.wait(timeout=10)
++    observed = m.process_identity(p.pid)
++    assert observed and observed['wait_result'] == 0 and observed['created']
++    launch = {'pid': p.pid, 'path': sys.executable, 'created': observed['created']}
++    with patch.object(m, 'terminate_exact', side_effect=AssertionError('dead child must not be killed')):
++        result = m.observe_launch_cleanup(launch)
++    assert result['app_exit_observation']['wait_result'] == 0 and 'fallback_terminate' not in result
++    checks.append('real exited child with retained handle is observed signaled and never terminated')
++finally:
++    if p.poll() is None: p.kill(); p.wait(timeout=10)
++
++launch = {'pid': 123, 'path': 'C:\\qa\\syndocal.exe', 'created': 456}
++for wait in (258, 0xffffffff, None):
++    observed = {**launch, 'path': None, 'wait_result': wait}
++    with patch.object(m, 'process_identity', return_value=observed), patch.object(m, 'terminate_exact', return_value={'terminated': False, 'reason': 'identity mismatch'}) as terminate:
++        result = m.observe_launch_cleanup(launch)
++    terminate.assert_called_once_with(123, launch['path'], 456)
++    assert 'fallback_terminate' in result
++checks.append('timeout, failed wait and missing wait proof retain fallback failure even when image path is unavailable')
++for observed in (None, {**launch, 'created': 457, 'wait_result': 258}, {**launch, 'path': None, 'wait_result': 0}):
++    with patch.object(m, 'process_identity', return_value=observed), patch.object(m, 'terminate_exact', side_effect=AssertionError('must not kill')):
++        result = m.observe_launch_cleanup(launch)
++    assert 'fallback_terminate' not in result
++checks.append('gone child, reused PID and positively signaled child never trigger termination')
++
++# Exact launch fencing remains enforced by the existing termination primitive.
++p = subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(30)'])
++try:
++    observed = m.process_identity(p.pid)
++    assert observed and observed['wait_result'] == 258 and observed['path']
++    bad = m.terminate_exact(p.pid, observed['path'], observed['created'] + 1)
++    assert bad['terminated'] is False and bad['reason'] == 'identity mismatch' and p.poll() is None
++    bad = m.terminate_exact(p.pid, observed['path'] + '.wrong', observed['created'])
++    assert bad['terminated'] is False and bad['reason'] == 'identity mismatch' and p.poll() is None
++    result = m.observe_launch_cleanup(observed)
++    assert result['fallback_terminate']['terminated'] is True and result['fallback_terminate']['exit_observed'] is True
++    p.wait(timeout=10)
++    checks.append('real live child remains protected against wrong path or creation time; exact owned child is terminated and failure receipt retained')
++finally:
++    if p.poll() is None: p.kill(); p.wait(timeout=10)
++
++print(json.dumps({'selftest': 'PASS', 'checks': checks}, indent=2))
+--- a/target/qa/steroids-60fps-design-20261025/c5/mcp-control.mjs
++++ b/target/qa/steroids-60fps-design-20261025/c5/mcp-control.mjs
+@@ -38,6 +38,27 @@
+ const exec = promisify(execFile);
+ const pause = ms => new Promise(r => setTimeout(r, ms));
+
++// Only these local read-only queries precede the control-plane send. Never
++// classify a transport failure or a rejected mutation receipt as retryable.
++const PRESEND_QUERIES = new Set(['query_output_control_authority_v1', 'allocate_output_control_request_id_v1', 'query_output_lease_authority_v1']);
++export function isPresendQueryOverloaded(error) {
++  return !!(error && PRESEND_QUERIES.has(error.queryCommand)
++    && error.queryError?.code === 'overloaded' && error.queryError?.retryable === true
++    && error.queryError?.resnapshot_required === false);
++}
++
++export async function invokeMcpLocal(backend, command, params) {
++  const r = await backend.evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)},${JSON.stringify(params ?? {})}).then(value=>({ok:true,value}),error=>({ok:false,error:String(error),queryError:error&&typeof error==='object'?{code:error.code,retryable:error.retryable,resnapshot_required:error.resnapshot_required}:null}))`);
++  if (!r.ok) {
++    const q = r.queryError;
++    const typed = q && typeof q.code === 'string' && typeof q.retryable === 'boolean' && typeof q.resnapshot_required === 'boolean';
++    const error = Error(command + ': ' + (typed ? JSON.stringify(q) : r.error));
++    if (typed) { error.queryCommand = command; error.queryError = q; }
++    throw error;
++  }
++  return r.value;
++}
++
+ export const OUTPUT_OPERATIONS = {
+   acquire: 'syndocal.output.lease.acquire.v2',
+   both: 'syndocal.output.lease.acquire.v2',
+@@ -55,11 +76,7 @@
+   const principalId = `${label}-${randomUUID()}`;
+   const state = { principalId, principalIncarnation: null, paired: false, revoked: false, credentialDirRemoved: false, sidecarPid: null, grants: [], leaseHistory: [] };
+   let credentialDirectory, mcp, lease = null;
+-  const invoke = async (command, params) => {
+-    const r = await backend.evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)},${JSON.stringify(params ?? {})}).then(value=>({ok:true,value}),error=>({ok:false,error:String(error)}))`);
+-    if (!r.ok) throw Error(command + ': ' + r.error);
+-    return r.value;
+-  };
++  const invoke = (command, params) => invokeMcpLocal(backend, command, params);
+   try {
+     credentialDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-c5-mcp-credential-'));
+     const { stdout } = await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value'], { windowsHide: true, timeout: 10000 });
+--- a/target/qa/steroids-60fps-design-20261025/c5/session-c5.mjs
++++ b/target/qa/steroids-60fps-design-20261025/c5/session-c5.mjs
+@@ -270,11 +270,10 @@
+
+ // ---------------------------------------------------------------- MCP mode
+ // Only the local pre-send refusal of the authority/request-id/lease queries
+-// ("Overloaded ... retryable: true") is retried: nothing has been sent to the
++// (code=overloaded, retryable=true, resnapshot_required=false) is retried: nothing has been sent to the
+ // control plane yet. A receipt that is not ok, a send failure or any other
+ // error is never retried.
+-const PRESEND_OVERLOAD = /^(query_output_control_authority_v1|allocate_output_control_request_id_v1|query_output_lease_authority_v1): [\s\S]*Overloaded[\s\S]*retryable: true/;
+-const presendOverloaded = e => PRESEND_OVERLOAD.test(String(e?.message ?? e));
++const { isPresendQueryOverloaded: presendOverloaded } = await import('./mcp-control.mjs');
+ const CREDENTIAL_PREFIX = 'syndocal-c5-mcp-credential-';
+ const credentialDirs = async () => (await fs.readdir(os.tmpdir())).filter(n => n.startsWith(CREDENTIAL_PREFIX)).sort();
+ const pidAlive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+--- /dev/null
++++ b/target/qa/steroids-60fps-design-20261025/c5/selftest-mcp-query-error.mjs
+@@ -0,0 +1,41 @@
++import assert from 'node:assert/strict';
++import vm from 'node:vm';
++import { invokeMcpLocal, isPresendQueryOverloaded } from './mcp-control.mjs';
++
++const queries = ['query_output_control_authority_v1', 'allocate_output_control_request_id_v1', 'query_output_lease_authority_v1'];
++let calls = 0;
++let rejection;
++const backend = { evaluate: expression => vm.runInNewContext(expression, {
++  window: { __TAURI_INTERNALS__: { invoke: async () => { calls++; if (rejection) throw rejection; return 42; } } },
++}) };
++assert.equal(await invokeMcpLocal(backend, queries[0]), 42);
++const observed = async command => {
++  try { await invokeMcpLocal(backend, command); assert.fail('must reject'); }
++  catch (error) { assert.equal(error.constructor, Error); return error; }
++};
++rejection = { code: 'overloaded', message: 'private diagnostic must not be retained', retryable: true, resnapshot_required: false, credential: 'never retain' };
++for (const command of queries) {
++  const error = await observed(command);
++  assert.equal(isPresendQueryOverloaded(error), true);
++  assert.match(error.message, /"code":"overloaded"/);
++  assert.equal(/private|credential|never retain/.test(error.message), false);
++  assert.deepEqual(Object.keys(error.queryError).sort(), ['code', 'resnapshot_required', 'retryable']);
++}
++assert.equal(isPresendQueryOverloaded(await observed('execute_control_plane')), false);
++for (const value of [
++  { code: 'forbidden', retryable: true, resnapshot_required: false },
++  { code: 'unavailable', retryable: true, resnapshot_required: false },
++  { code: 'internal', retryable: true, resnapshot_required: false },
++  { code: 'overloaded', retryable: false, resnapshot_required: false },
++  { code: 'overloaded', retryable: 'true', resnapshot_required: false },
++  { code: 'overloaded', retryable: true, resnapshot_required: true },
++  { code: 'overloaded', retryable: true },
++  'Overloaded retryable: true',
++]) {
++  rejection = value;
++  assert.equal(isPresendQueryOverloaded(await observed(queries[0])), false);
++}
++assert.equal(isPresendQueryOverloaded(Error(queries[0] + ': Overloaded retryable: true')), false);
++await assert.rejects(invokeMcpLocal({ evaluate: async () => { throw Error('transport failed'); } }, queries[0]), /transport failed/);
++assert.equal(calls, 13, 'each invocation executes once; this adapter performs no retries');
++console.log(JSON.stringify({ selftest: 'PASS', cases: 'real evaluated IPC result mapping; exact three-query whitelist; structured overload only; denied/malformed/transport errors; redaction; no adapter retries' }));
