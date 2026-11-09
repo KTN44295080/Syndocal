@@ -923,7 +923,7 @@ impl NativeResidentDisplaySession {
         for input in &inputs {
             let frame = renderer
                 .frame_provider
-                .frame_for_input_shared_with_cancellation(input, cancellation)
+                .frame_for_input_shared_live_with_cancellation(input, cancellation)
                 .map_err(|error| format!("native raw input acquisition failed: {error:?}"))?;
             let binding = self
                 .input_bindings

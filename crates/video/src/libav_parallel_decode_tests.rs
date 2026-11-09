@@ -792,16 +792,16 @@ fn pending_cached_reuse_rejects_changed_identity_extent_signature_and_backward_t
         input(1, &path, 67),
     ] {
         assert!(decoder
-            .reuse_pending_cached_frame(&invalid, &path, &signature)
+            .reuse_pending_cached_frame(&invalid, &path, &signature, false)
             .is_none());
     }
     assert!(decoder
-        .reuse_pending_cached_frame(&target, &other_path, &signature)
+        .reuse_pending_cached_frame(&target, &other_path, &signature, false)
         .is_none());
     let mut changed_signature = signature.clone();
     changed_signature.len = Some(changed_signature.len.unwrap_or(0).wrapping_add(1));
     assert!(decoder
-        .reuse_pending_cached_frame(&target, &path, &changed_signature)
+        .reuse_pending_cached_frame(&target, &path, &changed_signature, false)
         .is_none());
     assert_eq!(decoder.lookaheads[0].last_request_ms, Some(16));
     assert_eq!(decoder.entries[0].position_ms, 16);
@@ -833,7 +833,8 @@ fn pending_cached_stop_reaps_worker_and_never_returns_success() {
         .reuse_pending_cached_frame(
             &input(1, &path, 20),
             &path,
-            &StillImageSignature::from_path(&path)
+            &StillImageSignature::from_path(&path),
+            false
         )
         .is_none());
     let (finished, ready) = std::sync::mpsc::sync_channel(1);

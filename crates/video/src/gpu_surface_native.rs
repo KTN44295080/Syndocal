@@ -778,6 +778,10 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
         owner: &mut NativeGpuOwner,
         extent: (u32, u32),
     ) -> Result<(), NativeGpuFault> {
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _qa_reconfigure = crate::native_frame_timing::span(
+            crate::native_frame_timing::Phase::PresenterReconfigure,
+        );
         self.drain_retirements(owner)?;
         self.configured = None;
         self.validated = FirstUseValidated::default();
@@ -858,6 +862,13 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
         &mut self,
         owner: &mut NativeGpuOwner,
     ) -> Result<(), NativeGpuFault> {
+        // Includes polling the previous submission, not swapchain present.
+        // First-use validation uses the same phase separately; call counts
+        // distinguish its additional wait from the steady-state drain.
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _qa_validation = crate::native_frame_timing::span(
+            crate::native_frame_timing::Phase::PresenterValidation,
+        );
         let started = Instant::now();
         loop {
             if self.poll_retirements(owner)? == 0 {
@@ -1038,7 +1049,14 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
                 Err((fault, _reservation)) => self.retain_failure(input, None, None, fault),
             };
         }
-        let acquired = match self.target.acquire() {
+        let acquisition = {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_acquire = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::PresenterAcquire,
+            );
+            self.target.acquire()
+        };
+        let acquired = match acquisition {
             Ok(acquired) => acquired,
             Err(error) => {
                 if let Err((fault, _reservation)) =
@@ -1090,6 +1108,9 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
                 return self.retain_failure(input, None, None, fault);
             }
         };
+        #[cfg(feature = "qa-native-frame-timing")]
+        let qa_encode =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::PresenterEncode);
         let encoded = match self.encode(&mut phase, K::source(&input), extent, needs, &view) {
             Ok(commands) => phase.finish(commands),
             Err(fault) => {
@@ -1106,7 +1127,16 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
             }
         };
         drop(view);
-        let receipt = match txn.submit_phase(encoded) {
+        #[cfg(feature = "qa-native-frame-timing")]
+        drop(qa_encode);
+        let submitted = {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_submit = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::PresenterSubmit,
+            );
+            txn.submit_phase(encoded)
+        };
+        let receipt = match submitted {
             Ok(receipt) => receipt,
             Err(fault) => {
                 let pending = txn.finish();
@@ -1178,7 +1208,13 @@ impl<T: NativePresentTarget> SharedSurfacePresenter<T> {
                 return self.retain_failure(input, pending, receipt, fault);
             }
         }
-        self.target.present(acquired);
+        {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _qa_present = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::PresenterPresent,
+            );
+            self.target.present(acquired);
+        }
         self.presents = sequence;
         if content == NativePresentContent::HardBlackout {
             self.hard_blackouts = self.hard_blackouts.saturating_add(1);
@@ -1611,6 +1647,9 @@ fn await_first_use(
     pending: &mut PendingGpuTransaction,
     receipt: &mut Option<PendingPhaseReceipt>,
 ) -> FirstUse {
+    #[cfg(feature = "qa-native-frame-timing")]
+    let _qa_validation =
+        crate::native_frame_timing::span(crate::native_frame_timing::Phase::PresenterValidation);
     let started = Instant::now();
     loop {
         match owner.poll_transaction(pending, &|| false) {

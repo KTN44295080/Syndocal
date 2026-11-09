@@ -46,6 +46,10 @@ impl<A: NativeResidentPresentationAuthority> NativeOutputAuthority for ResidentA
         _request: &NativeOutputRequest,
         boundary: OutputBoundary,
     ) -> Result<(), PresentRejection> {
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _authority_trace = crate::native_frame_timing::span(
+            crate::native_frame_timing::Phase::PresentationAuthority,
+        );
         let boundary = match boundary {
             OutputBoundary::BeforeAcquire => NativeResidentPresentBoundary::BeforeAcquire,
             OutputBoundary::BeforePhysicalPresent => {
@@ -231,9 +235,6 @@ impl NativeResidentDisplaySession {
             .presents()
             .checked_add(1)
             .ok_or_else(|| "native present sequence exhausted".to_string())?;
-        #[cfg(feature = "qa-native-frame-timing")]
-        let _present_trace =
-            crate::native_frame_timing::span(crate::native_frame_timing::Phase::PresenterPresent);
         let pipelined = frame.pipelined;
         match frame.content {
             ResidentDisplayContent::Resident(mut ready) => {

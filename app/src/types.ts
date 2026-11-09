@@ -2127,6 +2127,7 @@ export interface VideoDecoderDiagnostics {
   libav_session_reset_count: number;
   libav_sequential_continue_count: number;
   libav_frame_reuse_count: number;
+  libav_live_held_frame_count: number;
   libav_working_set_eviction_count: number;
   libav_session_error_count: number;
   libav_hardware_session_count: number;

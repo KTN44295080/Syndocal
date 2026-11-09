@@ -2156,6 +2156,7 @@ function installOperatorVjMockInPage() {
           libav_session_reset_count: 0,
           libav_sequential_continue_count: 0,
           libav_frame_reuse_count: 0,
+          libav_live_held_frame_count: 0,
           libav_working_set_eviction_count: 0,
           libav_session_error_count: 0,
           cli_cache_len: 0,

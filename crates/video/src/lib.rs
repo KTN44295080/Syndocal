@@ -2103,6 +2103,15 @@ pub trait VideoFrameProvider {
         self.frame_for_input_with_cancellation(input, cancellation)
             .map(Arc::new)
     }
+    /// Resident Display acquisition may hold a decoder's last served frame
+    /// while its streamed look-ahead is behind. All other callers stay exact.
+    fn frame_for_input_shared_live_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Arc<VideoFrame>, VideoFrameProviderError> {
+        self.frame_for_input_shared_with_cancellation(input, cancellation)
+    }
     fn frames_for_layer(
         &mut self,
         layer: &VideoLayerSummary,
@@ -2240,6 +2249,28 @@ pub trait VideoFrameDecoder {
         self.decode_input_frame_with_cancellation(input, cancellation)
             .map(|frame| frame.map(Arc::new))
     }
+    /// Explicit live resident Display policy. Decoders without streamed
+    /// look-ahead retain their exact acquisition contract.
+    fn decode_input_frame_shared_live(
+        &mut self,
+        input: &VideoRenderInput,
+    ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
+        self.decode_input_frame_shared(input)
+    }
+    fn decode_input_frame_shared_live_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Option<Arc<VideoFrame>>, VideoDecodeError> {
+        if cancellation.is_cancelled() {
+            return Err(VideoDecodeError::Cancelled);
+        }
+        let frame = self.decode_input_frame_shared_live(input)?;
+        if cancellation.is_cancelled() {
+            return Err(VideoDecodeError::Cancelled);
+        }
+        Ok(frame)
+    }
     /// `decode_input_frames` as shared frames. A decoder that overrides
     /// `decode_input_frames` to decode a tick together overrides this too.
     fn decode_input_frames_shared(
@@ -2281,6 +2312,15 @@ pub struct DecoderBackedFrameProvider<D = NullVideoDecoder> {
         VideoRenderInput,
         Result<Option<Arc<VideoFrame>>, VideoDecodeError>,
     )>,
+}
+
+/// Acquisition policy is local to an invocation, never retained on a provider
+/// shared by live output, preview and exact offline rendering.
+#[derive(Clone, Copy)]
+enum FrameAcquisition {
+    Owned,
+    Shared,
+    LiveShared,
 }
 
 pub struct VideoPreviewRenderer<P = PreviewFrameProvider> {
@@ -4213,7 +4253,23 @@ impl<D: VideoFrameDecoder> VideoFrameProvider for DecoderBackedFrameProvider<D> 
         input: &VideoRenderInput,
         cancellation: &dyn VideoRenderCancellation,
     ) -> Result<Arc<VideoFrame>, VideoFrameProviderError> {
-        self.decode_or_placeholder_for_input_shared_with_cancellation(input, cancellation, true)
+        self.decode_or_placeholder_for_input_shared_with_cancellation(
+            input,
+            cancellation,
+            FrameAcquisition::Shared,
+        )
+    }
+
+    fn frame_for_input_shared_live_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Arc<VideoFrame>, VideoFrameProviderError> {
+        self.decode_or_placeholder_for_input_shared_with_cancellation(
+            input,
+            cancellation,
+            FrameAcquisition::LiveShared,
+        )
     }
 
     fn frames_for_layer(
@@ -4437,18 +4493,21 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
         input: &VideoRenderInput,
         cancellation: &dyn VideoRenderCancellation,
     ) -> Result<VideoFrame, VideoFrameProviderError> {
-        self.decode_or_placeholder_for_input_shared_with_cancellation(input, cancellation, false)
-            .map(Arc::unwrap_or_clone)
+        self.decode_or_placeholder_for_input_shared_with_cancellation(
+            input,
+            cancellation,
+            FrameAcquisition::Owned,
+        )
+        .map(Arc::unwrap_or_clone)
     }
 
-    /// One cancellable acquisition. `shared` selects the decoder's shared live
-    /// path (no frame copy, look-ahead started) used by resident native
-    /// preparation; otherwise the decoder's owned cancellable decode is used.
+    /// One cancellable acquisition; only the explicit live policy can hold a
+    /// streamed frame. Shared and owned exact paths preserve frame accuracy.
     fn decode_or_placeholder_for_input_shared_with_cancellation(
         &mut self,
         input: &VideoRenderInput,
         cancellation: &dyn VideoRenderCancellation,
-        shared: bool,
+        acquisition: FrameAcquisition,
     ) -> Result<Arc<VideoFrame>, VideoFrameProviderError> {
         if cancellation.is_cancelled() {
             return Err(VideoFrameProviderError::Cancelled);
@@ -4497,7 +4556,10 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
                 Err(VideoDecodeError::Cancelled)
             }
             Some(decoded) => decoded,
-            None if shared => self
+            None if matches!(acquisition, FrameAcquisition::LiveShared) => self
+                .decoder
+                .decode_input_frame_shared_live_with_cancellation(input, cancellation),
+            None if matches!(acquisition, FrameAcquisition::Shared) => self
                 .decoder
                 .decode_input_frame_shared_with_cancellation(input, cancellation),
             None => self
