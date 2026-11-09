@@ -71,14 +71,115 @@ Evidence lives under `target/qa/native-spike-diagnostic-20261109/`:
 
 Compiler warnings in the completed video tests, feature-OFF release build and
 feature-ON app check: zero. No new baseline compile was run, so a numerical
-baseline/delta is not inferred. Feature-ON native diagnostic execution remains
-pending. Observer cost and spike reproduction have not yet been measured.
+baseline/delta is not inferred. Feature-ON execution and the observer comparison
+were completed below; the original soak failure remains unresolved.
 
 Protected `target/release/syndocal.exe` remains SHA-256
 `1d8e757ea8e7b1ffee8a51496d1c4ef2aa0399148a373c55313f252f1212d228`.
 Unrelated Vite directories and prior failed/invalid evidence remain untouched.
 
-Next: prepare a receipted committed timing artifact, compare short observer
-OFF/ON runs, then collect a long diagnostic.
-Only after attribution and any justified fix can a fresh formal acceptance
+## Native capture at `ba7be6d3`
+
+The receipted artifact is `c5/build-ba7be6d3b48b-timing-2611090534/`, under
+`target/qa/steroids-60fps-design-20261025/`. EXE SHA-256:
+`16631dd06af60620d8889adaf59a5db725c7f56a1e82a81ae328f1fe26073e80`.
+Committed source archive, all source files and nine pinned runtime files were
+verified. Release build exited 0 with zero compiler warnings. The normal EXE
+hash above is unchanged. Profile:
+`jp.seraf.ktn.syndocal.qa.c5xba7be6d3t2611090534`.
+
+The owner confirmed preparation before these five runs. All used the same
+artifact, canonical grouped fixture, 2560×1600/180 Hz, resident GPU ON, 15 s
+warmup and authenticated MCP control. Lighting stayed denied. Each run used a
+new process; only the first used a fresh profile, so these are not four
+independent cold-start comparisons. Every run exited 0 and independently
+proved clean Stop, Standby/Ready/all-deny, empty routes/health, MCP teardown,
+graceful close, no owned leftovers and free CDP port. No dialogs or forced exit.
+
+### Observer OFF / ON / ON / OFF
+
+Run IDs below are under `c5/runs/`, all ending `-ba7be6d3b48b`.
+
+| Run prefix | Observer | Host FPS | Reconstructed work mean µs | Work deadline misses |
+| --- | --- | --- | --- | --- |
+| `20261109-072006-618176` | OFF | 59.9994 | 7142.4 | 6 |
+| `20261109-072218-799116` | ON | 59.9852 | 6874.2 | 1 |
+| `20261109-072429-207640` | ON | 59.9939 | 6871.5 | 1 |
+| `20261109-072640-943122` | OFF | 60.0063 | 7067.3 | 4 |
+
+All four 60 s windows passed V1–V9 and G1–G8. The campaign verdicts remain
+`DIAGNOSTIC-NOT-GATING`, not C5 acceptance. The weighted work means were
+7104.85 µs OFF and 6872.85 µs ON (descriptive difference −3.265%). No work-mean
+increase was observed in these four runs. Integer lifetime means are only an
+approximation; this is not proof of causation, zero overhead or an overhead
+upper bound. ON's Presented p99 was 17.7 ms versus OFF's 17.6 ms, host CPU
+averages were 12.95% versus 12.45%, and health roundtrips above 10 ms were
+10/219 versus 4/220. Those differences also do not establish causation.
+
+Both ON captures retained 2312 bytes, with 4525 admitted samples each and zero
+matches above 33,333 µs. Their smaller 60fps deadline misses remain visible.
+Partial, unobserved, invalid, incomplete, unprepared and overflow counts were
+zero. Comparison details are retained in
+`target/qa/native-spike-diagnostic-20261109/observer-comparison.json`.
+
+### Thirty-minute diagnostic: prepare burst reproduced
+
+Run `20261109-072858-337749-ba7be6d3b48b` measured 1800.028 s and 107981
+Presented receipts (59.9885 host FPS; required 108000). It is deliberately
+`INVALID` under the unchanged V6=60 s acceptance rule; every other V condition
+passed. G1 and G3 were false. G2/G4–G8 passed. Native exit 0 proves diagnostic
+and lifecycle completion, not 60fps acceptance.
+
+The capture completed all 108987 attempted iterations: 61 excluded, 108923
+fast, three matched. All partial/unobserved/invalid/incomplete/unprepared and
+overflow counters were zero; retained bytes 2312. The three matched samples
+were consecutive, same output 1 and validation epoch 2:
+
+| G3 work sequence | JST 2026-11-09 start → sample | Work ms | Prepare ms | Present ms |
+| --- | --- | --- | --- | --- |
+| 73183 | 07:49:45.183801 → .454275 | 270.474 | 269.785 | 0.628 |
+| 73184 | .454282 → .548708 | 94.425 | 93.646 | 0.756 |
+| 73185 | .548717 → .586614 | 37.897 | 37.097 | 0.782 |
+
+Prepare occupied 99.745% / 99.175% / 97.889% of each work sample. Pacing and
+metrics-lock wait were zero µs in all three. Clock identity residual was
+0/1/0 µs; bucket rounding/unassigned residual was 4/2/4 µs. This is wall time
+in the coarse prepare interval, including its surrounding demand-counter and
+evidence bookkeeping, not proved CPU execution or GPU time.
+
+Raw statuses at 07:49:46.020 (lifetime count 73211, bounded count 600) and
+07:49:51.148 (73518/600) both strictly contain all three work sequences and
+report maximum 270474 µs / G3=false. At 07:49:58.235 (73944/600), the samples
+have aged out and G3=true. The recovered final state does not erase failure.
+Health at the same time recorded dropped slots 0→20, one interval above
+100 ms and cumulative maximum 271.8367 ms. Individual receipt identity is
+not carried by that histogram, so only time correspondence is established.
+
+The burst overlapped a successful MCP renewal of about 1224.052 ms. Of 158
+renewals, 31 were at least that long; renewal occupied 9.408% of the measured
+window. This overlap does not prove a renewal cause. Decoder reset increased
+303→306 across the surrounding status reads, but the same +3 recurred about
+every 11–12 s with G3 passing elsewhere. Cache/session counts stayed 3, errors
+and evictions stayed zero. Multi-layer cumulative decode wall time cannot be
+assigned to an individual spike. Near-event host busy was about 21–23%; AC,
+180 Hz and an unoccluded screen were maintained, without build processes or
+another Syndocal. One-second whole-host samples cannot exclude a blocked/preempted
+thread, a driver/GPU wait or short resource pressure.
+
+Stop took 337.433 ms, graceful close 209 ms and cleanup 4958.644 ms. Capture,
+source/runtime hashes, clock/sequence correspondence and cleanup were reviewed
+independently. All raw data, preceding failures and unrelated Vite directories
+remain preserved. No source or threshold changed during the five runs.
+
+## Continuation boundary
+
+The failure is narrowed to **prepare wall time**, with three genuine adopted
+G3 samples and a coincident cadence disturbance. CPU/decoder/GPU/OS/renewal
+attribution is still open; the older 35.604 ms spike is not proved to share
+this cause. This is not a performance fix or a passing soak. Keep default OFF.
+
+Next split the prepare interval at its engine-context/snapshot reads, previous
+GPU ring completion, demand/decode acquisition, ISF submission/completion and
+final settlement. Preserve exact G3 clocks and bounded Stop/ACK ownership.
+Only after attribution and a justified fix can a fresh formal acceptance
 campaign be considered. Physical scanout and release gates remain separate.
