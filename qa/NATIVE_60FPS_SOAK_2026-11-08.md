@@ -131,3 +131,32 @@ retain the spike and all preceding invalid attempts. Next work is a separately
 identified diagnostic capture of the work spike before attempting adoption or
 another acceptance run. This used profile cannot qualify for another soak under
 the current retained-history rule; do not delete its ledger to manufacture reuse.
+
+## 2026-11-09 rerun after the live-tick stall fixes (Claude)
+
+Product: `c58d7b45` (live resident Display may hold a layer's frame instead
+of waiting on a behind look-ahead) + `9d57a91d` (resident Display surface
+uses Mailbox when supported, AutoVsync otherwise). Receipted normal build
+`c5/build-9d57a91d828c-normal-2611091812/`. Same group-FX fixture,
+2560×1600 / 180 Hz, MCP control, lighting denied, unchanged gates. The
+operator's Claude and ChatGPT windows were minimized for the run (an earlier
+attempt, `c5/runs/20261109-174422-474889-9d57a91d828c`, is INVALID only
+by V1 occlusion from a ChatGPT window; its ON windows passed every gate).
+
+- **C5 PASS** — `c5/runs/20261109-182338-497390-9d57a91d828c`: ON
+  59.9966 / 60.0088 / 59.9955 fps, whole max 19.0 / 18.7 / 24.0 ms, 0/0/1
+  intervals >20 ms, every G1–G8 PASS; OFF 7.63 fps (expected baseline FAIL).
+- **Soak FAIL (resource growth only)** — `c5/runs/20261109-184818-256747-9d57a91d828c`:
+  30/30 windows valid and PASS (min 59.9844 fps, G3 work budget passed in
+  every minute, max interval 33.4 ms in minute 10, ≤2 intervals >20 ms per
+  minute). Failed only `resource_growth_bounded`: private-byte high-water
+  +142,065,664 B over minute 1 (bound 134,217,728); working set +129,044,480
+  (pass). Queue/cache/session/retirement growth 0. Live holds: 0 in every
+  window, so the hold path did not run.
+
+The memory is not higher than the 11/08 run that passed: private high-water
+range 2077.8–2219.8 MB (median 2095.2) versus 2082.7–2227.0 MB (median
+2139.8) then. The difference is the baseline: this run's minute 1 was its
+lowest minute (2077.8 MB), 11/08's minute 1 was mid-range (2117.4 MB). The
+gate is unchanged and the verdict stays FAIL; headroom against a
+first-minute baseline needs either a lower sawtooth peak or a repeat run.
