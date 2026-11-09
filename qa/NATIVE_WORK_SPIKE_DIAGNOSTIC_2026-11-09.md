@@ -248,3 +248,30 @@ Actual V2 capture size, observer cost and prepare-internal attribution remain
 unmeasured. Next build a receipted timing artifact from this committed source,
 then compare observer OFF/ON before another long diagnostic. No passing
 acceptance or root-cause fix is claimed.
+
+## V2 capture at `cb763fbd` — two distinct spike shapes (2026-11-09, Claude)
+
+Artifact `c5/build-cb763fbd09cf-timing-2611091035/` (profile
+`jp.seraf.ktn.syndocal.qa.c5xcb763fbdt2611091035`). Observer OFF/ON/ON/OFF
+60 s windows `c5/runs/20261109-105519…`, `-105730…`, `-105953…`, `-110209…`
+each PASS (60.0055 / 60.0034 / 60.0032 / 59.9895 fps; work means 6500.0 /
+6733.8 / 6458.8 / 6570.6 µs), campaign INCOMPLETE by construction
+(single path). Thirty-minute diagnostic `c5/runs/20261109-110450-969137-cb763fbd09cf`
+(11:04–11:35 JST): 107994/108000 receipts, 59.9959 fps, max interval 49.9 ms,
+181 intervals >20 ms, INVALID only by V6 window length, G3 false.
+Capture `native-work-spikes-2`: 109017 attempted/completed, 3 matched, zero
+partial/unobserved/invalid/incomplete/overflow, 10888 bytes retained.
+
+| JST | Work ms | Prepare ms | Present ms | Largest inclusive phases |
+| --- | --- | --- | --- | --- |
+| 11:08:44.621 | 46.463 | 45.650 | 0.774 | Demand 41.000 (1 call), Isf 3.543 |
+| 11:21:32.595 | 34.284 | 10.456 | 26.803 (pacing 3.100) | PresenterPresent 23.277, IsfMappedCopy 3.089, ResidentRingResolve 2.173, IsfMapWait 2.172 |
+| 11:22:33.819 | 40.686 | 13.707 | 26.894 | PresenterPresent 26.879, IsfMappedCopy 8.159 |
+
+So the over-budget samples are **not one cause**: one is a decode-demand
+stall inside prepare; two are a ~23–27 ms block inside the presenter's
+present call (plus a slower ISF mapped readback). Inclusive wall time only;
+it does not prove CPU vs GPU vs OS waits. Next: split Demand (frame
+acquisition vs decoder wait vs queue) and PresenterPresent (swapchain
+present / frame-latency wait / GPU queue backpressure), then fix and rerun
+the formal C5 + 30-minute soak. Default resident ON remains unaccepted.
