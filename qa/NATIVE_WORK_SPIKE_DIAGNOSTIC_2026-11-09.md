@@ -183,3 +183,68 @@ GPU ring completion, demand/decode acquisition, ISF submission/completion and
 final settlement. Preserve exact G3 clocks and bounded Stop/ACK ownership.
 Only after attribution and a justified fix can a fresh formal acceptance
 campaign be considered. Physical scanout and release gates remain separate.
+
+## Prepare phase summaries — implementation after `c0e62e4f`
+
+The next diagnostic reuses the existing `span(Phase)` call sites on the
+synchronous resident owner. Each selected record additionally reports
+`phase_wall_us` and `phase_calls` in the explicit 31-entry `samples.phase_order`.
+The existing 26 phases cover demand, retention, ISF submission/waits and
+presentation. Five appended phases identify ContextCapture,
+PresentationSnapshot, PresentationAuthority, ResidentRingResolve and
+ResidentSettle. The app hooks only bracket existing calls; authority order,
+Stop, rendering and compatibility policy are unchanged.
+
+Phase times are **inclusive wall time**. Nested and repeated phases can
+overlap; never sum these arrays as CPU work, GPU time or a critical path.
+The collector uses a fixed 16-deep owner-local stack, generation/iteration and
+non-reused serial tokens. Its guard is not Send. A stale, misordered,
+overflowing or unfinished span produces explicit invalid/partial evidence;
+it cannot charge another frame. An admitted frame's spans may complete after
+Stop. Worker threads without the resident buffer record nothing. Disabled
+mode touches no diagnostic TLS/clock. The fixed 16-record / 16 KiB bound and
+original G3 sample Instant/pacing identity remain enforced.
+
+The writer now emits only `native-work-spikes-2`; the V1 writer is removed.
+The new cold reader rejects retired, future and malformed formats, exact phase
+order/length/type mismatches and inconsistent duration/call accounting. It
+does not interpret inclusive sums as exclusive time. Ordinary C5/soak gates,
+the full trace's 3072/64/8 capacities and 8 MiB bound remain unchanged.
+
+For V1 evidence above, preserve the original raw data and reports. To reanalyse
+it, restore its matching reader from `C5_SPIKE_DIAGNOSTIC_2026-11-09.patch` into
+a separate harness copy and use a **copy of the run**, never the protected
+original. The current CLI refuses incompatible ON captures before report
+writes; synthetic retired/future/malformed inputs proved unchanged hashes for
+raw capture, `c5-result.json` and `SUMMARY.md`. The newer reader delta is
+retained in `C5_SPIKE_PREPARE_2026-11-09.patch`, applied after the prior patches.
+
+Evidence is under `target/qa/native-spike-prepare-20261109/`. The pinned
+MSVC/PATH-first formal video test run exited 0: 30 passed, zero failed/ignored,
+702 filtered, zero compiler warnings. This includes prior full-trace checks,
+nested/repeated inclusive phase summaries, bounded depth, stale/misordered
+tokens, incomplete spans, Stop/in-flight completion and disabled/no-owner
+clock checks. Two earlier wrapper attempts were invalid and are not counted;
+the accepted wrapper has all 14 lines encoded CRLF and verified the exact
+linker before Cargo. Synthetic diagnostic/CLI protection tests passed, as did
+the 46 ordinary analyzer regressions and a normal synthetic CLI reanalysis.
+
+The feature-OFF `pnpm --dir app tauri build --no-bundle` completed successfully
+in the reused isolated Cargo target with a new QA identifier. Its EXE SHA-256
+is `b5fbab046b3b6ecad9e151e97fbd110fa9da71de953b4feb7a597d5eae06e5a1`.
+`normal-native-proof.json` verifies one responsive maximized 2560×1600 Syndocal
+window, a populated rendered root, denied lighting/video over three polls,
+no live video outputs, normal exit 0, no force and free CDP 9287. The source
+hash manifest remained identical before/after the build. All nine isolated
+runtime identities and the protected normal EXE were verified.
+
+`cargo check -p syndocal --features qa-native-frame-timing,ndi` also exited 0.
+The frozen five-file Rust diff and cold harness received independent review.
+For video feature tests, feature-ON app check and feature-OFF release build,
+compiler warnings were previous-checkpoint baseline 0 / current 0 / delta 0;
+no extra baseline build was run. The invalid wrapper attempts are excluded.
+
+Actual V2 capture size, observer cost and prepare-internal attribution remain
+unmeasured. Next build a receipted timing artifact from this committed source,
+then compare observer OFF/ON before another long diagnostic. No passing
+acceptance or root-cause fix is claimed.

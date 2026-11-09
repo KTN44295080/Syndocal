@@ -1,0 +1,193 @@
+--- a/target/qa/steroids-60fps-design-20261025/c5/run-c5.py
++++ b/target/qa/steroids-60fps-design-20261025/c5/run-c5.py
+@@ -1837,12 +1837,20 @@
+                       '| Iteration | G3 sample seq | Last Presented request | work us | pacing us | extent / permit / retirement / prepare / present-with-pacing / metrics-lock ms |',
+                       '| --- | --- | --- | --- | --- | --- |']
+             records = samples.get('records')
++            phase_summaries = []
+             for sample in records if isinstance(records, list) else []:
+                 if not isinstance(sample, dict): continue
+                 buckets = ' / '.join(str(round(sample.get(k, 0) / 1000, 3)) for k in
+                           ('extent_us', 'permit_us', 'retirement_configure_us', 'prepare_us', 'present_with_pacing_us', 'metrics_lock_wait_us')
+                           if isinstance(sample.get(k, 0), (int, float)))
+                 lines.append(f"| {sample.get('iteration')} | {sample.get('work_sample_sequence')} | {sample.get('last_presented_request_sequence')} | {sample.get('work_us')} us | {sample.get('pacing_us')} us | {buckets} |")
++                phases = samples.get('phase_order', [])
++                times, calls = sample.get('phase_wall_us', []), sample.get('phase_calls', [])
++                if isinstance(phases, list) and isinstance(times, list) and isinstance(calls, list):
++                    detail = ', '.join(f'{name}={duration} us/{count} calls' for name, duration, count in zip(phases, times, calls) if count)
++                    phase_summaries.append(f"Inclusive phase summary for work {sample.get('work_sample_sequence')}: {detail}. Nested totals overlap; do not sum them.")
++            for detail in phase_summaries:
++                lines += ['', detail]
+     (run_dir / 'SUMMARY.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+     return result
+
+@@ -1861,11 +1869,15 @@
+     return 0 if r['c5_verdict'] in ('PASS', 'DIAGNOSTIC-NOT-GATING') else (1 if r['c5_verdict'] == 'FAIL' else 3)
+
+
+-def analyze_spike_capture(run_dir, mode, sessions):
++def spike_reader():
+     spec = importlib.util.spec_from_file_location('spike_diagnostic', WORK / 'spike-diagnostic.py')
+     module = importlib.util.module_from_spec(spec)
+     spec.loader.exec_module(module)
+-    return module.analyze(run_dir, mode, sessions)
++    return module
++
++
++def analyze_spike_capture(run_dir, mode, sessions):
++    return spike_reader().analyze(run_dir, mode, sessions)
+
+
+ def main():
+@@ -1898,6 +1910,9 @@
+     args.control = args.control if args.control is not None else ('mcp' if args.soak or args.diagnostic_spikes is not None else 'dialog')
+     args.window_seconds = args.window_seconds if args.window_seconds is not None else (1800 if args.diagnostic_spikes is not None else 60)
+     if args.analyze:
++        analysis_meta = json.loads((pathlib.Path(args.analyze) / 'campaign.json').read_text(encoding='utf-8'))
++        if analysis_meta.get('diagnostic_spikes') == 'on':
++            spike_reader().guard_reanalysis(args.analyze)
+         r = analyze(args.analyze); print(json.dumps({'c5_verdict': r['c5_verdict'], 'c5_verdict_excluding_known_exit_defect': r['c5_verdict_excluding_known_exit_defect'],
+                                                     'paths': r['paths'], **({'mode': 'soak', 'soak_verdict': r['soak_verdict']} if 'soak' in r else {})}, indent=1))
+         return exit_code(r)
+--- a/target/qa/steroids-60fps-design-20261025/c5/spike-diagnostic.py
++++ b/target/qa/steroids-60fps-design-20261025/c5/spike-diagnostic.py
+@@ -1,6 +1,14 @@
+ """Cold, read-only validation of bounded diagnostic capture; never a C5 gate."""
+ import json
+ import pathlib
++
++PHASE_ORDER = ['Prepare', 'Retention', 'RetentionJoin', 'RetentionRecv', 'Demand', 'ChainPreparation',
++               'Queue', 'Isf', 'IsfUpload', 'IsfEncode', 'IsfSubmit', 'IsfMapWait', 'IsfMappedCopy',
++               'IsfUnmap', 'IsfCleanup', 'CpuComposition', 'LastValidLookup', 'LastValidClone',
++               'LastValidReplace', 'PresenterAcquire', 'PresenterReconfigure', 'PresenterUpload',
++               'PresenterEncode', 'PresenterSubmit', 'PresenterValidation', 'PresenterPresent',
++               'ContextCapture', 'PresentationSnapshot', 'PresentationAuthority',
++               'ResidentRingResolve', 'ResidentSettle']
+
+
+ def nat(v):
+@@ -11,7 +19,7 @@
+     errors = []
+     if not isinstance(data, dict):
+         return ['capture is not an object']
+-    if data.get('schema') != 'native-work-spikes-1' or data.get('diagnostic_only') is not True:
++    if data.get('schema') != 'native-work-spikes-2' or data.get('diagnostic_only') is not True:
+         errors.append('unrecognized diagnostic schema')
+     for key in ('generation', 'start_monotonic_us', 'start_unix_us', 'clock_calibration_uncertainty_us', 'stop_us', 'unprepared_frames'):
+         if not nat(data.get(key)):
+@@ -21,6 +29,8 @@
+     s = data.get('samples')
+     if not isinstance(s, dict):
+         return errors + ['missing samples']
++    if s.get('phase_order') != PHASE_ORDER:
++        errors.append('phase order mismatch')
+     if not nat(s.get('generation')) or s.get('generation') != data.get('generation') or not nat(data.get('generation')) or data['generation'] == 0:
+         errors.append('generation mismatch')
+     if not nat(s.get('retained_bytes')) or not 0 < s['retained_bytes'] <= 16384:
+@@ -54,6 +64,17 @@
+             errors.append('malformed slow record'); continue
+         if r.get('admitted') is not True or r.get('work_observed') is not True or r.get('partial') is not False or r['work_us'] <= 33333:
+             errors.append('record is not an admitted slow work sample')
++        times, calls = r.get('phase_wall_us'), r.get('phase_calls')
++        if (not isinstance(times, list) or not isinstance(calls, list) or len(times) != len(PHASE_ORDER)
++                or len(calls) != len(PHASE_ORDER) or not all(nat(v) for v in times + calls)):
++            errors.append('malformed inclusive phase summaries')
++        else:
++            wall = r['sample_us'] - r['start_us']
++            # Nested spans are inclusive. A repeated phase can overlap itself;
++            # never sum phase totals or claim exclusive CPU/GPU work.
++            if any((count == 0 and duration != 0) or duration > count * (max(0, wall) + 2)
++                   for duration, count in zip(times, calls)):
++                errors.append('phase duration/call accounting mismatch')
+         if not last_iteration < r['iteration'] <= c['attempted_iterations'] or not last_work < r['work_sample_sequence']:
+             errors.append('non-monotonic sample identity')
+         last_iteration, last_work = r['iteration'], r['work_sample_sequence']
+@@ -66,6 +87,25 @@
+         if abs((r['sample_us'] - r['start_us']) - (r['work_us'] + r['pacing_us'])) > 2:
+             errors.append('work boundary does not share the metric clock')
+     return errors
++
++
++def guard_reanalysis(run_dir):
++    """Refuse incompatible evidence before the CLI can overwrite reports."""
++    root = pathlib.Path(run_dir)
++    meta = json.loads((root / 'campaign.json').read_text(encoding='utf-8'))
++    if meta.get('diagnostic_spikes') != 'on':
++        return
++    captures = list(root.glob('s*/frame-spikes.json'))
++    try:
++        if len(captures) != 1:
++            raise ValueError('one retained diagnostic capture required')
++        data = json.loads(captures[0].read_text(encoding='utf-8'))
++        errors = validate_capture(data)
++        if errors:
++            raise ValueError('; '.join(errors))
++    except (OSError, ValueError, TypeError) as error:
++        raise SystemExit('Refusing incompatible diagnostic reanalysis before report writes: '
++                         + str(error) + '. Preserve this run; use its matching retained reader on a copy.')
+
+
+ def analyze(run_dir, mode, sessions):
+--- a/target/qa/steroids-60fps-design-20261025/c5/selftest-spike-diagnostic.py
++++ b/target/qa/steroids-60fps-design-20261025/c5/selftest-spike-diagnostic.py
+@@ -1,5 +1,5 @@
+ """Synthetic mode/JSON/exit regressions; no app launch or device access."""
+-import copy, importlib.util, json, pathlib, subprocess, tempfile
++import copy, hashlib, importlib.util, json, pathlib, subprocess, sys, tempfile
+ from types import SimpleNamespace
+
+ D = pathlib.Path(__file__).resolve().parent
+@@ -23,15 +23,27 @@
+               frames_presented=99900, validation_epoch=2, start_us=1000000, sample_us=1045604, work_us=35604,
+               pacing_us=10000, extent_us=10, permit_us=20, retirement_configure_us=30, prepare_us=6000,
+               present_with_pacing_us=10000, metrics_lock_wait_us=29500, work_observed=True, admitted=True, partial=False)
+-capture = dict(schema='native-work-spikes-1', diagnostic_only=True, generation=1, start_monotonic_us=10,
++record['phase_wall_us']=[0]*len(d.PHASE_ORDER);record['phase_calls']=[0]*len(d.PHASE_ORDER)
++record['phase_wall_us'][0]=35000;record['phase_calls'][0]=1
++record['phase_wall_us'][4]=33000;record['phase_calls'][4]=1
++capture = dict(schema='native-work-spikes-2', diagnostic_only=True, generation=1, start_monotonic_us=10,
+                start_unix_us=100000000, clock_calibration_uncertainty_us=1, stop_us=2000000, unprepared_frames=0,
+                samples=dict(generation=1,retained_bytes=4096,record_capacity=16,work_threshold_us=33333,counters=counters,
+-                            retired=True,current_iteration=None,unfinished_iteration=None,records=[record]))
++                            retired=True,current_iteration=None,unfinished_iteration=None,
++                            phase_order=d.PHASE_ORDER,records=[record]))
+ assert d.validate_capture(capture)==[]
+ after_stop=copy.deepcopy(capture); after_stop['stop_us']=1000001
+ assert d.validate_capture(after_stop)==[], 'admitted frame may finish after Stop'
+ late_begin=copy.deepcopy(capture); late_begin['stop_us']=999999
+ assert d.validate_capture(late_begin), 'admission after Stop must be rejected'
++retired=copy.deepcopy(capture);retired['schema']='native-work-spikes-1'
++assert d.validate_capture(retired), 'retired writer schema requires its retained matching reader'
++for key,value in [('phase_wall_us',[1]),('phase_calls',[False]*len(d.PHASE_ORDER)),
++                  ('phase_wall_us',[1000000]*len(d.PHASE_ORDER)),('phase_calls',[0]*len(d.PHASE_ORDER))]:
++    bad=copy.deepcopy(capture);bad['samples']['records'][0][key]=value
++    assert d.validate_capture(bad), key
++bad=copy.deepcopy(capture);bad['samples']['phase_order']=list(reversed(d.PHASE_ORDER))
++assert d.validate_capture(bad), 'phase order must be exact'
+ for path,value in [(('schema',),'future'),(('diagnostic_only',),False),(('unprepared_frames',),1),
+                    (('samples','generation'),True),(('samples','retained_bytes'),16385),(('samples','retired'),False),
+                    (('samples','current_iteration'),1),(('samples','work_threshold_us'),40000),
+@@ -56,6 +68,23 @@
+     result['sessions'][0]['lifecycle']['ok']=True
+     result['spike_diagnostic']['ok']=False; assert m.exit_code(result)==1
+     assert not d.analyze(root,'off',sessions)['ok']
++with tempfile.TemporaryDirectory(prefix='syndocal-spike-reanalysis-') as tmp:
++    root=pathlib.Path(tmp); s=root/'s01-B-on';s.mkdir()
++    (root/'campaign.json').write_text(json.dumps(dict(diagnostic_spikes='on')),encoding='utf-8')
++    for name in ('c5-result.json','SUMMARY.md'):
++        (root/name).write_text('protected evidence sentinel',encoding='utf-8')
++    for schema in ('native-work-spikes-1','future',None):
++        bad=copy.deepcopy(capture);bad['schema']=schema
++        raw=s/'frame-spikes.json';raw.write_text(json.dumps(bad),encoding='utf-8')
++        files=[root/'c5-result.json',root/'SUMMARY.md',raw]
++        before={p:hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
++        run=subprocess.run([sys.executable,'-I','-B',str(D/'run-c5.py'),'--analyze',str(root)],
++                           capture_output=True,text=True,timeout=10)
++        assert run.returncode!=0 and 'Refusing incompatible diagnostic reanalysis before report writes' in run.stderr
++        assert before=={p:hashlib.sha256(p.read_bytes()).hexdigest() for p in files}, 'rejected reanalysis changed evidence'
++    for mode in (None,'off'):
++        (root/'campaign.json').write_text(json.dumps(dict(diagnostic_spikes=mode)),encoding='utf-8')
++        d.guard_reanalysis(root) # Ordinary/OFF evidence has no new capture requirement.
+ with tempfile.TemporaryDirectory(prefix='syndocal-spike-admission-') as tmp:
+     root=pathlib.Path(tmp); session=root/'must-not-be-written'
+     driver=dict(spikeDiagnostic='on',control='mcp',path='on',windows=1,windowMs=10000,

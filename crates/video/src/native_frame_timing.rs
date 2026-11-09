@@ -58,7 +58,48 @@ pub enum Phase {
     PresenterSubmit,
     PresenterValidation,
     PresenterPresent,
+    ContextCapture,
+    PresentationSnapshot,
+    PresentationAuthority,
+    ResidentRingResolve,
+    ResidentSettle,
 }
+
+pub const PHASE_COUNT: usize = Phase::ResidentSettle as usize + 1;
+/// Canonical array order for slow-work inclusive phase summaries.
+pub const PHASE_ORDER: [Phase; PHASE_COUNT] = [
+    Phase::Prepare,
+    Phase::Retention,
+    Phase::RetentionJoin,
+    Phase::RetentionRecv,
+    Phase::Demand,
+    Phase::ChainPreparation,
+    Phase::Queue,
+    Phase::Isf,
+    Phase::IsfUpload,
+    Phase::IsfEncode,
+    Phase::IsfSubmit,
+    Phase::IsfMapWait,
+    Phase::IsfMappedCopy,
+    Phase::IsfUnmap,
+    Phase::IsfCleanup,
+    Phase::CpuComposition,
+    Phase::LastValidLookup,
+    Phase::LastValidClone,
+    Phase::LastValidReplace,
+    Phase::PresenterAcquire,
+    Phase::PresenterReconfigure,
+    Phase::PresenterUpload,
+    Phase::PresenterEncode,
+    Phase::PresenterSubmit,
+    Phase::PresenterValidation,
+    Phase::PresenterPresent,
+    Phase::ContextCapture,
+    Phase::PresentationSnapshot,
+    Phase::PresentationAuthority,
+    Phase::ResidentRingResolve,
+    Phase::ResidentSettle,
+];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 #[repr(u8)]
@@ -684,7 +725,7 @@ fn spike_snapshot() -> Result<SpikeCaptureSnapshot, &'static str> {
     buffer.retire(generation);
     let samples = buffer.snapshot();
     Ok(SpikeCaptureSnapshot {
-        schema: "native-work-spikes-1",
+        schema: "native-work-spikes-2",
         diagnostic_only: true,
         generation,
         start_monotonic_us: control.start_us,
@@ -1244,6 +1285,7 @@ pub struct SpanGuard {
     generation: u64,
     parent: usize,
     child: u8,
+    spike: Option<spike::SpikeSpanGuard>,
 }
 fn relative_us(parent: &mut Parent) -> u32 {
     let elapsed = now_us().saturating_sub(parent.start_us);
@@ -1257,7 +1299,14 @@ pub fn span(phase: Phase) -> SpanGuard {
         generation: 0,
         parent: 0,
         child: ROOT,
+        spike: None,
     };
+    if SPIKE_ENABLED.load(Ordering::Relaxed) {
+        return SpanGuard {
+            spike: spike::begin_span(phase),
+            ..inactive()
+        };
+    }
     if !process_enabled() {
         return inactive();
     }
@@ -1289,11 +1338,15 @@ pub fn span(phase: Phase) -> SpanGuard {
             generation: buffer.generation,
             parent: index,
             child,
+            spike: None,
         }
     })
 }
 impl Drop for SpanGuard {
     fn drop(&mut self) {
+        if self.spike.is_some() {
+            return;
+        }
         update_parent(self.generation, self.parent, |p| {
             let end_us = relative_us(p);
             let child = &mut p.children[usize::from(self.child)];

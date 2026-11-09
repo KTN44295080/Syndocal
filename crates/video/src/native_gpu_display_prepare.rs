@@ -682,6 +682,9 @@ impl NativeResidentDisplaySession {
             &live,
             &committed,
         );
+        #[cfg(feature = "qa-native-frame-timing")]
+        let _settle_trace =
+            crate::native_frame_timing::span(crate::native_frame_timing::Phase::ResidentSettle);
         self.settle_tick(result, &live, &committed, renderer, snapshot)
     }
 
@@ -747,7 +750,13 @@ impl NativeResidentDisplaySession {
         }
         // Snapshot ring stage A: the previous tick's output drains and commits
         // its history before this tick plans, quotes or hands history over.
-        self.resolve_ring_submitted(renderer, snapshot, committed)?;
+        {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _resolve_trace = crate::native_frame_timing::span(
+                crate::native_frame_timing::Phase::ResidentRingResolve,
+            );
+            self.resolve_ring_submitted(renderer, snapshot, committed)?;
+        }
         self.release_retiring_history_entries();
         // Leaving Follow releases its complete cached CPU owner before any
         // ordinary frame admission, including an ordinary preparation failure.

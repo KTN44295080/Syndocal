@@ -412,22 +412,38 @@ fn prepare(
     *observed_follow = None;
     let cancel = StopCancellation(stop);
     if unpublished.is_none() {
-        if let Some((context, follow)) =
+        let captured_follow = {
+            #[cfg(feature = "qa-native-frame-timing")]
+            let _trace =
+                video::native_frame_timing::span(video::native_frame_timing::Phase::ContextCapture);
             capture_native_timeline_follow_video_render_snapshot(engine)
-        {
+        };
+        if let Some((context, follow)) = captured_follow {
             let follow_identity = native_timeline_follow_active_identity(&follow);
             *observed_follow = Some(follow_identity);
-            let sample = engine.video_presentation_sample();
-            let authority = capture_native_display_presentation_authority(
-                &sample,
-                engine.output_ownership_status(),
-                engine.safety_blackout_authority(),
-                output_id,
-                label,
-            )
-            .map_err(|_| video::NativeResidentPrepareError::Revoked {
-                retirement_required: false,
-            })?;
+            let sample = {
+                #[cfg(feature = "qa-native-frame-timing")]
+                let _trace = video::native_frame_timing::span(
+                    video::native_frame_timing::Phase::PresentationSnapshot,
+                );
+                engine.video_presentation_sample()
+            };
+            let authority = {
+                #[cfg(feature = "qa-native-frame-timing")]
+                let _trace = video::native_frame_timing::span(
+                    video::native_frame_timing::Phase::PresentationAuthority,
+                );
+                capture_native_display_presentation_authority(
+                    &sample,
+                    engine.output_ownership_status(),
+                    engine.safety_blackout_authority(),
+                    output_id,
+                    label,
+                )
+                .map_err(|_| video::NativeResidentPrepareError::Revoked {
+                    retirement_required: false,
+                })?
+            };
             if follow.epoch != authority.ownership.epoch
                 || follow.epoch != context.project_render_epoch
             {
@@ -549,28 +565,46 @@ fn prepare(
     let sample;
     let (snapshot, authority): (&EngineSnapshot, NativeDisplayPresentationAuthority) =
         if let Some(snapshot) = unpublished {
-            let authority = capture_unpublished_native_display_presentation_authority(
-                snapshot,
-                &engine.output_ownership_status(),
-                engine.safety_blackout_authority(),
-                engine.video_presentation_config_token(),
-                output_id,
-                label,
-            )
-            .map_err(video::NativeResidentPrepareError::Fault)?;
+            let authority = {
+                #[cfg(feature = "qa-native-frame-timing")]
+                let _trace = video::native_frame_timing::span(
+                    video::native_frame_timing::Phase::PresentationAuthority,
+                );
+                capture_unpublished_native_display_presentation_authority(
+                    snapshot,
+                    &engine.output_ownership_status(),
+                    engine.safety_blackout_authority(),
+                    engine.video_presentation_config_token(),
+                    output_id,
+                    label,
+                )
+                .map_err(video::NativeResidentPrepareError::Fault)?
+            };
             (snapshot, authority)
         } else {
-            sample = engine.video_presentation_sample();
-            let authority = capture_native_display_presentation_authority(
-                &sample,
-                engine.output_ownership_status(),
-                engine.safety_blackout_authority(),
-                output_id,
-                label,
-            )
-            .map_err(|_| video::NativeResidentPrepareError::Revoked {
-                retirement_required: false,
-            })?;
+            sample = {
+                #[cfg(feature = "qa-native-frame-timing")]
+                let _trace = video::native_frame_timing::span(
+                    video::native_frame_timing::Phase::PresentationSnapshot,
+                );
+                engine.video_presentation_sample()
+            };
+            let authority = {
+                #[cfg(feature = "qa-native-frame-timing")]
+                let _trace = video::native_frame_timing::span(
+                    video::native_frame_timing::Phase::PresentationAuthority,
+                );
+                capture_native_display_presentation_authority(
+                    &sample,
+                    engine.output_ownership_status(),
+                    engine.safety_blackout_authority(),
+                    output_id,
+                    label,
+                )
+                .map_err(|_| video::NativeResidentPrepareError::Revoked {
+                    retirement_required: false,
+                })?
+            };
             (&sample.snapshot, authority)
         };
     resources
