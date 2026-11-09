@@ -2202,3 +2202,22 @@ fn shared_present_runs_beside_the_next_in_flight_logical_output() {
     );
     stop_and_reap(&mut presenter, &mut env.fixture.owner);
 }
+
+#[test]
+fn resident_present_mode_prefers_non_blocking_mailbox_and_keeps_vsync_otherwise() {
+    use wgpu::PresentMode;
+    assert_eq!(
+        super::resident_present_mode(&[
+            PresentMode::Fifo,
+            PresentMode::Mailbox,
+            PresentMode::Immediate
+        ]),
+        PresentMode::Mailbox
+    );
+    // Immediate tears; it is never chosen for the live Display.
+    assert_eq!(
+        super::resident_present_mode(&[PresentMode::Fifo, PresentMode::Immediate]),
+        PresentMode::AutoVsync
+    );
+    assert_eq!(super::resident_present_mode(&[]), PresentMode::AutoVsync);
+}

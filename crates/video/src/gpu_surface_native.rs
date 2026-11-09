@@ -602,9 +602,24 @@ impl SharedSurfacePresenter<NativeSurfaceTarget> {
             .ok_or_else(|| {
                 ContextCreateError::Surface("no supported surface configuration".into())
             })?;
-        config.present_mode = wgpu::PresentMode::AutoVsync;
+        let capabilities = surface.surface.get_capabilities(owner.context().adapter());
+        config.present_mode = resident_present_mode(&capabilities.present_modes);
         Self::new(NativeSurfaceTarget { surface, config }, owner)
             .map_err(|fault| ContextCreateError::Device(fault.message))
+    }
+}
+
+/// The live resident Display paces its own 60 Hz frames. With FIFO the
+/// present call blocks whenever the swapchain queue is full, so one slow GPU
+/// frame stalled the whole render tick (23-27 ms PresenterPresent samples in
+/// the 2026-11-09 thirty-minute diagnostics). Mailbox replaces a queued frame
+/// instead of blocking and never tears; it is used where the surface offers
+/// it, otherwise the previous vsynced mode is kept.
+pub(crate) fn resident_present_mode(supported: &[wgpu::PresentMode]) -> wgpu::PresentMode {
+    if supported.contains(&wgpu::PresentMode::Mailbox) {
+        wgpu::PresentMode::Mailbox
+    } else {
+        wgpu::PresentMode::AutoVsync
     }
 }
 
