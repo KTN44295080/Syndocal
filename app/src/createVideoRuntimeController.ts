@@ -697,12 +697,15 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
           && !layer.pending_launch && !layer.transition;
         if (!onlyQueued) throw new Error("This clip is playing; stop it to change its settings.");
         await runVideoClipSlotRuntime("cancel_queued_video_clip_slot_authoritative", { layer_id: layerId });
-        // The edit must carry the authority after the unqueue, not before it.
+        // Each step must carry the authority left by the one before it.
         await options.refreshSnapshot();
         try {
           result = await update();
         } finally {
-          await runVideoClipSlotRuntime("queue_video_clip_slot_authoritative", { layer_id: layerId, slot_id: slot.id });
+          await options.refreshSnapshot();
+          // Restoring the selection is best effort; the saved edit stands.
+          await runVideoClipSlotRuntime("queue_video_clip_slot_authoritative", { layer_id: layerId, slot_id: slot.id })
+            .catch(() => null);
         }
       }
       if (result) options.setMessage(`Updated video clip slot ${slot.id}.`);
