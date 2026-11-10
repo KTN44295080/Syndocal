@@ -1,7 +1,6 @@
 import { createMemo, createSignal, For, Match, mergeProps, Show, Switch, onCleanup, onMount, type JSX } from "solid-js";
 import type { VideoClipLayerRuntimeSummary } from "../types";
 import type { VideoControlPanelProps } from "./VideoControlPanel";
-import { outputDriveShortLabel } from "../outputDriveStatus";
 import { LiveVideoMonitorPanel } from "./LiveVideoMonitorPanel";
 import { LiveVideoOutputHealthReadout } from "./LiveVideoOutputHealthReadout";
 import { VideoStagePreviewButton } from "./VideoClipGridPanel";
@@ -71,17 +70,16 @@ const matrixChromePx = 2 + 44 + 44;
 /** A presentation adapter over the existing publication, transport and FX owners. */
 export function VideoPerformDesk(props: VideoControlPanelProps) {
   let legend!: HTMLDialogElement;
-  let blackout!: HTMLButtonElement;
-  const blackoutBlockedReason = () => props.masterControls.blackoutBlockedReason ?? null;
-  // Video BO is a direct toggle (no confirmation) and stops video only.
-  const blackoutStateText = () => props.masterControls.blackout ? "Video BO on" : "Stops video only. Lighting keeps running. ALL in the top bar stops both.";
+  // Video BO lives once, in the top bar (VID); the shortcut presses that one.
+  const pressTopbarVideoBlackout = () =>
+    document.querySelector<HTMLButtonElement>('[data-global-operator-action="video-blackout"]')?.click();
   const keyboardEnabled = () => props.performContext?.keyboardEnabled !== false;
   const shortcut = (event: KeyboardEvent) => {
     if (!keyboardEnabled() || event.repeat || event.isComposing || event.defaultPrevented ||
       document.querySelector("dialog[open], [data-video-perform-context-menu]") || (event.target instanceof Element &&
         event.target.closest("input,select,textarea,[contenteditable=true]"))) return;
     if (event.ctrlKey && event.shiftKey && event.code === "KeyB" && !event.altKey && !event.metaKey) {
-      event.preventDefault(); event.stopImmediatePropagation(); blackout.click();
+      event.preventDefault(); event.stopImmediatePropagation(); pressTopbarVideoBlackout();
     } else if (event.key === "?" && !event.ctrlKey && !event.altKey && !event.metaKey) {
       event.preventDefault(); event.stopImmediatePropagation(); legend.showModal();
     }
@@ -252,22 +250,6 @@ export function VideoPerformDesk(props: VideoControlPanelProps) {
                 <input data-video-perform-master type="range" min="0" max="1" step="0.01" value={props.masterControls.masterOpacity}
                   onInput={event => void props.masterControls.onSetMasterOpacity(Number(event.currentTarget.value))}
                   {...controlMappingTargetData({ action: "VideoMaster", label: "Video Master" })} /></label>
-              <div class="videoPerformBlackoutRow">
-                <button ref={blackout} class={`killButton${props.masterControls.blackout ? " engaged" : ""}${blackoutBlockedReason() ? " blocked" : ""}`} data-video-perform-blackout
-                  aria-pressed={props.masterControls.blackout} onClick={() => void props.masterControls.onSetBlackout(!props.masterControls.blackout)}
-                  aria-disabled={blackoutBlockedReason() ? "true" : undefined} data-blackout-blocked={blackoutBlockedReason() ? "true" : undefined}
-                  aria-describedby="videoPerformBlackoutReason"
-                  title={blackoutBlockedReason() ?? blackoutStateText()}
-                  {...controlMappingTargetData({ action: "VideoBlackout", label: "Video Blackout" })}>
-                  <span class="videoPerformBlackoutLabel">Video BO</span>
-                  <Show when={blackoutBlockedReason()}><span class="videoPerformBlackoutShort">{outputDriveShortLabel(blackoutBlockedReason() ?? "")}</span></Show>
-                </button>
-                <span class={`videoPerformBlackoutHint${blackoutBlockedReason() ? " blocked" : ""}`} id="videoPerformBlackoutReason"
-                  data-video-perform-blackout-reason role="status">
-                  <Show when={blackoutBlockedReason()}><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg></Show>
-                  <span>{blackoutBlockedReason() ?? blackoutStateText()}</span>
-                </span>
-              </div>
             </section>
           </div>
         </div>

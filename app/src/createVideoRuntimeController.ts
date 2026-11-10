@@ -680,8 +680,29 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     } catch (error) { options.setMessage(String(error)); return null; }
   };
   const updateVideoClipSlot = async (layerId: number, slot: VideoClipSlotSummary) => {
+    const update = () => runVideoClipSlotAuthored("update_video_clip_slot_authoritative", { layer_id: layerId, slot });
     try {
-      const result = await runVideoClipSlotAuthored("update_video_clip_slot_authoritative", { layer_id: layerId, slot });
+      let result;
+      try {
+        result = await update();
+      } catch (error) {
+        if (!/is active, queued, pending, or transitioning/.test(String(error))) throw error;
+        // Selecting a clip in Perform queues it. A slot that is only queued
+        // (not playing, launching or in a take) is unqueued for the edit and
+        // queued again, so its settings can be changed where it was picked.
+        const runtime = (await refreshVideoClipSlotRuntime())?.runtime;
+        if (!runtime) throw error;
+        const layer = runtime.layers.find((candidate) => candidate.layer_id === layerId);
+        const onlyQueued = layer?.queued_slot_id === slot.id && layer.active_slot_id !== slot.id
+          && !layer.pending_launch && !layer.transition;
+        if (!onlyQueued) throw new Error("This clip is playing; stop it to change its settings.");
+        await runVideoClipSlotRuntime("cancel_queued_video_clip_slot_authoritative", { layer_id: layerId });
+        try {
+          result = await update();
+        } finally {
+          await runVideoClipSlotRuntime("queue_video_clip_slot_authoritative", { layer_id: layerId, slot_id: slot.id });
+        }
+      }
       if (result) options.setMessage(`Updated video clip slot ${slot.id}.`);
       return result;
     } catch (error) { options.setMessage(String(error)); return null; }

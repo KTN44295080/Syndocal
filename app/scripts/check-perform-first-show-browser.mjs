@@ -191,24 +191,9 @@ try {
   await shot("ja-empty-perform");
   await fs("f.setLocale('en')"); await settle();
 
-  // ---- Item 2: Edit > Video BO is one toggle with a visible state ----
-  const bo = ".videoMasterControls [data-video-master-blackout]";
-  assert.equal(await evaluate("document.querySelectorAll('.videoMasterControls button').length"), 3, "Out, Full and one Video BO toggle");
-  assert.equal(await evaluate("[...document.querySelectorAll('.videoMasterControls button')].some(b=>/Clear BO/.test(b.textContent))"), false, "no separate Clear BO button");
-  assert.equal((await text(bo)).toLowerCase(), "video bo: off", "off state is named");
-  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(bo)}).getAttribute('aria-pressed')`), "false");
-  await click(bo); await settle();
-  assert.equal((await text(bo)).toLowerCase(), "video bo: on", "on state is named");
-  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(bo)}).getAttribute('aria-pressed')`), "true");
-  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(bo)}).classList.contains('engaged')`), true, "engaged styling marks the on state");
-  await click(bo); await settle();
-  assert.deepEqual(await fs("return f.log.blackouts"), [true, false], "the same toggle turns Video BO on and off directly");
-  await fs("f.setLocale('ja')"); await settle();
-  assert.equal(await text(bo), "映像BO: オフ", "Japanese off state");
-  await click(bo); await settle();
-  assert.equal(await text(bo), "映像BO: オン", "Japanese on state");
-  await shot("ja-edit-video-bo-on");
-  await click(bo); await fs("f.setLocale('en')"); await settle();
+  // ---- Item 2: Video BO exists once, in the top bar (owner 2026-11-11) ----
+  assert.equal(await evaluate("document.querySelectorAll('.videoMasterControls [data-video-master-blackout]').length"), 0, "Edit > Video has no second Video BO");
+  assert.equal(await evaluate("document.querySelectorAll('.videoMasterControls button').length"), 2, "Out and Full");
 
   // ---- Item 5: FX stays inside Perform; full editor targets the selected layer ----
   const addEffect = "[data-perform-fx-add-effect]";

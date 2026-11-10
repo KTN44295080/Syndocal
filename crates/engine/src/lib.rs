@@ -20375,6 +20375,9 @@ struct RuntimeVideoLayer {
     clip_take_transition: Option<Box<RuntimeVideoClipTake>>,
     clip_direction: RuntimeClipDirection,
     runtime_transport_dirty: bool,
+    /// Set when a launch revealed a stopped layer; the next fade step drops
+    /// any Stop fade-out still running for it so the launch stays visible.
+    stop_reveal_pending: bool,
 }
 
 /// A Timeline Video clip is authored against a `TimelineLayerSummary` lane,
@@ -41972,6 +41975,21 @@ impl EngineRuntime {
     }
 
     fn advance_video_layer_fades(&mut self, now: Instant) {
+        // A launch that revealed a stopped layer outranks the Stop fade-out.
+        for layer in self
+            .video_layers
+            .iter_mut()
+            .filter(|layer| layer.stop_reveal_pending)
+        {
+            layer.stop_reveal_pending = false;
+            let id = layer.id;
+            let before = self.video_layer_fades.len();
+            self.video_layer_fades
+                .retain(|fade| fade.layer_id != id || fade.target_opacity > 0.0);
+            if self.video_layer_fades.len() != before {
+                layer.state.opacity = 1.0;
+            }
+        }
         if self.video_layer_fades.is_empty() {
             return;
         }
@@ -49734,6 +49752,7 @@ impl EngineRuntime {
             clip_take_transition: None,
             clip_direction: RuntimeClipDirection::Stopped,
             runtime_transport_dirty: false,
+            stop_reveal_pending: false,
         };
         initialize_runtime_default_clip_slot(&mut layer);
         self.video_layers.push(layer);
@@ -49847,6 +49866,7 @@ impl EngineRuntime {
                     clip_take_transition: None,
                     clip_direction: RuntimeClipDirection::Stopped,
                     runtime_transport_dirty: false,
+                    stop_reveal_pending: false,
                 };
                 initialize_runtime_default_clip_slot(&mut layer);
                 layer
@@ -55898,6 +55918,7 @@ fn activate_runtime_video_clip_slot(
             )
         })?;
     validate_video_clip_slot_launch(&slot, assets)?;
+    let was_playing = layer.state.playing;
     let asset = assets
         .iter()
         .find(|asset| asset.id == slot.media_asset_id)
@@ -55927,6 +55948,14 @@ fn activate_runtime_video_clip_slot(
         slot.in_point_ms
     };
     layer.state.playing = slot.speed != 0.0;
+    if !was_playing {
+        // Stop fades a layer to zero and a layer added from the library starts
+        // at zero; launching it shows it again, as the legacy launch did.
+        if layer.state.opacity <= f32::EPSILON {
+            layer.state.opacity = 1.0;
+        }
+        layer.stop_reveal_pending = true;
+    }
     layer.active_clip_slot_id = Some(slot_id);
     layer.queued_clip_slot_id = None;
     layer.pending_clip_launch = None;
@@ -55950,10 +55979,12 @@ fn start_runtime_video_clip_take(
         ));
     }
     let outgoing_slot_id = layer.active_clip_slot_id;
+    // A stopped (faded-out) or never-shown layer has nothing to transition from.
     if matches!(kind, VideoClipTakeKind::Cut)
         || resolved_duration_ms == 0
         || outgoing_slot_id.is_none()
         || outgoing_slot_id == Some(slot_id)
+        || (!layer.state.playing && layer.state.opacity <= f32::EPSILON)
     {
         return activate_runtime_video_clip_slot(layer, slot_id, assets);
     }
@@ -56238,6 +56269,7 @@ fn runtime_video_layer_from_summary(layer: &VideoLayerSummary) -> RuntimeVideoLa
         clip_take_transition: None,
         clip_direction: RuntimeClipDirection::Stopped,
         runtime_transport_dirty: false,
+        stop_reveal_pending: false,
     };
     // A persisted project has no runtime take state. Its concrete default is
     // therefore the deterministic initial take—not an ambiguous idle layer
@@ -95570,6 +95602,44 @@ mod tests {
         assert_eq!(after.layers[0].playhead_ms, before.layers[0].playhead_ms);
         assert_eq!(after.layers[0].transition, before.layers[0].transition);
         assert_eq!(runtime.video_layers[0].state.opacity, 0.5);
+    }
+
+    #[test]
+    fn launching_a_stopped_or_new_layer_reveals_it_and_outranks_the_stop_fade() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        // A layer added from the library starts hidden and paused.
+        runtime.video_layers[0].state.opacity = 0.0;
+        runtime.video_layers[0].state.playing = false;
+        runtime
+            .launch_video_clip_slot(1, Some(VideoClipSlotId(20)))
+            .unwrap();
+        assert!(runtime.video_layers[0].state.playing);
+        assert_eq!(runtime.video_layers[0].state.opacity, 1.0);
+
+        // A playing layer keeps the operator's fader on the next launch.
+        runtime.video_layers[0].state.opacity = 0.3;
+        runtime
+            .launch_video_clip_slot(1, Some(VideoClipSlotId(21)))
+            .unwrap();
+        assert_eq!(runtime.video_layers[0].state.opacity, 0.3);
+
+        // Relaunch during a Stop fade-out: the launch wins.
+        runtime.video_layers[0].state.playing = false;
+        runtime.video_layers[0].state.opacity = 0.6;
+        runtime.video_layer_fades.push(RuntimeVideoLayerFade {
+            layer_id: 1,
+            started_at: Instant::now(),
+            duration: Duration::from_millis(1_000),
+            start_opacity: 1.0,
+            target_opacity: 0.0,
+        });
+        runtime
+            .launch_video_clip_slot(1, Some(VideoClipSlotId(20)))
+            .unwrap();
+        runtime.advance_video_layer_fades(Instant::now() + Duration::from_millis(500));
+        assert!(runtime.video_layer_fades.is_empty());
+        assert_eq!(runtime.video_layers[0].state.opacity, 1.0);
+        assert!(!runtime.video_layers[0].stop_reveal_pending);
     }
 
     #[test]

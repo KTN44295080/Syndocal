@@ -117,7 +117,8 @@ const selectors = {
   transitionKind: `${root} [data-video-perform-transition-kind]`,
   transitionDuration: `${root} [data-video-perform-transition-duration]`,
   fxEditor: `${root} [data-video-perform-fx-editor]`,
-  guardedBlackout: `${root} [data-video-perform-blackout]`,
+  // Owner decision 2026-11-11: Video BO exists once, in the top bar (VID).
+  guardedBlackout: "[data-global-operator-action='video-blackout']",
   legend: `${root} [data-video-perform-legend-toggle]`,
   inspect: `${root} [data-video-perform-inspect]`,
   clipOptions: `${root} [data-video-perform-clip-options]`,
@@ -774,13 +775,11 @@ try {
       await prepareImmediateAction();
       await focus(selectors.guardedBlackout);await cdp.key('Enter','Enter',13);
       await assertImmediateRefusal('Blackout Enter');
-      // Owner decision 2026-10-28: the Perform key is "Video BO" (video only)
-      // and no text claims a confirmation that does not exist.
-      const videoBo=await cdp.evaluate('(()=>{const b=document.querySelector('+JSON.stringify(selectors.guardedBlackout)+');const r=document.querySelector('+JSON.stringify(root+' [data-video-perform-blackout-reason]')+');const dt=[...document.querySelectorAll('+JSON.stringify(root+' [data-video-perform-legend] dt')+')].find(e=>e.textContent.includes("Ctrl + Shift + B"));return {label:b.querySelector(".videoPerformBlackoutLabel")?.textContent.trim(),title:b.title,hint:r?.textContent.trim()??"",legend:dt?.nextElementSibling?.textContent.trim()??""}})()');
-      assert.equal(videoBo.label,locale==='ja'?'映像BO':'Video BO',label+': the Perform blackout key is named Video BO');
-      assert.equal(videoBo.legend,locale==='ja'?'映像BOのオン／オフ':'Video BO on or off',label+': the legend names Video BO without a confirmation');
-      for(const [part,text] of Object.entries({title:videoBo.title,hint:videoBo.hint,legend:videoBo.legend}))
-        assert.doesNotMatch(text,/confirm|確認/i,label+': Video BO '+part+' claims no confirmation');
+      // Owner decision 2026-11-11: Perform has no second Video BO key; the
+      // top-bar VID is the only one and Ctrl+Shift+B presses it.
+      assert.equal(await cdp.evaluate('document.querySelectorAll('+JSON.stringify(root+' [data-video-perform-blackout], .videoMasterControls [data-video-master-blackout], .controlBothBlackoutRow')+').length'),0,label+': Video BO is not duplicated outside the top bar');
+      const legendBo=await cdp.evaluate('(()=>{const dt=[...document.querySelectorAll('+JSON.stringify(root+' [data-video-perform-legend] dt')+')].find(e=>e.textContent.includes("Ctrl + Shift + B"));return dt?.nextElementSibling?.textContent.trim()??""})()');
+      assert.equal(legendBo,locale==='ja'?'映像BOのオン／オフ':'Video BO on or off',label+': the legend names Video BO without a confirmation');
       await writeFile(join(evidenceDir,label+'-blackout-immediate.png'),Buffer.from((await cdp.capture({format:'png',captureBeyondViewport:false})).data,'base64'));
       await prepareImmediateAction();
       await cdp.evaluate('document.activeElement?.blur()');
@@ -800,29 +799,19 @@ try {
       {
         const reasonText=locale==='ja'?'スタンバイ: このマシンは出力を制御していません':'Standby: this machine is not driving outputs';
         const footer='.appStatusLine[data-status-key="blackout-unavailable"]';
-        const reasonEl=root+' [data-video-perform-blackout-reason]';
         const setDrive=(value)=>cdp.evaluate('window.__syndocalOutputDriveFixture='+JSON.stringify(value));
         await setDrive('driving');
         await waitFor(()=>cdp.evaluate('!document.querySelector('+JSON.stringify(selectors.guardedBlackout)+').hasAttribute("data-blackout-blocked")'),label+': a machine that drives outputs keeps Blackout available');
         await setDrive('standby');
         await waitFor(()=>cdp.evaluate('document.querySelector('+JSON.stringify(selectors.guardedBlackout)+').getAttribute("aria-disabled")==="true"'),label+': Standby marks the Perform Blackout unavailable');
-        const blocked=await cdp.evaluate('(()=>{const b=document.querySelector('+JSON.stringify(selectors.guardedBlackout)+');const r=document.querySelector('+JSON.stringify(reasonEl)+');const v=document.querySelector('+JSON.stringify(selectors.blackout)+');const a=document.querySelector("[data-global-operator-action=all-blackout]");const d=document.querySelector("[data-global-operator-action=dmx-blackout]");return {disabledAttr:b.disabled,tabIndex:b.tabIndex,title:b.title,described:b.getAttribute("aria-describedby")===r?.id,reason:r?.innerText.trim(),vid:v.getAttribute("aria-disabled"),all:a.getAttribute("aria-disabled"),dmx:d.getAttribute("aria-disabled"),vidTitle:v.title,vidEnabled:!v.disabled&&!a.disabled&&!d.disabled}})()');
+        const blocked=await cdp.evaluate('(()=>{const b=document.querySelector('+JSON.stringify(selectors.guardedBlackout)+');const v=document.querySelector('+JSON.stringify(selectors.blackout)+');const a=document.querySelector("[data-global-operator-action=all-blackout]");const d=document.querySelector("[data-global-operator-action=dmx-blackout]");return {disabledAttr:b.disabled,tabIndex:b.tabIndex,title:b.title,vid:v.getAttribute("aria-disabled"),all:a.getAttribute("aria-disabled"),dmx:d.getAttribute("aria-disabled"),vidTitle:v.title,vidEnabled:!v.disabled&&!a.disabled&&!d.disabled}})()');
         assert.equal(blocked.disabledAttr,false,label+': the unavailable key stays focusable (aria-disabled, not removed)');
-        assert.ok(blocked.tabIndex>=0&&blocked.described,label+': the unavailable key stays in the tab order and points at its reason');
-        assert.equal(blocked.reason,reasonText,label+': the Perform desk states why Blackout is unavailable');
+        assert.ok(blocked.tabIndex>=0,label+': the unavailable key stays in the tab order');
         assert.equal(blocked.title,reasonText,label+': the key title carries the reason');
         assert.deepEqual([blocked.vid,blocked.all,blocked.dmx],['true','true','true'],label+': top-bar DMX/VID/ALL keys show the same state');
         assert.equal(blocked.vidTitle,reasonText,label+': top-bar keys carry the reason');
         assert.ok(blocked.vidEnabled,label+': top-bar blackout keys remain focusable controls');
         assert.equal((await inspect(selectors.guardedBlackout)).failure,null,label+': the unavailable Blackout key stays visible');
-        // Wide panes show the full caption; short panes (no room for it) name the state on the key itself.
-        const reasonShown=(await inspect(reasonEl)).failure===null;
-        if(!reasonShown){
-          const shortKey=selectors.guardedBlackout+' .videoPerformBlackoutShort';
-          assert.equal((await inspect(shortKey)).failure,null,label+': a short pane names the state on the Blackout key without hover');
-          assert.equal(await cdp.evaluate('document.querySelector('+JSON.stringify(shortKey)+').textContent.trim()'),locale==='ja'?'スタンバイ':'Standby',label+': the short key label is the localized state');
-        }
-        assert.ok((await inspect(selectors.guardedBlackout)).height>=44,label+': the unavailable key keeps its 44px target');
         await writeFile(join(evidenceDir,label+'-blackout-standby.png'),Buffer.from((await cdp.capture({format:'png',captureBeyondViewport:false})).data,'base64'));
         // Enter on the key and Ctrl+Shift+B explain; neither opens a confirmation.
         await focus(selectors.guardedBlackout);await cdp.key('Enter','Enter',13);

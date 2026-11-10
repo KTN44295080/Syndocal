@@ -172,17 +172,6 @@ export function ControlBothPanel(props: ControlBothPanelProps) {
               <strong>{props.recordingLabel}</strong>
             </details>
           </div>
-          <div class="controlBothActionRow controlBothBlackoutRow" aria-label="Video blackout actions">
-            <button
-              type="button"
-              class={props.videoBlackout ? "active danger" : ""}
-              aria-pressed={props.videoBlackout}
-              aria-label={props.videoBlackout ? "Clear video blackout" : "Enable video blackout"}
-              onClick={() => void props.onSetVideoBlackout(!props.videoBlackout)}
-            >
-              {props.videoBlackout ? "Clear Video BO" : "Video BO"}
-            </button>
-          </div>
         </section>
       </div>
 

@@ -59,17 +59,6 @@ export function VideoMasterControlsPanel(props: VideoMasterControlsPanelProps) {
       <div class="buttonRow">
         <button onClick={() => void props.onSetMasterOpacity(0)} disabled={props.masterOpacity <= 0}>Out</button>
         <button onClick={() => void props.onSetMasterOpacity(1)} disabled={props.masterOpacity >= 1}>Full</button>
-        {/* One Video BO toggle, as in Perform: it stops video only and has no confirmation. */}
-        <button
-          type="button"
-          class={`killButton${props.blackout ? " engaged" : ""}`}
-          data-video-master-blackout
-          aria-pressed={props.blackout}
-          title={props.blackoutBlockedReason ?? undefined}
-          onClick={() => void props.onSetBlackout(!props.blackout)}
-        >
-          {props.blackout ? "Video BO: On" : "Video BO: Off"}
-        </button>
       </div>
     </div>
   );

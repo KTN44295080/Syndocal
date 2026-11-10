@@ -124,12 +124,14 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
     });
   };
 
-  const queue = (layerId: number, column: number) => {
+  const queue = (layerId: number, column: number, trigger?: HTMLButtonElement) => {
     const slot = rows.find((row) => row.id === layerId)?.layer.clip_slots?.[column];
     selectLayer(layerId);
     props.bank.onSelect(slot?.id ?? null);
     setFocusedColumn(column);
     if (slot) void props.bank.onQueue(slot.id);
+    // An empty cell's "+" opens the clip chooser (Inspector > Clip) for this layer.
+    else if (trigger) props.bank.onMore(null, trigger);
   };
 
   const audition = (layerId: number, column: number) => {
@@ -428,7 +430,7 @@ export function VideoPerformMatrix(props: VideoPerformMatrixProps) {
         const state = () => !cell.slot ? "Empty" : missing() ? "Missing" : failed() ? "Error" : cell.active ? (runtime()?.playing ? "LIVE" : previewing() ? "Preview" : "Paused") : cell.queued || cell.pending ? "Queued" : previewing() ? "Preview" : "Loaded";
         const selectedCell = () => selected() && (cell.slot ? cell.slot.id === props.bank.selectedSlotId : focusedColumn() === cell.index && props.bank.selectedSlotId === null);
         return <div class="videoPerformMatrixCell" classList={{ occupied: cell.slot !== null, live: cell.active && runtime()?.playing === true, queued: cell.queued || cell.pending, preview: previewing(), selected: selectedCell(), error: missing() || failed() }} role="gridcell" aria-colindex={cell.index + 2} data-video-clip-slot-id={cell.slot?.id} data-video-clip-slot-index={cell.index} data-video-clip-slot-layer-id={layer().id} data-video-perform-cell-state={state()} data-video-perform-preview={previewing() ? "true" : undefined}>
-          <button type="button" class="videoPerformClipTrigger" data-video-perform-layer-id={layer().id} data-video-perform-cell-index={cell.index} data-video-clip-slot-pad-index={cell.index} {...controlMappingTargetData(cell.slot ? { action: "VideoClipSlotTrigger", label: `${layer().label} clip ${cell.index + 1}`, layer_id: layer().id, clip_slot_id: cell.slot.id } : null)} aria-label={`Queue clip ${cell.index + 1}: ${asset()?.label ?? "Empty"}`} aria-pressed={selectedCell()} tabIndex={tabLayerId() === layer().id && cell.index === tabColumn() ? 0 : -1} onFocus={() => setFocusedColumn(cell.index)} onClick={() => queue(layer().id, cell.index)} aria-haspopup="menu" onContextMenu={(event) => openClipMenu(event, layer().id, cell.slot?.id ?? null)}>
+          <button type="button" class="videoPerformClipTrigger" data-video-perform-layer-id={layer().id} data-video-perform-cell-index={cell.index} data-video-clip-slot-pad-index={cell.index} {...controlMappingTargetData(cell.slot ? { action: "VideoClipSlotTrigger", label: `${layer().label} clip ${cell.index + 1}`, layer_id: layer().id, clip_slot_id: cell.slot.id } : null)} aria-label={cell.slot ? `Queue clip ${cell.index + 1}: ${asset()?.label ?? "Empty"}` : `Add a clip to slot ${cell.index + 1}`} aria-pressed={selectedCell()} tabIndex={tabLayerId() === layer().id && cell.index === tabColumn() ? 0 : -1} onFocus={() => setFocusedColumn(cell.index)} onClick={(event) => queue(layer().id, cell.index, event.currentTarget)} aria-haspopup="menu" onContextMenu={(event) => openClipMenu(event, layer().id, cell.slot?.id ?? null)}>
             <span class="videoPerformClipImage"><Show when={props.thumbnailsAuthorized && cell.slot && props.bank.thumbnails[cell.slot.media_asset_id]} fallback={<span class="videoPerformClipPlaceholder" aria-hidden="true">{cell.slot ? "▧" : "+"}</span>}>{(thumbnail) => <img src={thumbnail()} alt="" loading="lazy" />}</Show><kbd data-no-localize>{videoPerformClipKeys[cell.index].toUpperCase()}</kbd><Show when={previewing() && state() !== "Preview"}><span class="videoPerformPreviewBadge"><span aria-hidden="true">◉</span><span>Preview</span></span></Show></span>
             <span class="videoPerformClipTitle" title={asset()?.label} data-no-localize>{cell.slot ? asset()?.label ?? `#${cell.slot.id}` : "—"}</span>
             <span class="videoPerformClipState" title={state()} aria-label={state()} role="status">

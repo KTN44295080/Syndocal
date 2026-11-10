@@ -2449,6 +2449,7 @@ const japaneseText: Record<string, string> = {
   "Relink…": "再リンク…",
   "Seamless loop": "シームレスループ",
   "Add layer": "レイヤーに追加",
+  "This clip is playing; stop it to change its settings.": "このクリップは再生中です。設定を変えるには停止してください。",
   "Create a new layer that plays this clip": "このクリップを再生する新しいレイヤーを作ります",
   "Only video files and still images can become a layer.": "レイヤーにできるのは動画ファイルと静止画だけです。",
   "Making loop…": "ループ作成中…",

@@ -618,9 +618,10 @@ for (const code of ["KeyN", "KeyO", "KeyS", "Space"]) {
 
 // Standby (this machine does not drive outputs): the Blackout shortcuts reach the one
 // blackout owner, which explains the situation before any confirmation or command, and
-// the Perform Ctrl+Shift+B key is routed through the same guarded button, never around it.
+// the Perform Ctrl+Shift+B key presses the one guarded top-bar VID key, never around it.
 const performDeskSource = await readFile(path.join(appRoot, "src", "components", "VideoPerformDesk.tsx"), "utf8");
-assert.match(performDeskSource, /event\.ctrlKey && event\.shiftKey && event\.code === "KeyB"[\s\S]{0,160}blackout\.click\(\)/, "Perform Ctrl+Shift+B activates the guarded Blackout key itself");
+assert.match(performDeskSource, /event\.ctrlKey && event\.shiftKey && event\.code === "KeyB"[\s\S]{0,160}pressTopbarVideoBlackout\(\)/, "Perform Ctrl+Shift+B activates the guarded top-bar Video BO key");
+assert.match(performDeskSource, /data-global-operator-action="video-blackout"\]'\)\?\.click\(\)/, "the Perform shortcut presses the top-bar VID key");
 assert.match(appSource, /setVideoBlackout: requestPerformVideoBlackout/, "the global V shortcut shares the guarded Perform request");
 assert.match(appSource, /const requestPerformVideoBlackout = async[\s\S]*?const drive = await readOutputDriveForAction\(\);[\s\S]*?drive\.kind === "blocked"[\s\S]*?return;[\s\S]*?return setVideoBlackout\(enabled\);/, "Standby is explained in-app; otherwise Blackout acts at once");
 assert.match(appSource, /checkOutputDrive: readOutputDrive/, "B / V / Ctrl+Shift+B all converge on the controller's output-authority check");

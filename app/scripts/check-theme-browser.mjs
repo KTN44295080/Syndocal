@@ -395,11 +395,7 @@ render(()=><main class="app" style="height:100vh;grid-template-rows:56px minmax(
     assert.equal(semantic.monitorError.color, semantic.tokens["on-error"], `${theme} monitor error semantic ink`);
     assert.equal(semantic.latched.backgroundColor, semantic.tokens.latched, `${theme} latched key fill`);
     assert.equal(semantic.latched.color, semantic.tokens["on-latched"], `${theme} latched key ink`);
-    await sampler.locator('[data-video-perform-blackout]').click();
-    assert.equal(await sampler.locator('[data-video-perform-blackout]').getAttribute('aria-pressed'), 'true', 'synthetic blackout changes rendered state');
-    semantic.blackout = await sampler.locator('[data-video-perform-blackout]').evaluate(el => ({ backgroundColor: getComputedStyle(el).backgroundColor, color: getComputedStyle(el).color }));
-    assert.equal(semantic.blackout.backgroundColor, semantic.tokens.danger, `${theme} engaged blackout uses danger fill`);
-    assert.equal(semantic.blackout.color, semantic.tokens["on-program"], `${theme} engaged blackout uses readable program ink`);
+    // Video BO is only the top-bar VID key now (owner 2026-11-11); it is not in this sampler.
     const filename = `perform-state-sampler-${theme}-1920x1080-en.png`;
     await sampler.screenshot({ path: resolve(artifacts, filename) });
     report.stateSamplers.push({ theme, path: filename, semantic });

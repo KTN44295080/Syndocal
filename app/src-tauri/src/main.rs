@@ -8329,6 +8329,7 @@ fn build_media_asset_layer_import_candidate(
     mut allocate_asset_id: impl FnMut() -> MediaAssetId,
     mut allocate_layer_id: impl FnMut() -> VideoLayerId,
     mut allocate_clip_slot_id: impl FnMut() -> VideoClipSlotId,
+    hidden_until_launch: bool,
 ) -> Result<(MediaAssetImportCandidate, Vec<VideoLayerId>), String> {
     if prepared.is_empty() {
         return Err("Prepared media asset import contains no successful local files".to_string());
@@ -8372,7 +8373,12 @@ fn build_media_asset_layer_import_candidate(
             source: asset.source.clone(),
             media_asset_id: Some(asset.id),
             blend_mode: VideoBlendMode::Normal,
-            state: VideoLayerState::default(),
+            // A layer added during a show must not change Program before its
+            // clip is launched; launching a stopped layer reveals it.
+            state: VideoLayerState {
+                opacity: if hidden_until_launch { 0.0 } else { 1.0 },
+                ..VideoLayerState::default()
+            },
             isf_effect: None,
             clip_slots: vec![VideoClipSlotSummary {
                 id: slot_id,
@@ -13595,6 +13601,7 @@ fn commit_prepared_media_asset_layers_locked(
         || state.engine.allocate_media_asset_id(),
         || state.engine.allocate_video_layer_id(),
         || state.engine.allocate_video_clip_slot_id(),
+        bootstrap_output.is_none(),
     )?;
     let transaction = match bootstrap_output {
         Some(output) => MediaAssetTransaction::BootstrapVjShow {
@@ -41980,6 +41987,7 @@ fn commit_prepared_media_asset_layers_authoritative(
                     || state.engine.allocate_media_asset_id(),
                     || state.engine.allocate_video_layer_id(),
                     || state.engine.allocate_video_clip_slot_id(),
+                    !bootstrap,
                 )?;
                 if bootstrap {
                     let output_id = state.engine.allocate_video_output_id();
