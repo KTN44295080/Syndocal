@@ -49,3 +49,20 @@ Six are seamless by construction (expressions periodic in 8 s); `07_life`
    Create Slot slot both read `Loop`.
 6. Not yet walked: quantized launch timing, BPM-synced loop length,
    tempo-synced FX parameters, Auto VJ, crossfade/transition takes.
+
+## 2026-11-11 fixes (owner: "A。全部直して", "VideoBOが重複。ヘッダーだけでいい")
+
+| Finding | Fix | Native check (build) |
+| --- | --- | --- |
+| 1 Unlaunched layers on Program | `c362ec47`: file/library layers start at opacity 0; launching a stopped or never-shown layer reveals it (legacy launch semantics) and drops a running Stop fade | `3d936f3a`: two layers added → DISPLAY2 black (0,0,0), both opacity 0; Take → layer 1 opacity 1, DISPLAY2 shows it; the other stays 0 |
+| Stop → Take invisible (finding 4) | same: relaunch after/during Stop restores 100 % | `3d936f3a`: Stop then Take within the fade → opacity 1 |
+| Empty slot `+` | `c362ec47`: opens Inspector > Clip for the layer | `3d936f3a`: PASS, Create Slot made slot 3 |
+| Slot settings from Perform (finding 3) | `c362ec47` unqueue/save/requeue; `a7bacfec`/`969f008d` refresh authority between each step | `969f008d`: selecting slot (queued) → NextBar → Save Clip: `Updated video clip slot 3.` |
+| TAKE message / quantized launch | `a7bacfec`: names the launched slot or "launches on the next bar/beat" | `a7bacfec`: `Launched video clip slot 1.`; NextBar Take: cell QUEUED → LIVE 602 ms later (next bar at 120 BPM) |
+| Video BO duplicates | `c362ec47`: only the top-bar VID; Perform, Edit > Video and Control > Both copies removed; Ctrl+Shift+B presses VID | `3d936f3a`: 0 Perform / 0 Edit duplicates |
+| BPM Sync ignored by launched slots | `3d936f3a`: playing looping slots phase-lock to the clock (engine test) | toggle exercised by tests; not measured natively |
+| Crossfade Take | — | `3d936f3a`: 2 s crossfade radial → plasma blends on DISPLAY2 |
+| Auto VJ (4 beats, 250 ms) | — | `3d936f3a`: switches plasma → tunnel rings; the hidden tunnel layer is revealed by the take |
+
+Engine full lib (timing-budget tests excluded; they pass serially, fail only
+under the parallel run plus a live Display), app 2357 tests: pass.
