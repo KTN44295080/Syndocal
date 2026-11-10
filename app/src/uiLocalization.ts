@@ -5694,6 +5694,8 @@ const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
   [/^Set video clip slot (\d+) as the default\.$/, (id) => `映像クリップスロット ${id} を既定にしました。`],
   [/^Queued video clip slot (\d+)\.$/, (id) => `映像クリップスロット ${id} をキューしました。`],
   [/^Launched video clip slot (\d+|default)\.$/, (id) => `映像クリップスロット ${id === "default" ? "既定" : id} を起動しました。`],
+  [/^Video clip slot (\d+) launches on the next bar\.$/, (id) => `映像クリップスロット ${id} は次の小節で起動します。`],
+  [/^Video clip slot (\d+) launches on the next beat\.$/, (id) => `映像クリップスロット ${id} は次の拍で起動します。`],
   [/^Imported and assigned (\d+) video clip slot\(s\)\.$/, (count) => `映像クリップスロット ${count}件を読み込んで割り当てました。`],
   [/^Unknown Clip Slot command: (.+)$/, (command) => `不明なクリップスロットコマンドです: ${command}`],
   [/^Clip Slot receipt kind mismatch: expected (.+), received (.+)\.$/, (expected, actual) => `クリップスロットの完了種別が一致しません。期待値 ${expected}、受信値 ${actual}。`],

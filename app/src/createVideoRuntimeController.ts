@@ -697,6 +697,8 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
           && !layer.pending_launch && !layer.transition;
         if (!onlyQueued) throw new Error("This clip is playing; stop it to change its settings.");
         await runVideoClipSlotRuntime("cancel_queued_video_clip_slot_authoritative", { layer_id: layerId });
+        // The edit must carry the authority after the unqueue, not before it.
+        await options.refreshSnapshot();
         try {
           result = await update();
         } finally {
@@ -776,7 +778,18 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
             value_milliunits: Math.max(1, Math.round(transitionDuration.value_milliunits)),
           },
       });
-      if (result) options.setMessage(`Launched video clip slot ${slotId ?? "default"}.`);
+      if (result) {
+        // Say what happened: a quantized take is pending until its beat/bar.
+        const layer = result.runtime.layers.find((candidate) => candidate.layer_id === layerId);
+        const pending = layer?.pending_launch;
+        if (pending) {
+          options.setMessage(pending.quantization === "NextBar"
+            ? `Video clip slot ${pending.slot_id} launches on the next bar.`
+            : `Video clip slot ${pending.slot_id} launches on the next beat.`);
+        } else {
+          options.setMessage(`Launched video clip slot ${layer?.active_slot_id ?? slotId ?? "default"}.`);
+        }
+      }
       return result;
     } catch (error) { options.setMessage(String(error)); return null; }
   };
