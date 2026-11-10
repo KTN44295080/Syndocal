@@ -1,3 +1,4 @@
+import { rememberMidiInputName } from "../midiInputPreference";
 import { Show } from "solid-js";
 import "./SyncPanels.css";
 import type { SetupIoWorkspaceViewModel, FrontendViewInvoke } from "../App";
@@ -488,7 +489,10 @@ export function SetupIoWorkspaceView(props: { model: SetupIoWorkspaceViewModel; 
               void refreshMidiInputs();
               void refreshMidiOutputs();
             }}
-            onSelectedMidiInput={setSelectedMidiInput}
+            onSelectedMidiInput={(index) => {
+              setSelectedMidiInput(index);
+              rememberMidiInputName(midiInputs().find((input) => input.index === index)?.name);
+            }}
             onConnectClock={connectMidiClock}
             onDisconnectClock={disconnectMidiClock}
             onSelectedMidiOutput={setSelectedMidiOutput}

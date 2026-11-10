@@ -1,3 +1,4 @@
+import { defaultMidiInputIndex } from "./midiInputPreference";
 import { midiFaderConnection, type MidiFaderConnection } from "./midiFaderInput";
 import { batch, createEffect, createSignal, onCleanup, untrack, type Accessor, type Setter } from "solid-js";
 import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
@@ -184,7 +185,7 @@ export function createControlInputController(options: ControlInputControllerOpti
       const inputs = await options.invoke<MidiInputSummary[]>("list_midi_inputs");
       if (requestGeneration !== midiInputRefreshGeneration) return;
       options.setMidiInputs(inputs);
-      if (options.selectedMidiInput() === null && inputs.length > 0) options.setSelectedMidiInput(inputs[0].index);
+      if (options.selectedMidiInput() === null && inputs.length > 0) options.setSelectedMidiInput(defaultMidiInputIndex(inputs));
     } catch (error) {
       if (requestGeneration === midiInputRefreshGeneration) options.setMessage(String(error));
     }
