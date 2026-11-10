@@ -50,15 +50,15 @@ seeded `Both`). Evidence: `target/qa/physical-midi-dmx-20261110/`.
   applied.`, `Sending` on the first try. The earlier first-Apply failure did
   **not reproduce**; cause still unknown.
 - Fix 1: with group `Par` selected, Learn mode now marks the Faders panel CH1
-  fader pink (`Dimmer · Par`) — `fix-build/01-learn-pink.png`. Hardware
-  assignment to it was **not completed**: Learn was armed for 2 + 10 minutes
-  but no MIDI arrived (a raw WinMM capture also saw 0 messages; the operator
-  was away from the controller).
+  fader pink (`Dimmer · Par`) — `fix-build/01-learn-pink.png`. With the
+  operator back at the controller: `MIDI mapped PitchBend ch 1 #0 to Dimmer ·
+  Par`; MIDI Control `Connected`; U0 ch1 followed the fader 0–254 over 15 s
+  (`fix-build/fader-dimmer-samples.json`). **PASS.** (An earlier 2 + 10 minute
+  wait saw no MIDI because the operator was away; raw WinMM also saw 0.)
 - Fix 2: the first launch still preselects `SMC-Mixer-bt` (nothing
-  remembered yet); choosing `SMC-Mixer` stored the name. Preselection after a
-  restart is **not yet verified**.
+  remembered yet); choosing `SMC-Mixer` stored the name, and after an app
+  restart the MIDI input was preselected as `SMC-Mixer`. **PASS.**
 
 ## Not covered
 
-MIDI feedback (CC mode), DMX timing waveform (no analyser), RDM (no devices),
-the pending fix-build MIDI steps above.
+MIDI feedback (CC mode), DMX timing waveform (no analyser), RDM (no devices).
