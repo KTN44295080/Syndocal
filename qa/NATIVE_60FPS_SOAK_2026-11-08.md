@@ -160,3 +160,37 @@ range 2077.8–2219.8 MB (median 2095.2) versus 2082.7–2227.0 MB (median
 lowest minute (2077.8 MB), 11/08's minute 1 was mid-range (2117.4 MB). The
 gate is unchanged and the verdict stays FAIL; headroom against a
 first-minute baseline needs either a lower sawtooth peak or a repeat run.
+
+## 2026-11-10 rerun after lowering the loop-wrap memory peak (Claude)
+
+Product: `b7deae29` caps a libav look-ahead run at three frames (was four).
+A headless 3-layer group probe (`target/qa/task-mem-1109/`, allocation meter
+plus the native GPU Display bench) attributed the private-byte sawtooth to
+the three 12 s clips wrapping at the same moment: each wrap briefly held
+look-ahead frames for the old and the new run, about +6 output-sized frames
+(~16.4 MB each) for ~200 ms. With three frames the wrap peak is +3 frames and
+work time is unchanged; three still covers the next request plus two slack
+frames at 60 Hz with a 30 fps clip. A clip-start predecode cap was also tried
+and reverted (no measurable effect). Receipted normal build
+`c5/build-b7deae29754c-normal-2611101805/`; same fixture, 2560×1600 / 180 Hz,
+MCP control, lighting denied, unchanged gates, Claude/ChatGPT minimized.
+
+- **C5 PASS** — `c5/runs/20261110-181703-050208-b7deae29754c`: ON
+  60.0064 / 60.0008 / 59.9940 fps, whole max 20.1 / 20.1 / 20.7 ms, one
+  interval >20 ms per ON window, every G1–G8 PASS; OFF 7.23 / 7.36 / 7.38 fps
+  (expected baseline FAIL).
+- **Soak PASS** — `c5/runs/20261110-183023-404704-b7deae29754c`: 1800.0 s,
+  30/30 windows valid and PASS, min 59.988 fps, max rolling p95 17.61 ms,
+  worst whole-window max 33.8 ms (minute 16), ≤4 intervals >20 ms per minute,
+  150 lease renewals (max gap 15.5 s / 30 s bound). `resource_growth_bounded`
+  True: private +102,916,096 B over minute 1 (bound 134,217,728), working set
+  +102,883,328, OS peak working set +23,023,616; queue/cache/session/
+  retirement growth 0.
+
+Private high-water range 2077.6–2180.5 MB (median 2097.8) versus
+2077.8–2219.8 MB (median 2095.2) on 11/09: the minute-1 baseline is the same,
+the peak minute is 39 MB lower, and the headroom against the bound is now
+31.3 MB instead of −7.8 MB. The remaining sawtooth (+~100 MB at a few wraps)
+is the old/new decoder session overlap at a simultaneous wrap; it is bounded
+and non-monotonic. 60 fps native resident Display acceptance for 1.2.0 is
+met on this host with these thresholds.
