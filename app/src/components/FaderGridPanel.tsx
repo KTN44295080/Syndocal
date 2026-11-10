@@ -40,6 +40,9 @@ interface FaderGridPanelProps {
   controls: AttributeControl[];
   selectedFixtureId?: number | null;
   selectedGroupId?: string | null;
+  /** Members a group-selected fader writes; Learn maps each of them. */
+  selectedGroupFixtureIds?: readonly number[];
+  selectedGroupLabel?: string | null;
   valueForControl: (control: AttributeControl) => number;
   isControlWritten: (control: AttributeControl) => boolean;
   fullWidth?: boolean;
@@ -208,8 +211,19 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
           const swatch = () => swatchColor(control(), value());
           const glyph = () => attributeGlyph(control(), value());
           const mappingTarget = () => {
+            if (props.selectedGroupId) {
+              // A group fader writes every member (engine SetGroupAttribute), so
+              // Learn maps the same members instead of hiding the fader.
+              const groupLabel = props.selectedGroupLabel?.trim() || props.selectedGroupId;
+              return (props.selectedGroupFixtureIds ?? []).map((fixture_id) => ({
+                action: "FixtureAttribute" as const,
+                fixture_id,
+                attribute: control().attribute,
+                label: `${control().attribute} · ${groupLabel}`,
+              }));
+            }
             const fixtureId = props.selectedFixtureId;
-            if (fixtureId === null || fixtureId === undefined || props.selectedGroupId) return null;
+            if (fixtureId === null || fixtureId === undefined) return null;
             return {
               action: "FixtureAttribute" as const,
               fixture_id: fixtureId,

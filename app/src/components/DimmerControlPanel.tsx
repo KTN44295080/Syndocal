@@ -1,6 +1,7 @@
 import { Show } from "solid-js";
 import type { FixtureLimits } from "../types";
 import { DimmerLimitMeter } from "./FixtureLimitVisuals";
+import { controlMappingTargetData, type ControlMappingTarget } from "../controlMappingLearn";
 
 export interface DimmerControlSet {
   attribute: string;
@@ -18,6 +19,8 @@ interface DimmerControlPanelProps {
   normalizedLimits: FixtureLimits;
   formatDmxPercent: (value: number) => string;
   applyLimitsLabel: string;
+  /** Learn targets for the level controls; the same fixtures `onSetValue` writes. */
+  mappingTargets?: readonly ControlMappingTarget[];
   onSetValue: (value: number) => void;
   onUpdateLimit: (field: DimmerLimitField, value: number) => void;
   onResetLimits: () => void;
@@ -130,6 +133,7 @@ export function DimmerControlPanel(props: DimmerControlPanelProps) {
           aria-valuenow={clampToSliderRange(props.control.value)}
           aria-valuetext={`${dmxValueToPercent(props.control.value)}%`}
           tabIndex={0}
+          {...controlMappingTargetData(props.mappingTargets)}
           onPointerDown={(event) => {
             event.currentTarget.setPointerCapture(event.pointerId);
             setLevelFromPointer(event);
@@ -172,7 +176,7 @@ export function DimmerControlPanel(props: DimmerControlPanelProps) {
           </label>
         </div>
       </div>
-      <label class="dimmerVisualSlider">
+      <label class="dimmerVisualSlider" {...controlMappingTargetData(props.mappingTargets)}>
         Level
         <input
           type="range"

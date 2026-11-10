@@ -1000,6 +1000,18 @@ export function PersistentWorkspaceView(props: { model: PersistentWorkspaceViewM
               <>
           <FaderPrimaryAttributePanels
             dimmerControl={showDimmerPanel() ? selectedDimmerControl() : undefined}
+            dimmerMappingTargets={(() => {
+              // Mirror setDimmerValue: a selected group writes every member,
+              // otherwise the reference fixture.
+              const control = selectedDimmerControl();
+              if (!control) return [];
+              const groupId = selectedFixtureGroupFilter();
+              const label = `${control.attribute} · ${groupId ? selectedFixtureGroupLabel() || groupId : `Fixture ${selectedControlReferenceFixture()?.id ?? ""}`}`;
+              const ids = groupId
+                ? filteredFixtures().map((fixture) => fixture.id)
+                : [selectedControlReferenceFixture()?.id].filter((id): id is number => id !== undefined);
+              return ids.map((fixture_id) => ({ action: "FixtureAttribute" as const, fixture_id, attribute: control.attribute, label }));
+            })()}
             positionControls={showPositionPad() ? selectedPositionControls() : undefined}
             colorControls={showColorPad() ? selectedColorControls() : undefined}
             dimmerSliderMin={dimmerSliderRange().min}
@@ -1112,6 +1124,8 @@ export function PersistentWorkspaceView(props: { model: PersistentWorkspaceViewM
             fullWidth={activeControlCategory() === "fader"}
             selectedFixtureId={selectedControlReferenceFixture()?.id ?? null}
             selectedGroupId={selectedFixtureGroupFilter()}
+            selectedGroupFixtureIds={filteredFixtures().map((fixture) => fixture.id)}
+            selectedGroupLabel={selectedFixtureGroupLabel()}
             valueForControl={(control) => {
               const fixture = selectedControlReferenceFixture();
               return fixture ? faderValue(fixture.id, control.attribute, control.default_value) : control.default_value;

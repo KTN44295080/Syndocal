@@ -4,6 +4,7 @@ import { ColorControlPanel, type ColorControlSet, type ColorExtraControl, type H
 import { DimmerControlPanel, type DimmerControlSet } from "./DimmerControlPanel";
 import { PositionControlPanel, type PositionControlSet, type PositionFavorite } from "./PositionControlPanel";
 import type { FixtureLimits } from "../types";
+import type { ControlMappingTarget } from "../controlMappingLearn";
 
 interface PanTiltNudgeStep {
   label: string;
@@ -27,6 +28,7 @@ type MovementLimitToggle = "invert_pan" | "invert_tilt" | "swap_pan_tilt";
 
 interface FaderPrimaryAttributePanelsProps {
   dimmerControl?: DimmerControlSet;
+  dimmerMappingTargets?: readonly ControlMappingTarget[];
   positionControls?: PositionControlSet;
   colorControls?: ColorControlSet;
   dimmerSliderMin: number;
@@ -103,6 +105,7 @@ export function FaderPrimaryAttributePanels(props: FaderPrimaryAttributePanelsPr
             normalizedLimits={props.normalizedLimits}
             formatDmxPercent={props.formatDmxPercent}
             applyLimitsLabel={props.applyLimitsLabel}
+            mappingTargets={props.dimmerMappingTargets}
             onSetValue={props.onSetDimmerValue}
             onUpdateLimit={props.onUpdateDimmerLimit}
             onResetLimits={props.onResetDimmerLimits}
