@@ -41907,7 +41907,27 @@ impl EngineRuntime {
             if self.video_layers[index].active_clip_slot_id.is_some()
                 && self.video_layers[index].runtime_transport_dirty
             {
-                advance_runtime_video_clip_slot(&mut self.video_layers[index], delta);
+                let layer = &mut self.video_layers[index];
+                if layer.clip_take_transition.is_none()
+                    && clip_layer_locks_to_bpm_clock(&layer.state, &clock)
+                {
+                    // BPM Sync maps the looping slot onto `loop_bars` of the
+                    // global clock, phase-locked like a legacy layer.
+                    let source_duration_ms = layer
+                        .source
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.duration_ms);
+                    let locked = video::advance_layer_state_with_clock_and_duration(
+                        layer.state.clone(),
+                        delta,
+                        Some(&clock),
+                        source_duration_ms,
+                    );
+                    layer.state.position_ms = locked.position_ms;
+                } else {
+                    advance_runtime_video_clip_slot(layer, delta);
+                }
                 if completed_take {
                     complete_runtime_video_clip_take(&mut self.video_layers[index]);
                 }
@@ -56136,6 +56156,20 @@ fn runtime_video_layer_transition_summary(
         duration: transition.duration_intent,
         progress_millis,
     }
+}
+
+/// A launched, looping clip with BPM Sync on follows the global clock.
+fn clip_layer_locks_to_bpm_clock(state: &VideoLayerState, clock: &ClockSnapshot) -> bool {
+    state.playing
+        && state.bpm_sync.enabled
+        && state.loop_enabled
+        && state.loop_end_ms > state.loop_start_ms
+        && clock.bpm.is_finite()
+        && clock.bpm > 0.0
+        && state.bpm_sync.loop_bars.is_finite()
+        && state.bpm_sync.loop_bars > 0.0
+        && state.bpm_sync.ratio.is_finite()
+        && state.bpm_sync.ratio > 0.0
 }
 
 fn advance_runtime_video_clip_slot(layer: &mut RuntimeVideoLayer, delta: Duration) {
@@ -96207,6 +96241,47 @@ mod tests {
         runtime.publish_pending_command_acks(0, &published);
         assert!(receiver.recv().unwrap().is_err());
         assert_eq!(runtime.video_layers[0].queued_clip_slot_id, None);
+    }
+
+    #[test]
+    fn a_launched_bpm_synced_clip_slot_follows_the_global_clock() {
+        let mut runtime = clip_slot_engine_test_runtime();
+        let now = runtime.last_tick;
+        // 120 BPM started 1 s ago.
+        runtime.clock = BpmClock::new(120.0, now - Duration::from_millis(1_000));
+        runtime.clip_clock_tracker.last = Some(runtime.clock.snapshot(now));
+        let slot = &mut runtime.video_layers[0].clip_slots[0];
+        slot.loop_mode = VideoClipLoopMode::Loop;
+        slot.in_point_ms = 0;
+        slot.out_point_ms = Some(1_000);
+        runtime
+            .launch_video_clip_slot(1, Some(VideoClipSlotId(20)))
+            .unwrap();
+        runtime.video_layers[0].state.bpm_sync = protocol::VideoBpmSync {
+            enabled: true,
+            ratio: 1.0,
+            loop_bars: 1.0,
+        };
+        runtime.advance_video_layers(Duration::from_millis(16));
+        // One bar (4 beats) spans the 1 s loop: the playhead is the clock's
+        // phase within the bar, not elapsed time since the launch.
+        let clock = runtime.clock.snapshot(runtime.last_tick);
+        let beats = clock.beat_counter as f64 + f64::from(clock.beat_phase);
+        let expected = ((beats / 4.0).rem_euclid(1.0) * 1_000.0).round() as u64;
+        let position = runtime.video_layers[0].state.position_ms;
+        assert!(beats >= 0.9, "the clock is running ({beats} beats)");
+        assert!(
+            position.abs_diff(expected) <= 5,
+            "position {position}, expected {expected}"
+        );
+
+        // Without BPM Sync the slot advances by elapsed time only.
+        runtime.video_layers[0].state.bpm_sync.enabled = false;
+        runtime.advance_video_layers(Duration::from_millis(100));
+        assert_eq!(
+            runtime.video_layers[0].state.position_ms,
+            (position + 100) % 1_000
+        );
     }
 
     #[test]
