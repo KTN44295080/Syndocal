@@ -106,8 +106,12 @@ const LIBAV_SCALER_CACHE_CAPACITY: usize = 8;
 // then decodes on the caller's thread. The run is bounded per owner and by a
 // total byte budget over the working set, so many inputs fall back to the
 // single next frame instead of holding many output-sized frames.
+// Three frames still cover the next request plus the two slack frames at
+// 60 Hz with a 30 fps clip. A fourth only raised the private-memory peak at
+// simultaneous loop wraps (headless 3-layer group probe 2026-11-10: wrap
+// peak +6 -> +3 output-sized frames, work time unchanged).
 #[cfg(feature = "libav")]
-const LIBAV_LOOKAHEAD_MAX_FRAMES: usize = 4;
+const LIBAV_LOOKAHEAD_MAX_FRAMES: usize = 3;
 #[cfg(feature = "libav")]
 const LIBAV_LOOKAHEAD_BUDGET_BYTES: usize = 256 * 1024 * 1024;
 #[cfg(feature = "libav")]
