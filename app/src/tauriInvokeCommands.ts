@@ -295,6 +295,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "remove_video_output_v2",
   "rename_cue_list",
   "rename_fixture_group",
+  "render_media_asset_seamless_loop_v1",
   "renew_output_lease_v2",
   "reorder_cue_lists",
   "reorder_timeline_layers",

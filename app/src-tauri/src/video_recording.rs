@@ -21,6 +21,14 @@ use std::{
 pub(crate) mod encoder;
 #[path = "video_recording_selection.rs"]
 pub(crate) mod selection;
+
+/// The admitted LGPL FFmpeg and its first working H.264 encoder, shared with
+/// derived-media rendering (seamless loops) so both obey one license gate.
+pub(crate) fn select_lgpl_h264_encoder(
+    stop: &AtomicBool,
+) -> Result<(PathBuf, &'static str), String> {
+    selection::selected(stop)
+}
 use super::video_recording_renderer_process::{self, RecordingRenderRequest};
 
 /// The application-side input ownership seam for isolated recording. Live

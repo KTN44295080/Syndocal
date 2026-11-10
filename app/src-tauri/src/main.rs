@@ -121,6 +121,7 @@ use video_recording_runtime::{
     VideoRecordingState, VideoRecordingStatus,
 };
 mod video_recording;
+mod media_seamless_loop;
 use video_recording::{run_video_output_recording, RecordingAudioInput, VideoOutputRecordingContext};
 use video_recording::RecordingExternalFrameSources;
 #[cfg(target_os = "macos")]
@@ -27846,6 +27847,40 @@ fn select_media_relink_folder(
         .copied()
         .collect::<Vec<_>>();
     media_relink_folder::scan_media_relink_folder(&directory, &extensions).map(Some)
+}
+
+/// Render a derived seamless-loop copy of a local video asset beside its
+/// source and return the new file's path; the renderer imports it through
+/// the ordinary media import. The project is not changed here.
+#[tauri::command]
+async fn render_media_asset_seamless_loop_v1(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    asset_id: MediaAssetId,
+    crossfade_ms: u64,
+) -> Result<String, String> {
+    state.ensure_window_authority_not_blocked(window.label())?;
+    let (_, asset) = capture_media_asset_thumbnail_asset(&state, asset_id)?;
+    if asset.source.kind != VideoSourceKind::File {
+        return Err("Seamless loops can be made only from video files".to_string());
+    }
+    let path = asset
+        .source
+        .path
+        .clone()
+        .ok_or_else(|| "This media asset has no file path".to_string())?;
+    let duration_ms = asset
+        .source
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.duration_ms)
+        .ok_or_else(|| "The clip length is unknown; verify the media first".to_string())?;
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        media_seamless_loop::render_seamless_loop(Path::new(&path), duration_ms, crossfade_ms)
+    })
+    .await
+    .map_err(|error| format!("Seamless loop render task failed: {error}"))??;
+    Ok(output.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -137167,6 +137202,7 @@ fn main() {
             select_video_source_file,
             select_video_source_files,
             select_media_relink_folder,
+            render_media_asset_seamless_loop_v1,
             select_video_isf_file,
             import_video_output_bitmap_mask,
             import_gdtf,

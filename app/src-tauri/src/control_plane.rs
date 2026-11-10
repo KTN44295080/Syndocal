@@ -72,9 +72,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 594;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 595;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "3e4b820cafbd7c8ad4641d8834cc7d8077d4c0c4a06c529591d1095162d9d6e6";
+    "9eb5bf1fa3833fa7a821759565f4b46cb4fc1da234d466ca28cf0f348aa055ec";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -312,6 +312,9 @@ fn is_tauri_file_export_mutation(command: &str) -> bool {
             | "save_node_graph_preset_file"
             | "save_stage_map_preset_file"
             | "save_video_output_mapping_preset_file"
+            // Writes a new derived clip beside its source; the project is
+            // changed only by the ordinary media import that follows.
+            | "render_media_asset_seamless_loop_v1"
     )
 }
 
@@ -2675,7 +2678,7 @@ mod tests {
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 8);
         assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 183);
-        assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 29);
+        assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 30);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 28);
         assert_eq!(counts[&TauriRouteAdmissionClass::Retired], 27);
@@ -2773,7 +2776,7 @@ mod tests {
         // add two more of each. Native output cadence health adds one read-only
         // Tauri source and one frontend invocation source; the read-only Media
         // Health folder listing (`select_media_relink_folder`) adds one more of each.
-        const FRONTEND_INVOKE_COUNT: usize = 514;
+        const FRONTEND_INVOKE_COUNT: usize = 515;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 240);
         assert_eq!(
             registry.operations.len(),
@@ -2783,7 +2786,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1751);
+        assert_eq!(registry.operations.len(), 1753);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -3184,15 +3187,15 @@ mod tests {
         const ENGINE_COUNT: usize = 287;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 240;
-        const FRONTEND_COUNT: usize = 514;
+        const FRONTEND_COUNT: usize = 515;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1751);
-        assert_eq!(SOURCE_TOTAL, 1784);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1753);
+        assert_eq!(SOURCE_TOTAL, 1786);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 81);
 
@@ -3642,7 +3645,7 @@ mod tests {
         // add ten more local, unclassified sources.
         // The two authoring authority routes are local-only; their frontend
         // sources are aliases, and do not create external canonical operations.
-        assert_eq!(unclassified.len(), 1184);
+        assert_eq!(unclassified.len(), 1185);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -4420,11 +4423,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both native and frontend sources for generator create/update.
-        assert_eq!(legacy.operations.len(), 1751);
+        assert_eq!(legacy.operations.len(), 1753);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1751);
+        assert_eq!(operations.len(), 1753);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

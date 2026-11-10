@@ -94,6 +94,9 @@ export interface VideoControlPanelProps {
     onVerify: (assetIds: MediaAssetId[]) => void | Promise<void>;
     /** Resolves true when the asset was relinked (so it can be re-verified). */
     onRelink: (assetId: MediaAssetId) => boolean | void | Promise<boolean | void>;
+    /** Asset whose seamless loop is rendering; every loop button waits meanwhile. */
+    seamlessLoopBusyAssetId?: MediaAssetId | null;
+    onMakeSeamlessLoop?: (assetId: MediaAssetId) => void | Promise<void>;
     /** Epoch milliseconds of each asset's last verification in this session. */
     checkedAtById?: Record<number, number>;
     onScanRelinkFolder?: MediaHealthLibrary["onScanRelinkFolder"];
@@ -501,6 +504,16 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
                           >
                             Relink…
                           </button>
+                          <Show when={props.mediaLibrary.onMakeSeamlessLoop && asset.source.kind === "File"}>
+                            <button
+                              data-media-library-seamless-loop
+                              disabled={!props.mediaLibrary.backendAvailable || (props.mediaLibrary.seamlessLoopBusyAssetId ?? null) !== null}
+                              title="Make a copy whose end crossfades into its start, so it loops without a jump"
+                              onClick={() => void props.mediaLibrary.onMakeSeamlessLoop?.(asset.id)}
+                            >
+                              {props.mediaLibrary.seamlessLoopBusyAssetId === asset.id ? "Making loop…" : "Seamless loop"}
+                            </button>
+                          </Show>
                         </div>
                       </article>
                     );

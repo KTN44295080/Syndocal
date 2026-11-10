@@ -1,3 +1,4 @@
+import { seamlessLoopCrossfadeMs } from "./seamlessLoop";
 import { executeVideoOutputAuthoringControl, executeOutputLeaseLifecycle as executeVideoOutputLeaseSetup, type ExternalVideoOutputSpec, type VideoOutputConfigurationSpec, type OutputVideoAuthoringIntent } from "./outputControlController";
 import { validateVideoOutputAuthoringSpec, videoOutputAuthoringErrorMessage } from "./videoOutputAuthoring";
 import { buildNdiInputHealthRows } from "./ndiInputHealth";
@@ -22034,6 +22035,32 @@ function createAppView() {
     if (mediaLibraryStatusLease.isCurrent(statusLease)) setMessage(mediaRelinkApplySummary(applied.result));
     return applied.result;
   };
+  const [seamlessLoopBusyAssetId, setSeamlessLoopBusyAssetId] = createSignal<MediaAssetId | null>(null);
+  /** Writes a crossfaded loop copy beside the clip, then imports it as a new asset. */
+  const makeSeamlessLoopMediaAsset = async (assetId: MediaAssetId) => {
+    if (seamlessLoopBusyAssetId() !== null) return;
+    const asset = snapshot().video.media_assets.find((candidate) => candidate.id === assetId);
+    const durationMs = asset?.source.metadata?.duration_ms ?? null;
+    if (!asset || durationMs === null) {
+      setMessage("The clip length is unknown; verify the media first.");
+      return;
+    }
+    const crossfadeMs = seamlessLoopCrossfadeMs(durationMs);
+    if (crossfadeMs === null) {
+      setMessage("This clip is too short for a seamless loop.");
+      return;
+    }
+    setSeamlessLoopBusyAssetId(assetId);
+    setMessage(`Making a seamless loop of ${asset.label}…`);
+    try {
+      const path = await invoke<string>("render_media_asset_seamless_loop_v1", { assetId, crossfadeMs });
+      await importMediaFilesFromPaths([path]);
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setSeamlessLoopBusyAssetId(null);
+    }
+  };
   const videoLayerHasMonitorableAudio = (layerId: number) => {
     const layer = snapshot().video.layers.find((candidate) => candidate.id === layerId);
     return layer?.source.kind === "File" && layer.source.metadata?.has_audio !== false;
@@ -28889,6 +28916,8 @@ function createAppView() {
     mediaAssetCheckedAtById,
     inspectMediaAssetIds,
     relinkMediaLibraryAsset,
+    seamlessLoopBusyAssetId,
+    makeSeamlessLoopMediaAsset,
     scanMediaLibraryRelinkFolder,
     applyMediaLibraryRelinkRequests,
     beginMediaAssetPreview,
