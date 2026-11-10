@@ -120,8 +120,8 @@ use video_recording_runtime::{
     stop_video_output_recording_runtime, VideoRecordingEndReason, VideoRecordingRuntime,
     VideoRecordingState, VideoRecordingStatus,
 };
-mod video_recording;
 mod media_seamless_loop;
+mod video_recording;
 use video_recording::{run_video_output_recording, RecordingAudioInput, VideoOutputRecordingContext};
 use video_recording::RecordingExternalFrameSources;
 #[cfg(target_os = "macos")]
@@ -99918,7 +99918,7 @@ pub(crate) mod tests {
             "save_project_v1",
             "save_user_template_v1",
         ];
-        const SNAPSHOT_OR_EXTERNAL_FILE_ONLY: [&str; 18] = [
+        const SNAPSHOT_OR_EXTERNAL_FILE_ONLY: [&str; 19] = [
             "cache_gdtf_from_share",
             "delete_project_backup",
             "download_gdtf_from_share",
@@ -99937,6 +99937,9 @@ pub(crate) mod tests {
             "save_osc_mappings",
             "save_stage_map_preset_file",
             "save_video_output_mapping_preset_file",
+            // Writes a derived clip beside its source; the import that follows
+            // is the ordinary authoritative media route.
+            "render_media_asset_seamless_loop_v1",
         ];
         // These typed adapters delegate to their final native authority checks;
         // they are not snapshot-only exports or raw project writers.

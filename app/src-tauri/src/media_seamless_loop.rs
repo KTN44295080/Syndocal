@@ -59,11 +59,19 @@ pub(crate) fn seamless_loop_filter(duration_ms: u64, crossfade_ms: u64) -> Resul
 
 /// `clip.mov` -> `clip_seamless_1000ms.mp4` beside the source, never an
 /// existing file (a numeric suffix is added instead).
-pub(crate) fn seamless_loop_output_path(source: &Path, crossfade_ms: u64) -> Result<PathBuf, String> {
+pub(crate) fn seamless_loop_output_path(
+    source: &Path,
+    crossfade_ms: u64,
+) -> Result<PathBuf, String> {
     let directory = source
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-        .ok_or_else(|| format!("'{}' has no folder to write the loop into", source.display()))?;
+        .ok_or_else(|| {
+            format!(
+                "'{}' has no folder to write the loop into",
+                source.display()
+            )
+        })?;
     let stem = source
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -95,17 +103,10 @@ pub(crate) fn seamless_loop_ffmpeg_args(
     filter: &str,
     encoder: &str,
 ) -> Vec<OsString> {
-    let mut args: Vec<OsString> = [
-        "-hide_banner",
-        "-nostdin",
-        "-v",
-        "error",
-        "-n",
-        "-i",
-    ]
-    .iter()
-    .map(OsString::from)
-    .collect();
+    let mut args: Vec<OsString> = ["-hide_banner", "-nostdin", "-v", "error", "-n", "-i"]
+        .iter()
+        .map(OsString::from)
+        .collect();
     args.push(input.as_os_str().to_owned());
     for arg in [
         "-filter_complex",
@@ -150,7 +151,9 @@ pub(crate) fn render_seamless_loop(
     let (ffmpeg, encoder) = crate::video_recording::select_lgpl_h264_encoder(&stop)
         .map_err(|error| error.replace("Recording unavailable", "Seamless loop unavailable"))?;
     let mut child = hidden_command(&ffmpeg)
-        .args(seamless_loop_ffmpeg_args(source, &partial, &filter, encoder))
+        .args(seamless_loop_ffmpeg_args(
+            source, &partial, &filter, encoder,
+        ))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -186,7 +189,11 @@ pub(crate) fn render_seamless_loop(
         let detail = detail.lines().last().unwrap_or("").trim().to_string();
         return Err(format!(
             "FFmpeg could not render the seamless loop ({status}){}",
-            if detail.is_empty() { String::new() } else { format!(": {detail}") }
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(": {detail}")
+            }
         ));
     }
     std::fs::rename(&partial, &output).map_err(|error| {
@@ -205,7 +212,10 @@ mod tests {
         let filter = seamless_loop_filter(8_000, 1_000).unwrap();
         assert!(filter.contains("trim=start=1.000:end=8.000"), "{filter}");
         assert!(filter.contains("trim=start=0:end=1.000"), "{filter}");
-        assert!(filter.contains("xfade=transition=fade:duration=1.000:offset=6.000"), "{filter}");
+        assert!(
+            filter.contains("xfade=transition=fade:duration=1.000:offset=6.000"),
+            "{filter}"
+        );
     }
 
     #[test]
@@ -218,7 +228,8 @@ mod tests {
 
     #[test]
     fn output_path_never_replaces_an_existing_file() {
-        let directory = std::env::temp_dir().join(format!("syndocal-seamless-{}", std::process::id()));
+        let directory =
+            std::env::temp_dir().join(format!("syndocal-seamless-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let source = directory.join("clip.mov");
         let first = seamless_loop_output_path(&source, 500).unwrap();
@@ -231,8 +242,16 @@ mod tests {
 
     #[test]
     fn args_never_overwrite_and_drop_audio() {
-        let args = seamless_loop_ffmpeg_args(Path::new("in.mp4"), Path::new("out.mp4.partial"), "f", "h264_mf");
-        let args: Vec<String> = args.into_iter().map(|arg| arg.into_string().unwrap()).collect();
+        let args = seamless_loop_ffmpeg_args(
+            Path::new("in.mp4"),
+            Path::new("out.mp4.partial"),
+            "f",
+            "h264_mf",
+        );
+        let args: Vec<String> = args
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect();
         assert!(args.contains(&"-n".to_string()));
         assert!(args.contains(&"-an".to_string()));
         assert_eq!(args.last().unwrap(), "out.mp4.partial");
