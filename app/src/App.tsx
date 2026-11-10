@@ -21052,6 +21052,7 @@ function createAppView() {
     addVideoLayer,
     importMediaFiles,
     importMediaFilesFromPaths,
+    addMediaPathsAsLayers,
     launchVideoClip,
     takeVideoClip,
     stopVideoClip,
@@ -22060,6 +22061,17 @@ function createAppView() {
     } finally {
       setSeamlessLoopBusyAssetId(null);
     }
+  };
+  /** Put a library clip into a new layer so it can be performed. */
+  const addMediaLibraryAssetAsLayer = async (assetId: MediaAssetId) => {
+    const asset = snapshot().video.media_assets.find((candidate) => candidate.id === assetId);
+    const kind = asset?.source.kind;
+    const path = asset?.source.path?.trim();
+    if (!asset || (kind !== "File" && kind !== "StillImage") || !path) {
+      setMessage("Only video files and still images can become a layer.");
+      return;
+    }
+    await addMediaPathsAsLayers(kind, [path]);
   };
   const videoLayerHasMonitorableAudio = (layerId: number) => {
     const layer = snapshot().video.layers.find((candidate) => candidate.id === layerId);
@@ -28918,6 +28930,7 @@ function createAppView() {
     relinkMediaLibraryAsset,
     seamlessLoopBusyAssetId,
     makeSeamlessLoopMediaAsset,
+    addMediaLibraryAssetAsLayer,
     scanMediaLibraryRelinkFolder,
     applyMediaLibraryRelinkRequests,
     beginMediaAssetPreview,

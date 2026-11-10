@@ -97,6 +97,8 @@ export interface VideoControlPanelProps {
     /** Asset whose seamless loop is rendering; every loop button waits meanwhile. */
     seamlessLoopBusyAssetId?: MediaAssetId | null;
     onMakeSeamlessLoop?: (assetId: MediaAssetId) => void | Promise<void>;
+    /** Create a new layer that plays this library clip. */
+    onAddAsLayer?: (assetId: MediaAssetId) => void | Promise<void>;
     /** Epoch milliseconds of each asset's last verification in this session. */
     checkedAtById?: Record<number, number>;
     onScanRelinkFolder?: MediaHealthLibrary["onScanRelinkFolder"];
@@ -504,6 +506,17 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
                           >
                             Relink…
                           </button>
+                          <Show when={props.mediaLibrary.onAddAsLayer && (asset.source.kind === "File" || asset.source.kind === "StillImage")}>
+                            <button
+                              class="primary"
+                              data-media-library-add-layer
+                              disabled={!props.mediaLibrary.backendAvailable || props.mediaLibrary.activeOperations.length > 0}
+                              title="Create a new layer that plays this clip"
+                              onClick={() => void props.mediaLibrary.onAddAsLayer?.(asset.id)}
+                            >
+                              Add layer
+                            </button>
+                          </Show>
                           <Show when={props.mediaLibrary.onMakeSeamlessLoop && asset.source.kind === "File"}>
                             <button
                               data-media-library-seamless-loop

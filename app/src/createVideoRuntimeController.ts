@@ -1033,6 +1033,44 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       preparedStart.operation.release();
     }
   };
+  /** One new layer per library file (the existing asset is reused by content). */
+  const addMediaPathsAsLayers = async (kind: "File" | "StillImage", paths: readonly string[]) => {
+    const normalizedPaths = paths.map((path) => path.trim()).filter(Boolean);
+    if (normalizedPaths.length === 0) return null;
+    const authority = options.getCurrentProjectAuthority();
+    let sideEffectAuthority = authority;
+    const preparedStart = await preflightAndBeginMediaAssetOperation(
+      authority,
+      options.prepareMediaAssetOperationStart,
+      () => options.beginMediaAssetOperation("Add layer from Media Library", "preparing"),
+    );
+    sideEffectAuthority = preparedStart.authority;
+    try {
+      const staged = await prepareFinalizeAndCommitMediaAssets({
+        invoke: options.invoke,
+        kind,
+        paths: normalizedPaths,
+        expectedEpoch: sideEffectAuthority.project_epoch,
+        expectedAuthority: sideEffectAuthority,
+        ownerId: options.projectTransactionOwnerId,
+        signal: preparedStart.operation.signal,
+        onPhase: preparedStart.operation.setPhase,
+        onReport: options.setMediaAssetImportReport,
+        commitCommand: "commit_prepared_local_media_layers_authoritative",
+        commitArgs: { kind },
+      });
+      if (!staged.applicationCurrent || !options.isProjectAuthorityCurrent(staged.terminalAuthority)) return null;
+      const layerIds = staged.committed ?? [];
+      options.setMessage(`Added ${layerIds.length} layer(s) from the Media Library.`);
+      await options.refreshSnapshot();
+      return layerIds;
+    } catch (error) {
+      setMessageIfAuthorityCurrent(sideEffectAuthority, String(error));
+      return null;
+    } finally {
+      preparedStart.operation.release();
+    }
+  };
   const launchVideoClip = async (layerId: number, fadeMs: number) => {
     try {
       await executeVideoClipLaunchOutputControl(options.invoke, layerId, Math.max(0, Math.round(fadeMs)));
@@ -1890,7 +1928,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   const { setVideoMasterOpacity, setVideoBlackout } = options;
 
   return {
-    addVideoLayer, importMediaFiles, importMediaFilesFromPaths, launchVideoClip, takeVideoClip, stopVideoClip,
+    addVideoLayer, importMediaFiles, importMediaFilesFromPaths, addMediaPathsAsLayers, launchVideoClip, takeVideoClip, stopVideoClip,
     createVideoClipSlot, assignVideoClipSlotAsset, updateVideoClipSlot, removeVideoClipSlot,
     duplicateVideoClipSlot, setDefaultVideoClipSlot, reorderVideoClipSlots,
     queueVideoClipSlot, cancelQueuedVideoClipSlot, launchVideoClipSlot, seekVideoClipSlot,
