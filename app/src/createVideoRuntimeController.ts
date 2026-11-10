@@ -658,10 +658,12 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     }
   };
   const createVideoClipSlot = async (layerId: number, mediaAssetId: number, beforeSlotId: VideoClipSlotId | null) => {
+    // Performed video material keeps running: a new video file slot loops.
+    const assetKind = options.snapshot().video.media_assets.find((asset) => asset.id === mediaAssetId)?.source.kind;
     try {
       const result = await runVideoClipSlotAuthored("create_video_clip_slot_authoritative", {
         layer_id: layerId, media_asset_id: mediaAssetId, in_point_ms: 0, out_point_ms: null,
-        loop_mode: "Once", speed: 1, cue_points: [], launch_quantization: "Immediate",
+        loop_mode: assetKind === "File" ? "Loop" : "Once", speed: 1, cue_points: [], launch_quantization: "Immediate",
         effect_overrides: [], before_slot_id: beforeSlotId, make_default: false,
       });
       if (result) options.setMessage(`Created video clip slot ${result.focus_slot_id ?? ""}.`);

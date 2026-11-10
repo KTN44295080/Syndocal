@@ -8379,7 +8379,7 @@ fn build_media_asset_layer_import_candidate(
                 media_asset_id: asset.id,
                 in_point_ms: 0,
                 out_point_ms: None,
-                loop_mode: Default::default(),
+                loop_mode: new_clip_slot_loop_mode(&asset.source.kind),
                 speed: 1.0,
                 cue_points: Vec::new(),
                 launch_quantization: Default::default(),
@@ -8390,6 +8390,17 @@ fn build_media_asset_layer_import_candidate(
         layer_ids.push(layer_id);
     }
     Ok((candidate, layer_ids))
+}
+
+/// A newly created clip slot for a video file loops (performed VJ material is
+/// expected to keep running); stills and live inputs keep `Once`. Stored
+/// projects are untouched: this applies only where a slot is created.
+fn new_clip_slot_loop_mode(kind: &VideoSourceKind) -> protocol::VideoClipLoopMode {
+    if *kind == VideoSourceKind::File {
+        protocol::VideoClipLoopMode::Loop
+    } else {
+        protocol::VideoClipLoopMode::Once
+    }
 }
 
 fn require_prepared_local_media_kind(
@@ -41490,7 +41501,7 @@ fn import_and_assign_video_clip_slots_authoritative_command_impl(
                                 media_asset_id,
                                 in_point_ms: 0,
                                 out_point_ms: None,
-                                loop_mode: Default::default(),
+                                loop_mode: new_clip_slot_loop_mode(&asset.source.kind),
                                 speed: 1.0,
                                 cue_points: Vec::new(),
                                 launch_quantization: Default::default(),
