@@ -249,7 +249,7 @@ try {
             return {panel:q('[data-control-timeline-playback]')?.getAttribute('role'),
               labelled:q('[data-control-timeline-playback]')?.getAttribute('aria-labelledby'),
               go:hit('[data-playback-action=go]'),back:hit('[data-playback-action=back]'),release:hit('[data-playback-action=release]'),
-              toggle:hit('[data-playback-action=timeline-toggle]'),dmx:hit('[data-playback-action=dmx-blackout]'),vid:hit('[data-playback-action=video-blackout]'),all:hit('[data-playback-action=all-blackout]'),
+              toggle:hit('[data-playback-action=timeline-toggle]'),playbackBlackouts:document.querySelectorAll('[data-playback-action$=blackout]').length,
               cue:hit('[data-playback-cue-id]'),seek:hit('[data-playback-seek]'),
               current:!!q('[data-playback-current]'),next:!!q('[data-playback-next]'),position:!!q('[data-playback-position]'),
               cueList:!!q('[data-playback-cue-list]'),legend:q('[data-playback-shortcut-legend]')?.textContent.length>0,
@@ -257,7 +257,9 @@ try {
               panelFontOk:[...document.querySelectorAll('[data-control-timeline-playback] :is(small,span,li,dd,dt,button)')].every(e=>!e.textContent.trim()||parseFloat(getComputedStyle(e).fontSize)>=13)}})()`);
           assert.equal(probe.panel,"tabpanel");
           assert.equal(probe.labelled,"control-domain-timeline");
-          for (const key of ["go","back","release","toggle","dmx","vid","all","seek"]) assert.ok(probe[key] && probe[key].h >= 44, `${key} keeps a 44px target: ${JSON.stringify(probe[key])}`);
+          for (const key of ["go","back","release","toggle","seek"]) assert.ok(probe[key] && probe[key].h >= 44, `${key} keeps a 44px target: ${JSON.stringify(probe[key])}`);
+          // Owner decision 2026-11-11: DMX/VID/ALL blackout keys live only in the top bar.
+          assert.equal(probe.playbackBlackouts,0,"the playback surface adds no blackout keys");
           assert.ok(probe.go.h >= 56, "GO is the primary, largest target");
           for (const key of ["current","next","position","cueList","legend"]) assert.equal(probe[key], true, `${key} readout is present`);
           assert.equal(probe.globalGo,1,"the top-bar GO is the only global GO; the surface adds none");

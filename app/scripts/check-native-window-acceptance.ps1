@@ -1618,7 +1618,7 @@ function Invoke-NativeControlSurfaceAcceptance {
       "both" {
         if (-not [bool]$state.both.panel -or -not [bool]$state.both.lightingCard -or
           -not [bool]$state.both.videoCard -or [int]$state.both.monitors -ne 2 -or
-          [int]$state.both.cueActions -ne 3 -or @($state.both.blackoutActions).Count -ne 2) {
+          [int]$state.both.cueActions -ne 3 -or @($state.both.blackoutActions).Count -ne 0) {
           throw "Native Both surface is incomplete: $($state | ConvertTo-Json -Depth 8 -Compress)"
         }
         foreach ($action in @($state.both.blackoutActions)) {

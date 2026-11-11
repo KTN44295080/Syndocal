@@ -1609,12 +1609,7 @@ try {
     assert.equal(both.headerActionCount, 2, "Both exposes both detailed domain routes");
     assert.equal(both.cueActionCount, 3, "Both exposes Back, GO, and Release");
     // Owner decision 2026-11-11: Video BO is only the top-bar VID key.
-    assert.equal(both.blackoutButtons.length, 2, "Both exposes DMX and all-output blackout controls");
-    assert.deepEqual(both.blackoutButtons.map(({ label }) => label), [
-      "Enable DMX blackout",
-      "Enable all blackouts",
-    ], "Both blackout controls expose stable accessible names");
-    assert.deepEqual(both.blackoutButtons.map(({ pressed }) => pressed), ["false", "false"], "Both blackout controls expose their current off state");
+    assert.equal(both.blackoutButtons.length, 0, "Both adds no blackout keys; DMX/VID/ALL are only in the top bar");
     assert.ok(both.footer?.[2] > 0 && both.footer?.[3] > 0, "Both output truth footer is visible");
     assert.equal(both.contained, true, `Both overview remains inside the viewport at ${viewport.width}x${viewport.height}`);
     assert.deepEqual(both.documentScroll, [0, 0], "Both does not add document scroll");

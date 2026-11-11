@@ -101,26 +101,6 @@ export function ControlBothPanel(props: ControlBothPanelProps) {
               onChange={(event) => void props.onSetLightingMaster(Number(event.currentTarget.value))}
             />
           </label>
-          <div class="controlBothActionRow controlBothBlackoutRow" aria-label="Lighting blackout actions">
-            <button
-              type="button"
-              class={props.blackout ? "active danger" : ""}
-              aria-pressed={props.blackout}
-              aria-label={props.blackout ? "Clear DMX blackout" : "Enable DMX blackout"}
-              onClick={() => void props.onSetBlackout(!props.blackout)}
-            >
-              {props.blackout ? "Clear DMX BO" : "DMX BO"}
-            </button>
-            <button
-              type="button"
-              class={props.videoBlackout && props.blackout ? "active danger" : ""}
-              aria-pressed={props.videoBlackout && props.blackout}
-              aria-label={props.videoBlackout && props.blackout ? "Clear all blackouts" : "Enable all blackouts"}
-              onClick={() => void props.onSetAllBlackout(!(props.blackout && props.videoBlackout))}
-            >
-              {props.blackout && props.videoBlackout ? "Clear All BO" : "All BO"}
-            </button>
-          </div>
         </section>
 
         <section class="controlBothDomainCard controlBothVideoCard" aria-label="Video live controls">

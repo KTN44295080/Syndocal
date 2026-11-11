@@ -65,14 +65,12 @@ export function ControlTimelinePlaybackPanel(props: ControlTimelinePlaybackPanel
   const next = createMemo(() =>
     nextCueTiming(props.nextCueId, props.timelineEvents, props.timelinePositionMs, props.timelinePlaying));
   const hasCues = () => props.cues.length > 0;
-  const allBlackout = () => props.blackout && props.videoBlackout;
   const remainingMs = () => Math.max(0, props.timelineDurationMs - props.timelinePositionMs);
   // A seek commits when the operator releases the slider; while dragging the
   // slider shows the requested position instead of fighting live updates.
   const [scrubMs, setScrubMs] = createSignal<number | null>(null);
   const shownPositionMs = () => scrubMs() ?? props.timelinePositionMs;
   const canTransport = () => props.timelinePlaying || props.timelineDurationMs > 0;
-  const blocked = () => props.blackoutBlockedReason !== null;
 
   return (
     <section
@@ -238,44 +236,6 @@ export function ControlTimelinePlaybackPanel(props: ControlTimelinePlaybackPanel
             <Show when={props.blackoutBlockedReason}>
               {(reason) => <p class="controlPlaybackNote" role="status" data-playback-blackout-blocked>{reason()}</p>}
             </Show>
-            <div class="controlPlaybackActions" role="group" aria-label="Blackout actions">
-              <button
-                type="button"
-                class="topbarSafetyButton"
-                classList={{ engaged: props.blackout, blocked: blocked() }}
-                data-playback-action="dmx-blackout" aria-keyshortcuts="B"
-                aria-disabled={blocked() ? "true" : undefined}
-                aria-pressed={props.blackout}
-                aria-label={props.blackout ? "Clear DMX Blackout" : "DMX Blackout"}
-                onClick={() => props.onSetBlackout(!props.blackout)}
-              >
-                <span data-no-localize>DMX</span>
-              </button>
-              <button
-                type="button"
-                class="topbarSafetyButton"
-                classList={{ engaged: props.videoBlackout, blocked: blocked() }}
-                data-playback-action="video-blackout" aria-keyshortcuts="V"
-                aria-disabled={blocked() ? "true" : undefined}
-                aria-pressed={props.videoBlackout}
-                aria-label={props.videoBlackout ? "Clear Video Blackout" : "Video Blackout"}
-                onClick={() => props.onSetVideoBlackout(!props.videoBlackout)}
-              >
-                <span data-no-localize>VID</span>
-              </button>
-              <button
-                type="button"
-                class="topbarSafetyButton"
-                classList={{ engaged: allBlackout(), blocked: blocked() }}
-                data-playback-action="all-blackout"
-                aria-disabled={blocked() ? "true" : undefined}
-                aria-pressed={allBlackout()}
-                aria-label={allBlackout() ? "Clear All Blackout" : "All Blackout"}
-                onClick={() => props.onSetAllBlackout(!allBlackout())}
-              >
-                <span data-no-localize>ALL</span>
-              </button>
-            </div>
           </section>
           </div>
           <details class="controlPlaybackKeyDisclosure">
