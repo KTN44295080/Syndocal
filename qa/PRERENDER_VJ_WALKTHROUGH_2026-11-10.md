@@ -69,8 +69,11 @@ under the parallel run plus a live Display), app 2357 tests: pass.
 
 ## 2026-11-14 UI declutter (owner: "見出しの縦幅でかすぎる。ここに限らず", "ここスクロールしないといけないのどうかと思う")
 
-- Pane headers are 32 px app-wide (`--pane-header-h`; was 44 px). Perform keeps
-  44 px because its header buttons are contract-pinned 44 px touch targets.
+- Pane headers are 32 px app-wide (`--pane-header-h`; was 44 px). Perform
+  followed in `cab992e6` (owner 2026-11-15: "Perform 32 too"): header tools are
+  28 px, Inspector tabs 32 px; body controls keep 44 px touch targets. Native
+  check `vj-walk-20261110/31-perform-32px.png`: three 32 px headers, no clipped
+  header control; `check-perform-layout` pass.
   The Control desk toolbar (Edit/Live, page, Scenes) and the Edit > Video
   header and Outputs/Layers tabs use the same height.
 - Edit > Video: the thumbnail shrinks to its pane (no scroll); the Layers tab
