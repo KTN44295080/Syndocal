@@ -34,7 +34,12 @@ assert.equal(scenes.touchSceneActive(cue(4,1),{active_cue_id:5}),false);
 assert.equal(scenes.touchSceneActive(cue(4,1,{group_id:'front'}),{active_cue_id:4,active_group_cue_ids:{front:7}}),false,'grouped Scenes follow their group activity');
 assert.equal(scenes.touchSceneActive(cue(7,1,{group_id:'front'}),{active_cue_id:null,active_group_cue_ids:{front:7}}),true);
 
-const desk=defaultTouchSurface(cues).pages[0];
+// The Default Desk is one submaster per existing group, nothing else.
+const groups=Array.from({length:12},(_,index)=>({id:`g${index}`,label:`Group ${index}`}));
+const desk=defaultTouchSurface(groups).pages[0];
+assert.equal(desk.controls.length,12,'one fader per group');
+assert.ok(desk.controls.every(control=>control.kind==='Fader'&&control.binding?.kind==='group_submaster'),'only group submasters');
+assert.equal(defaultTouchSurface([]).pages[0].controls.length,0,'no groups: an empty desk, no placeholder controls');
 assert.equal(scenes.touchScenePanelColumnsFree(desk),true,'the Default Desk leaves the last three columns free');
 const full={...desk,controls:[...desk.controls,{id:99,kind:'Button',x:10,y:0,w:2,h:1,label:'X',binding:null}]};
 assert.equal(scenes.touchScenePanelColumnsFree(full),false);

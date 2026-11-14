@@ -2561,7 +2561,7 @@ h3 {
 .editVideoPreviewPane {
   height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .editVideoPreviewContent,
@@ -32042,23 +32042,6 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
   overflow-y: hidden;
 }
 
-.attributeFaderFine {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  justify-content: center;
-  width: 100%;
-  gap: 2px;
-  min-width: 0;
-}
-
-.attributeFaderFine button {
-  width: auto;
-  min-width: 0;
-  min-height: 26px;
-  border-radius: 1px;
-  padding: 0;
-  font-size: 16px;
-}
 
 .attributeDeskSurface > .channelFunctionPanel {
   order: 4;
@@ -40259,6 +40242,14 @@ body.outputBody, body.outputBody #root { background: #000; color: #fff; }
   white-space: nowrap;
 }
 .app .workspacePaneHeader { height: 44px; position: relative; z-index: 6; }
+/* The context pane reserves the full 44px header row (it was 34px, so the
+   pane body covered the header's lower edge), and header tools sit at the
+   right edge beside the pane actions instead of floating mid-row. */
+.app .controlContextPane:has(> .controlContextHeader) { grid-template-rows: 44px minmax(0, 1fr); }
+.app .controlContextHeader { justify-content: flex-start; }
+.app .controlContextHeader > .controlContextHeaderTools:not(.controlContextHeaderPaneActions) { margin-left: auto; }
+.app .controlContextHeader > .controlContextHeaderTools:empty { display: none; }
+.app .controlContextHeader > .controlContextHeaderTools:empty + .controlContextHeaderPaneActions { margin-left: auto; }
 .app :is(.workspacePaneTitle, .workspacePaneHeader > h2, .controlContextHeader > h2) {
   display: flex;
   align-items: center;

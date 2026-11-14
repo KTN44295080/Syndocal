@@ -577,10 +577,10 @@ export function PersistentWorkspaceView(props: { model: PersistentWorkspaceViewM
             setWorkspaceTab("setup");
             selectSetupMode("patch");
           }}
+          lowerLeftTitle={paneWindow !== "stage" && workspaceTab() === "control" && controlMode() === "mixer" ? "Thumbnail" : undefined}
           lowerLeftContent={
             paneWindow !== "stage" && workspaceTab() === "control" && controlMode() === "mixer" ? (
               <section class="panel editVideoPreviewPane" data-edit-video-preview aria-label="Selected media thumbnail">
-                <header class="panelHeader"><h2>Thumbnail</h2><span>Selected media</span></header>
                 <Show when={selectedMediaLibraryAsset()} fallback={<div class="emptyState">Select Media Library item to view its thumbnail.</div>}>
                   {(asset) => <div class="editVideoPreviewContent">
                     <Show when={mediaAssetThumbnails()[asset().id]} fallback={<div class="videoMediaLibraryThumbnailPlaceholder" aria-hidden="true" />}>
@@ -643,9 +643,10 @@ export function PersistentWorkspaceView(props: { model: PersistentWorkspaceViewM
           keepChildrenMounted={workspaceTab() === "control" && controlMode() === "live"}
           workspace={workspaceTab() === "setup" ? "setup" : workspaceTab() === "touch" ? "touch" : "control"}
           controlMode={workspaceTab() === "touch" ? "edit" : controlMode()}
-          controlHeaderTitle={workspaceTab() === "touch" ? "Faders" : faderDeskTitle()}
+          controlHeaderTitle={workspaceTab() === "touch" ? "Faders" : workspaceTab() === "control" && controlMode() === "mixer" ? "Media Properties" : faderDeskTitle()}
           controlHeaderTools={
-            <>
+            // Edit > Video's pane is media properties: the lighting EDIT/LIVE write mode does not apply.
+            workspaceTab() === "control" && controlMode() === "mixer" ? undefined : <>
               <ControlFaderWriteHeader
                 busy={controlFaderModeChanging()}
                 targetKind={controlTargetKind()}

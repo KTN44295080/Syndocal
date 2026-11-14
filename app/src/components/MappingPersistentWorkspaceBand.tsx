@@ -39,6 +39,8 @@ type MappingPersistentWorkspaceBandProps = {
   onCloseHotkeyHelp: () => void;
   onOpenMapping: () => void;
   lowerLeftContent?: JSX.Element;
+  /** Pane header that replaces the Groups ribbon when the lower left shows something else. */
+  lowerLeftTitle?: JSX.Element;
   contextContent?: JSX.Element;
   keepChildrenMounted?: boolean;
   children?: JSX.Element;
@@ -94,7 +96,7 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
         class="mappingPersistentWorkspaceGrid"
         data-lower-split-ratio={props.lowerSplitRatio}
       >
-        <MappingGroupRibbon
+        <Show when={props.lowerLeftTitle} fallback={<MappingGroupRibbon
           fixtureCount={props.filters.fixtureCount}
           selectedGroupId={props.filters.selectedGroupId}
           groupRows={props.filters.groupRows}
@@ -104,7 +106,9 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
           onDeleteGroup={props.filters.onDeleteGroup}
           onRecolorGroup={props.filters.onRecolorGroup}
           controlChrome={props.workspace !== "setup"}
-        />
+        />}>
+          <header class="mappingGroupStrip" data-lower-left-pane-header><span>{props.lowerLeftTitle}</span></header>
+        </Show>
         <section class="mappingWorkspaceLeftPane" data-workspace-pane="lower-left" aria-label="Groups and Stage pane">
           <Show when={props.lowerLeftContent} fallback={<>
           <section

@@ -41,7 +41,6 @@ const valueToHexByte = (value: number) =>
   Math.round(clampDmxValue(value) / 257).toString(16).padStart(2, "0");
 
 const percentLabel = (value: number) => `${Math.round((clampDmxValue(value) / 65_535) * 100)}%`;
-const fineStep = (control: AttributeControl) => control.resolution === "SixteenBit" ? 1 : 257;
 
 const fullLimitOverlay = {
   left: "0%",
@@ -281,36 +280,6 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
                             onClick={() => props.onResetControl(group.key, control().attribute)}
                           >
                             <span data-no-localize>{"OFF"}</span>
-                          </button>
-                          <button
-                            type="button"
-                            aria-label="Decrease value"
-                            title="Decrease value"
-                            data-fixture-type-trim-control="decrease"
-                            onClick={() =>
-                              props.onSetControl(
-                                group.key,
-                                control().attribute,
-                                valueFor(control()) - fineStep(control()),
-                              )
-                            }
-                          >
-                            <span aria-hidden="true" data-no-localize>−</span>
-                          </button>
-                          <button
-                            type="button"
-                            aria-label="Increase value"
-                            title="Increase value"
-                            data-fixture-type-trim-control="increase"
-                            onClick={() =>
-                              props.onSetControl(
-                                group.key,
-                                control().attribute,
-                                valueFor(control()) + fineStep(control()),
-                              )
-                            }
-                          >
-                            <span aria-hidden="true" data-no-localize>+</span>
                           </button>
                         </div>
                       </div>

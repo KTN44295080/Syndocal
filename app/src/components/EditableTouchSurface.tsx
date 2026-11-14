@@ -42,6 +42,8 @@ interface EditableTouchSurfaceProps {
   bankAuthority: FullBankAuthoritySnapshot;
   snapshot: EngineSnapshot;
   surface?: TouchSurfaceSummary;
+  /** Fixture groups with their member counts; the Default Desk shows the non-empty ones. */
+  groups?: ReadonlyArray<{ groupId: string; label: string; count: number }>;
   selectedFixtureId?: number | null;
   selectedGroupId?: string | null;
   colorPalette?: readonly string[];
@@ -174,7 +176,9 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
   };
   const surface = createMemo(() => effectiveTouchSurface(
     props.surface,
-    bankAuthorityAvailable() ? props.bankAuthority.cues : [],
+    (props.groups ?? [])
+      .filter((group) => group.count > 0)
+      .map((group) => ({ id: group.groupId, label: group.label })),
   ));
   const activePage = createMemo<TouchPageSummary | undefined>(() =>
     surface().pages.find((page) => page.id === selectedPageId()) ?? surface().pages[0],

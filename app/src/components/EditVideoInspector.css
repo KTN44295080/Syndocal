@@ -1,7 +1,7 @@
 .editVideoInspectorPane {
   height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-width: 0;
 }
 

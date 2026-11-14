@@ -64,71 +64,38 @@ export const createTouchControl = (
   binding: defaultBindingForKind(kind),
 });
 
+/** Grid columns the Default Desk may use; the Scene panel owns the rest. */
+const defaultDeskColumns = touchSurfaceGridColumns - 3;
+
+/**
+ * The Default Desk holds only what the rest of Control does not: one
+ * submaster per fixture group that exists. Fixture attributes live in the
+ * Faders panel, Scenes in the Scene panel and masters/blackouts in the top
+ * bar, so the desk repeats none of them (owner 2026-11-11: no clutter).
+ */
 export const defaultTouchSurface = (
-  cues: ReadonlyArray<{ id: number; label: string }> = [],
-): TouchSurfaceSummary => {
-  const visibleCues = cues.slice(0, 4);
-  return {
-    pages: [
-      {
+  groups: ReadonlyArray<{ id: string; label: string }> = [],
+): TouchSurfaceSummary => ({
+  pages: [
+    {
       id: 1,
       label: "Default Desk",
-      controls: [
-        { ...createTouchControl(1, "Label", 0, 0), label: "SHOW CONTROL" },
-        { ...createTouchControl(2, "Image", 0, 1), h: 1, label: "Touch Stage" },
-        {
-          ...createTouchControl(6, "Fader", 2, 0),
-          w: 4,
-          h: 2,
-          label: "FRONT",
-          binding: { kind: "group_submaster", group_id: "front" },
-        },
-        {
-          ...createTouchControl(9, "Dial", 0, 2),
-          h: 4,
-          label: "DIMMER",
-          binding: { kind: "selected_fixture_attribute", attribute: "Dimmer" },
-        },
-        {
-          ...createTouchControl(10, "IncrementalWheel", 2, 2),
-          h: 4,
-          label: "FINE",
-          binding: { kind: "selected_fixture_attribute", attribute: "Dimmer" },
-        },
-        {
-          ...createTouchControl(11, "ColorWheel", 4, 2),
-          w: 2,
-          h: 4,
-          label: "COLOR",
-          binding: { kind: "selected_fixture_color" },
-        },
-        {
-          ...createTouchControl(12, "XyGrid", 6, 2),
-          h: 6,
-          label: "POSITION",
-          binding: { kind: "selected_fixture_pan_tilt", pan_attribute: "Pan", tilt_attribute: "Tilt" },
-        },
-        ...visibleCues.map((cue, index) => {
-          const start = Math.floor(index * 6 / visibleCues.length);
-          const end = Math.floor((index + 1) * 6 / visibleCues.length);
-          return {
-            ...createTouchControl(15 + index, "Button", start, 6),
-            w: end - start,
-            label: cue.label,
-            binding: { kind: "cue" as const, cue_id: cue.id },
-          };
-        }),
-      ],
-      },
-    ],
-  };
-};
+      controls: groups.slice(0, defaultDeskColumns * 2).map((group, index) => ({
+        ...createTouchControl(index + 1, "Fader", index % defaultDeskColumns, Math.floor(index / defaultDeskColumns) * 4),
+        w: 1,
+        h: 4,
+        label: group.label,
+        binding: { kind: "group_submaster" as const, group_id: group.id },
+      })),
+    },
+  ],
+});
 
 export const effectiveTouchSurface = (
   surface: TouchSurfaceSummary | undefined,
-  cues: ReadonlyArray<{ id: number; label: string }> = [],
+  groups: ReadonlyArray<{ id: string; label: string }> = [],
 ): TouchSurfaceSummary => withoutTopbarDuplicateTouchControls(
-  surface && surface.pages.length > 0 ? surface : defaultTouchSurface(cues),
+  surface && surface.pages.length > 0 ? surface : defaultTouchSurface(groups),
 );
 
 const topbarDuplicateBindingKinds = new Set<TouchControlBinding["kind"]>([

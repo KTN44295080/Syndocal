@@ -192,7 +192,6 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
   );
   const displayValue = (control: AttributeControl, value: number) =>
     control.resolution === "SixteenBit" ? `${clampDmxValue(value)}` : `${Math.round(clampDmxValue(value) / 257)}`;
-  const fineStep = (control: AttributeControl) => (control.resolution === "SixteenBit" ? 1 : 257);
 
   return (
     <div
@@ -271,24 +270,6 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
                 onPointerCaptureChange={(captured) => setControlPointerCapture(entry.id, captured)}
                 onInput={(event) => setControlValue(control(), Number(event.currentTarget.value))}
               />
-              <div class="attributeFaderFine" role="group" aria-label="Fine adjustment">
-                <button
-                  type="button"
-                  aria-label="Decrease value"
-                  title="Decrease value"
-                  onClick={() => setControlValue(control(), value() - fineStep(control()))}
-                >
-                  −
-                </button>
-                <button
-                  type="button"
-                  aria-label="Increase value"
-                  title="Increase value"
-                  onClick={() => setControlValue(control(), value() + fineStep(control()))}
-                >
-                  +
-                </button>
-              </div>
             </div>
           );
         }}

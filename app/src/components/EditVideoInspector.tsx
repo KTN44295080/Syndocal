@@ -48,7 +48,6 @@ export function EditVideoInspector(props: EditVideoInspectorProps) {
 
   return (
     <section class="editVideoInspectorPane" data-edit-video-inspector aria-label="Media properties and layer effects">
-      <header class="panelHeader"><h2>Media Properties</h2></header>
       <div class="editVideoInspectorContent">
         <Show when={props.asset} fallback={<div class="emptyState">Select a Media Library item to inspect its properties.</div>}>
           {(asset) => <>

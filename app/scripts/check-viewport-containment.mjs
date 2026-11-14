@@ -37583,8 +37583,8 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     ["dimmerCategoryUsesPrimaryFaders", () => multiple.primaryControlKinds.every((kind) => kind === "dimmer")],
     ["dimmerCategoryHasOffPerType", () => multiple.offButtonCount === multiple.columnCount],
     ["dimmerCategoryHasFaderPerType", () => multiple.faderCount === multiple.columnCount],
-    ["dimmerCategoryHasTrimPerType", () => multiple.trimButtonCount === multiple.columnCount * 2],
-    ["typeColumnControlsMeetTargetFloor", () => multiple.headerMinimumHeight >= 40 && multiple.offButtonMinimumHeight >= 40 && multiple.faderMinimumWidth >= 40 && multiple.trimButtonMinimumHeight >= 40],
+    ["dimmerCategoryHasNoTrimSteppers", () => multiple.trimButtonCount === 0],
+    ["typeColumnControlsMeetTargetFloor", () => multiple.headerMinimumHeight >= 40 && multiple.offButtonMinimumHeight >= 40 && multiple.faderMinimumWidth >= 40 ],
     ["allTypeColumnsSupportDimmerFixture", () => multiple.supportedStates.every((state) => state === "true")],
     ["unsupportedFixtureTypeColumnsAreHiddenPerCategory", () =>
       Object.entries(expectedSupportedTypeColumnCounts).every(([category, expectedCount]) => {
@@ -37618,7 +37618,7 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     ["faderCategoryPreservesTypeColumns", () => faderBank.columnCount === 3 && faderBank.primaryControlKinds.every((kind) => kind === "fader-bank")],
     ["faderCategoryUsesChannelVerticalBank", () => faderBank.bankFaderCount === 54 && faderBank.bankVerticalInputCount === 54],
     ["faderCategoryShowsChannelNumbers", () => faderBank.bankChannelLabels.length === 54 && faderBank.bankChannelLabels.every((label) => label.startsWith("CH "))],
-    ["faderCategoryHasTrimPerChannel", () => faderBank.bankFineButtonCount === faderBank.bankFaderCount * 2],
+    ["faderCategoryHasNoFineSteppers", () => faderBank.bankFineButtonCount === 0],
     ["faderColumnsUseCompact54pxContract", () =>
       [faderBank, singleFaderBank].every((state) =>
         state.bankFaderCount > 0 &&
@@ -37626,13 +37626,8 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
         state.bankFaderMaximumWidth <= 54.5
       )
     ],
-    ["faderFineButtonsUseCompact23pxContract", () =>
-      [faderBank, singleFaderBank].every((state) =>
-        state.bankFineButtonCount === state.bankFaderCount * 2 &&
-        state.bankFineButtonMinimumWidth >= 22.5 &&
-        state.bankFineButtonMinimumHeight >= 25.5
-      )
-    ],
+    // Owner 2026-11-11: no -/+ steppers under faders (drag, wheel or arrow keys).
+    ["faderColumnsHaveNoFineSteppers", () => [faderBank, singleFaderBank].every((state) => state.bankFineButtonCount === 0)],
     ["faderAttributeIconsReplaceTextLabelRows", () =>
       [faderBank, singleFaderBank].every((state) =>
         state.bankAttributeIconCount === state.bankFaderCount &&

@@ -1372,6 +1372,7 @@ export function AppWorkspaceView(props: { model: AppWorkspaceViewModel; invokeCo
           bankAuthority={bankAuthority()}
           snapshot={snapshot()}
           surface={snapshot().touch_surface}
+          groups={fixtureGroupRows()}
           selectedFixtureId={selectedFixtureId()}
           selectedGroupId={selectedFixtureGroupFilter()}
           colorPalette={selectedColorControls() ? defaultColorPalette.slice(0, 8) : []}
