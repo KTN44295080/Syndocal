@@ -154,7 +154,7 @@ export function VideoOutputControlListPanel(props: VideoOutputControlListPanelPr
           </For>
         </nav>
       </Show>
-      <Show when={props.compact && props.outputs.length > 0}>
+      <Show when={props.compact && pageCount() > 1}>
         <div class="deckPager">
           <strong>Output</strong>
           <span>{page() + 1} / {props.outputs.length}</span>

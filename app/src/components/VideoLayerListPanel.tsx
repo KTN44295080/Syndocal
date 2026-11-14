@@ -114,7 +114,7 @@ export function VideoLayerListPanel(props: VideoLayerListPanelProps) {
           <button data-video-generator-add="Noise" onClick={() => void props.onAddGenerator(defaultVideoGenerators.Noise())}>Animated noise</button>
         </div>
       </details>
-      <Show when={props.compact && props.layers.length > 0}>
+      <Show when={props.compact && pageCount() > 1}>
         <div class="deckPager">
           <strong>Layers</strong>
           <span>

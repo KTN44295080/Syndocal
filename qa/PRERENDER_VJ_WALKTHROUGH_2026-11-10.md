@@ -66,3 +66,21 @@ Six are seamless by construction (expressions periodic in 8 s); `07_life`
 
 Engine full lib (timing-budget tests excluded; they pass serially, fail only
 under the parallel run plus a live Display), app 2357 tests: pass.
+
+## 2026-11-14 UI declutter (owner: "見出しの縦幅でかすぎる。ここに限らず", "ここスクロールしないといけないのどうかと思う")
+
+- Pane headers are 32 px app-wide (`--pane-header-h`; was 44 px). Perform keeps
+  44 px because its header buttons are contract-pinned 44 px touch targets.
+  The Control desk toolbar (Edit/Live, page, Scenes) and the Edit > Video
+  header and Outputs/Layers tabs use the same height.
+- Edit > Video: the thumbnail shrinks to its pane (no scroll); the Layers tab
+  is one scrollport so Scoped Video FX no longer covers the layer row; layer
+  and output pagers only show with more than one page; the empty output rail
+  box is hidden.
+- Checked on the native `5616c763` build with the new stylesheet injected
+  (`vj-walk-20261110/25`–`30`). `check-perform-layout`: pass (its stale
+  "Video BO inside the Output pane" assertion removed). `--live-desk-header`,
+  `--persistent-band`, `--control-mode-surface`: pass.
+- Already failing before these edits (same result with the edits stashed):
+  `check-theme-browser` (theme option not visible), viewport `--operator-vj`,
+  `--edit-ia-video`, `--pane-mixer`, `--workspace-shell`. To fix separately.

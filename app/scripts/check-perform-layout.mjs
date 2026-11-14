@@ -526,7 +526,8 @@ try {
       for (const [region, pane] of [['matrix', 'matrix'], ['health', 'matrix'], ['transition', 'output'], ['quick-fx', 'inspector']]) {
         assert.equal(await inside(root+' [data-video-perform-region="'+region+'"]', pane), true, label+': '+region+' region lies inside the '+pane+' pane');
       }
-      for (const selector of [selectors.take, selectors.guardedBlackout, selectors.master, selectors.transitionKind, selectors.transitionDuration]) {
+      // Video BO lives only in the top bar (owner: "VideoBOが重複。ヘッダーだけでいい").
+      for (const selector of [selectors.take, selectors.master, selectors.transitionKind, selectors.transitionDuration]) {
         assert.equal(await inside(selector, 'output'), true, label+': '+selector+' lies inside the Output pane');
       }
       assert.equal(await inside(selectors.fxEditor, 'inspector'), true, label+': Full FX editor lies inside the Inspector pane');

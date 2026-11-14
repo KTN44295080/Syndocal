@@ -2583,6 +2583,27 @@ h3 {
   background: var(--theme-bg);
 }
 
+/* The thumbnail shrinks to the pane instead of making the pane scroll. */
+.editVideoPreviewContent:has(> img, > .videoMediaLibraryThumbnailPlaceholder) {
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  align-content: stretch;
+  gap: 6px;
+  padding: 8px;
+  overflow: hidden;
+}
+.editVideoPreviewContent > img,
+.editVideoPreviewContent > .videoMediaLibraryThumbnailPlaceholder {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+}
+.editVideoPreviewContent > :not(img, .videoMediaLibraryThumbnailPlaceholder) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .editVideoInspectorContent dl {
   display: grid;
   gap: 6px;
@@ -4920,7 +4941,7 @@ progress {
 /* VJ Desk: three continuous production panes with a persistent program monitor. */
 .layoutControl.controlModeMixer .videoControlPanelMixer {
   grid-template-columns: minmax(390px, 1.12fr) minmax(400px, 1fr) minmax(300px, 0.72fr);
-  grid-template-rows: 36px minmax(0, 1fr);
+  grid-template-rows: var(--pane-header-h, 32px) minmax(0, 1fr);
   gap: 0;
   min-width: 0;
   min-height: 0;
@@ -4933,7 +4954,7 @@ progress {
 .layoutControl.controlModeMixer .videoControlPanelMixer > .panelHeader {
   grid-column: 1 / -1;
   grid-row: 1;
-  min-height: 36px;
+  min-height: var(--pane-header-h, 32px);
   border-bottom: 1px solid var(--ray-border);
   background: var(--theme-raised);
   padding: 4px 10px;
@@ -26938,6 +26959,10 @@ h3 { font-size: var(--fs-control); font-weight: var(--fw-strong); color: var(--t
   background: var(--theme-bg);
 }
 
+.videoControlPanelMixer .videoOutputControlList.compact > .videoOutputSelectorRail:empty {
+  display: none;
+}
+
 .videoControlPanelMixer .videoOutputRailButton {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -36737,7 +36762,7 @@ a[href]:focus-visible,
   grid-template-columns: minmax(390px, 1fr) minmax(520px, 1.2fr);
   /* Preview and Program are the primary operator surface. Give them the
      larger track; lower Clip / Outputs+Layers panes keep bounded scrollports. */
-  grid-template-rows: 36px minmax(0, 0.64fr) 5px minmax(0, 0.36fr);
+  grid-template-rows: var(--pane-header-h, 32px) minmax(0, 0.64fr) 5px minmax(0, 0.36fr);
   gap: 0;
   min-width: 0;
   min-height: 0;
@@ -36952,7 +36977,7 @@ html:not([data-window-mode="fullscreen"])
 
   .layoutControl.controlModeMixer .videoControlPanelMixer {
     grid-template-columns: minmax(390px, 1.04fr) minmax(520px, 1fr);
-    grid-template-rows: 36px minmax(0, 0.64fr) 5px minmax(0, 0.36fr);
+    grid-template-rows: var(--pane-header-h, 32px) minmax(0, 0.64fr) 5px minmax(0, 0.36fr);
   }
 
   .videoControlPanelMixer .videoMixerClipPane .videoClipGrid {
@@ -37150,7 +37175,7 @@ html:not([data-window-mode="fullscreen"])
 
 .app.paneWindow-mixer .layoutControl.controlModeMixer .videoControlPanelMixer {
   grid-template-columns: minmax(300px, 1fr) minmax(0, 1.2fr);
-  grid-template-rows: 36px minmax(0, 0.64fr) 5px minmax(0, 0.36fr);
+  grid-template-rows: var(--pane-header-h, 32px) minmax(0, 0.64fr) 5px minmax(0, 0.36fr);
 }
 
 /* A large physical display can expose this desk as a short CSS viewport when
@@ -37160,7 +37185,7 @@ html:not([data-window-mode="fullscreen"])
 @media (max-height: 800px) and (min-width: 1200px) and (min-resolution: 144dpi) {
   .layoutControl.controlModeMixer .videoControlPanelMixer {
     grid-template-columns: minmax(390px, 1.04fr) minmax(520px, 1fr);
-    grid-template-rows: 36px minmax(0, 0.64fr) 5px minmax(0, 0.36fr);
+    grid-template-rows: var(--pane-header-h, 32px) minmax(0, 0.64fr) 5px minmax(0, 0.36fr);
   }
 }
 
@@ -40233,7 +40258,7 @@ body.outputBody, body.outputBody #root { background: #000; color: #fff; }
   flex: none;
   gap: 10px;
   min-width: 0;
-  min-height: 44px;
+  min-height: var(--pane-header-h);
   padding: 0;
   background: var(--theme-raised);
   border: 0;
@@ -40241,11 +40266,11 @@ body.outputBody, body.outputBody #root { background: #000; color: #fff; }
   color: var(--theme-text);
   white-space: nowrap;
 }
-.app .workspacePaneHeader { height: 44px; position: relative; z-index: 6; }
+.app .workspacePaneHeader { height: var(--pane-header-h); position: relative; z-index: 6; }
 /* The context pane reserves the full 44px header row (it was 34px, so the
    pane body covered the header's lower edge), and header tools sit at the
    right edge beside the pane actions instead of floating mid-row. */
-.app .controlContextPane:has(> .controlContextHeader) { grid-template-rows: 44px minmax(0, 1fr); }
+.app .controlContextPane:has(> .controlContextHeader) { grid-template-rows: var(--pane-header-h) minmax(0, 1fr); }
 .app .controlContextHeader { justify-content: flex-start; }
 .app .controlContextHeader > .controlContextHeaderTools:not(.controlContextHeaderPaneActions) { margin-left: auto; }
 .app .controlContextHeader > .controlContextHeaderTools:empty { display: none; }
@@ -40253,18 +40278,28 @@ body.outputBody, body.outputBody #root { background: #000; color: #fff; }
 /* Edit > Video mixer: the monitors and the Outputs / Layers tabs label their
    panes, so the repeated pane headers are gone and their rows with them. */
 .app .videoControlPanelMixer .videoMixerTopPane { grid-template-rows: minmax(0, 1fr); }
-.app .videoControlPanelMixer .videoMixerContextPane > :is(.videoMixerProgramPane, .videoMixerLayerPane) { grid-template-rows: minmax(0, 1fr); }
+.app .videoControlPanelMixer .videoMixerContextPane > .videoMixerProgramPane { grid-template-rows: minmax(0, 1fr); }
+/* Layers tab: one scrollport for the layer list and Scoped Video FX, so the
+   catalog never covers the list in a short pane; the tabs stay compact. */
+.app .videoControlPanelMixer .videoMixerContextPane > .videoMixerLayerPane:not([hidden]) { display: block; overflow: hidden auto; }
+.app .videoControlPanelMixer .videoMixerContextPane > .videoMixerLayerPane .videoLayerList { overflow: visible; }
+.app .videoControlPanelMixer .videoMixerContextTabs { padding: 0; gap: 0; }
+/* Control desk toolbar (Edit/Live, page, Scenes) is a header row too. */
+.app .layoutTouch .touchSurfaceToolbar,
+.app .layoutTouch.touchDomainLighting .touchSurfaceToolbar { min-height: var(--pane-header-h); padding: 0; }
+.app .layoutTouch .touchSurfaceToolbar button { min-height: calc(var(--pane-header-h) - 2px); padding-block: 0; }
+.app .videoControlPanelMixer .videoMixerContextTabs button { min-height: var(--pane-header-h); }
 .app :is(.workspacePaneTitle, .workspacePaneHeader > h2, .controlContextHeader > h2) {
   display: flex;
   align-items: center;
   align-self: stretch;
   flex: 0 0 auto;
   margin: 0;
-  padding: 0 14px;
+  padding: 0 12px;
   background: transparent;
   color: var(--theme-text);
   font-family: var(--theme-font-label);
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: .08em;
   line-height: 1;
@@ -40292,7 +40327,7 @@ body.outputBody, body.outputBody #root { background: #000; color: #fff; }
 .app .workspacePaneTools:empty { display: none; }
 .app .workspacePaneTabs { display: flex; align-self: stretch; margin-left: 2px; }
 .app .workspacePaneTabs > button {
-  min-height: 44px;
+  min-height: var(--pane-header-h);
   padding: 0 14px;
   border: 0;
   border-right: 1px solid var(--theme-line);
@@ -40325,10 +40360,10 @@ body.outputBody, body.outputBody #root { background: #000; color: #fff; }
   display: grid;
   place-items: center;
   flex: none;
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  min-height: 44px;
+  width: var(--pane-header-h);
+  height: var(--pane-header-h);
+  min-width: var(--pane-header-h);
+  min-height: var(--pane-header-h);
   padding: 0;
   border: 0;
   border-left: 1px solid var(--theme-line);
@@ -40337,7 +40372,7 @@ body.outputBody, body.outputBody #root { background: #000; color: #fff; }
   color: var(--theme-dim);
   box-shadow: none;
 }
-.app :is(.workspacePaneButton, .controlContextHeader .panePopoutToggle) svg { width: 20px; height: 20px; }
+.app :is(.workspacePaneButton, .controlContextHeader .panePopoutToggle) svg { width: 16px; height: 16px; }
 .app :is(.workspacePaneButton, .controlContextHeader .panePopoutToggle):hover:not(:disabled) { background: var(--theme-key-hover); color: var(--theme-text); }
 .app :is(.workspacePaneButton, .controlContextHeader .panePopoutToggle):is(.active, .expanded, [aria-pressed="true"]) {
   border-color: var(--theme-line);
@@ -40368,13 +40403,13 @@ body.outputBody, body.outputBody #root { background: #000; color: #fff; }
   display: inline-flex;
   align-items: center;
   align-self: flex-start;
-  min-height: 44px;
+  min-height: var(--pane-header-h);
   margin: 0;
-  padding: 0 14px;
+  padding: 0 12px;
   background: transparent;
   color: var(--theme-text);
   font-family: var(--theme-font-label);
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: .08em;
   line-height: 1;
@@ -40391,7 +40426,7 @@ body.outputBody, body.outputBody #root { background: #000; color: #fff; }
   font-family: var(--theme-font-ui);
   font-size: 14px;
 }
-.app .layout .layout > .panel > .panelHeader { min-height: 44px; }
+.app .layout .layout > .panel > .panelHeader { min-height: var(--pane-header-h); }
 /* These two Patch headers use their existing controls to set the row height.
    Keep the shared pane typography and every control's dimensions unchanged. */
 .app .layout .dmxPatchMap > .panelHeader,
@@ -40401,9 +40436,9 @@ body.outputBody, body.outputBody #root { background: #000; color: #fff; }
 .app .patchProfileBrowserPanel { gap: 4px; }
 
 /* Band left header: the Groups ribbon is the pane header of the Stage pane. */
-.app .mappingPersistentWorkspaceGrid { grid-template-rows: 44px minmax(0, 1fr); }
+.app .mappingPersistentWorkspaceGrid { grid-template-rows: var(--pane-header-h) minmax(0, 1fr); }
 .app .mappingPersistentWorkspaceGrid > .mappingGroupStrip {
-  min-height: 44px;
+  min-height: var(--pane-header-h);
   gap: 8px;
   padding: 0 8px 0 0;
   background: var(--theme-raised);
@@ -40414,11 +40449,11 @@ body.outputBody, body.outputBody #root { background: #000; color: #fff; }
   display: flex;
   align-items: center;
   align-self: stretch;
-  padding: 0 14px;
+  padding: 0 12px;
   background: transparent;
   color: var(--theme-text);
   font-family: var(--theme-font-label);
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: .08em;
   line-height: 1;
@@ -40430,8 +40465,8 @@ body.outputBody, body.outputBody #root { background: #000; color: #fff; }
    strip and view toggles); only the chrome tokens apply. */
 .app .sceneMatrixSurfaceHeader { border-bottom-color: var(--theme-line-strong); }
 
-/* Video Control's header sits in a fixed 36px grid track that the Video viewport
-   contracts pin; its title block fills that track instead of forcing 44px. */
+/* Video Control's header sits in the shared pane-header grid track;
+   its title block fills that track. */
 .app .layoutControl.controlModeMixer .videoControlPanelMixer > .panelHeader { padding-block: 0; }
 .app .layoutControl.controlModeMixer .videoControlPanelMixer > .panelHeader > h2 { min-height: 0; align-self: stretch; }
 
@@ -40443,7 +40478,9 @@ body.outputBody, body.outputBody #root { background: #000; color: #fff; }
    Each chrome rule also sets --type-role so the browser guard
    (check-theme-browser.mjs) can prove the condensed face is used nowhere else.
    ========================================================================== */
-:root { --pane-bar-idle: color-mix(in srgb, var(--theme-accent) 38%, var(--theme-line-strong)); --type-role: ui; }
+:root { --pane-header-h: 32px; --pane-bar-idle: color-mix(in srgb, var(--theme-accent) 38%, var(--theme-line-strong)); --type-role: ui; }
+/* Perform is the live touch desk: its pane headers keep 44px hit targets. */
+.app [data-video-perform-layout] { --pane-header-h: 44px; }
 body, .app { font-size: var(--fs-control); font-variant-numeric: tabular-nums; }
 small { font-size: var(--fs-text); }
 button, .buttonLink, input, select, textarea { font-family: var(--theme-font-ui); font-size: var(--fs-control); }
