@@ -40250,6 +40250,10 @@ body.outputBody, body.outputBody #root { background: #000; color: #fff; }
 .app .controlContextHeader > .controlContextHeaderTools:not(.controlContextHeaderPaneActions) { margin-left: auto; }
 .app .controlContextHeader > .controlContextHeaderTools:empty { display: none; }
 .app .controlContextHeader > .controlContextHeaderTools:empty + .controlContextHeaderPaneActions { margin-left: auto; }
+/* Edit > Video mixer: the monitors and the Outputs / Layers tabs label their
+   panes, so the repeated pane headers are gone and their rows with them. */
+.app .videoControlPanelMixer .videoMixerTopPane { grid-template-rows: minmax(0, 1fr); }
+.app .videoControlPanelMixer .videoMixerContextPane > :is(.videoMixerProgramPane, .videoMixerLayerPane) { grid-template-rows: minmax(0, 1fr); }
 .app :is(.workspacePaneTitle, .workspacePaneHeader > h2, .controlContextHeader > h2) {
   display: flex;
   align-items: center;

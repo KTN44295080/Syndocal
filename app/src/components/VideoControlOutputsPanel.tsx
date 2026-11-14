@@ -118,10 +118,12 @@ export function VideoOutputControlListPanel(props: VideoOutputControlListPanelPr
 
   return (
     <div class={`videoOutputControlList ${props.compact ? "compact" : ""}`}>
+      <Show when={!props.compact}>
       <div class="sectionHeader">
         <h3>Video Outputs</h3>
         <span>Read-only selection and physical status</span>
       </div>
+      </Show>
       <Show when={props.compact}>
         <nav class="videoOutputSelectorRail" aria-label="Video output selection">
           <For each={props.outputs}>

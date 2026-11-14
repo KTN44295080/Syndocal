@@ -303,6 +303,8 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
         <ExternalVideoIoStatusPanel {...props.externalIoStatus} />
       </div>
       <section class="videoMixerTopPane" aria-label="Preview and Program">
+        {/* The mixer monitors carry their own PREVIEW / PROGRAM labels. */}
+        <Show when={!props.mixer}>
         <header class="videoMixerPaneHeader">
           <div>
             <strong>Preview / Program</strong>
@@ -310,6 +312,7 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
           </div>
           <span>LIVE MONITORS</span>
         </header>
+        </Show>
         <div class="videoMixerTopContent">
           <LiveVideoMonitorPanel {...props.liveMonitors} />
           <VideoMasterControlsPanel {...props.masterControls} />
@@ -591,6 +594,8 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
         </div>
         </Show>
         <section class="videoMixerProgramPane" aria-label="Video outputs" hidden={props.mixer && contextSurface() !== "outputs"}>
+          {/* In the mixer the Outputs / Layers tab already names the pane. */}
+          <Show when={!props.mixer}>
           <header class="videoMixerPaneHeader">
             <div>
               <strong>Outputs</strong>
@@ -598,9 +603,11 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
             </div>
             <span>OUTPUTS</span>
           </header>
+          </Show>
           <VideoOutputControlListPanel {...props.outputControls} compact={props.mixer} />
         </section>
         <section class="videoMixerLayerPane" aria-label="Live video layers" hidden={props.mixer && contextSurface() !== "layers"}>
+          <Show when={!props.mixer}>
           <header class="videoMixerPaneHeader">
             <div>
               <strong>Layers</strong>
@@ -608,6 +615,7 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
             </div>
             <span>COMPOSITE</span>
           </header>
+          </Show>
           <VideoLayerListPanel {...props.layerList} compact={props.mixer} />
           <details class="videoEffectScopeCatalog">
             <summary>
