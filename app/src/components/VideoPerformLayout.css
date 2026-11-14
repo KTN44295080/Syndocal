@@ -84,6 +84,9 @@
 .videoPerformLayout label { margin: 0; min-width: 0; }
 .videoPerformLayout :is(button:not(.workspaceSplitHandle), input, select) { min-height: 44px; min-width: 44px; font-size: 14px; }
 .videoPerformLayout .workspacePaneHeader { font-size: 14px; }
+/* Header controls fit the shared 32px pane header (owner: headers were too tall, Perform included). */
+.videoPerformLayout .workspacePaneTools :is(button, input, select) { min-height: 0; height: calc(var(--pane-header-h) - 4px); padding-block: 0; }
+.videoPerformLayout .workspacePaneTabs > button { min-height: var(--pane-header-h); height: var(--pane-header-h); padding-block: 0; }
 
 /* Health and the shortcuts button live in the matrix pane header. */
 .videoPerformHealth { display: flex; flex: 1 1 0; gap: 12px; align-items: center; padding: 0 8px; border-left: 1px solid var(--theme-line); min-width: 0; height: 100%; }

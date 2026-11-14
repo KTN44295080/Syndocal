@@ -262,7 +262,7 @@ render(()=><main class="app" style="height:100vh;grid-template-rows:56px minmax(
         }
         if (["lighting-edit", "setup-patch", "control-perform"].includes(workspace.id) && configuration.locale === "en") {
           // Task 13b: every workspace pane header shares the Broadcast chrome: 32px (owner: 44px headers
-          // were too tall; Perform keeps 44px touch targets), a
+          // were too tall, Perform included), a
           // condensed-uppercase title and the raised header surface. Task 14: the title is calm:
           // transparent fill, primary text colour and a 3px accent bar, never an inverse block.
           const chrome = await page.evaluate(() => {
@@ -286,8 +286,7 @@ render(()=><main class="app" style="height:100vh;grid-template-rows:56px minmax(
           });
           assert.ok(chrome.length >= 2, `${theme} ${workspace.id} shows the shared pane headers ${JSON.stringify(chrome)}`);
           for (const header of chrome) {
-            const expectedHeader = workspace.id === "control-perform" ? 44 : 32; // Perform keeps 44px touch targets
-            assert.ok(Math.abs(header.height - expectedHeader) <= 1, `${theme} ${workspace.id} ${header.cls} pane header is ${expectedHeader}px ${JSON.stringify(header)}`);
+            assert.ok(Math.abs(header.height - 32) <= 1, `${theme} ${workspace.id} ${header.cls} pane header is 32px ${JSON.stringify(header)}`);
             assert.equal(header.titleTransform, "uppercase", `${theme} ${workspace.id} ${header.cls} title is condensed uppercase`);
             assert.match(header.titleBackground, /^(rgba\(0, 0, 0, 0\)|transparent)$/, `${theme} ${workspace.id} ${header.cls} title is not an inverse block (${header.titleBackground})`);
             assert.notEqual(header.titleBackground, header.accent, `${theme} ${workspace.id} ${header.cls} title does not fill with the accent token`);

@@ -344,7 +344,9 @@ try {
         const measurement = await inspect(selector); geometry.push(measurement);
         assert.equal(measurement.failure, null, label+': '+JSON.stringify(measurement));
         if (selector.startsWith(root) && !regions.includes(selector) && ![selectors.preview,selectors.program].includes(selector)) {
-          assert.ok(measurement.height >= 44 && measurement.width >= 44, label+': preserved 44px control target '+selector);
+          // Pane-header controls follow the shared 32px header (owner 2026-11-15: "Perform 32 too"); body controls keep 44px.
+          const minimum = selector === selectors.legend ? 28 : 44;
+          assert.ok(measurement.height >= minimum && measurement.width >= 44, label+': preserved '+minimum+'px control target '+selector);
         }
       }
       // Health lives in the desk header between the title and the shortcuts button and never below the matrix.
@@ -541,7 +543,7 @@ try {
       const healthOpen = root + ' [data-video-perform-region="health"] [data-media-health-open]';
       const healthButton = await inspect(healthOpen);
       assert.equal(healthButton.failure, null, label + ': Media health Details button is fully visible in the header ' + JSON.stringify(healthButton));
-      assert.ok(healthButton.height >= 44 && healthButton.width >= 44, label + ': Media health Details keeps its 44px target ' + JSON.stringify(healthButton));
+      assert.ok(healthButton.height >= 28 && healthButton.width >= 44, label + ': Media health Details fills the 32px header ' + JSON.stringify(healthButton));
       await cdp.evaluate('document.querySelector(' + JSON.stringify(healthOpen) + ').click()');
       await waitFor(() => cdp.evaluate('document.querySelector("dialog[data-media-health-dialog][open]") !== null'), label + ': Details opens the health view');
       const healthView = await cdp.evaluate('(()=>{const d=document.querySelector("dialog[data-media-health-dialog][open]");const r=d.getBoundingClientRect();const small=[...d.querySelectorAll("button")].filter(b=>{const x=b.getBoundingClientRect();return x.height<44||x.width<44}).length;return {within:r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight,small,verifyAll:!!d.querySelector("[data-media-health-verify-all]"),chips:d.querySelectorAll("[data-media-health-chip]").length,rows:d.querySelectorAll("[data-media-health-row]").length,groups:[...d.querySelectorAll("[data-media-health-group]")].map(g=>g.dataset.mediaHealthGroup)}})()');

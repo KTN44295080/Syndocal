@@ -40479,8 +40479,6 @@ body.outputBody, body.outputBody #root { background: #000; color: #fff; }
    (check-theme-browser.mjs) can prove the condensed face is used nowhere else.
    ========================================================================== */
 :root { --pane-header-h: 32px; --pane-bar-idle: color-mix(in srgb, var(--theme-accent) 38%, var(--theme-line-strong)); --type-role: ui; }
-/* Perform is the live touch desk: its pane headers keep 44px hit targets. */
-.app [data-video-perform-layout] { --pane-header-h: 44px; }
 body, .app { font-size: var(--fs-control); font-variant-numeric: tabular-nums; }
 small { font-size: var(--fs-text); }
 button, .buttonLink, input, select, textarea { font-family: var(--theme-font-ui); font-size: var(--fs-control); }
